@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { describe, expect, it, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { PRE_DISPATCH_HOOK } from '../../src/engine/session-hook-assets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, '..', 'fixtures', 'session-hook-payloads');
@@ -74,5 +84,62 @@ describe('session-hook-behavior fixtures', () => {
 
   it('loader throws for a nonexistent fixture', () => {
     expect(() => loadPreDispatchPayload('does-not-exist.json')).toThrow();
+  });
+});
+
+describe('PRE_DISPATCH_HOOK behavior', () => {
+  let tempDir: string | undefined;
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
+  });
+
+  it('script source contains explicit "Task: none" pass-through handling', () => {
+    // Guards against a no-op skeleton silently satisfying the functional
+    // assertions below for the wrong reason (i.e. because it does nothing
+    // at all, not because it recognizes "Task: none").
+    expect(PRE_DISPATCH_HOOK).toContain('Task: none');
+  });
+
+  it('passes through (exit 0, no state change) when line 1 is "Task: none"', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+    const pipelineDir = join(tempDir, '.pipeline');
+    mkdirSync(pipelineDir, { recursive: true });
+
+    const statusPath = join(pipelineDir, 'task-status.json');
+    const seededStatus = JSON.stringify({
+      tasks: [
+        { id: '1', status: 'completed' },
+        { id: '2', status: 'in_progress' },
+        { id: '7', status: 'pending' },
+      ],
+    });
+    writeFileSync(statusPath, seededStatus, 'utf-8');
+
+    const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+    writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+    const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+      prompt: 'Task: none — reply with the single word done',
+    });
+
+    let exitCode = 0;
+    try {
+      execFileSync('bash', [hookPath], {
+        input: JSON.stringify(payload),
+        cwd: tempDir,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      const execErr = err as { status?: number };
+      exitCode = execErr.status ?? 1;
+    }
+
+    expect(exitCode).toBe(0);
+    expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
   });
 });
