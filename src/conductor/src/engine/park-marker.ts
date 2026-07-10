@@ -60,12 +60,12 @@ export async function resolveMainRepoRoot(
   const resultPromise = (async () => {
     try {
       // Use git rev-parse --git-common-dir to find the git directory
-      const result = await execFile('git', ['rev-parse', '--git-common-dir'], {
-        cwd: startDir,
-      });
+      // Use injected gitRunner if provided (for testing), otherwise use execFile
+      const runner = gitRunner || ((args: string[], cwd: string) => execFile('git', args, { cwd }));
+      const result = await runner(['rev-parse', '--git-common-dir'], startDir);
 
       // stdout contains the git-common-dir path (may be relative or absolute)
-      let gitCommonDir = (result.stdout as string).trim();
+      let gitCommonDir = (typeof result === 'string' ? result : result.stdout).trim();
 
       // If relative, join it against startDir
       if (!isAbsolute(gitCommonDir)) {

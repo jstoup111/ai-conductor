@@ -193,6 +193,37 @@ describe('resolveMainRepoRoot (Task 1)', () => {
     }
   });
 
+  it('resolveMainRepoRoot invokes git runner exactly once per unique directory', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+
+    // Create a counting runner that tracks invocation count
+    let callCount = 0;
+    const countingRunner = async (args: string[], cwd: string) => {
+      callCount++;
+      return execFile('git', args, { cwd });
+    };
+
+    // First call to worktreeDir — should invoke git runner once
+    const first = await resolveMainRepoRoot(worktreeDir, countingRunner);
+    expect(first).toBe(mainRoot);
+    expect(callCount).toBe(1);
+
+    // Second call to same worktreeDir — should NOT invoke git runner again (cached)
+    const second = await resolveMainRepoRoot(worktreeDir, countingRunner);
+    expect(second).toBe(mainRoot);
+    expect(callCount).toBe(1); // Still 1, not 2
+
+    // Call to a different directory — should invoke git runner again
+    const tmpDir = await mkdtemp(join(tmpdir(), 'unique-dir-'));
+    try {
+      const third = await resolveMainRepoRoot(tmpDir, countingRunner);
+      expect(third).toBe(tmpDir); // Falls back to tmpDir (not a git repo)
+      expect(callCount).toBe(2); // Now invoked for the new directory
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('resolveMainRepoRoot(nonGitDir) returns nonGitDir as fallback', async () => {
     const nonGitDir = await mkdtemp(join(tmpdir(), 'non-git-'));
     try {
@@ -217,5 +248,38 @@ describe('resolveMainRepoRoot (Task 1)', () => {
     } finally {
       await rm(nonGitDir, { recursive: true, force: true });
     }
+  });
+
+  it('resolveMainRepoRoot falls back to startDir when injected gitRunner throws', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'injected-runner-error-'));
+    const errors: Error[] = [];
+    const failingRunner = async () => {
+      throw new Error('Injected git failure');
+    };
+
+    try {
+      const resolved = await resolveMainRepoRoot(testDir, failingRunner, (err) => {
+        errors.push(err);
+      });
+      expect(resolved).toBe(testDir);
+      // Error should have been logged via callback
+      expect(errors.length).toBe(1);
+      expect(errors[0]?.message).toBe('Injected git failure');
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot handles nonexistent paths without throwing', async () => {
+    const nonExistentPath = '/tmp/this-path-definitely-does-not-exist-12345-67890';
+    const errors: Error[] = [];
+
+    // Should not throw, should return input path as fallback
+    const resolved = await resolveMainRepoRoot(nonExistentPath, undefined, (err) => {
+      errors.push(err);
+    });
+    expect(resolved).toBe(nonExistentPath);
+    // Error should be logged (git command failed)
+    expect(errors.length).toBeGreaterThan(0);
   });
 });
