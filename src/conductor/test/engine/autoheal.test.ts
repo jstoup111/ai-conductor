@@ -881,6 +881,79 @@ describe('getEvidenceRange', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Task 6: explicit anchorArg is rung 1 of the ladder — pins that a
+  // reachable explicit anchor is used verbatim (no warning), and an
+  // unreachable explicit anchor falls through to the ladder with the
+  // existing "unreachable; falling back" diagnostic preserved.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('uses a reachable explicit anchorArg verbatim as the lower bound (rung 1), with no warning', async () => {
+    const mod = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-explicit-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    for (let i = 0; i < 3; i++) {
+      await writeFile(join(gitDir, `explicit${i}.txt`), `content ${i}`);
+      await execa('git', ['add', `explicit${i}.txt`], { cwd: gitDir });
+      await execa('git', ['commit', '-m', `explicit commit ${i}`], { cwd: gitDir });
+    }
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Additional commit after origin/main, so there is a range to derive.
+    await writeFile(join(gitDir, 'explicit-after.txt'), 'content');
+    await execa('git', ['add', 'explicit-after.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: after origin/main\n\nTask: 6\n'], { cwd: gitDir });
+
+    const logOutput = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const allShas = logOutput.stdout.split('\n').filter(s => s.trim());
+    // A reachable, explicit anchor: the second-from-bottom commit (rung 1
+    // must use it verbatim rather than recomputing a merge-base).
+    const explicitAnchorSha = allShas[allShas.length - 2];
+
+    const range = await mod.getEvidenceRange(gitDir, explicitAnchorSha);
+
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.warnings).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+    // No commit at or before the explicit anchor should be included.
+    expect(range.commits.some(c => c.sha === explicitAnchorSha)).toBe(false);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('falls back from an unreachable explicit anchorArg into the ladder, preserving the "unreachable; falling back" warning', async () => {
+    const mod = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-explicit-unreachable-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const explicitUnreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+    const range = await mod.getEvidenceRange(gitDir, explicitUnreachableSha);
+
+    // Falls through to the ladder (merge-base against origin default branch)
+    // rather than erroring or returning nothing.
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable; falling back/i);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Task 1: getEvidenceRange derives the origin default branch instead of
   // hardcoding origin/main. Resolution ladder:
   //   1. reachable explicit anchorArg
