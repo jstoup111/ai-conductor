@@ -81,6 +81,7 @@ import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
 } from './engine/daemon-park-cli.js';
+import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -354,6 +355,15 @@ async function main(): Promise<void> {
   const deriveFeedbackCmd = detectDeriveFeedbackCommand(process.argv);
   if (deriveFeedbackCmd) {
     const code = await dispatchDeriveFeedback(deriveFeedbackCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Task subcommand (`task start|done <id>`, Task 7) runs NON-INTERACTIVELY and exits —
+  // routes to task start/done operations. Dispatched before the inline pipeline fallback,
+  // mirroring the derive-feedback-cli dispatch pattern.
+  const taskCmd = detectTaskCommand(process.argv);
+  if (taskCmd) {
+    const code = await dispatchTaskCommand(taskCmd, process.cwd());
     process.exit(code);
   }
 

@@ -503,6 +503,12 @@ export type ResolutionAttempt = { resolved: true } | { resolved: false; reason: 
 export interface ResolutionContext { conflicts: string[]; projectRoot: string; baseRef: string }
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 
+// ── Setup failure resolution (TS-3 / Task 9) ────────────────────────────────
+
+export type SetupFailureAttempt = { attempted: true };
+export interface SetupFailureContext { worktreePath: string; outputTail: string; slug: string }
+export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFailureAttempt>;
+
 /**
  * Check whether every commit subject from before the rebase is still present in
  * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
@@ -726,14 +732,15 @@ export async function applyRebaseVerdicts(
   projectRoot: string,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-): Promise<{ satisfied: boolean; kickedBack: StepName[] }> {
+  preVerify?: (step: StepName) => Promise<{ done: boolean; reason?: string }>,
+): Promise<{ satisfied: boolean; kickedBack: StepName[]; reverified: StepName[] }> {
   if (outcome.kind === 'conflict_halt') {
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
       reason: `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
-    return { satisfied: false, kickedBack: [] };
+    return { satisfied: false, kickedBack: [], reverified: [] };
   }
 
   // rebase gate is satisfied (branch now current with base).
@@ -750,7 +757,7 @@ export async function applyRebaseVerdicts(
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
 
   if (outcome.kind !== 'changed') {
-    return { satisfied: true, kickedBack: [] };
+    return { satisfied: true, kickedBack: [], reverified: [] };
   }
 
   // FR-5: code/test paths changed → invalidate downstream gates kickback-shaped.
@@ -760,6 +767,33 @@ export async function applyRebaseVerdicts(
       ? ` (+${outcome.changedCodePaths.length - 5} more)`
       : '');
   const kickedBack: StepName[] = [];
+  const reverified: StepName[] = [];
+
+  // Task 3: Pre-verify pass confirms build with a fresh objective verdict.
+  // When preVerify('build') returns { done: true }, the build gate is confirmed
+  // to be still satisfied (evidence-intact after file-changing rebase), so write
+  // a fresh objective verdict and add it to reverified instead of kickedBack.
+  let buildReVerified = false;
+  if (preVerify) {
+    try {
+      const buildPreVerify = await preVerify('build');
+      if (buildPreVerify.done) {
+        // Pre-verify succeeded — build is evidence-intact, write fresh verdict.
+        await writeVerdict(projectRoot, 'build', {
+          satisfied: true,
+          reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+          checkedAt: Date.now(),
+        });
+        reverified.push('build');
+        buildReVerified = true;
+      }
+    } catch {
+      // Task 5: preVerify throw → fail-closed, no error escapes.
+      // Error is caught here; buildReVerified stays false, allowing normal
+      // kickback verdict write (lines below) to handle build as invalidated.
+    }
+  }
+
   // build_review sits between build and manual_test — a build change must
   // invalidate it too (it grades the diff that just changed), or the
   // selector could jump straight to manual_test on a stale build_review
@@ -770,6 +804,10 @@ export async function applyRebaseVerdicts(
     ? ['build', 'build_review', 'manual_test']
     : ['build', 'build_review'];
   for (const target of targets) {
+    // Skip build if it was pre-verified (already wrote verdict above).
+    if (target === 'build' && buildReVerified) {
+      continue;
+    }
     await writeVerdict(projectRoot, target, {
       satisfied: false,
       reason: 'invalidated by file-changing rebase',
@@ -778,7 +816,7 @@ export async function applyRebaseVerdicts(
     });
     kickedBack.push(target);
   }
-  return { satisfied: true, kickedBack };
+  return { satisfied: true, kickedBack, reverified };
 }
 
 /** Map a rebase outcome to its structured event. Best-effort emission. */

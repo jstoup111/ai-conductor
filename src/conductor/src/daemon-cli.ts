@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
@@ -60,6 +60,8 @@ import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import { prepareWorktree } from './engine/worktree-prepare.js';
+import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -751,9 +753,32 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       resolveConflict: stepRunner.resolveRebaseConflict
         ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
         : undefined,
+      // ADR-2026-07-09-mid-run-merged-pr-guard: pass the gh runner and recorded PR URL
+      // so the guard can check if the feature was merged out-of-band before rebasing.
+      runGh: ownerGh,
+      prUrl: baseState.pr_url,
       log,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
+    if (resume === 'already_shipped') {
+      // ADR-2026-07-09: the recorded PR is merged out-of-band. Write the synthetic
+      // verified-ship markers and return without invoking conductor.run().
+      const headSha = await (async () => {
+        try {
+          const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt.path });
+          return stdout.trim();
+        } catch {
+          return 'unknown';
+        }
+      })();
+      await mkdir(join(wt.path, '.pipeline'), { recursive: true });
+      const finishChoicePath = join(wt.path, '.pipeline', 'finish-choice');
+      const donePath = join(wt.path, '.pipeline', 'DONE');
+      await writeFile(finishChoicePath, 'pr', 'utf-8');
+      await writeFile(donePath, '', 'utf-8');
+      log(`already shipped out-of-band; local branch retained at ${headSha}`);
+      return;
+    }
 
     await conductor.run();
 
@@ -795,6 +820,79 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
   };
 
+  // Task 15: Production wiring of setup-failure triage in daemon-cli.
+  // Construct runSetupTriage with real deps: git runner for worktree,
+  // prepareWorktree for retry, and fix-session dispatcher that constructs
+  // fresh DefaultStepRunner per dispatch (uuid session).
+  const runSetupTriage = async (
+    error: any, // SetupFailureError
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => {
+    // Kill-switch for testing: prevent actual LLM dispatch
+    if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
+      return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
+    }
+
+    // Create a git runner rooted at the worktree path
+    const git: GitRunner = makeGitRunner(worktree.path);
+
+    // Inject prepareWorktree for retry after quarantine
+    const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath, log);
+
+    // Triage stage 1: run-triage (TS-2/TS-3)
+    // Classify tree state and route: clean → pass, dirty → quarantine+retry
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+
+    // A park with no quarantineRef is a genuine PRESERVATION failure (the
+    // quarantine commit/branch itself could not be created) — stop immediately,
+    // never risk a fix-session on top of an unsafe tree. A park WITH a
+    // quarantineRef means quarantine succeeded but the post-quarantine retry
+    // still failed (committed breakage at a now-clean HEAD) — per the ADR this
+    // must still proceed to the bounded fix-session (Stage 2), not stop here.
+    if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+      return triageOutcome;
+    }
+
+    // A quarantined-pass outcome means stage-1 retry succeeded and setup is now
+    // passing at a clean HEAD. Per adr-2026-07-09-setup-failure-triage sub-decision 4,
+    // stage 2 (fix-session) should only run 'if setup still fails at a clean HEAD',
+    // so quarantined-pass skips directly to normal build dispatch.
+    if (triageOutcome.kind === 'quarantined-pass') {
+      return triageOutcome;
+    }
+
+    // Triage stage 2: fix-session (Task 10)
+    // For non-park outcomes, dispatch LLM fix session and mechanically verify
+    const dispatchFixSession = async () => {
+      // Construct a fresh DefaultStepRunner for this fix session
+      const sessionId = uuidv4();
+      const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
+        featureDesc: `setup-fix-${item.slug}`,
+        config,
+        mode: 'auto',
+      });
+      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      await stepRunner.resolveSetupFailure({
+        worktreePath: worktree.path,
+        outputTail: error.outputTail ?? '',
+        slug: item.slug,
+      });
+    };
+
+    // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
+    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare);
+
+    // A stage-1 quarantine ref must never be lost from the final outcome —
+    // fixSession() doesn't know about it, so carry it forward if the fix
+    // itself also failed (park) and didn't already attach its own ref.
+    if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+      return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+    }
+
+    return fixOutcome;
+  };
+
   const deps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
@@ -803,6 +901,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     provider,
     memoryProvider,
     log,
+    runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
 

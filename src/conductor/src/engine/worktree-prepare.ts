@@ -1,9 +1,24 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
+
+/**
+ * Thrown when `bin/setup` fails to run or exits non-zero. Carries the tail of
+ * the script's output (last 50 lines) for triage.
+ */
+export class SetupFailureError extends Error {
+  outputTail: string;
+
+  constructor(message: string, outputTail: string) {
+    super(message);
+    this.name = 'SetupFailureError';
+    this.outputTail = outputTail;
+  }
+}
 
 /**
  * The env var the daemon writes into each worktree's `.env` to carry that
@@ -49,7 +64,93 @@ export async function prepareWorktree(
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
+  // Write git hooks before setup so they exist even if setup fails
+  await writeGitHooksAndWire(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Write git hook scripts to the worktree and wire them via git config.
+ * Fail-open: logs and continues on any error, never throwing.
+ */
+async function writeGitHooksAndWire(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    await writeGitHooks(worktreePath, log);
+    await wireGitHooks(worktreePath, log);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`git hooks: skipped (${msg})`);
+  }
+}
+
+/**
+ * Write the two attribution hook scripts to .pipeline/git-hooks/ and make them executable.
+ */
+async function writeGitHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const hooksDir = join(worktreePath, '.pipeline', 'git-hooks');
+  await mkdir(hooksDir, { recursive: true });
+
+  const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');
+  await writeFile(prepareCommitMsgPath, PREPARE_COMMIT_MSG_HOOK, 'utf-8');
+  await chmod(prepareCommitMsgPath, 0o755);
+
+  const commitMsgPath = join(hooksDir, 'commit-msg');
+  await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
+  await chmod(commitMsgPath, 0o755);
+
+  log?.('git hooks: written to .pipeline/git-hooks/');
+}
+
+/**
+ * Wire the git hooks via git config: set extensions.worktreeConfig and core.hooksPath
+ * to use the worktree-scoped .pipeline/git-hooks/ directory.
+ *
+ * Note: extensions.worktreeConfig must be enabled in the shared repository config
+ * before we can use --worktree flag to set worktree-scoped configs.
+ */
+async function wireGitHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    // Check if we have write access to the worktree's .git before attempting config changes.
+    // This allows us to fail-open gracefully if .git is inaccessible or read-only.
+    const worktreeGit = join(worktreePath, '.git');
+    try {
+      await access(worktreeGit, constants.W_OK);
+    } catch {
+      throw new Error(`no write access to git: ${worktreeGit}`);
+    }
+
+    // Enable extensions.worktreeConfig in the shared repository config.
+    // This must be done once, not per worktree, before --worktree flags work.
+    try {
+      // Set it without --worktree to enable it in the shared (local) config
+      await execa('git', ['-C', worktreePath, 'config', 'extensions.worktreeConfig', 'true'], { all: true });
+    } catch {
+      // If this fails, it might already be set or the repo might not support it.
+      // We'll continue and ensure the worktree-scoped config is also set.
+    }
+
+    // Set extensions.worktreeConfig in the worktree-scoped config (redundant safety measure)
+    await execa('git', ['-C', worktreePath, 'config', '--worktree', 'extensions.worktreeConfig', 'true'], { all: true });
+
+    // Set core.hooksPath to the absolute path of the hooks directory (worktree-scoped only)
+    const hooksPath = join(worktreePath, '.pipeline', 'git-hooks');
+    await execa('git', ['-C', worktreePath, 'config', '--worktree', 'core.hooksPath', hooksPath], { all: true });
+
+    log?.('git hooks: wired via core.hooksPath');
+  } catch (err) {
+    // Re-throw so the caller (writeGitHooksAndWire) can catch and log fail-open
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`git config failed: ${msg}`);
+  }
 }
 
 /** Reduce a worktree dir name to a token safe as a database / resource name. */
@@ -113,6 +214,26 @@ async function runProjectSetup(
     log?.('setup: ok');
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`project setup (${SETUP_SCRIPT}) failed: ${detail}`);
+    // Extract output tail from the error (last 50 lines of combined stdout/stderr).
+    // If there's no captured output (e.g., spawn failure), use the error message itself.
+    let outputText = (err as any).all || '';
+    if (!outputText.trim()) {
+      outputText = detail;
+    }
+    const outputTail = extractTail(outputText, 50);
+
+    throw new SetupFailureError(
+      `project setup (${SETUP_SCRIPT}) failed: ${detail}`,
+      outputTail,
+    );
   }
+}
+
+/**
+ * Extract the last `lines` lines from text, or all text if shorter.
+ */
+function extractTail(text: string, lines: number): string {
+  const allLines = text.split('\n');
+  const tail = allLines.slice(Math.max(0, allLines.length - lines));
+  return tail.join('\n');
 }

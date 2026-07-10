@@ -10,8 +10,78 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- `priority: critical` backlog band, above `high`: reserved for fixes to
+  things that completely break or cause very severe degradation. The daemon
+  dispatches critical-labeled work first among issue-linked items (unlinked
+  `no-issue` items still lead, unchanged). Parser accepts the exact label
+  `priority: critical`; band ladder is now no-issue → critical → high →
+  medium → low → unlabeled. READMEs document the new vocabulary.
+
+### Changed
+
+- `conduct-ts engineer claim` now serves pending ideas by priority band
+  (critical first) before capturedAt FIFO, reading labels at claim time and
+  failing open to FIFO on gh outages (#461).
+
 ### Fixed
 
+- `bin/install` never hard-fails on missing dependencies. Every optional phase
+  (permissions/hooks configuration, dependency bootstrap, conductor config,
+  viewer/renderer selection) is now failure-isolated — a missing python3, npm,
+  brew, curl, or viewer tool degrades to a warning instead of aborting the
+  whole install under `set -e`. python3-dependent phases preflight and skip
+  with an actionable message; `configure_conductor` no longer reports a false
+  "Created/Refreshed" when python3 is absent; core symlink steps warn-and-
+  continue per item. Verified: full install exits 0 with warnings only on a
+  PATH containing nothing but coreutils. The two intentional fatal guards
+  (missing skills directory, worktree-root refusal #363) are unchanged.
+- `bin/install` now offers to install `uv` (Serena's installer) when it's
+  missing, via a platform-agnostic ladder: brew when present, else the
+  official installer (`astral.sh/uv/install.sh` → `~/.local/bin`) via curl or
+  wget, picking up `~/.local/bin` on PATH for the same run. Interactive-only
+  (non-tty runs keep the previous skip-with-warning), and every rung is
+  best-effort — a failed uv install degrades to the manual-install warning.
+
+### Added
+
+- **Deterministic task attribution automation via `conduct-ts task` CLI and worktree-scoped git hooks.** The
+  pipeline now automates task progress tracking via CLI subcommands owned by the conductor engine, not prompt
+  discipline. Two new subcommands: `conduct-ts task start <id>` (flip status to in_progress before dispatching
+  a subagent), `conduct-ts task done <id>` (mark task completed after subagent commit lands). Both are
+  idempotent and fail-open (never block the build on status-file corruption). Wired into the pipeline
+  orchestration step 0 (DISPATCH phase).
+- **Engine-provisioned worktree-scoped git hooks for task attribution.** When the daemon provisions a feature
+  worktree, the conductor writes two deterministic attribution hooks (`prepare-commit-msg`, `commit-msg`) to
+  `.pipeline/git-hooks/` and wires them via `git config --worktree core.hooksPath` scoped to that worktree
+  only. The `prepare-commit-msg` hook auto-injects the `Task: <id>` trailer from `.pipeline/current-task`
+  into every commit (amends malformed trailers). The `commit-msg` hook validates the trailer format. Both
+  hooks are fail-open (provisioning skips gracefully on errors, build never halts). Host checkout and
+  other worktrees are unaffected; if the repository has its own hooks, both run (engine's hooks first,
+  exit codes propagate for chaining). Hook scripts are embedded as engine assets, written fresh to each
+  worktree, and kept in sync with the engine version. The completion gate derives task completion from
+  git trailers, proving code commits are load-bearing (no stray empty-commit trailers).
+- Documentation added to README.md and src/conductor/README.md explaining task CLI and hook wiring
+  behavior (fail-open design, chaining with repo hooks, worktree-scoped wiring).
+
+### Changed
+
+- **Pipeline SKILL step 0 (DISPATCH) now uses `conduct-ts task start|done` for task progress tracking.**
+  The orchestrator no longer hand-edits `.pipeline/task-status.json` or relies on the subagent to inject
+  the task trailer via prompt discipline. The conductor runs `conduct-ts task start <id>` before dispatching
+  the subagent and `conduct-ts task done <id>` after the commit lands, ensuring deterministic and
+  repeatable task attribution independent of subagent behavior. See skills/pipeline/SKILL.md §Per-Task
+  Execution, steps 0 and 6.
+
+### Fixed
+
+- Mid-run merged-PR guard (#358): when the daemon's kickback rewind discovers the feature's
+  recorded PR has been merged out-of-band (operator manual merge during a retry cycle), the daemon
+  stops the run at the earliest checkpoint (kickback re-entry, rebase entry, or rekick play-forward)
+  and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious
+  rebase conflicts. Guard invoked at three sites: kickback routes, rebase entry, and rekick
+  play-forward.
 - Tests no longer park child processes on undrained stdio pipes.
   `daemon-stale-respawn-e2e` spawned real daemons with `stdio: ['ignore',
   'pipe', 'pipe']` and never read either stream, so a chatty daemon wedged
@@ -30,6 +100,33 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Setup-failure triage — two-stage deterministic recovery (#446).** The daemon now runs a
+  bounded two-stage recovery when `bin/setup` fails, eliminating the wedge pattern where a dead
+  agent corrupts the worktree and leaves no mechanism to dispatch a fix-session.
+  - **Stage 1: Deterministic quarantine + retry** — when setup exits nonzero, if the working tree
+    has uncommitted changes, the engine preserves them to a quarantine branch
+    (`wip/setup-quarantine-<slug>`) via `git add -A + commit`, then `reset --hard HEAD` to return
+    to clean HEAD, and re-runs `bin/setup` exactly once (full prepare flow). All dirty state is
+    committed and preserved before any reset, so a resuming agent can recover WIP deliberately via
+    `git show wip/setup-quarantine-<slug>`. If setup succeeds at clean HEAD, the feature proceeds;
+    if it still fails, advance to stage 2.
+  - **Stage 2: Bounded fix-session** — if setup still fails at clean HEAD, dispatch exactly ONE
+    fix-session with a fresh LLM session. Prompt carries the setup stderr tail (last 50 lines) and
+    an explicit success contract: `bin/setup` exits 0 AND the working tree is clean (fix committed).
+    The engine verifies the contract mechanically by re-running the full prepare flow — never trusts
+    the agent's claim. Success ⇒ proceed to build. Failure ⇒ diagnostic HALT naming the setup error
+    tail, the quarantine ref (where dirty state was preserved), and the contract verification outcome.
+  - **Surfacing:** daemon log records each stage with the quarantine ref and setup stderr tail.
+    `.pipeline/QUARANTINE` sentinel surfaces the ref + preserved paths to the resuming build agent.
+    HALT evidence includes the error, quarantine ref, and contract outcome.
+  - **Constraints:** exactly one retry (stage 1), exactly one fix-session (stage 2), all uncommitted
+    state preserved before any reset (no data loss), daemon-only (no change to interactive `/conduct`
+    or manual repair), zero cost to happy path (setup exit 0 ⇒ no triage).
+  - **Modules:** `engine/setup-triage.ts` (triage core, dependency-injected), `worktree-prepare.ts`
+    (SetupFailureError classification), `daemon-runner.ts` (wiring at prepare seam),
+    `step-runners.ts` (fix-session dispatch + contract verification).
+  - See `src/conductor/README.md` → "Setup-failure triage" and
+    `.docs/decisions/adr-2026-07-09-setup-failure-triage.md` (APPROVED).
 - CLAUDE.md "Design Principles" section codifying deterministic-first design:
   machinery (engine code, git hooks, gates) wherever possible, LLM agents only
   for steps that genuinely need judgement; repeated agent rule violations get
@@ -261,6 +358,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   sandbox builds inject the token via `--build-auth-token` CLI argument, preserving
   the operator's OAuth for non-build steps. See HARNESS.md "Daemon Build Auth" and
   `.docs/specs/2026-07-07-isolate-daemon-build-auth-from-operator-oauth.md`.
+- **Post-rebase gate-first mechanical re-verify (Task 14):** file-changing finish-time rebases
+  no longer unconditionally dispatch the build agent. Instead, the rebase step pre-verifies the
+  build gate's objective completion predicate against the freshly-rebased tree. If the predicate
+  (git evidence trailers, `root-commit..HEAD`) remains satisfied post-rebase, dispatch is skipped
+  and a `rebase_gate_reverified` event is emitted with the step and optional reason
+  (`skippedDispatch: false` for re-dispatch, `true` for mechanical skip). If pre-verify fails or
+  throws, build is kicked back and re-dispatched as before (fail-closed). Scope: **`build` only**
+  — `build_review` and `manual_test` remain unconditionally invalidated. Consequence: the ~45–60 min
+  build-agent lap on every evidence-complete file-changing rebase drops to ~1–2 min mechanical
+  derivation; evidence-missing rebases re-dispatch normally. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
 - `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
   path (HALT clear detection), so the polling fallback can be slower. Override with
   `--idle-poll 5` to restore legacy behavior or when filesystem watch is unavailable.

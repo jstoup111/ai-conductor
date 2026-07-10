@@ -1,4 +1,4 @@
-import { writeFile, access } from 'node:fs/promises';
+import { writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -16,7 +16,7 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
-import type { ResolutionContext, ResolutionAttempt } from './rebase.js';
+import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { findArtifactFiles } from './artifacts.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
@@ -363,7 +363,7 @@ export class DefaultStepRunner implements StepRunner {
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const resolved = this.resolvedConfigFor(step, state.complexity_tier);
 
-    const systemPrompt = this.buildSystemPrompt(step, autonomous, opts?.retryReason);
+    const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
     // limits and stale sessions. Collaborative steps use invokeInteractive()
@@ -642,6 +642,60 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
+   * Dispatch a fix-session to attempt to resolve a setup failure. Part of the
+   * two-stage setup-failure triage (TS-3). Uses a fresh one-shot session
+   * (never resumes the main conductor session) with the output tail in the
+   * prompt so Claude can diagnose and fix the root cause.
+   *
+   * Always returns `{ attempted: true }` — the method's role is to bootstrap
+   * the fix session. Whether the fix succeeds is determined by whether the
+   * setup step subsequently passes, not by this method's return value.
+   *
+   * Runs with cwd set to the worktreePath so any cleanup/fix commands operate
+   * in the right worktree context.
+   */
+  async resolveSetupFailure(ctx: SetupFailureContext): Promise<SetupFailureAttempt> {
+    const resolved = this.resolvedConfigFor('worktree');
+
+    const systemPrompt =
+      'You are attempting to fix a setup failure in a feature worktree.\n' +
+      `Worktree path: ${ctx.worktreePath}\n` +
+      `Feature slug: ${ctx.slug}\n\n` +
+      'Diagnose the failure and attempt to fix the root cause (e.g., missing dependencies, ' +
+      'version conflicts, environment issues). Use the current directory (the worktree) ' +
+      'for any diagnostic or remediation commands.\n' +
+      'After making fixes, the setup step will be retried automatically.';
+
+    const prompt =
+      'The last output from the failed setup step was:\n' +
+      '```\n' +
+      `${ctx.outputTail}\n` +
+      '```\n\n' +
+      'Diagnose and fix the setup failure. Explain your diagnosis and the fixes you applied.';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Walk the fallback ladder so the setup-failure resolver is not blocked by
+    // one model's unavailability.
+    await this.modelAvailability.invokeWithLadder(this.provider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: ctx.worktreePath,
+    });
+
+    // Always report attempted: true — the success of the fix is determined by
+    // whether the setup step subsequently passes.
+    return { attempted: true };
+  }
+
+  /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
    * the default branch plus the plan body (assembleBuildReviewInputs /
@@ -747,7 +801,7 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
-  private buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): string {
+  private async buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): Promise<string> {
     const stepDef = getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
     // sequence, so present them by label instead of an "N/total" index rather
@@ -767,6 +821,15 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.
+    // This surfaces the quarantine ref and preserved paths to the resuming build dispatch.
+    if (step === 'build' && this.pipelineDir) {
+      const quarantineContent = await this.readQuarantineSentinel();
+      if (quarantineContent) {
+        prompt += `\n\n--- SETUP QUARANTINE CONTEXT ---\n${quarantineContent}\n--- END QUARANTINE CONTEXT ---`;
+      }
+    }
 
     // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
     // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
@@ -809,5 +872,41 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return prompt;
+  }
+
+  /**
+   * Read the `.pipeline/QUARANTINE` sentinel if it exists.
+   * Returns the content of the sentinel, or null if it doesn't exist or can't be read.
+   * If the sentinel exists but the ref has been deleted, includes a notice about the missing ref.
+   */
+  private async readQuarantineSentinel(): Promise<string | null> {
+    if (!this.pipelineDir) return null;
+
+    try {
+      const sentinelPath = join(this.pipelineDir, 'QUARANTINE');
+      const content = await readFile(sentinelPath, 'utf-8');
+
+      // Check if the quarantine ref mentioned in the sentinel still exists.
+      // If not, add a notice that it's missing.
+      const refMatch = content.match(/Quarantine ref: ([\w\/\-]+)/);
+      if (refMatch) {
+        const ref = refMatch[1];
+        try {
+          const git = makeGitRunner(this.projectDir);
+          const result = await git(['rev-parse', '--verify', ref]);
+          if (result.exitCode !== 0) {
+            // Ref was deleted externally
+            return `${content}\n\nNOTE: Quarantine ref ${ref} is no longer present in the repository (may have been deleted externally). Dispatch proceeds; the preserved paths may still be reviewed via reflog.`;
+          }
+        } catch {
+          // Git check failed, but return content anyway (best-effort)
+        }
+      }
+
+      return content;
+    } catch {
+      // Sentinel doesn't exist or can't be read — return null (not an error)
+      return null;
+    }
   }
 }

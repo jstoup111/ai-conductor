@@ -153,6 +153,13 @@ determined, so an outage can't produce a wrong-order build.
 
 ## Story: Intake claims the oldest unblocked idea
 
+> **Amended by #461** (`2026-07-10-priority-banded-intake-claim.md`,
+> `adr-2026-07-10-intake-claim-priority-banding`): the claim walk now offers candidates in
+> priority-band order (oldest-first within a band) instead of pure age order. The
+> blocked/unblocked deferral semantics asserted here are unchanged — "walks the whole queue in
+> age order" becomes "walks the whole queue in banded order"; the scenarios below remain valid
+> for same-band entries.
+
 **Requirement:** FR-8
 
 As the operator, I want the engineer to author specs only for issues whose prerequisites have
