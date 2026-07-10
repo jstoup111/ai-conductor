@@ -272,6 +272,28 @@ describe('engine/daemon-park-cli', () => {
       expect(code).toBe(0);
       expect(await isOperatorParked(root, 'fresh-checkout-slug')).toBe(true);
     });
+
+    it('park from a non-git cwd falls back to cwd-anchored behavior (pre-#486 semantics): exit 0, marker at cwd', async () => {
+      // A non-git directory that is NOT part of any git repository
+      const nonGitRoot = await mkdtemp(join(tmpdir(), 'non-git-park-'));
+      try {
+        // Create a worktree-like directory structure in the non-git root
+        await mkdir(join(nonGitRoot, '.worktrees', 'non-git-slug'), { recursive: true });
+
+        const out: string[] = [];
+        const code = await dispatchDaemonPark(
+          { kind: 'park', slug: 'non-git-slug' },
+          { cwd: nonGitRoot, out: (l) => out.push(l) },
+        );
+        expect(code).toBe(0);
+        // Marker should be written to the non-git root (cwd), not resolved to a git root
+        expect(await isOperatorParked(nonGitRoot, 'non-git-slug')).toBe(true);
+        const markerPath = join(nonGitRoot, '.daemon', 'parked', 'non-git-slug');
+        expect(out.join('\n')).toContain(markerPath);
+      } finally {
+        await rm(nonGitRoot, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('validateSlug', () => {
