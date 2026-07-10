@@ -143,13 +143,12 @@ export interface FeatureRunnerDeps {
     failureReason: string;
   }) => Promise<{ prUrl?: string }>;
   /**
-   * Task 13: Setup-failure triage dispatcher (daemon mode only). When present,
-   * the daemon catches SetupFailureError and routes it through the triage engine
-   * to classify the failure and decide whether to route to quarantine+retry or
-   * park. Optional; if absent, SetupFailureError behaves like any other error
-   * (worktree kept, feature marked error).
+   * Task 13: Setup-failure triage handler (daemon mode only). When a
+   * SetupFailureError is caught during prepareWorktree and daemon mode is
+   * enabled, route it here for classification. Returns 'park' to error the
+   * feature, or 'quarantined-pass' to continue to runConductor.
    */
-  runSetupTriage?: (worktree: FeatureWorktree, error: SetupFailureError) => Promise<TriageOutcome>;
+  runSetupTriage?: (error: SetupFailureError, worktree: FeatureWorktree, item: BacklogItem) => Promise<TriageOutcome>;
 }
 
 /**
