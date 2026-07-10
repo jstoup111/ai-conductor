@@ -311,6 +311,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `no-issue` items still lead, unchanged). Parser accepts the exact label
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
+- `conduct-ts halt-issues sweep` subcommand: reconciles GitHub issues auto-filed by the
+  out-of-repo halt-monitor daemon (`monitor.sh`, #355) against shipped fixes — stamps
+  filed issues with a Halt-Slug marker, detects shipping evidence, and closes resolved
+  issues (respecting the `halt-sweep:keep-open` label escape hatch). Additive
+  subcommand, not a breaking surface — no migration block needed. See `README.md` and
+  `src/conductor/README.md` for flags and the `monitor.sh` hook line
+  (`conduct-ts halt-issues sweep || true`).
 
 ### Added
 
