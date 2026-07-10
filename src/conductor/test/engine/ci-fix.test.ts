@@ -677,4 +677,45 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       await cleanup();
     }
   }, REAL_GIT_TIMEOUT_MS);
+
+  it('primary checkout leak assertion: git status clean and HEAD/branch unchanged after fix run (Task 20)', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      const beforeBranch = execSync(`git rev-parse --abbrev-ref HEAD`, { cwd: repoPath }).toString().trim();
+      const beforeHead = execSync(`git rev-parse HEAD`, { cwd: repoPath }).toString().trim();
+
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
+      };
+
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      expect(result.kind).toBe('changed');
+
+      // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.
+      const status = execSync(`git status --porcelain`, { cwd: repoPath }).toString();
+      expect(status).toBe('');
+
+      // HEAD and branch must be exactly what they were before the resolver ran —
+      // proves worktree isolation is real, not just hoped-for (no accidental
+      // rebase/checkout/merge leaked into the primary checkout).
+      const afterBranch = execSync(`git rev-parse --abbrev-ref HEAD`, { cwd: repoPath }).toString().trim();
+      const afterHead = execSync(`git rev-parse HEAD`, { cwd: repoPath }).toString().trim();
+      expect(afterBranch).toBe(beforeBranch);
+      expect(afterHead).toBe(beforeHead);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
 });
