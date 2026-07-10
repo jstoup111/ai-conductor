@@ -166,6 +166,84 @@ describe('Task 2: resolveClaimBands — labels to band map', () => {
   });
 });
 
+describe('Task 3: dependency-claim — banded walk drains all, sorts band-first', () => {
+  it('critical(newest) beats low(oldest) when resolveBands is injected', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // low, oldest
+    const B = makeEnvelope('acme/app#2', '2026-07-05T00:00:00.000Z'); // critical, newest
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({});
+    const bands = new Map([
+      ['acme/app#1', 'low'],
+      ['acme/app#2', 'critical'],
+    ]);
+    const resolveBands = async (_refs: string[]) => bands;
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#2');
+
+    const stillPending = (await queue.listPending()).map((e: any) => e.sourceRef);
+    expect(stillPending).toEqual(['acme/app#1']);
+  });
+
+  it('band drain across claims: unlabeled, high, medium → high then medium then unlabeled', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // unlabeled
+    const B = makeEnvelope('acme/app#2', '2026-07-02T00:00:00.000Z'); // high
+    const C = makeEnvelope('acme/app#3', '2026-07-03T00:00:00.000Z'); // medium
+    const queue = makeFakeQueue([A, B, C]);
+    const resolveDependency = makeResolveDependency({});
+    const bands = new Map([
+      ['acme/app#1', 'unlabeled'],
+      ['acme/app#2', 'high'],
+      ['acme/app#3', 'medium'],
+    ]);
+    const resolveBands = async (_refs: string[]) => bands;
+
+    const first = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    expect(first.kind).toBe('claim');
+    expect((first as any).envelope.sourceRef).toBe('acme/app#2');
+
+    const second = await claimUnblocked({ queue, resolveDependency, resolveBands });
+    expect(second.kind).toBe('claim');
+    expect((second as any).envelope.sourceRef).toBe('acme/app#3');
+  });
+
+  it('no resolveBands injected → stays FIFO (oldest-unblocked wins, unchanged)', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // low, oldest
+    const B = makeEnvelope('acme/app#2', '2026-07-05T00:00:00.000Z'); // critical, newest
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({});
+
+    const outcome = await claimUnblocked({ queue, resolveDependency });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#1');
+  });
+
+  it('resolveBands throws → logs exactly one warning and keeps drain order', async () => {
+    const { claimUnblocked } = await loadClaimModule();
+    const A = makeEnvelope('acme/app#1', '2026-07-01T00:00:00.000Z'); // low, oldest
+    const B = makeEnvelope('acme/app#2', '2026-07-05T00:00:00.000Z'); // critical, newest
+    const queue = makeFakeQueue([A, B]);
+    const resolveDependency = makeResolveDependency({});
+    const resolveBands = async (_refs: string[]) => {
+      throw new Error('bands boom');
+    };
+    const warnings: unknown[][] = [];
+    const log = (...args: unknown[]) => warnings.push(args);
+
+    const outcome = await claimUnblocked({ queue, resolveDependency, resolveBands, log });
+
+    expect(outcome.kind).toBe('claim');
+    expect(outcome.envelope.sourceRef).toBe('acme/app#1');
+    expect(warnings.length).toBe(1);
+  });
+});
+
 describe('Task 20: dependency-claim — deferral is free; indeterminate defers; walk continues', () => {
   it('deferred entry keeps status pending and attempts unchanged after deferral', async () => {
     const { claimUnblocked } = await loadClaimModule();

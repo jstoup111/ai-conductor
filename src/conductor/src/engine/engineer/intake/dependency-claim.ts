@@ -5,7 +5,12 @@
 // walk; the all-blocked outcome lands in Task 21.
 
 import type { BlockerVerdict } from '../../blocker-resolver.js';
-import { parsePriorityLabels, type IssueLabelReader, type PriorityBand } from '../../backlog-priority.js';
+import {
+  parsePriorityLabels,
+  PRIORITY_BAND_RANK,
+  type IssueLabelReader,
+  type PriorityBand,
+} from '../../backlog-priority.js';
 
 /** Minimal envelope shape this module cares about. */
 export interface ClaimableEnvelope {
@@ -30,10 +35,18 @@ export interface DependencyClaimLedger {
   transition(source: string, sourceRef: string, status: string): Promise<void>;
 }
 
+/** Resolves priority bands for a batch of sourceRefs — typically
+ * `resolveClaimBands` bound to an IssueLabelReader. Absent ⇒ FIFO (today's
+ * behavior, byte-for-byte). Throws propagate as a single logged warning; the
+ * walk falls back to drain order rather than failing the claim. */
+export type ResolveBands = (refs: string[]) => Promise<Map<string, PriorityBand>>;
+
 export interface DependencyClaimDeps {
   queue: DependencyClaimQueue;
   resolveDependency: ResolveDependency;
   ledger?: DependencyClaimLedger;
+  resolveBands?: ResolveBands;
+  log?: (...args: unknown[]) => void;
 }
 
 /** A single deferred entry surfaced in an all-blocked report. */
@@ -88,30 +101,64 @@ export async function resolveClaimBands(
 }
 
 export async function claimUnblocked(deps: DependencyClaimDeps): Promise<ClaimOutcome> {
-  const { queue, resolveDependency } = deps;
+  const { queue, resolveDependency, resolveBands, log } = deps;
   const held: ClaimableEnvelope[] = [];
   const deferred: AllBlockedEntry[] = [];
 
   try {
+    // Drain ALL pending entries up front via the queue's own atomic claim()
+    // primitive. This lets a band resolver see (and reorder) the full
+    // pending set before any verdict is evaluated — without it, the walk is
+    // exactly today's FIFO scan.
     for (;;) {
       const envelope = await queue.claim();
-      if (!envelope) {
-        return deferred.length > 0 ? { kind: 'all-blocked', entries: deferred } : { kind: 'empty' };
-      }
+      if (!envelope) break;
+      held.push(envelope);
+    }
 
+    if (held.length === 0) {
+      return { kind: 'empty' };
+    }
+
+    if (resolveBands) {
+      try {
+        const refs = held
+          .map((e) => e.sourceRef)
+          .filter((ref): ref is string => ref != null);
+        const bands = await resolveBands(refs);
+        const withIndex = held.map((envelope, originalIndex) => ({ envelope, originalIndex }));
+        withIndex.sort((a, b) => {
+          const bandA = (a.envelope.sourceRef && bands.get(a.envelope.sourceRef)) ?? 'unlabeled';
+          const bandB = (b.envelope.sourceRef && bands.get(b.envelope.sourceRef)) ?? 'unlabeled';
+          const rankDiff = PRIORITY_BAND_RANK[bandA] - PRIORITY_BAND_RANK[bandB];
+          return rankDiff !== 0 ? rankDiff : a.originalIndex - b.originalIndex;
+        });
+        held.splice(0, held.length, ...withIndex.map((w) => w.envelope));
+      } catch (err) {
+        // Sort failure must never fail the claim — fall back to drain order
+        // and surface exactly one warning for operators.
+        log?.('claimUnblocked: resolveBands threw; falling back to drain order', err);
+      }
+    }
+
+    for (let i = 0; i < held.length; i++) {
+      const envelope = held[i];
       const verdict = await resolveDependency(envelope.sourceRef);
       if (verdict.kind === 'unblocked') {
+        held.splice(i, 1);
         return { kind: 'claim', envelope };
       }
 
       // blocked / indeterminate / cycle — defer, stateless, keep walking.
-      held.push(envelope);
       deferred.push({ envelope, verdict });
     }
+
+    return deferred.length > 0 ? { kind: 'all-blocked', entries: deferred } : { kind: 'empty' };
   } finally {
-    // Release every deferred entry back to the queue, regardless of how the
-    // walk ended (claim found, empty, or an unexpected throw) — deferral
-    // must never drop an entry from the queue.
+    // Release every remaining held entry back to the queue, regardless of
+    // how the walk ended (claim found, empty, or an unexpected throw) — the
+    // selected entry was already removed from `held`, so it's never
+    // re-released; deferral must never drop an entry from the queue.
     for (const envelope of held) {
       await queue.release(envelope);
     }
