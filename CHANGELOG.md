@@ -97,6 +97,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   unsatisfiable, and cross-file numeric story-ID collisions let unrelated
   plans falsely satisfy coverage. Unresolvable scoping now fails explicitly
   and never falls back to a corpus-wide scan.
+- Stale-engine initialization residuals from auto-restart work (#369):
+  orphaned `initStaleEngineState` call site in `daemon-cli.ts` (#307),
+  stale verdict log missing engine identities (#320, #321), and suppression
+  records incorrectly storing boot identity instead of durable identity (#478).
+  All three are now wired correctly: `initStaleEngineState` called once at
+  daemon startup with its result used by the stale-engine checker,
+  identities consistently captured and logged, and suppression records identity
+  properly to allow cache invalidation on identity changes.
 
 ### Added
 
