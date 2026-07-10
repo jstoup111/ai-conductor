@@ -280,7 +280,7 @@ export function makeRunFeature(
         const reason = failureReasonForFalseShip(outcome);
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -326,7 +326,7 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      await writeErrorHalt(worktree, noMarkerReason);
+      await writeErrorHalt(worktree, noMarkerReason, log);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -343,7 +343,7 @@ export function makeRunFeature(
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
       if (worktree) {
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -361,7 +361,7 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktree: FeatureWorktree, reason: string): Promise<void> {
+async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
   const note =
     `feature errored — parked for human inspection\n${reason}\n\n` +
     `Resume procedure:\n` +
