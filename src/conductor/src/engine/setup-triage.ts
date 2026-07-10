@@ -71,7 +71,7 @@ export type TriageOutcome =
   | {
       kind: 'park';
       outputTail: string;
-      quarantineRef?: never;
+      quarantineRef?: string;
       preservedPaths?: never;
       contractOutcome?: string;
     };
