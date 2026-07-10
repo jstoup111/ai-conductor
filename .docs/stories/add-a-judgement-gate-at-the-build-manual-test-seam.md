@@ -138,7 +138,7 @@ As the operator, I want the build → build_review → build cycle capped so tha
 
 #### Happy Path
 - Given `buildReviewSelfHeals` below `MAX_KICKBACKS_PER_GATE` (2), when FAIL arrives, then the counter increments and the kickback proceeds (TS-5). The counter is implemented as the existing **gate-keyed per-gate kickback counter** (the mechanism the daemon `↩ KICKBACK` visibility feature defines) — keyed by `build_review`, not a second parallel counter registry; independence from `manualTestSelfHeals` comes from the key.
-- Given the counter at the cap, when a further FAIL arrives, then `LOOP_HALT_MARKER` (`.pipeline/halt-user-input-required`) is written with the grader's evidence, a `loop_halt` event is emitted, and the run stops — no further dispatches.
+- Given the counter at the cap, when a further FAIL arrives, then `LOOP_HALT_MARKER` (`.pipeline/HALT` — NOT `.pipeline/halt-user-input-required`, which is the agent-written stall-question marker; see conflict report 2026-07-10-daemon-stall-remediation) is written with the grader's evidence, a `loop_halt` event is emitted, and the run stops — no further dispatches.
 
 #### Negative Paths
 - Given a HALT was written, when the daemon rekick sweep runs, then the feature is not silently re-dispatched into the same failing cycle (HALT is the terminal state until a human clears it).
