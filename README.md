@@ -908,6 +908,48 @@ On auth failure or expiry, the feature HALTs immediately instead of waiting.
 
 See `src/conductor/README.md` → "Sandbox auth-expiry park-and-poll" for implementation details.
 
+### Daemon build-auth (`conduct-ts` only) — isolating daemon builds from operator OAuth
+
+Self-host daemon builds no longer have to share the operator's own interactive `.credentials.json`
+OAuth session. Configure `harness_self_host.build_auth` to give the daemon its own build
+credential:
+
+```yaml
+# .ai-conductor/config.yml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; default shown
+```
+
+**Modes:**
+- **`daemon-token` (default).** The daemon reads a token from `token_path` (default
+  `~/.ai-conductor/build-auth`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` for the sandboxed
+  build step only — the operator's own session is untouched. Mint it once with:
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+- **`api-key`.** The build authenticates via an `ANTHROPIC_API_KEY` already present in the
+  daemon's environment; no token file is needed and the token pre-flight is skipped.
+
+**HALT remediation.** If `daemon-token` mode is configured and the token file is missing, empty,
+or unreadable, the daemon HALTs *before* provisioning the sandbox with a reason naming the mint
+command (`claude setup-token`), the resolved token path, and the config keys to set — it never
+burns the step's retry budget. Clear the HALT once the token exists and re-queue the feature. A
+mid-build auth failure in `daemon-token` mode parks and polls the token file for a refresh (same
+mechanism, and same `auth_park_timeout_minutes` timeout, as the operator-credentials park-and-poll
+above); in `api-key` mode there is nothing to poll, so an auth failure HALTs immediately naming
+`ANTHROPIC_API_KEY`.
+
+**Backward compatibility.** Leave `harness_self_host.build_auth` unset and nothing changes: the
+daemon keeps using the operator-credentials pre-flight and park-and-poll described above. Setting
+`build_auth.mode` explicitly switches the build to its own isolated credential and disables the
+operator-credentials pre-flight for that project.
+
+See `src/conductor/README.md` → "Daemon build-auth" for the module-level reference, and the
+`CHANGELOG.md` `[Unreleased]` migration block for copy-pasteable setup commands.
+
 ### Harness self-host guardrails (`conduct-ts` only)
 
 The harness is the one repo the daemon can't build the way it builds every other repo — a self-build

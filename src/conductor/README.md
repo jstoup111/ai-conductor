@@ -2005,6 +2005,72 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Daemon build-auth: isolating daemon builds from operator OAuth (Tasks 5-17, TR-1..TR-4)
+
+Self-host daemon builds authenticate to Claude independently of the operator's own
+`.credentials.json` OAuth session, so a daemon build can never read, wait on, or exhaust the
+operator's interactive login. Configured under `harness_self_host.build_auth` in
+`.ai-conductor/config.yml` (`types/config.ts`, validated in `engine/config.ts`, resolved by
+`resolveSelfHostConfig` in `engine/resolved-config.ts`):
+
+```yaml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; ~ expands to $HOME
+```
+
+**Modes:**
+
+- **`daemon-token` (default).** The daemon reads a token file at `token_path` (default
+  `~/.ai-conductor/build-auth`, resolved by `getDefaultBuildAuthTokenPath()` in
+  `resolved-config.ts`) that is entirely separate from the operator's `.credentials.json`. Mint
+  it once with:
+
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+
+  (`DAEMON_BUILD_TOKEN_MINT_COMMAND` in `self-host/daemon-build-token.ts` is the single source of
+  truth for this command string, reused by both the HALT message and the CHANGELOG migration
+  block.) On each sandboxed build dispatch the conductor reads the token
+  (`readDaemonBuildToken`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` into the sandboxed step's
+  environment only — the operator's own `CLAUDE_CODE_OAUTH_TOKEN` (if any) is restored in a
+  `finally` block afterward (`conductor.ts`, around the sandboxed `stepRunner.run` call).
+- **`api-key`.** The build authenticates via a pre-existing `ANTHROPIC_API_KEY` in the daemon
+  process's environment. The daemon-token preflight and the operator-credentials preflight are
+  both skipped in this mode — no token file is required.
+
+**Fail-closed pre-flight (`self-host/build-auth-preflight.ts`, Task 6).** Before a self-host build
+provisions its sandbox, `preflightBuildAuthCheck` runs in `daemon-token` mode only:
+
+- Token file present and non-empty → proceeds normally.
+- Token file missing, empty/whitespace-only, or unreadable (e.g. `chmod 000`) → writes
+  `.pipeline/HALT` (only if one doesn't already exist, so retries don't clobber an existing
+  reason) with the mint command, the resolved token path, and the `harness_self_host.build_auth`
+  config keys to set. The check runs **before** any sandbox is provisioned and never consumes the
+  step's retry budget.
+
+**Backward compatibility.** An absent `harness_self_host.build_auth` block (or one that isn't
+explicitly `daemon-token`/`api-key`) leaves the pre-#5-17 behavior unchanged: the conductor falls
+back to the operator-credentials preflight (`preflightCredentialsCheck`, which watches
+`~/.claude/.credentials.json` expiry) — see the park-and-poll section below. Once `build_auth.mode`
+is explicitly set to `daemon-token` or `api-key`, the operator-credentials preflight is skipped
+entirely (Task 11) — the two auth paths are mutually exclusive per build.
+
+**Auth-failure park in daemon-token mode (Task 11, TR-4).** If a step reports an auth failure
+mid-build, the daemon-token mode parks and polls the token file's mtime/content for a refresh
+(`createDaemonTokenContentClassifier` + `waitForCredentialsChange`), the same park-and-poll
+mechanism the operator-credentials path uses (see below), bounded by
+`auth_park_timeout_minutes`. In `api-key` mode there is no token file to watch, so an auth
+failure HALTs immediately with a reason naming `ANTHROPIC_API_KEY` and instructions to re-queue
+the feature after fixing it — parking never happens in `api-key` mode.
+
+**Migration.** See the `CHANGELOG.md` `[Unreleased]` migration block for the exact commands to
+mint a token and wire it into an existing project's config without clobbering a token that's
+already present.
+
 ### Sandbox auth-expiry park-and-poll (self-host daemon builds)
 
 Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
