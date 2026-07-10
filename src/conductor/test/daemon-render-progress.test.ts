@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import chalk from 'chalk';
+import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 // daemon-cli transitively imports the provider layer (execa); stub it so this
 // pure-formatting test doesn't pull a live process dependency.
@@ -7,6 +10,8 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 
 import { renderDaemonEvent } from '../src/daemon-cli.js';
 import type { ConductorEvent } from '../src/types/index.js';
+import { openDaemonLog, formatDaemonLogLine } from '../src/engine/daemon-log.js';
+import { computeStatusRow } from '../src/engine/daemon-observe-cli.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 11: daemon.log renders the three intra-step build kinds
@@ -121,5 +126,64 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     } as unknown as ConductorEvent;
 
     expect(() => renderDaemonEvent(malformed, () => {})).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 12: end-to-end seam — event → renderDaemonEvent → DaemonLogSink →
+// daemon.log → tailDaemonLog → computeStatusRow's lastActivity
+// (adr-2026-07-10-intra-step-build-progress-events).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('daemon status freshness integration: build_progress heartbeat', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    chalk.level = 0;
+    root = await mkdtemp(join(tmpdir(), 'daemon-status-freshness-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("computeStatusRow's lastActivity surfaces the line rendered for a build_progress event, written through the real DaemonLogSink path", async () => {
+    const repo = join(root, 'repo');
+    await mkdir(repo, { recursive: true });
+
+    const event: ConductorEvent = {
+      type: 'build_progress',
+      step: 'build',
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      currentTaskName: 'Wire watcher into conductor',
+      featureSlug: 'emit-intra-step-build-progress-and-stall-as-events',
+    };
+
+    // Mirrors runDaemonMode's log() sink: renderDaemonEvent produces the line,
+    // formatDaemonLogLine stamps it, DaemonLogSink appends it to daemon.log.
+    const sink = await openDaemonLog(repo);
+    let renderedLine: string | undefined;
+    renderDaemonEvent(event, (m) => {
+      renderedLine = m;
+      sink.write(formatDaemonLogLine(`[daemon] ${m}`));
+    });
+    await sink.close();
+
+    expect(renderedLine).toBeDefined();
+
+    const record = {
+      schemaVersion: 1 as const,
+      name: 'repo',
+      path: repo,
+      status: 'registered' as const,
+      registeredAt: '2026-07-10T00:00:00.000Z',
+    };
+    const row = await computeStatusRow(record);
+
+    expect(row.lastActivity).toBeDefined();
+    expect(row.lastActivity).toContain(renderedLine!);
+    expect(row.lastActivityAt).toBeDefined();
   });
 });
