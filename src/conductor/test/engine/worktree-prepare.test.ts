@@ -358,4 +358,67 @@ describe('engine/worktree-prepare', () => {
       ).toBe(1);
     });
   });
+
+  // Task 14: corrupt .claude/settings.local.json is backed up and replaced
+  // rather than crashing provisioning; committed .claude/settings.json is
+  // never touched.
+  describe('settings wiring negatives (Task 14)', () => {
+    const settingsPath = (worktreeDir: string) =>
+      join(worktreeDir, '.claude', 'settings.local.json');
+    const committedSettingsPath = (worktreeDir: string) =>
+      join(worktreeDir, '.claude', 'settings.json');
+
+    it('backs up corrupt settings.local.json, warns, and writes a fresh valid file', async () => {
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      await writeFile(settingsPath(dir), '{invalid', 'utf-8');
+
+      const logs: string[] = [];
+      await prepareWorktree(dir, (msg) => logs.push(msg));
+
+      // Fresh file is valid JSON with the expected hook entries.
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+      expect(settings.hooks.PreToolUse).toBeDefined();
+      expect(settings.hooks.PostToolUse).toBeDefined();
+
+      // Original corrupt file was renamed aside with a .bak-<ts> suffix.
+      const entries = await import('node:fs/promises').then((m) => m.readdir(claudeDir));
+      const backups = entries.filter((e) => /^settings\.local\.json\.bak-/.test(e));
+      expect(backups.length).toBe(1);
+      const backupContent = await readFile(join(claudeDir, backups[0]), 'utf-8');
+      expect(backupContent).toBe('{invalid');
+
+      // A warning was logged.
+      expect(logs.some((l) => /corrupt|invalid|malformed/i.test(l))).toBe(true);
+    });
+
+    it('never modifies the committed .claude/settings.json bytes, and settings.local.json is not tracked-modified', async () => {
+      await execFileAsync('git', ['init'], { cwd: dir });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      const committedBytes = JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] } }, null, 2);
+      await writeFile(committedSettingsPath(dir), committedBytes, 'utf-8');
+
+      // .claude/settings.local.json is gitignored in real projects; mirror that.
+      await writeFile(join(dir, '.gitignore'), '.claude/settings.local.json\n', 'utf-8');
+
+      await execFileAsync('git', ['add', '-A'], { cwd: dir });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: dir });
+
+      await prepareWorktree(dir);
+
+      const afterBytes = await readFile(committedSettingsPath(dir), 'utf-8');
+      expect(afterBytes).toBe(committedBytes);
+
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: dir });
+      const trackedModifiedLocalSettings = stdout
+        .split('\n')
+        .some((line) => / M .*settings\.local\.json/.test(line));
+      expect(trackedModifiedLocalSettings).toBe(false);
+    });
+  });
 });

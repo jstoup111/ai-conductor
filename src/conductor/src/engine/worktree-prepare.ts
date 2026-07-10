@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from './session-hook-assets.js';
@@ -100,8 +100,24 @@ async function wireSessionHookSettings(
     try {
       const raw = await readFile(settingsPath, 'utf-8');
       settings = JSON.parse(raw);
-    } catch {
-      // No file yet, or malformed — start fresh.
+    } catch (parseErr) {
+      // No file yet is fine — start fresh silently. A file that exists but
+      // fails to parse is corrupt: back it up rather than discarding it
+      // silently, then continue with a fresh, valid settings object.
+      let existed = true;
+      try {
+        await access(settingsPath);
+      } catch {
+        existed = false;
+      }
+      if (existed) {
+        const backupPath = `${settingsPath}.bak-${Date.now()}`;
+        await rename(settingsPath, backupPath);
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        log?.(
+          `session hook settings: settings.local.json was corrupt/malformed (${msg}) — backed up to ${backupPath}`,
+        );
+      }
       settings = {};
     }
 
