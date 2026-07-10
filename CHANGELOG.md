@@ -12,6 +12,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Intra-step build progress and stall events on the conductor event bus
+  (`conduct-ts` only): `build_progress` (change-driven heartbeat: resolved/total
+  tasks, current task, commit count, no-evidence attempts), `build_no_progress`
+  (quiet-episode warning after `quiet_minutes` with no task-status change), and
+  `build_stall` (terminal no-progress signal). Emitted by a new
+  `BuildProgressWatcher` polling `.pipeline/task-status.json`/git `HEAD` during
+  the `build` step, with a leak-safe start/stop lifecycle. Rendered by
+  daemon.log, the TTY dashboard, the OTel exporter (as span events), and
+  persisted to `.pipeline/events.jsonl`. Configurable via an optional
+  `build_progress:` block (`poll_seconds`, `quiet_minutes`,
+  `heartbeat_minutes`, `enabled`; all default-populated, `enabled: false` as a
+  full escape hatch). See `README.md` and `src/conductor/README.md`.
 - `priority: critical` backlog band, above `high`: reserved for fixes to
   things that completely break or cause very severe degradation. The daemon
   dispatches critical-labeled work first among issue-linked items (unlinked
