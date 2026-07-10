@@ -76,6 +76,24 @@ class MockGh {
   private closeResponses: Array<{ shouldFail?: boolean; error?: string }> = [];
   private commentResponses: Array<{ shouldFail?: boolean; error?: string }> = [];
 
+  /** Call-counting instrumentation for quota-discipline tests */
+  public callCounts = {
+    getIssueBody: 0,
+    upsertIssueBody: 0,
+    getIssueLabels: 0,
+    getIssueState: 0,
+    upsertIssueComment: 0,
+    closeIssue: 0
+  };
+
+  get totalCalls(): number {
+    return Object.values(this.callCounts).reduce((a, b) => a + b, 0);
+  }
+
+  get writeCalls(): number {
+    return this.callCounts.upsertIssueBody + this.callCounts.upsertIssueComment + this.callCounts.closeIssue;
+  }
+
   setBody(repo: string, issue: string, body: string | null): void {
     this.bodies.set(`${repo}/${issue}`, body);
   }
@@ -101,10 +119,12 @@ class MockGh {
   }
 
   async getIssueBody(repo: string, issue: string): Promise<string | null> {
+    this.callCounts.getIssueBody++;
     return this.bodies.get(`${repo}/${issue}`) ?? null;
   }
 
   async upsertIssueBody(repo: string, issue: string, body: string): Promise<void> {
+    this.callCounts.upsertIssueBody++;
     const response = this.stampResponses[this.stampIndex++];
     if (response?.shouldFail) {
       throw new Error(response.error ?? 'stamp failed');
@@ -113,14 +133,17 @@ class MockGh {
   }
 
   async getIssueLabels(repo: string, issue: string): Promise<string[]> {
+    this.callCounts.getIssueLabels++;
     return this.labels.get(`${repo}/${issue}`) ?? [];
   }
 
   async getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null> {
+    this.callCounts.getIssueState++;
     return this.states.get(`${repo}/${issue}`) ?? null;
   }
 
   async upsertIssueComment(repo: string, issue: string, body: string): Promise<void> {
+    this.callCounts.upsertIssueComment++;
     const response = this.commentResponses[this.commentIndex++];
     if (response?.shouldFail) {
       throw new Error(response.error ?? 'comment failed');
@@ -128,6 +151,7 @@ class MockGh {
   }
 
   async closeIssue(repo: string, issue: string): Promise<void> {
+    this.callCounts.closeIssue++;
     const response = this.closeResponses[this.closeIndex++];
     if (response?.shouldFail) {
       throw new Error(response.error ?? 'close failed');
@@ -337,6 +361,157 @@ describe('sweep', () => {
       expect(result.exitCode).toBe(0);
       // Ledger should not be written
       expect(await mockFs.fileExists(baseConfig.ledgerPath)).toBe(false);
+    });
+  });
+
+  describe('quota discipline (C1)', () => {
+    function seedLedger(entries: Array<{ issue: string; slug: string; haltAt: string }>) {
+      const ledgerEntries: Record<string, unknown> = {};
+      for (const e of entries) {
+        ledgerEntries[e.issue] = {
+          issue: e.issue,
+          repo: 'test/repo',
+          slug: e.slug,
+          haltAt: e.haltAt,
+          status: 'pending',
+          stampedAt: e.haltAt // already stamped in a prior sweep
+        };
+      }
+      mockFs.setFile(baseConfig.ledgerPath, JSON.stringify({ version: 1, entries: ledgerEntries }, null, 2));
+    }
+
+    it('makes zero gh calls when all entries are already stamped and not closable', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, SIMPLE_MONITOR_LOG);
+      seedLedger([
+        { issue: '297', slug: 'daemon-lifecycle-controls', haltAt: '2026-07-04T11:58:38.984Z' },
+        { issue: '300', slug: 'make-daemon-build-push-pr-timing-a-configurable-st', haltAt: '2026-07-04T11:58:38.984Z' }
+      ]);
+      // No local ship evidence set up -> not resolvable
+
+      const config: SweepConfig = {
+        ...baseConfig,
+        fs: mockFs,
+        gh: mockGh,
+        clock: { now: () => new Date('2026-07-05T10:00:00Z') }
+      };
+
+      const result = await sweep(config);
+
+      expect(result.exitCode).toBe(0);
+      expect(mockGh.totalCalls).toBe(0);
+    });
+
+    it('makes zero gh calls for 50 open entries without local evidence', async () => {
+      const lines: string[] = [];
+      const seedEntries: Array<{ issue: string; slug: string; haltAt: string }> = [];
+      for (let i = 0; i < 50; i++) {
+        const issue = String(1000 + i);
+        const slug = `quota-test-slug-${i}`;
+        lines.push(`2026-07-04T11:59:37Z NEW HALT: 2026-07-04T11:58:38.984Z [daemon] ✋ ${slug} halted`);
+        lines.push(`HALT ${slug} -> filed #${issue}`);
+        seedEntries.push({ issue, slug, haltAt: '2026-07-04T11:58:38.984Z' });
+      }
+      mockFs.setFile(baseConfig.monitorLogPath, lines.join('\n'));
+      seedLedger(seedEntries);
+
+      const config: SweepConfig = {
+        ...baseConfig,
+        fs: mockFs,
+        gh: mockGh,
+        clock: { now: () => new Date('2026-07-05T10:00:00Z') }
+      };
+
+      const result = await sweep(config);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.parsed).toBe(50);
+      expect(mockGh.totalCalls).toBe(0);
+    });
+
+    it('bounds gh calls for one newly-closable entry to state+label reads and comment+close writes', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, SIMPLE_MONITOR_LOG);
+      seedLedger([
+        { issue: '297', slug: 'daemon-lifecycle-controls', haltAt: '2026-07-04T11:58:38.984Z' },
+        { issue: '300', slug: 'make-daemon-build-push-pr-timing-a-configurable-st', haltAt: '2026-07-04T11:58:38.984Z' }
+      ]);
+
+      // Local ship evidence for issue 297 only, mtime after haltAt
+      mockFs.setFile(
+        '/test/repo/.daemon/processed/daemon-lifecycle-controls.json',
+        JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }),
+        new Date('2026-07-05T00:00:00Z')
+      );
+
+      mockGh.setLabels('test/repo', '297', []);
+      mockGh.setState('test/repo', '297', 'open');
+
+      const config: SweepConfig = {
+        ...baseConfig,
+        fs: mockFs,
+        gh: mockGh,
+        clock: { now: () => new Date('2026-07-05T10:00:00Z') }
+      };
+
+      const result = await sweep(config);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.closed).toBe(1);
+      // No stamp calls should occur since already stamped
+      expect(mockGh.callCounts.getIssueBody).toBe(0);
+      expect(mockGh.callCounts.upsertIssueBody).toBe(0);
+      // Bounded close-path calls: 1 label read + 1 state read + 1 comment + 1 close
+      expect(mockGh.callCounts.getIssueLabels).toBeLessThanOrEqual(1);
+      expect(mockGh.callCounts.getIssueState).toBeLessThanOrEqual(1);
+      expect(mockGh.callCounts.upsertIssueComment).toBeLessThanOrEqual(1);
+      expect(mockGh.callCounts.closeIssue).toBeLessThanOrEqual(1);
+      expect(mockGh.totalCalls).toBeLessThanOrEqual(4);
+    });
+  });
+
+  describe('dry-run planned actions', () => {
+    it('makes zero write calls and prints planned actions when dryRun is enabled', async () => {
+      mockFs.setFile(baseConfig.monitorLogPath, SIMPLE_MONITOR_LOG);
+      const ledgerEntries = {
+        '297': {
+          issue: '297',
+          repo: 'test/repo',
+          slug: 'daemon-lifecycle-controls',
+          haltAt: '2026-07-04T11:58:38.984Z',
+          status: 'pending',
+          stampedAt: '2026-07-04T11:58:38.984Z'
+        },
+        '300': {
+          issue: '300',
+          repo: 'test/repo',
+          slug: 'make-daemon-build-push-pr-timing-a-configurable-st',
+          haltAt: '2026-07-04T11:58:38.984Z',
+          status: 'pending',
+          stampedAt: '2026-07-04T11:58:38.984Z'
+        }
+      };
+      mockFs.setFile(baseConfig.ledgerPath, JSON.stringify({ version: 1, entries: ledgerEntries }, null, 2));
+
+      // Local ship evidence for issue 297 -> would be closable if not dry-run
+      mockFs.setFile(
+        '/test/repo/.daemon/processed/daemon-lifecycle-controls.json',
+        JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test/repo/pull/1' }),
+        new Date('2026-07-05T00:00:00Z')
+      );
+
+      const config: SweepConfig = {
+        ...baseConfig,
+        dryRun: true,
+        fs: mockFs,
+        gh: mockGh,
+        clock: { now: () => new Date('2026-07-05T10:00:00Z') }
+      };
+
+      const result = await sweep(config);
+
+      expect(result.exitCode).toBe(0);
+      expect(mockGh.writeCalls).toBe(0);
+      // Planned action for the closable issue should be surfaced in output
+      expect(result.summary).toContain('297');
     });
   });
 });
