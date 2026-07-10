@@ -16,7 +16,7 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
-import type { ResolutionContext, ResolutionAttempt } from './rebase.js';
+import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { findArtifactFiles } from './artifacts.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
@@ -639,6 +639,60 @@ export class DefaultStepRunner implements StepRunner {
     });
 
     return parseRebaseResolutionOutput(result.output);
+  }
+
+  /**
+   * Dispatch a fix-session to attempt to resolve a setup failure. Part of the
+   * two-stage setup-failure triage (TS-3). Uses a fresh one-shot session
+   * (never resumes the main conductor session) with the output tail in the
+   * prompt so Claude can diagnose and fix the root cause.
+   *
+   * Always returns `{ attempted: true }` — the method's role is to bootstrap
+   * the fix session. Whether the fix succeeds is determined by whether the
+   * setup step subsequently passes, not by this method's return value.
+   *
+   * Runs with cwd set to the worktreePath so any cleanup/fix commands operate
+   * in the right worktree context.
+   */
+  async resolveSetupFailure(ctx: SetupFailureContext): Promise<SetupFailureAttempt> {
+    const resolved = this.resolvedConfigFor('worktree');
+
+    const systemPrompt =
+      'You are attempting to fix a setup failure in a feature worktree.\n' +
+      `Worktree path: ${ctx.worktreePath}\n` +
+      `Feature slug: ${ctx.slug}\n\n` +
+      'Diagnose the failure and attempt to fix the root cause (e.g., missing dependencies, ' +
+      'version conflicts, environment issues). Use the current directory (the worktree) ' +
+      'for any diagnostic or remediation commands.\n' +
+      'After making fixes, the setup step will be retried automatically.';
+
+    const prompt =
+      'The last output from the failed setup step was:\n' +
+      '```\n' +
+      `${ctx.outputTail}\n` +
+      '```\n\n' +
+      'Diagnose and fix the setup failure. Explain your diagnosis and the fixes you applied.';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Walk the fallback ladder so the setup-failure resolver is not blocked by
+    // one model's unavailability.
+    await this.modelAvailability.invokeWithLadder(this.provider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: ctx.worktreePath,
+    });
+
+    // Always report attempted: true — the success of the fix is determined by
+    // whether the setup step subsequently passes.
+    return { attempted: true };
   }
 
   /**

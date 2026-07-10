@@ -103,6 +103,8 @@ import {
   type RebaseOutcome,
   type ResolutionContext,
   type ResolutionAttempt,
+  type SetupFailureContext,
+  type SetupFailureAttempt,
 } from './rebase.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -282,6 +284,17 @@ export interface StepRunner {
    * degrades gracefully to a conflict HALT.
    */
   resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
+  /**
+   * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
+   * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
+   * the main conductor session) with the output tail in the system prompt.
+   *
+   * Always returns `{ attempted: true }` — the success of the fix is determined
+   * by whether the setup step subsequently passes, not by this method's result.
+   * Used to bootstrap a fresh session that attempts to fix the root cause so
+   * the setup step can be retried.
+   */
+  resolveSetupFailure?(ctx: SetupFailureContext): Promise<SetupFailureAttempt>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';

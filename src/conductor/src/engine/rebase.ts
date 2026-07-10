@@ -503,6 +503,12 @@ export type ResolutionAttempt = { resolved: true } | { resolved: false; reason: 
 export interface ResolutionContext { conflicts: string[]; projectRoot: string; baseRef: string }
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 
+// ── Setup failure resolution (TS-3 / Task 9) ────────────────────────────────
+
+export type SetupFailureAttempt = { attempted: true };
+export interface SetupFailureContext { worktreePath: string; outputTail: string; slug: string }
+export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFailureAttempt>;
+
 /**
  * Check whether every commit subject from before the rebase is still present in
  * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
