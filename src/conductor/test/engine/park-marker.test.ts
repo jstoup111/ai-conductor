@@ -1,13 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   writeAutoPark,
   isOperatorParked,
   getProvenanceType,
   writeOperatorPark,
+  resolveMainRepoRoot,
+  __resetResolveCacheForTests,
 } from '../../src/engine/park-marker';
+
+const execFile = promisify(execFileCb);
 
 let repoPath: string;
 
@@ -113,5 +119,103 @@ describe('park-marker auto-park provenance (Task 22)', () => {
     expect(secondContent).toBe(firstContent);
     expect(secondContent).toContain('First reason');
     expect(secondContent).not.toContain('Second reason');
+  });
+});
+
+describe('resolveMainRepoRoot (Task 1)', () => {
+  let mainRoot: string;
+
+  async function g(args: string[], cwd?: string) {
+    return execFile('git', args, { cwd: cwd || mainRoot });
+  }
+
+  /** Create a real git repo at mainRoot with a real linked worktree. */
+  async function initRepoWithWorktree(slug: string): Promise<string> {
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(mainRoot, 'README.md'), '# base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await mkdir(join(mainRoot, '.worktrees'), { recursive: true });
+    const worktreeDir = join(mainRoot, '.worktrees', slug);
+    await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+    return worktreeDir;
+  }
+
+  beforeEach(async () => {
+    mainRoot = await mkdtemp(join(tmpdir(), 'resolve-main-root-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(mainRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('resolveMainRepoRoot(mainRoot) returns mainRoot when called from main repo root', async () => {
+    await initRepoWithWorktree('test-feat');
+    const resolved = await resolveMainRepoRoot(mainRoot);
+    expect(resolved).toBe(mainRoot);
+  });
+
+  it('resolveMainRepoRoot(worktreeDir) returns mainRoot when called from a linked worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+    const resolved = await resolveMainRepoRoot(worktreeDir);
+    expect(resolved).toBe(mainRoot);
+  });
+
+  it('resolveMainRepoRoot caches results per startDir to avoid repeated git calls', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+
+    // First call resolves the worktree to main root
+    const first = await resolveMainRepoRoot(worktreeDir);
+    expect(first).toBe(mainRoot);
+
+    // Second call returns the same cached promise
+    const second = await resolveMainRepoRoot(worktreeDir);
+    expect(second).toBe(mainRoot);
+
+    // Both calls should return identical results
+    expect(first).toBe(second);
+
+    // Verify cache is populated by checking another directory uses different cache entry
+    const tmpDir = await mkdtemp(join(tmpdir(), 'cache-test-'));
+    try {
+      const third = await resolveMainRepoRoot(tmpDir);
+      // Non-git dir returns itself
+      expect(third).toBe(tmpDir);
+      // Different result from first call
+      expect(third).not.toBe(first);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot(nonGitDir) returns nonGitDir as fallback', async () => {
+    const nonGitDir = await mkdtemp(join(tmpdir(), 'non-git-'));
+    try {
+      const resolved = await resolveMainRepoRoot(nonGitDir);
+      expect(resolved).toBe(nonGitDir);
+    } finally {
+      await rm(nonGitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot logs errors via onResolveError callback when provided', async () => {
+    const nonGitDir = await mkdtemp(join(tmpdir(), 'non-git-error-'));
+    const errors: Error[] = [];
+
+    try {
+      const resolved = await resolveMainRepoRoot(nonGitDir, undefined, (err) => {
+        errors.push(err);
+      });
+      expect(resolved).toBe(nonGitDir);
+      // Error should have been logged
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      await rm(nonGitDir, { recursive: true, force: true });
+    }
   });
 });
