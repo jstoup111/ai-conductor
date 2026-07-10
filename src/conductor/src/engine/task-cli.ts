@@ -52,16 +52,22 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '  confirmation and updates task-status.json.\n' +
         '\n' +
         'conduct task done <id>\n' +
-        '  Mark task <id> as complete. Updates task-status.json and prints\n' +
-        '  a completion summary.',
+        '  Mark task <id> as complete. Clears the current-task stamp file.\n' +
+        '  Task status is updated only by the gate authority (Task 19/pipeline skill gate).',
     );
     return 2;
   }
 
-  // TODO: Implement task start/done logic
-  // For now, just acknowledge the command
-  console.log(`Task ${cmd.kind}: ${cmd.id}`);
-  return 0;
+  if (cmd.kind === 'start') {
+    return runTaskStart(cwd, cmd.id);
+  }
+
+  if (cmd.kind === 'done') {
+    return runTaskDone(cwd, cmd.id);
+  }
+
+  // Should never reach here
+  return 2;
 }
 
 /**
@@ -147,6 +153,52 @@ export async function runTaskStart(projectRoot: string, id: string): Promise<num
     await writeFile(stampPath, id);
   } catch (err) {
     console.error(`[task-cli] failed to write stamp file: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  return 0;
+}
+
+/**
+ * Clear a task by removing its stamp file at .pipeline/current-task.
+ * Validates that the stamp matches the requested id before removing it.
+ *
+ * Safety guarantees:
+ * - If stamp file contains a different id, exits non-zero and leaves stamp untouched
+ * - If stamp file is absent, exits 0 (idempotent)
+ * - NEVER modifies task-status.json (completion is gate authority, not this function)
+ *
+ * Exit codes:
+ *   0 = success (stamp removed or already absent)
+ *   1 = mismatch (stamp exists but id doesn't match, stamp left untouched)
+ */
+export async function runTaskDone(projectRoot: string, id: string): Promise<number> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const stampPath = join(pipelineDir, 'current-task');
+
+  // Try to read the current stamp
+  let stampContent: string;
+  try {
+    stampContent = await readFile(stampPath, 'utf-8');
+  } catch (err) {
+    // Stamp file doesn't exist — this is idempotent success
+    return 0;
+  }
+
+  // Validate stamp matches the requested id
+  if (stampContent !== id) {
+    console.error(
+      `[task-cli] task id mismatch: requested "${id}" but stamp contains "${stampContent}"\n` +
+        `[task-cli] stamp will not be removed until task ${stampContent} is marked done`,
+    );
+    return 1;
+  }
+
+  // Remove the stamp file
+  try {
+    await rm(stampPath);
+  } catch (err) {
+    console.error(`[task-cli] failed to remove stamp file: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { detectTaskCommand, runTaskStart } from '../../src/engine/task-cli.js';
+import { detectTaskCommand, runTaskStart, runTaskDone } from '../../src/engine/task-cli.js';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -484,6 +484,233 @@ describe('runTaskStart', () => {
         expect(task).toHaveProperty('name');
         expect(task).toHaveProperty('status');
       }
+    });
+  });
+});
+
+describe('runTaskDone', () => {
+  let dir: string;
+  let stdErr: string[];
+
+  beforeEach(async () => {
+    dir = await fsPromises.mkdtemp(join(tmpdir(), 'task-cli-done-test-'));
+    stdErr = [];
+    const origError = console.error;
+    console.error = (...args: any[]) => {
+      stdErr.push(args.join(' '));
+      origError(...args);
+    };
+  });
+
+  afterEach(async () => {
+    await fsPromises.rm(dir, { recursive: true, force: true });
+  });
+
+  describe('happy path — done 7 after start 7', () => {
+    it('removes current-task stamp and exits 0', async () => {
+      // Setup: seed task-status.json and stamp
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Start task 7 first
+      await runTaskStart(dir, '7');
+
+      // Verify stamp exists
+      const stampPath = join(dir, '.pipeline/current-task');
+      let stampContent = await fsPromises.readFile(stampPath, 'utf-8');
+      expect(stampContent).toBe('7');
+
+      // Call runTaskDone for task 7
+      const exitCode = await runTaskDone(dir, '7');
+      expect(exitCode).toBe(0);
+
+      // Verify stamp file is removed
+      let stampExists = false;
+      try {
+        await fsPromises.readFile(stampPath, 'utf-8');
+        stampExists = true;
+      } catch {
+        stampExists = false;
+      }
+      expect(stampExists).toBe(false);
+    });
+
+    it('does not modify task-status.json row status (stays in_progress)', async () => {
+      // Setup: seed task-status.json and stamp
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Start task 7
+      await runTaskStart(dir, '7');
+
+      // Call runTaskDone
+      await runTaskDone(dir, '7');
+
+      // Verify row 7 is still in_progress (never becomes completed)
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const content = await fsPromises.readFile(statusPath, 'utf-8');
+      const status = JSON.parse(content);
+
+      const task7 = status.tasks.find((t: any) => t.id === '7');
+      expect(task7.status).toBe('in_progress');
+    });
+  });
+
+  describe('mismatch guard — done 7 while stamp is 8', () => {
+    it('exits non-zero when stamp has different id', async () => {
+      // Setup: seed task-status.json and stamp with id 8
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Start task 8
+      await runTaskStart(dir, '8');
+
+      // Try to done task 7 (mismatch)
+      const exitCode = await runTaskDone(dir, '7');
+      expect(exitCode).not.toBe(0);
+    });
+
+    it('leaves stamp file untouched on mismatch', async () => {
+      // Setup: seed task-status.json and stamp with id 8
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Start task 8
+      await runTaskStart(dir, '8');
+
+      const stampPath = join(dir, '.pipeline/current-task');
+      const originalStamp = await fsPromises.readFile(stampPath, 'utf-8');
+
+      // Try to done task 7 (mismatch)
+      await runTaskDone(dir, '7');
+
+      // Verify stamp is still 8
+      const currentStamp = await fsPromises.readFile(stampPath, 'utf-8');
+      expect(currentStamp).toBe(originalStamp);
+      expect(currentStamp).toBe('8');
+    });
+
+    it('error message names both ids (requested and current)', async () => {
+      // Setup: seed task-status.json and stamp with id 8
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks }, null, 2),
+      );
+
+      // Start task 8
+      await runTaskStart(dir, '8');
+
+      // Clear stderr capture
+      stdErr = [];
+
+      // Try to done task 7 (mismatch)
+      await runTaskDone(dir, '7');
+
+      // Verify error names both ids
+      const errorOutput = stdErr.join('\n');
+      expect(errorOutput).toContain('7');
+      expect(errorOutput).toContain('8');
+    });
+  });
+
+  describe('idempotent — done 7 with no stamp file', () => {
+    it('exits 0 when stamp file does not exist', async () => {
+      // Setup: only pipeline dir exists, no stamp
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      // Call runTaskDone for task 7 (no stamp)
+      const exitCode = await runTaskDone(dir, '7');
+      expect(exitCode).toBe(0);
+    });
+
+    it('is a no-op when stamp file does not exist', async () => {
+      // Setup: pipeline dir exists, no stamp
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      await fsPromises.writeFile(statusPath, JSON.stringify({ tasks }, null, 2));
+
+      const originalContent = await fsPromises.readFile(statusPath, 'utf-8');
+
+      // Call runTaskDone for task 7 (no stamp)
+      await runTaskDone(dir, '7');
+
+      // Verify task-status.json is unchanged
+      const currentContent = await fsPromises.readFile(statusPath, 'utf-8');
+      expect(currentContent).toBe(originalContent);
+    });
+  });
+
+  describe('no completion stamping — never modifies task-status.json', () => {
+    it('does not modify task-status.json when clearing stamp', async () => {
+      // Setup: seed task-status.json and start task 7
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const tasks = Array.from({ length: 12 }, (_, i) => ({
+        id: String(i + 1),
+        name: `Task ${i + 1}`,
+        status: 'pending',
+      }));
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const initialJson = JSON.stringify({ tasks }, null, 2);
+      await fsPromises.writeFile(statusPath, initialJson);
+
+      // Start task 7 (this modifies status to in_progress)
+      await runTaskStart(dir, '7');
+      const afterStartContent = await fsPromises.readFile(statusPath, 'utf-8');
+
+      // Call runTaskDone
+      await runTaskDone(dir, '7');
+
+      // Verify task-status.json content is identical to after-start state
+      const afterDoneContent = await fsPromises.readFile(statusPath, 'utf-8');
+      expect(afterDoneContent).toBe(afterStartContent);
+
+      // Verify row 7 is still in_progress (not completed)
+      const status = JSON.parse(afterDoneContent);
+      const task7 = status.tasks.find((t: any) => t.id === '7');
+      expect(task7.status).toBe('in_progress');
     });
   });
 });
