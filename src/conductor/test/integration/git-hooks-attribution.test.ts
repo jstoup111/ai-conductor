@@ -264,26 +264,68 @@ describe('integration/git-hooks-attribution', () => {
       await chmod(path, 0o755);
     }
 
-    it('runs the chained commit-msg hook with the same arguments', async () => {
-      await writeCommonHook(
-        'commit-msg',
-        '#!/bin/bash\ncp "$1" "$(git rev-parse --show-toplevel)/chained-saw.txt"\nexit 0\n',
-      );
-      const res = await commitFile('o.txt', 'o', 'feat: chained\n\nTask: 7');
-      expect(res.code).toBe(0);
-      const saw = await readFile(join(dir, 'chained-saw.txt'), 'utf-8');
-      expect(saw).toContain('Task: 7');
+    describe('commit-msg hook chaining', () => {
+      it('runs the chained commit-msg hook with the same arguments', async () => {
+        await writeCommonHook(
+          'commit-msg',
+          '#!/bin/bash\ncp "$1" "$(git rev-parse --show-toplevel)/chained-saw.txt"\nexit 0\n',
+        );
+        const res = await commitFile('o.txt', 'o', 'feat: chained\n\nTask: 7');
+        expect(res.code).toBe(0);
+        const saw = await readFile(join(dir, 'chained-saw.txt'), 'utf-8');
+        expect(saw).toContain('Task: 7');
+      });
+
+      it('fails the commit when the chained hook exits non-zero', async () => {
+        await writeCommonHook('commit-msg', '#!/bin/bash\necho "chained veto" >&2\nexit 1\n');
+        const res = await commitFile('p.txt', 'p', 'feat: chained veto\n\nTask: 7');
+        expect(res.code).not.toBe(0);
+      });
+
+      it('does not error when the common hook is absent or non-executable', async () => {
+        const res = await commitFile('q.txt', 'q', 'feat: no common hook\n\nTask: 7');
+        expect(res.code).toBe(0);
+      });
     });
 
-    it('fails the commit when the chained hook exits non-zero', async () => {
-      await writeCommonHook('commit-msg', '#!/bin/bash\necho "chained veto" >&2\nexit 1\n');
-      const res = await commitFile('p.txt', 'p', 'feat: chained veto\n\nTask: 7');
-      expect(res.code).not.toBe(0);
-    });
+    describe('prepare-commit-msg hook chaining', () => {
+      it('runs the chained prepare-commit-msg hook with the same arguments', async () => {
+        // Set current task so the hook will stamp a Task: trailer (and proceed to chaining)
+        await writeCurrentTask('7');
 
-    it('does not error when the common hook is absent or non-executable', async () => {
-      const res = await commitFile('q.txt', 'q', 'feat: no common hook\n\nTask: 7');
-      expect(res.code).toBe(0);
+        await writeCommonHook(
+          'prepare-commit-msg',
+          '#!/bin/bash\ntouch "$(git rev-parse --show-toplevel)/prepare-chained-was-called"\nexit 0\n',
+        );
+        const res = await commitFile('r.txt', 'r', 'feat: prepare chained');
+        expect(res.code).toBe(0);
+
+        // Verify the chained hook was called by checking if it created the marker file
+        const markerPath = join(dir, 'prepare-chained-was-called');
+        try {
+          await readFile(markerPath, 'utf-8');
+          // File exists, so the hook was called
+        } catch {
+          throw new Error('Chained prepare-commit-msg hook was not called');
+        }
+      });
+
+      it('fails the commit when the chained prepare-commit-msg hook exits non-zero', async () => {
+        // Set current task so the hook will stamp a Task: trailer (triggering chaining)
+        await writeCurrentTask('7');
+
+        await writeCommonHook('prepare-commit-msg', '#!/bin/bash\necho "prepare chained veto" >&2\nexit 1\n');
+        const res = await commitFile('s.txt', 's', 'feat: prepare chained veto');
+        expect(res.code).not.toBe(0);
+      });
+
+      it('does not error when the prepare-commit-msg common hook is absent or non-executable', async () => {
+        // Set current task so the hook will try to do chaining
+        await writeCurrentTask('7');
+
+        const res = await commitFile('t.txt', 't', 'feat: no prepare common hook');
+        expect(res.code).toBe(0);
+      });
     });
   });
 });
