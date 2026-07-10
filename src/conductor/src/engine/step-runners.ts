@@ -1,4 +1,4 @@
-import { writeFile, access } from 'node:fs/promises';
+import { writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -801,7 +801,7 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
-  private buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): string {
+  private async buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): Promise<string> {
     const stepDef = getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
     // sequence, so present them by label instead of an "N/total" index rather
@@ -821,6 +821,15 @@ export class DefaultStepRunner implements StepRunner {
 
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
+
+    // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.
+    // This surfaces the quarantine ref and preserved paths to the resuming build dispatch.
+    if (step === 'build' && this.pipelineDir) {
+      const quarantineContent = await this.readQuarantineSentinel();
+      if (quarantineContent) {
+        prompt += `\n\n--- SETUP QUARANTINE CONTEXT ---\n${quarantineContent}\n--- END QUARANTINE CONTEXT ---`;
+      }
+    }
 
     // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
     // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
@@ -863,5 +872,41 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return prompt;
+  }
+
+  /**
+   * Read the `.pipeline/QUARANTINE` sentinel if it exists.
+   * Returns the content of the sentinel, or null if it doesn't exist or can't be read.
+   * If the sentinel exists but the ref has been deleted, includes a notice about the missing ref.
+   */
+  private async readQuarantineSentinel(): Promise<string | null> {
+    if (!this.pipelineDir) return null;
+
+    try {
+      const sentinelPath = join(this.pipelineDir, 'QUARANTINE');
+      const content = await readFile(sentinelPath, 'utf-8');
+
+      // Check if the quarantine ref mentioned in the sentinel still exists.
+      // If not, add a notice that it's missing.
+      const refMatch = content.match(/Quarantine ref: ([\w\/\-]+)/);
+      if (refMatch) {
+        const ref = refMatch[1];
+        try {
+          const git = makeGitRunner(this.projectDir);
+          const result = await git(['rev-parse', '--verify', ref]);
+          if (result.exitCode !== 0) {
+            // Ref was deleted externally
+            return `${content}\n\nNOTE: Quarantine ref ${ref} is no longer present in the repository (may have been deleted externally). Dispatch proceeds; the preserved paths may still be reviewed via reflog.`;
+          }
+        } catch {
+          // Git check failed, but return content anyway (best-effort)
+        }
+      }
+
+      return content;
+    } catch {
+      // Sentinel doesn't exist or can't be read — return null (not an error)
+      return null;
+    }
   }
 }
