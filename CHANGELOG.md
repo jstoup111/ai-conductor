@@ -10,6 +10,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- `bin/install` never hard-fails on missing dependencies. Every optional phase
+  (permissions/hooks configuration, dependency bootstrap, conductor config,
+  viewer/renderer selection) is now failure-isolated — a missing python3, npm,
+  brew, curl, or viewer tool degrades to a warning instead of aborting the
+  whole install under `set -e`. python3-dependent phases preflight and skip
+  with an actionable message; `configure_conductor` no longer reports a false
+  "Created/Refreshed" when python3 is absent; core symlink steps warn-and-
+  continue per item. Verified: full install exits 0 with warnings only on a
+  PATH containing nothing but coreutils. The two intentional fatal guards
+  (missing skills directory, worktree-root refusal #363) are unchanged.
+- `bin/install` now offers to install `uv` (Serena's installer) when it's
+  missing, via a platform-agnostic ladder: brew when present, else the
+  official installer (`astral.sh/uv/install.sh` → `~/.local/bin`) via curl or
+  wget, picking up `~/.local/bin` on PATH for the same run. Interactive-only
+  (non-tty runs keep the previous skip-with-warning), and every rung is
+  best-effort — a failed uv install degrades to the manual-install warning.
+
 ### Added
 
 - **Deterministic task attribution automation via `conduct-ts task` CLI and worktree-scoped git hooks.** The
