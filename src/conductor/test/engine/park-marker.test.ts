@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -538,5 +538,151 @@ describe('write/read primitives converge on main root (Task 4)', () => {
     const fromMain = await isOperatorParked(mainRoot, slug);
     expect(fromWorktree).toBe(true);
     expect(fromMain).toBe(true);
+  });
+});
+
+describe('non-git directories preserve pre-#486 semantics (Task 6)', () => {
+  let nonGitRoot: string;
+
+  beforeEach(async () => {
+    nonGitRoot = await mkdtemp(join(tmpdir(), 'non-git-root-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(nonGitRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('writeAutoPark(nonGitRoot) writes marker to <nonGitRoot>/.daemon/parked/<slug>, not resolved elsewhere', async () => {
+    const slug = 'non-git-feature';
+    const reason = 'Test in non-git directory';
+
+    await writeAutoPark(nonGitRoot, slug, reason);
+
+    // Marker should exist at the input root (no resolution attempted)
+    const markerPath = join(nonGitRoot, '.daemon', 'parked', slug);
+    const content = await readFile(markerPath, 'utf-8');
+    expect(content).toContain(`auto-parked: ${reason}`);
+  });
+
+  it('isOperatorParked(nonGitRoot) returns true for auto-parked marker in non-git directory', async () => {
+    const slug = 'non-git-feature';
+
+    await writeAutoPark(nonGitRoot, slug, 'No evidence');
+
+    const isParked = await isOperatorParked(nonGitRoot, slug);
+    expect(isParked).toBe(true);
+  });
+
+  it('removeOperatorPark(nonGitRoot) removes marker from non-git directory', async () => {
+    const slug = 'non-git-removable';
+
+    await writeOperatorPark(nonGitRoot, slug);
+    expect(await isOperatorParked(nonGitRoot, slug)).toBe(true);
+
+    await removeOperatorPark(nonGitRoot, slug);
+    expect(await isOperatorParked(nonGitRoot, slug)).toBe(false);
+  });
+
+  it('writeOperatorPark(nonGitRoot) writes marker to non-git directory', async () => {
+    const slug = 'non-git-operator-park';
+
+    await writeOperatorPark(nonGitRoot, slug);
+
+    const markerPath = join(nonGitRoot, '.daemon', 'parked', slug);
+    const content = await readFile(markerPath, 'utf-8');
+    expect(content).toContain('parked by operator');
+  });
+
+  it('getProvenanceType(nonGitRoot) returns "auto" for auto-parked marker in non-git directory', async () => {
+    const slug = 'non-git-auto-provenance';
+
+    await writeAutoPark(nonGitRoot, slug, 'Auto reason');
+
+    const provenance = await getProvenanceType(nonGitRoot, slug);
+    expect(provenance).toBe('auto');
+  });
+
+  it('getProvenanceType(nonGitRoot) returns "operator" for operator-parked marker in non-git directory', async () => {
+    const slug = 'non-git-operator-provenance';
+
+    await writeOperatorPark(nonGitRoot, slug);
+
+    const provenance = await getProvenanceType(nonGitRoot, slug);
+    expect(provenance).toBe('operator');
+  });
+
+  it('listOperatorParkedSlugs(nonGitRoot) returns slugs from non-git directory', async () => {
+    const slug1 = 'slug-1';
+    const slug2 = 'slug-2';
+
+    await writeAutoPark(nonGitRoot, slug1, 'reason 1');
+    await writeOperatorPark(nonGitRoot, slug2);
+
+    const slugs = await listOperatorParkedSlugs(nonGitRoot);
+    expect(slugs).toContain(slug1);
+    expect(slugs).toContain(slug2);
+  });
+});
+
+describe('fail-toward-parked: unreadable markers report true (Task 6)', () => {
+  let testRoot: string;
+
+  beforeEach(async () => {
+    testRoot = await mkdtemp(join(tmpdir(), 'fail-toward-parked-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(testRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('isOperatorParked() returns true when marker exists but is unreadable (permission denied)', async () => {
+    const slug = 'permission-denied-test';
+
+    // Create a marker
+    await writeOperatorPark(testRoot, slug);
+    expect(await isOperatorParked(testRoot, slug)).toBe(true);
+
+    // Make the marker directory unreadable by removing read permissions from the parent
+    const markerDir = join(testRoot, '.daemon', 'parked');
+    await chmod(markerDir, 0o000);
+
+    try {
+      // isOperatorParked should still return true (fail toward parked)
+      const result = await isOperatorParked(testRoot, slug);
+      expect(result).toBe(true);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(markerDir, 0o755);
+    }
+  });
+
+  it('isOperatorParked() with onResolveError callback fires callback on permission denied', async () => {
+    const slug = 'callback-fire-test';
+    const errors: Error[] = [];
+
+    // Create a marker
+    await writeOperatorPark(testRoot, slug);
+
+    // Make the marker directory unreadable
+    const markerDir = join(testRoot, '.daemon', 'parked');
+    await chmod(markerDir, 0o000);
+
+    try {
+      // Call isOperatorParked with error callback
+      const result = await isOperatorParked(testRoot, slug, (err) => {
+        errors.push(err);
+      });
+
+      // Should return true (fail toward parked) and fire callback
+      expect(result).toBe(true);
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(markerDir, 0o755);
+    }
   });
 });
