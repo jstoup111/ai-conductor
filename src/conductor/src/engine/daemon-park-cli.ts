@@ -155,12 +155,19 @@ export async function dispatchDaemonPark(
       if (provenance === 'auto') {
         const worktreeDir = join(resolvedRoot, '.worktrees', cmd.slug);
         const resetRoot = existsSync(worktreeDir) ? worktreeDir : resolvedRoot;
+        const usedFallback = !existsSync(worktreeDir);
         await resetNoEvidenceAttempts(resetRoot);
-        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+        if (usedFallback) {
+          out(`Unparked '${cmd.slug}' and reset no-evidence counter at resolved root (fallback — worktree missing) — normal dispatch and re-kick resume.`);
+        } else {
+          out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+        }
       } else {
         out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
       }
 
+      // Only remove the marker after counter reset succeeds.
+      // If reset failed, the marker survives for recovery/retry.
       await removeOperatorPark(resolvedRoot, cmd.slug);
     }
     return 0;

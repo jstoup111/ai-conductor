@@ -406,6 +406,136 @@ describe('engine/daemon-park-cli', () => {
         await rm(nonGitRoot, { recursive: true, force: true });
       }
     });
+
+    it('unpark with missing worktree falls back to reset counter at resolved root (Task 12)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'missing-worktree-slug');
+
+      // Simulate an auto-parked feature: seed the counter in the worktree
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+
+      // Increment counter 2 times in the WORKTREE
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+
+      // Write an auto-park marker at the main root
+      await writeAutoPark(root, 'missing-worktree-slug', 'no evidence after 2 attempts');
+
+      // Verify counter is at 2 in worktree before deletion
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(2);
+
+      // Also seed counter at main root (so fallback can reset it)
+      await incrementNoEvidenceAttempts(root);
+      expect(await readNoEvidenceAttempts(root)).toBe(1);
+
+      // Delete the worktree directory (simulate missing worktree)
+      await rm(worktreeDir, { recursive: true, force: true });
+
+      // Unpark from the main root
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'missing-worktree-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+
+      // Verify exit success
+      expect(code).toBe(0);
+
+      // Verify fallback message is printed
+      const joined = out.join('\n').toLowerCase();
+      expect(joined).toContain('fallback');
+
+      // Verify marker removed
+      expect(await isOperatorParked(root, 'missing-worktree-slug')).toBe(false);
+
+      // Verify counter was reset at resolved root (fallback location)
+      // Since worktree is deleted, counter should be reset at main root
+      expect(await readNoEvidenceAttempts(root)).toBe(0);
+    });
+
+    it('unpark on operator-parked slug does not touch counter (Task 12)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'operator-park-manual-slug');
+
+      // Manually write an operator-park marker (not auto-park)
+      const { writeOperatorPark } = await import('../../src/engine/park-marker.js');
+      await writeOperatorPark(root, 'operator-park-manual-slug');
+
+      // Seed a counter in the worktree (simulating failed attempts)
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(3);
+
+      // Unpark the operator-parked feature
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'operator-park-manual-slug' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+
+      // Verify exit success
+      expect(code).toBe(0);
+
+      // Verify marker removed
+      expect(await isOperatorParked(root, 'operator-park-manual-slug')).toBe(false);
+
+      // Verify counter was NOT reset (should remain at 3)
+      // The output should NOT mention "reset" (for auto-park counter resets)
+      const joined = out.join('\n');
+      expect(joined.toLowerCase()).not.toContain('reset');
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(3);
+    });
+
+    it('unpark fails when counter reset fails, marker survives for recovery (Task 12)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'reset-failure-slug');
+
+      // Simulate an auto-parked feature
+      const { incrementNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+
+      // Seed counter in worktree
+      await incrementNoEvidenceAttempts(worktreeDir);
+
+      // Write an auto-park marker at the main root
+      await writeAutoPark(root, 'reset-failure-slug', 'no evidence');
+
+      // Make the .pipeline/ directory unwritable (simulate permission denial)
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await execFile('chmod', ['000', pipelineDir]);
+
+      try {
+        // Attempt to unpark (reset will fail due to permission denial)
+        const out: string[] = [];
+        const code = await dispatchDaemonPark(
+          { kind: 'unpark', slug: 'reset-failure-slug' },
+          { cwd: root, out: (l) => out.push(l) },
+        );
+
+        // Verify exit failure
+        expect(code).toBe(1);
+
+        // Verify marker still exists (was NOT removed)
+        expect(await isOperatorParked(root, 'reset-failure-slug')).toBe(true);
+
+        // Verify error message mentions the failure
+        const joined = out.join('\n');
+        expect(joined.toLowerCase()).toContain('could not unpark');
+      } finally {
+        // Restore permissions so cleanup doesn't fail
+        await execFile('chmod', ['755', pipelineDir]);
+      }
+    });
   });
 
   describe('validateSlug', () => {
