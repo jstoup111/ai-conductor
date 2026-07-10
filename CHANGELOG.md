@@ -19,6 +19,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
 
+### Changed
+
+- `conduct-ts engineer claim` now serves pending ideas by priority band
+  (critical first) before capturedAt FIFO, reading labels at claim time and
+  failing open to FIFO on gh outages (#461).
+
 ### Fixed
 
 - `bin/install` never hard-fails on missing dependencies. Every optional phase

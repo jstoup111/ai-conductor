@@ -309,6 +309,18 @@ outcome (never confused with an empty queue) when every pending idea is stuck. A
 describe dependencies as prose into real GitHub issue-dependency links so the gate can see them.
 See [`src/conductor/README.md`](src/conductor/README.md#dependency-ordered-intake-and-dispatch)
 for details.
+
+**Claim ordering honors priority bands.** `conduct-ts engineer claim` serves pending
+intake ideas **priority-band-first**: no-issue (no `sourceRef`) first, then
+`critical` → `high` → `medium` → `low`, with unlabeled ideas last. Within a band,
+ideas are served **oldest-first** by `receivedAt` (a stable sort, so ties never
+reorder). Priority labels are read from GitHub **at claim time** — not cached
+across claims — so relabeling an issue between claims is honored on the very next
+claim. If GitHub is unreachable (API outage, auth error) when resolving labels,
+the claim **fails open to plain FIFO order** and logs a single warning to stderr;
+it never blocks or drops the claim. This ordering only changes *which* pending
+idea is served first — the claimed idea's JSON output shape is unchanged:
+`{kind, text, source, sourceRef}`.
 It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason
