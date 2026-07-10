@@ -168,6 +168,104 @@ ${pathsLine}Recover deliberately:
 }
 
 /**
+ * Surface quarantine evidence to the resuming build agent (Task 14 / TS-5,
+ * all criteria). Called after a triage outcome (of any kind) is settled and
+ * BEFORE the dispatch to the build agent resumes.
+ *
+ * Behavior:
+ *   - The outcome carries a `quarantineRef` (a quarantine happened THIS
+ *     rotation) → verify the ref still resolves, then write/refresh
+ *     `.pipeline/QUARANTINE` naming the ref, the preserved paths, and
+ *     "recover deliberately" guidance.
+ *   - The outcome carries no ref, but a `wip/setup-quarantine-<slug>` ref
+ *     already exists (from a prior rotation) → surface that ref the same way.
+ *   - No ref either way (this rotation or a prior one) → no sentinel is
+ *     written, and any existing sentinel is left untouched (nothing to do
+ *     here — this function never removes a sentinel that names a live ref).
+ *   - A ref is known (from the outcome or a prior rotation) but
+ *     `git rev-parse --verify <ref>` fails (deleted externally) → write a
+ *     sentinel that says the ref is missing; dispatch proceeds regardless
+ *     (fail-open — this is diagnostic surfacing, never a dispatch gate).
+ *
+ * Fail-open throughout: a git or fs failure is logged (if a logger is
+ * given) and swallowed — it must never block the build dispatch.
+ */
+export async function surfaceQuarantine(
+  git: GitRunner,
+  worktreePath: string,
+  slug: string,
+  outcome: TriageOutcome,
+  logger?: Logger,
+): Promise<void> {
+  try {
+    let ref = outcome.quarantineRef;
+    let preservedPaths: string[] | undefined =
+      'preservedPaths' in outcome ? outcome.preservedPaths : undefined;
+
+    if (!ref) {
+      // No ref from this rotation's outcome — check for one left over from a
+      // prior rotation before concluding there is nothing to surface.
+      const priorRef = `wip/setup-quarantine-${slug}`;
+      const verifyPrior = await git(['rev-parse', '--verify', priorRef]);
+      if (verifyPrior.exitCode === 0) {
+        ref = priorRef;
+      }
+    }
+
+    if (!ref) {
+      // No quarantine present this rotation or previously — no sentinel, no notice.
+      return;
+    }
+
+    const verify = await git(['rev-parse', '--verify', ref]);
+    if (verify.exitCode !== 0) {
+      await writeQuarantineMissingRefSentinel(worktreePath, ref, logger);
+      return;
+    }
+
+    await writeQuarantineSentinel(worktreePath, ref, preservedPaths ?? [], logger);
+  } catch (err) {
+    if (logger) {
+      logger.log(`quarantine surfacing failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+/**
+ * Write a `.pipeline/QUARANTINE` notice stating the named ref no longer
+ * resolves (deleted externally, e.g. by a manual `git branch -D`). The
+ * build dispatch proceeds regardless — this is diagnostic only, never a
+ * gate. Best-effort: write failures are logged but do not throw.
+ */
+async function writeQuarantineMissingRefSentinel(
+  worktreePath: string,
+  quarantineRef: string,
+  logger?: Logger,
+): Promise<void> {
+  try {
+    await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+    const content = `Quarantine ref: ${quarantineRef}
+
+This ref no longer resolves — it appears to have been deleted externally.
+Dispatch is proceeding regardless; this notice is diagnostic only.
+
+Recover deliberately:
+1. If the ref was deleted in error, restore it from reflog: git reflog
+2. Otherwise no action is needed — the quarantined changes are gone.
+3. Remove this marker: rm .pipeline/QUARANTINE
+`;
+    await writeFile(join(worktreePath, QUARANTINE_SENTINEL), content, 'utf-8');
+    if (logger) {
+      logger.log(`quarantine sentinel written: ${quarantineRef} — ref missing (deleted externally)`);
+    }
+  } catch (err) {
+    if (logger) {
+      logger.log(`quarantine sentinel (missing-ref) write failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}
+
+/**
  * Quarantine result from preserving dirty tree state.
  *
  * Fields:
