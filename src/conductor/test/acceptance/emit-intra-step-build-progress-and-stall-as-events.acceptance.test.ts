@@ -93,6 +93,7 @@ describe('BuildProgressWatcher emits build_progress on the real event bus (S1)',
     // mechanism beyond the documented `.unref()'d setInterval` (ADR D-3).
     await vi.advanceTimersByTimeAsync(31_000);
 
+    await watcher.settle();
     watcher.stop();
 
     const progress = received.find((e) => e.type === 'build_progress');

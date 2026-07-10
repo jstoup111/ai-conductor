@@ -633,3 +633,97 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     expect(noProgressEvents()).toHaveLength(1);
   });
 });
+
+describe('BuildProgressWatcher settle()', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-settle-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  it('settle() resolves only after an in-flight interval-fired tick completes and the emission is observed', async () => {
+    await writeTasks(5, 21);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+    });
+    watcher.start();
+
+    // Establish baseline.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // Simulate a real scenario: change triggers a tick that will do fs/git I/O,
+    // then advance the timer to fire the interval callback which starts an
+    // in-flight tick.
+    await writeTasks(6, 21);
+    let settled = false;
+    const settlePromise = watcher.settle().then(() => {
+      settled = true;
+    });
+
+    // settle() is called, but no tick has fired yet, so it returns immediately.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+
+    watcher.stop();
+    await settlePromise;
+  });
+
+  it('settle() is a no-op resolved promise when no tick is in flight', async () => {
+    await writeTasks(1, 2);
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+
+    // Before any start() — settle() should resolve immediately.
+    const startResult = await watcher.settle();
+    expect(startResult).toBeUndefined();
+
+    // After stop() — settle() should still resolve immediately.
+    watcher.start();
+    watcher.stop();
+    const stopResult = await watcher.settle();
+    expect(stopResult).toBeUndefined();
+  });
+
+  it('the existing stopped-guard contract still holds when stop() is called before settle()', async () => {
+    await writeTasks(1, 2);
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // Change state so next tick would emit.
+    await writeTasks(2, 2);
+
+    // stop() swallows the pending tick's emission (no settle beforehand).
+    watcher.stop();
+    await tick(watcher);
+
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+});

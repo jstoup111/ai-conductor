@@ -179,6 +179,7 @@ export class BuildProgressWatcher {
   private lastSnapshot: TickSnapshot | null = null;
   private lastEmitAt: number | null = null;
   private stopped = false;
+  private pending: Promise<void> | null = null;
   /**
    * Quiet-episode state (Task 7): `lastChangeAt` is the timestamp of the most
    * recent change-driven tick (task delta, HEAD move, current-task change, or
@@ -203,7 +204,9 @@ export class BuildProgressWatcher {
     if (this.timer || !this.resolvedConfig.enabled) return;
     this.stopped = false;
     const timer = setInterval(() => {
-      void this.tick();
+      this.pending = this.tick().finally(() => {
+        this.pending = null;
+      });
     }, this.resolvedConfig.poll_seconds * 1000);
     timer.unref?.();
     this.timer = timer;
@@ -218,6 +221,15 @@ export class BuildProgressWatcher {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+  }
+
+  /** Await any in-flight interval-fired tick to complete. No-op (resolves
+   * immediately) if no tick is currently pending. Used in tests to
+   * deterministically settle real fs/git I/O before calling stop(). */
+  async settle(): Promise<void> {
+    if (this.pending) {
+      await this.pending;
     }
   }
 
