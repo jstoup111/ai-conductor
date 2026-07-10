@@ -36,9 +36,15 @@ build steps and vitest runs work without manual prep.
   injected failing runner), when `bin/setup` runs, then it exits non-zero without running the
   build, `prepareWorktree` throws, the worktree is KEPT on disk, and the feature is marked
   errored (existing worktree-prepare.ts contract).
+  > **Superseded by #446** (`setup-before-dispatch-wedge-deterministic-setup-fa.md` TS-2/TS-3,
+  > conflict resolution 2026-07-09): "worktree kept" still holds, but a daemon setup failure
+  > is now routed to setup-failure triage first; the feature is marked errored/HALTed only
+  > when triage exhausts (preservation failure, or fix-session contract failure).
 - Given a worktree where `npm install` succeeds but `npm run build` fails (inject a TypeScript
   error), when `bin/setup` runs, then it exits non-zero and the same keep-worktree/errored
   contract holds.
+  > **Superseded by #446** — same routing note as above: non-zero exit now enters triage;
+  > errored is the terminal outcome, not the immediate one.
 - Given a consumer repo (not the harness), when its daemon prepares a worktree, then the
   harness's `bin/setup` is not involved (script is repo-local; no cross-repo effect).
 
@@ -48,6 +54,8 @@ build steps and vitest runs work without manual prep.
 - [ ] Real-binary smoke: running `bin/setup` in a scratch worktree produces
       `src/conductor/node_modules/` and `src/conductor/dist/index.js` inside that worktree only.
 - [ ] Failure test proves non-zero exit propagates: worktree kept + feature errored.
+      *(Superseded by #446: the test's terminal-outcome assertion moves to "routed to
+      setup-failure triage"; the #446 plan updates this pinned test.)*
 
 ---
 
