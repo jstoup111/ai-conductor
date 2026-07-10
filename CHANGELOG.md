@@ -10,6 +10,36 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- **Deterministic task attribution automation via `conduct-ts task` CLI and worktree-scoped git hooks.** The
+  pipeline now automates task progress tracking via CLI subcommands owned by the conductor engine, not prompt
+  discipline. Two new subcommands: `conduct-ts task start <id>` (flip status to in_progress before dispatching
+  a subagent), `conduct-ts task done <id>` (mark task completed after subagent commit lands). Both are
+  idempotent and fail-open (never block the build on status-file corruption). Wired into the pipeline
+  orchestration step 0 (DISPATCH phase).
+- **Engine-provisioned worktree-scoped git hooks for task attribution.** When the daemon provisions a feature
+  worktree, the conductor writes two deterministic attribution hooks (`prepare-commit-msg`, `commit-msg`) to
+  `.pipeline/git-hooks/` and wires them via `git config --worktree core.hooksPath` scoped to that worktree
+  only. The `prepare-commit-msg` hook auto-injects the `Task: <id>` trailer from `.pipeline/current-task`
+  into every commit (amends malformed trailers). The `commit-msg` hook validates the trailer format. Both
+  hooks are fail-open (provisioning skips gracefully on errors, build never halts). Host checkout and
+  other worktrees are unaffected; if the repository has its own hooks, both run (engine's hooks first,
+  exit codes propagate for chaining). Hook scripts are embedded as engine assets, written fresh to each
+  worktree, and kept in sync with the engine version. The completion gate derives task completion from
+  git trailers, proving code commits are load-bearing (no stray empty-commit trailers).
+- Documentation added to README.md and src/conductor/README.md explaining task CLI and hook wiring
+  behavior (fail-open design, chaining with repo hooks, worktree-scoped wiring).
+
+### Changed
+
+- **Pipeline SKILL step 0 (DISPATCH) now uses `conduct-ts task start|done` for task progress tracking.**
+  The orchestrator no longer hand-edits `.pipeline/task-status.json` or relies on the subagent to inject
+  the task trailer via prompt discipline. The conductor runs `conduct-ts task start <id>` before dispatching
+  the subagent and `conduct-ts task done <id>` after the commit lands, ensuring deterministic and
+  repeatable task attribution independent of subagent behavior. See skills/pipeline/SKILL.md §Per-Task
+  Execution, steps 0 and 6.
+
 ### Fixed
 
 - Tests no longer park child processes on undrained stdio pipes.

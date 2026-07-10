@@ -179,6 +179,46 @@ It's invoked by the daemon's auto-mode finish step (`src/conductor/src/engine/st
 and can also be run manually in place of hand-editing the marker. See
 `src/conductor/README.md` for full detail.
 
+**Task attribution automation (`task start|done`)** — The pipeline now automates task progress tracking
+via `conduct-ts task` subcommands, which own the mechanics of updating `.pipeline/task-status.json`
+and git hook wiring. Instead of editing JSON by hand or relying on prompt discipline, the orchestrator
+calls:
+
+```bash
+# Before dispatching a subagent to work on a task
+conduct-ts task start <id>
+
+# After the subagent's commit lands (task complete)
+conduct-ts task done <id>
+```
+
+- `<id>` is the bare task ID from the plan header (e.g., `7`, not `task-7`).
+- `task start` flips the task status to `in_progress` in `.pipeline/task-status.json`.
+- `task done` marks the task `completed` and clears the in-flight marker.
+- Both commands are **deterministic and idempotent** — running them multiple times is safe.
+- They fail gracefully on missing/corrupt state; orchestrator can continue.
+
+**Git hook wiring (worktree-scoped, fail-open)** — When a daemon builds a feature worktree,
+the conductor provisions two **deterministic attribution hooks** (run from the engine, not the prompt)
+to capture proof that a task's code commits are load-bearing:
+
+- **`prepare-commit-msg` hook** — Auto-injects the `Task: <id>` trailer (or amends a malformed one)
+  from `.pipeline/current-task` so every commit carries the required attribution trailer.
+- **`commit-msg` hook** — Validates the trailer format (non-empty id, no false-positive noise).
+
+Both hooks are written to `.pipeline/git-hooks/` and wired via git config (`core.hooksPath`)
+scoped to the worktree only — the host checkout is never affected. **Fail-open design:**
+if hook provisioning fails, the build continues (hooks are logged as skipped, not fatal);
+the engine's later evidence gate will derive completion from git trailers whether hooks ran
+or not.
+
+**Chaining with repo's own hooks** — The wired hooks chain to the repository's own hooks
+(if any exist under `.git/hooks/`), so a repo's custom pre-commit linter or post-commit
+automation is not disabled. The engine's hooks run first, and exit codes propagate.
+
+For implementation details and hook asset definitions, see `src/conductor/src/engine/git-hook-assets.ts`
+and `src/conductor/README.md` → "Task attribution automation".
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
