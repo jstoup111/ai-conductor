@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
+import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -489,6 +490,34 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(out.reason).toMatch(/bin\/setup failed/);
       expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached
       expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    // #446 conflict resolution (Task 16): supersedes the prior pin that a
+    // prepareWorktree failure is *always* terminal/errored. Since Task 13 wired
+    // triage into makeRunFeature, a SetupFailureError in daemon mode with a
+    // triage handler present is routed to triage instead of erroring directly
+    // (see the 'daemon-only triage routing (Task 13)' describe block below for
+    // the full routed-to-triage matrix). This test pins the backward-compat
+    // half of that split: when the triage dependency is absent (e.g. manual
+    // /conduct runs, or daemon builds that haven't wired triage), a
+    // SetupFailureError still falls through to the legacy errored path.
+    // keep-worktree is unchanged either way.
+    it('a SetupFailureError with no triage dep present keeps the legacy errored path (backward compat)', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature({
+        ...depsWithOrder(order, {}, rec),
+        daemon: false, // no triage dep wired: runSetupTriage is absent
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          throw new SetupFailureError('project setup (bin/setup) failed: pg unreachable', 'tail of output');
+        },
+      });
+      const out = await run(ITEM);
+      expect(out.status).toBe('error'); // legacy errored path, not routed-to-triage
+      expect(out.reason).toMatch(/pg unreachable/);
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached, triage never invoked
+      expect(rec.teardownKeep).toBe(true); // worktree kept for inspection — unchanged
     });
 
     it('writes a diagnostic .pipeline/HALT into the worktree on an error (so it is not opaque)', async () => {
