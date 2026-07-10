@@ -9,6 +9,7 @@ import {
   sanitizeNamespace,
   SETUP_SCRIPT,
   NAMESPACE_VAR,
+  SetupFailureError,
 } from '../../src/engine/worktree-prepare.js';
 
 const execFileAsync = promisify(execFile);
@@ -80,14 +81,26 @@ describe('engine/worktree-prepare', () => {
     await readFile(join(dir, 'ran.marker'), 'utf-8'); // ran in the worktree cwd
   });
 
-  it('throws when bin/setup exits non-zero (do not build against a half-prepared env)', async () => {
-    await writeSetup('#!/usr/bin/env bash\necho "db down" >&2\nexit 3\n');
-    await expect(prepareWorktree(dir)).rejects.toThrow(/bin\/setup/);
+  it('rejects with SetupFailureError carrying outputTail when bin/setup exits non-zero', async () => {
+    await writeSetup('#!/usr/bin/env bash\necho "line 1"\necho "FAILURE_MARKER" >&2\nexit 3\n');
+    try {
+      await prepareWorktree(dir);
+      throw new Error('should have rejected');
+    } catch (err) {
+      expect(err).toBeInstanceOf(SetupFailureError);
+      expect((err as SetupFailureError).outputTail).toContain('FAILURE_MARKER');
+    }
   });
 
-  it('surfaces a present-but-non-executable bin/setup as an error, not a silent skip', async () => {
-    await writeSetup('#!/usr/bin/env bash\nexit 0\n', 0o644);
-    await expect(prepareWorktree(dir)).rejects.toThrow(/bin\/setup/);
+  it('rejects with SetupFailureError when spawn fails (non-executable or missing interpreter)', async () => {
+    await writeSetup('#!/usr/bin/env bash\nexit 0\n', 0o644); // not executable
+    try {
+      await prepareWorktree(dir);
+      throw new Error('should have rejected');
+    } catch (err) {
+      expect(err).toBeInstanceOf(SetupFailureError);
+      expect((err as SetupFailureError).outputTail).toBeTruthy();
+    }
   });
 
   it('forwards setup output to the log sink', async () => {
