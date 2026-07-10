@@ -358,6 +358,12 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
 // ── Tests for runCiFix (Task 17: resolver worktree lifecycle) ────────────────
 
 describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
+  // Real git subprocesses (worktree add/remove, checkout, log, push) run in
+  // every test in this block. Task 19 added several more git calls per test
+  // (checkout -B, guards, suite gate, lease push), which pushes wall time
+  // past vitest's 5s default under load — raise it here rather than globally.
+  const REAL_GIT_TIMEOUT_MS = 20000;
+
   const PR_URL = 'https://github.com/foo/bar/pull/42';
   const SLUG = 'foo/bar#42';
 
@@ -439,7 +445,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     } finally {
       await cleanup();
     }
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('worktree removed after callback throws', async () => {
     const { repoPath, cleanup } = await createFixtureRepo();
@@ -481,7 +487,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     } finally {
       await cleanup();
     }
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('branch-gone: aborts with logged reason, no throw, no primary-tree mutation', async () => {
     const { repoPath, cleanup } = await createFixtureRepo();
@@ -517,7 +523,122 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     } finally {
       await cleanup();
     }
-  });
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('happy path: guards + suite gate pass -> pushRefreshed invoked on PR branch (Task 19)', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
+      };
+
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+
+      expect(result.kind).toBe('changed');
+
+      // The push landed on origin: the bare repo's feat/fix ref carries the new commit
+      const originLog = execSync(`git log --format=%s feat/fix`, { cwd: originPath }).toString();
+      expect(originLog).toContain('ci fix commit');
+
+      expect(logs.some((l) => l.includes('refreshed'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('suite gate fails -> no push, outcome logged, attempt stays consumed (Task 19)', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      const beforeSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
+
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
+      };
+
+      const result = await runCiFix(
+        entry,
+        branch,
+        hint,
+        { fixRunner, suiteCommand: 'exit 1' },
+        logger,
+      );
+
+      // Attempt stays consumed: the outcome remains 'changed' even though nothing published
+      expect(result.kind).toBe('changed');
+
+      const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
+      expect(afterSha).toBe(beforeSha);
+
+      expect(
+        logs.some((l) => l.toLowerCase().includes('suite') && l.toLowerCase().includes('escalat')),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('acceptance guards report lost commits -> no push (Task 19)', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const logger = (msg: string) => logs.push(msg);
+
+      const { runCiFix } = await import('../../src/engine/ci-fix.js');
+
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+      const branch = 'feat/fix';
+      const hint = 'Test hint';
+
+      const beforeSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
+
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          // Drop the original "feature work" commit entirely and replace it —
+          // simulates a lossy fix session that loses prior work.
+          execSync(`git reset --hard HEAD~1`, { cwd: worktreePath });
+          execSync(`git commit --allow-empty -m "different work"`, { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
+      };
+
+      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+
+      expect(result.kind).toBe('changed');
+
+      const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
+      expect(afterSha).toBe(beforeSha);
+
+      expect(
+        logs.some((l) => l.toLowerCase().includes('guard') && l.toLowerCase().includes('escalat')),
+      ).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
 
   it('cleans up stale worktree from crashed prior run', async () => {
     const { repoPath, cleanup } = await createFixtureRepo();
@@ -555,5 +676,5 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     } finally {
       await cleanup();
     }
-  });
+  }, REAL_GIT_TIMEOUT_MS);
 });

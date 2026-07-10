@@ -11,7 +11,15 @@ import type { GhRunner } from './pr-labels.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
-import { logOutcome, isResolutionInFlight, withResolveWorktree } from './autoresolve.js';
+import {
+  logOutcome,
+  isResolutionInFlight,
+  withResolveWorktree,
+  runAcceptanceGuards,
+  runSuiteGate,
+  pushRefreshedBranch,
+} from './autoresolve.js';
+import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
 
 /**
@@ -279,8 +287,19 @@ export const productionCiFixRunner: CiFixRunner = {
  * @param entry The watch entry for this PR
  * @param branch The PR's source branch name (e.g., "feat/fix")
  * @param hint A RETRY hint string to pass to the fix-runner (e.g., failing check names)
+ * Task 19: once the fix-runner reports a `changed` outcome, the resolver
+ * chains the same work-preservation guards and suite gate used by the
+ * sweep's rebase-resolution pipeline ({@link runAcceptanceGuards},
+ * {@link runSuiteGate}) before publishing with a lease-protected push
+ * ({@link pushRefreshedBranch}). Any stage failure (lost commits, a red
+ * suite) skips the push and logs an `escalated` outcome — the fix-runner's
+ * outcome (`changed`) is still returned so the caller's attempt bookkeeping
+ * treats this as a consumed attempt, not a retry.
+ *
  * @param deps Dependencies for the fix execution
  * @param deps.fixRunner The injected {@link CiFixRunner} seam
+ * @param deps.suiteCommand Optional suite command forwarded to {@link runSuiteGate}.
+ *                           Undefined/empty → suite gate is a noop pass.
  * @param logger Optional logging function for abort/error messages
  * @returns CiFixOutcome describing the result
  */
@@ -290,6 +309,7 @@ export async function runCiFix(
   hint: string,
   deps: {
     fixRunner: CiFixRunner;
+    suiteCommand?: string;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -328,9 +348,63 @@ export async function runCiFix(
     const branchToUse = remoteCheck.exitCode === 0 ? `origin/${branch}` : branch;
 
     const outcome = await withResolveWorktree(slug, branchToUse, repoCwd, async (worktreePath) => {
+      const git = makeGitRunner(worktreePath);
+
+      // Ensure a local branch named `branch` is checked out, regardless of
+      // whether the worktree was created from a local ref or a detached
+      // `origin/<branch>` ref — pushRefreshedBranch pushes `branch` by name.
+      await git(['checkout', '-B', branch]);
+
+      // Capture the pre-fix commit subjects for the work-preservation guard
+      // (Task 19). baseRef is the parent of the branch tip before the
+      // fix-runner ran; if there is no parent (root commit), fall back to
+      // HEAD itself — an empty subjectsBefore list makes the guard trivially
+      // pass, per featureCommitsPreserved's own empty-array short-circuit.
+      const parentResult = await git(['rev-parse', 'HEAD~1']);
+      const baseRef = parentResult.exitCode === 0 ? parentResult.stdout.trim() : 'HEAD';
+      const subjectsBefore: string[] = [];
+      if (parentResult.exitCode === 0) {
+        const subjResult = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
+        if (subjResult.exitCode === 0) {
+          subjectsBefore.push(
+            ...subjResult.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
+          );
+        }
+      }
+
       // Run the fix-runner seam inside the worktree, propagating its result
       // as the dispatch outcome (Task 18).
-      return await deps.fixRunner.run({ worktreePath, hint, entry });
+      const fixOutcome = await deps.fixRunner.run({ worktreePath, hint, entry });
+
+      if (fixOutcome.kind !== 'changed') {
+        return fixOutcome;
+      }
+
+      // Task 19: guards + suite gate before push.
+      const guardsResult = await runAcceptanceGuards(git, baseRef, subjectsBefore);
+      if (!guardsResult.ok) {
+        const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
+        log(`${prUrl}: ci-fix acceptance guard failed: ${reason}`);
+        logOutcome(log, prUrl, 'ci-fix-acceptance-guards', 'escalated');
+        return fixOutcome;
+      }
+
+      const suiteResult = await runSuiteGate(deps.suiteCommand, worktreePath, log);
+      if (!suiteResult.ok) {
+        log(`${prUrl}: ci-fix suite gate failed`);
+        logOutcome(log, prUrl, 'ci-fix-suite-gate', 'escalated');
+        return fixOutcome;
+      }
+
+      const pushResult = await pushRefreshedBranch(git, branch, log);
+      if (!pushResult.pushed) {
+        log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
+        logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');
+        return fixOutcome;
+      }
+
+      logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
+      return fixOutcome;
     });
 
     return outcome;
