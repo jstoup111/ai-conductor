@@ -520,6 +520,43 @@ install_dependencies() {
   # Serena — optional LSP-backed semantic code toolkit (oraios/serena), used as an
   # MCP server. Opt-in: heavyweight, so we prompt rather than auto-install like rtk.
   # /bootstrap auto-registers it as a user-scope MCP server once it's on PATH.
+  #
+  # uv is Serena's installer. When it's missing, offer to install it first —
+  # platform-agnostic ladder: brew when present, else the official installer
+  # (https://astral.sh/uv/install.sh → ~/.local/bin) via curl or wget. Every
+  # rung is best-effort; failure degrades to the manual-install warning below.
+  if ! command -v serena &>/dev/null && ! command -v uv &>/dev/null && [ -t 0 ]; then
+    printf "  ${CYAN}→${NC} Install uv (Python tool manager — needed for Serena)? [y/N]: "
+    local uv_choice=""
+    read -r uv_choice || uv_choice=""
+    if [[ "$uv_choice" =~ ^[Yy]$ ]]; then
+      info "Installing uv..."
+      local uv_installed=false
+      if command -v brew &>/dev/null; then
+        brew install uv 2>/dev/null && uv_installed=true || true
+      fi
+      if ! $uv_installed; then
+        if curl -LsSf https://astral.sh/uv/install.sh 2>/dev/null | sh 2>/dev/null; then
+          uv_installed=true
+        elif wget -qO- https://astral.sh/uv/install.sh 2>/dev/null | sh 2>/dev/null; then
+          uv_installed=true
+        fi
+      fi
+      # The official installer lands in ~/.local/bin, which may not be on this
+      # shell's PATH yet — pick it up so the Serena prompt below can run now.
+      if ! command -v uv &>/dev/null && [ -x "${HOME}/.local/bin/uv" ]; then
+        export PATH="${HOME}/.local/bin:${PATH}"
+      fi
+      if command -v uv &>/dev/null; then
+        ok "uv installed"
+      else
+        warn "uv install failed — install manually: https://docs.astral.sh/uv/"
+      fi
+    else
+      info "Skipped uv — install later from https://docs.astral.sh/uv/"
+    fi
+  fi
+
   if command -v serena &>/dev/null; then
     ok "Serena already installed"
   elif ! command -v uv &>/dev/null; then

@@ -22,6 +22,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   continue per item. Verified: full install exits 0 with warnings only on a
   PATH containing nothing but coreutils. The two intentional fatal guards
   (missing skills directory, worktree-root refusal #363) are unchanged.
+- `bin/install` now offers to install `uv` (Serena's installer) when it's
+  missing, via a platform-agnostic ladder: brew when present, else the
+  official installer (`astral.sh/uv/install.sh` → `~/.local/bin`) via curl or
+  wget, picking up `~/.local/bin` on PATH for the same run. Interactive-only
+  (non-tty runs keep the previous skip-with-warning), and every rung is
+  best-effort — a failed uv install degrades to the manual-install warning.
 
 ### Added
 
