@@ -149,6 +149,21 @@ export interface FeatureRunnerDeps {
    * feature, or 'quarantined-pass' to continue to runConductor.
    */
   runSetupTriage?: (error: SetupFailureError, worktree: FeatureWorktree, item: BacklogItem) => Promise<TriageOutcome>;
+  /**
+   * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
+   * Called once triage settles on a non-park outcome, BEFORE the worktree is
+   * handed to `runConductor`. Writes `.pipeline/QUARANTINE` in the worktree
+   * when a quarantine ref is live (this rotation or a prior one) so the
+   * dispatched agent can see the ref, preserved paths, and recovery guidance.
+   * Optional; absent → no sentinel is written (backward-compatible). Fail-open
+   * by contract of the real implementation — daemon-runner also guards the
+   * call so a thrown error never blocks dispatch.
+   */
+  surfaceQuarantineRef?: (
+    worktree: FeatureWorktree,
+    slug: string,
+    outcome: TriageOutcome,
+  ) => Promise<void>;
 }
 
 /**
@@ -245,6 +260,19 @@ export function makeRunFeature(
             }
             // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
             log(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
+
+            // Task 14 (TS-5): surface quarantine evidence to the resuming build
+            // agent before dispatch. Fail-open — a surfacing failure must never
+            // block the build; it is diagnostic only.
+            if (deps.surfaceQuarantineRef) {
+              try {
+                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome);
+              } catch (err) {
+                log(
+                  `[daemon-runner] quarantine surfacing error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
           } else {
             // Not a SetupFailureError, or daemon=false, or no triage handler: today's path
             throw prepareErr;

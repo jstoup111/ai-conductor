@@ -337,6 +337,111 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     });
   });
 
+  describe('quarantine surfacing to the resuming build agent (Task 14 — makeRunFeature wiring)', () => {
+    class SetupFailureError extends Error {
+      outputTail: string;
+      constructor(message: string, outputTail: string = '') {
+        super(message);
+        this.name = 'SetupFailureError';
+        this.outputTail = outputTail;
+      }
+    }
+
+    function depsWithSurfacing(
+      rec: { teardownKeep?: boolean },
+      opts: {
+        triageReturnValue: TriageOutcome;
+        surfaceQuarantineRef?: FeatureRunnerDeps['surfaceQuarantineRef'];
+      },
+    ): FeatureRunnerDeps {
+      const base = deps(
+        { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
+        rec,
+      );
+      return {
+        ...base,
+        daemon: true,
+        createWorktree: async (slug) => ({ path: `/wt/${slug}`, branch: `feat/${slug}` }),
+        prepareWorktree: async () => {
+          throw new SetupFailureError('project setup failed', 'tail');
+        },
+        runConductor: async () => {},
+        runSetupTriage: async () => opts.triageReturnValue,
+        surfaceQuarantineRef: opts.surfaceQuarantineRef,
+      };
+    }
+
+    it('quarantine happened this rotation → surfaceQuarantineRef is invoked with the outcome before dispatch', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const calls: Array<{ slug: string; outcome: TriageOutcome }> = [];
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-feat-x',
+          },
+          surfaceQuarantineRef: async (_wt, slug, outcome) => {
+            calls.push({ slug, outcome });
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].slug).toBe('feat-x');
+      expect(calls[0].outcome.quarantineRef).toBe('wip/setup-quarantine-feat-x');
+    });
+
+    it('no quarantine present → surfaceQuarantineRef is still invoked (it decides internally whether to write)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const calls: TriageOutcome[] = [];
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: { kind: 'pass', outputTail: '' },
+          surfaceQuarantineRef: async (_wt, _slug, outcome) => {
+            calls.push(outcome);
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe('pass');
+      expect(calls[0].quarantineRef).toBeUndefined();
+    });
+
+    it('surfaceQuarantineRef throwing does not block dispatch (fail-open)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-feat-x',
+          },
+          surfaceQuarantineRef: async () => {
+            throw new Error('sentinel write blew up');
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done'); // dispatch proceeded despite the surfacing failure
+    });
+
+    it('surfaceQuarantineRef absent → makeRunFeature builds normally (backward compatible)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: { kind: 'quarantined-pass', outputTail: '', quarantineRef: 'wip/setup-quarantine-feat-x' },
+          surfaceQuarantineRef: undefined,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+    });
+  });
+
   describe('prepareWorktree (write namespace + run bin/setup)', () => {
     function depsWithOrder(
       order: string[],

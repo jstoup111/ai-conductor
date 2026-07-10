@@ -1,6 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { classifyTree, quarantine, retryPrepareAfterQuarantine, runTriage, fixSession, type TriageOutcome, type GitRunner, type GitResult } from '../../src/engine/setup-triage.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { classifyTree, quarantine, retryPrepareAfterQuarantine, runTriage, fixSession, surfaceQuarantine, QUARANTINE_SENTINEL, type TriageOutcome, type GitRunner, type GitResult } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(
@@ -674,5 +686,86 @@ describe('engine/setup-triage — quarantine sentinel surfacing (Task 14)', () =
     expect(result.kind).toBe('pass');
     expect((result as any).quarantineRef).toBeUndefined();
     expect(prepareCalled).toBe(false);
+  });
+});
+
+describe('engine/setup-triage — surfaceQuarantine (Task 14 / TS-5: quarantine surfacing)', () => {
+  let dir: string;
+
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+  });
+
+  it('quarantine happened this rotation → writes .pipeline/QUARANTINE naming ref, preserved paths, and recovery guidance', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'quarantine-surface-'));
+    const { git } = fakeGit([
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 0, stdout: 'aaaa\n' } },
+    ]);
+
+    const outcome: TriageOutcome = {
+      kind: 'quarantined-pass',
+      outputTail: '',
+      quarantineRef: 'wip/setup-quarantine-test-slug',
+    };
+
+    await surfaceQuarantine(git, dir, 'test-slug', outcome);
+
+    const sentinelPath = join(dir, QUARANTINE_SENTINEL);
+    expect(await exists(sentinelPath)).toBe(true);
+    const content = await readFile(sentinelPath, 'utf-8');
+    expect(content).toContain('wip/setup-quarantine-test-slug');
+    expect(content).toContain('Recover deliberately');
+  });
+
+  it('an existing wip/setup-quarantine-<slug> ref from a prior rotation → writes .pipeline/QUARANTINE even when this rotation\'s outcome carries no ref', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'quarantine-surface-'));
+    const { git } = fakeGit([
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 0, stdout: 'bbbb\n' } },
+    ]);
+
+    const outcome: TriageOutcome = { kind: 'pass', outputTail: '' };
+
+    await surfaceQuarantine(git, dir, 'test-slug', outcome);
+
+    const sentinelPath = join(dir, QUARANTINE_SENTINEL);
+    expect(await exists(sentinelPath)).toBe(true);
+    const content = await readFile(sentinelPath, 'utf-8');
+    expect(content).toContain('wip/setup-quarantine-test-slug');
+  });
+
+  it('no quarantine present (no ref this rotation, none from before) → no .pipeline/QUARANTINE sentinel, no notice', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'quarantine-surface-'));
+    const { git } = fakeGit([
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 1, stdout: '', stderr: 'unknown revision' } },
+    ]);
+
+    const outcome: TriageOutcome = { kind: 'pass', outputTail: '' };
+
+    await surfaceQuarantine(git, dir, 'test-slug', outcome);
+
+    const sentinelPath = join(dir, QUARANTINE_SENTINEL);
+    expect(await exists(sentinelPath)).toBe(false);
+  });
+
+  it('sentinel-worthy ref but deleted externally → sentinel states the ref is missing, dispatch proceeds (no throw)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'quarantine-surface-'));
+    const { git } = fakeGit([
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 1, stdout: '', stderr: 'unknown revision or path' } },
+    ]);
+
+    const outcome: TriageOutcome = {
+      kind: 'quarantined-pass',
+      outputTail: '',
+      quarantineRef: 'wip/setup-quarantine-test-slug',
+    };
+
+    // Must not throw — dispatch proceeds regardless of the missing ref.
+    await expect(surfaceQuarantine(git, dir, 'test-slug', outcome)).resolves.toBeUndefined();
+
+    const sentinelPath = join(dir, QUARANTINE_SENTINEL);
+    expect(await exists(sentinelPath)).toBe(true);
+    const content = await readFile(sentinelPath, 'utf-8');
+    expect(content).toContain('wip/setup-quarantine-test-slug');
+    expect(content.toLowerCase()).toContain('no longer resolves');
   });
 });
