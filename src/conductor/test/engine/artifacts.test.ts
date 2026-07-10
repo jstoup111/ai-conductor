@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
+import { execa } from 'execa';
 import {
   STEP_ARTIFACT_GLOBS,
   findArtifactFiles,
@@ -706,6 +707,63 @@ describe('engine/artifacts', () => {
         const result = await checkStepCompletion(dir, 'build', ctx);
 
         expect(result).toEqual({ done: true });
+      });
+
+      // Regression (Task 10): a task legitimately completed via a real commit
+      // (Task: N trailer + path-corroborating changes) must keep passing the
+      // gate even if the mutable `.pipeline/task-evidence.json` sidecar is
+      // deleted out from under it. deriveCompletion re-derives evidence from
+      // git (the immutable source of truth) on every gate evaluation and
+      // re-writes the sidecar — the sidecar is a cache, never the source.
+      it('re-stamps and still passes the gate after the evidence sidecar is deleted (real commit)', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        // getEvidenceRange requires a resolvable origin default branch to
+        // bound the commit range — set up a bare "origin" the way a real
+        // clone would have one, pushed at the initial commit so the plan +
+        // work commits below are ahead of it.
+        const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-origin-'));
+        await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+        await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+        await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+        await writePlan('### Task 1: Real task\n**Story:** 1\nContent with `src/real.ts`\n');
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // A real commit with a corroborating path change and the Task: N trailer.
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/real.ts'), 'export const real = true;\n');
+        await execa('git', ['add', 'src/real.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement real task\n\nTask: 1\n'], { cwd: dir });
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // First pass: seed + derive should stamp the task from the commit and pass.
+        const first = await checkStepCompletion(dir, 'build', ctx);
+        expect(first).toEqual({ done: true });
+
+        const sidecarPath = join(dir, '.pipeline/task-evidence.json');
+        const beforeDelete = JSON.parse(await readFile(sidecarPath, 'utf-8'));
+        expect(beforeDelete.evidenceStamps['1']).toBeDefined();
+
+        // Delete the mutable sidecar entirely.
+        await rm(sidecarPath, { force: true });
+
+        // Re-run seed + derive + gate: the task must be re-stamped from git
+        // and still count as completed, even though the sidecar was wiped.
+        const second = await checkStepCompletion(dir, 'build', ctx);
+        expect(second).toEqual({ done: true });
+
+        const restamped = JSON.parse(await readFile(sidecarPath, 'utf-8'));
+        expect(restamped.evidenceStamps['1']).toBeDefined();
+
+        await rm(bareDir, { recursive: true, force: true });
       });
     });
   });
