@@ -779,6 +779,168 @@ describe('daemon startup handshake (Task 9)', () => {
     expect(armedDisarmedLines[0]).not.toMatch(/^ARMED/);
   });
 
+  describe('Task 9: Capture-failure and corrupt-marker degradation', () => {
+    it('(a) missing/unreadable dist/index.js → init returns null, handshake skipped, no crash', async () => {
+      // Task 9(a): When the engine entry point (dist/index.js) is missing or unreadable,
+      // captureEngineIdentity returns null, which causes:
+      // 1. initStaleEngineState returns null
+      // 2. Handshake is skipped (checker disabled)
+      // 3. Restart marker is NOT read (safe degradation)
+      // 4. Boot continues without crash
+
+      // Set up a marker to verify it's NOT read/handled when engine identity is null
+      const marker: RestartMarker = {
+        reason: 'engine stalled',
+        fromIdentity: 'daemon-old',
+        targetIdentity: 'engine-old-xyz',
+        at: Date.now(),
+      };
+
+      await writeRestartMarker(marker, projectRoot);
+
+      // Verify marker exists
+      const statusBefore = await readRestartMarkerWithStatus(projectRoot);
+      expect(statusBefore.kind).toBe('present');
+
+      // Call initStaleEngineState with non-existent engine file
+      const logs: string[] = [];
+      const nonExistentEngineFile = join(projectRoot, 'does-not-exist', 'index.js');
+
+      const capturedIdentity = await initStaleEngineState({
+        repoPath: projectRoot,
+        entryPath: nonExistentEngineFile,
+        flag: true,
+        log: (msg) => logs.push(msg),
+      });
+
+      // Verify init returned null (capture failed)
+      expect(capturedIdentity).toBeNull();
+
+      // Verify daemon identity log is NOT present (because identity was null)
+      expect(logs.some((m) => m.includes('daemon identity'))).toBe(false);
+
+      // Verify ARMED status is still logged (before the identity check)
+      expect(logs.some((m) => m.includes('ARMED'))).toBe(true);
+
+      // CRITICAL: Verify handshake is NOT logged (handshake skipped when identity is null)
+      expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(false);
+
+      // CRITICAL: Verify marker is still present on disk (not read/cleared when identity is null)
+      // This is the safe degradation — checker is disabled, so no restart handling
+      const statusAfter = await readRestartMarkerWithStatus(projectRoot);
+      expect(statusAfter.kind).toBe('present');
+
+      // CRITICAL: Boot continued without crashing (no exception thrown)
+      expect(true).toBe(true);
+    });
+
+    it('(b) corrupt marker JSON → logged + removed, no suppression write, boot continues', async () => {
+      // Task 9(b): When the marker file contains corrupt JSON,
+      // readRestartMarkerWithStatus handles it gracefully:
+      // 1. Corruption is logged
+      // 2. Marker file is removed
+      // 3. No suppression file is written
+      // 4. Boot continues normally
+
+      const engineContent = 'mock engine for corrupt marker test';
+      const enginePath = await createMockEngineFile(projectRoot, engineContent);
+      const engineIdentity = await captureEngineIdentity(enginePath);
+      expect(engineIdentity).not.toBeNull();
+
+      // Write corrupt marker directly to disk
+      const markerPath = join(projectRoot, '.daemon', 'RESTART_PENDING');
+      await mkdir(dirname(markerPath), { recursive: true });
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(markerPath, 'this is not valid json {{{', 'utf-8');
+
+      // Verify corrupt marker exists
+      expect(existsSync(markerPath)).toBe(true);
+
+      // Verify no suppression file exists yet
+      const suppressionPath = join(projectRoot, SUPPRESSION_PATH);
+      expect(existsSync(suppressionPath)).toBe(false);
+
+      // Call initStaleEngineState
+      const logs: string[] = [];
+      const capturedIdentity = await initStaleEngineState({
+        repoPath: projectRoot,
+        entryPath: enginePath,
+        flag: true,
+        log: (msg) => logs.push(msg),
+      });
+
+      // Verify engine identity was captured
+      expect(capturedIdentity).toBe(engineIdentity);
+
+      // Verify daemon identity was logged
+      expect(logs.some((m) => m.includes('daemon identity'))).toBe(true);
+
+      // Verify ARMED status was logged
+      expect(logs.some((m) => m.includes('ARMED'))).toBe(true);
+
+      // CRITICAL: Verify corruption was logged
+      expect(logs.some((m) => m.includes('corrupt'))).toBe(true);
+
+      // CRITICAL: Verify handshake is NOT logged (marker was corrupt, not present)
+      expect(logs.some((m) => m.includes('restarted for engine refresh'))).toBe(false);
+
+      // CRITICAL: Verify no suppression write was attempted (no suppression file created)
+      expect(existsSync(suppressionPath)).toBe(false);
+
+      // CRITICAL: Verify corrupt marker file was removed by readRestartMarkerWithStatus
+      expect(existsSync(markerPath)).toBe(false);
+
+      // CRITICAL: Boot continued without crashing
+      expect(true).toBe(true);
+    });
+
+    it('(b) corrupt marker with fresh identity mismatch → degraded safely, no suppression write', async () => {
+      // Task 9(b) variant: Corrupt marker case where fresh identity differs from target.
+      // Even though the marker is corrupt, the degradation path should be identical:
+      // corruption logged, marker removed, no suppression written, boot continues.
+
+      const engineContent = 'mock engine for corrupt marker variant';
+      const enginePath = await createMockEngineFile(projectRoot, engineContent);
+      const engineIdentity = await captureEngineIdentity(enginePath);
+      expect(engineIdentity).not.toBeNull();
+
+      // Write corrupt marker
+      const markerPath = join(projectRoot, '.daemon', 'RESTART_PENDING');
+      await mkdir(dirname(markerPath), { recursive: true });
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(markerPath, '{ corrupted data }}}', 'utf-8');
+
+      expect(existsSync(markerPath)).toBe(true);
+
+      const suppressionPath = join(projectRoot, SUPPRESSION_PATH);
+      expect(existsSync(suppressionPath)).toBe(false);
+
+      // Call initStaleEngineState
+      const logs: string[] = [];
+      const capturedIdentity = await initStaleEngineState({
+        repoPath: projectRoot,
+        entryPath: enginePath,
+        flag: true,
+        log: (msg) => logs.push(msg),
+      });
+
+      expect(capturedIdentity).toBe(engineIdentity);
+
+      // Verify corruption was logged
+      expect(logs.some((m) => m.includes('corrupt'))).toBe(true);
+
+      // Verify no suppression warning/write
+      expect(logs.some((m) => m.includes('suppressing restart loop'))).toBe(false);
+      expect(existsSync(suppressionPath)).toBe(false);
+
+      // Verify marker was removed
+      expect(existsSync(markerPath)).toBe(false);
+
+      // Boot continued successfully
+      expect(true).toBe(true);
+    });
+  });
+
   describe('Task 6: Persistence-failure degradation', () => {
     it('(a) suppression write fails → failure logged, boot continues, marker cleared', async () => {
       // Task 6(a): When recording suppression fails (e.g., can't write suppression file)
