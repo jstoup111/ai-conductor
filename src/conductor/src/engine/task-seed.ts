@@ -1,7 +1,6 @@
-import { readFile, writeFile, mkdir, mkdtemp, rm, readdir } from 'node:fs/promises';
+import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { access } from 'node:fs/promises';
 import { parsePlanTasks, PlanTask } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 
@@ -45,7 +44,21 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
   try {
     // Ensure .pipeline directory exists
     const pipelineDir = join(projectRoot, '.pipeline');
-    await mkdir(pipelineDir, { recursive: true });
+    await fsPromises.mkdir(pipelineDir, { recursive: true });
+
+    // Clear stale stamp file at build entry (defensive cleanup)
+    const currentTaskPath = join(pipelineDir, 'current-task');
+    try {
+      await fsPromises.rm(currentTaskPath, { force: false });
+    } catch (err) {
+      if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) {
+        // Not a "file not found" error — log warning but continue (fail-open)
+        console.warn(
+          `[task-seed] Failed to clear stale stamp file at ${currentTaskPath}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+      // If ENOENT (file not found), that's fine — no cleanup needed
+    }
 
     const statusPath = join(pipelineDir, 'task-status.json');
     const sidecarPath = join(pipelineDir, 'task-evidence.json');
@@ -54,7 +67,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Read engine-recorded plan path if available
     let recordedPlanPath: string | undefined = enginePlanPath;
     try {
-      const engineStateContent = await readFile(engineStatePath, 'utf-8');
+      const engineStateContent = await fsPromises.readFile(engineStatePath, 'utf-8');
       const engineState: EngineState = JSON.parse(engineStateContent);
       if (engineState.activePlanPath) {
         recordedPlanPath = engineState.activePlanPath;
@@ -85,7 +98,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Check if this is a first seed (sidecar absent = pre-cutover)
     let isFirstSeed = false;
     try {
-      await access(sidecarPath);
+      await fsPromises.access(sidecarPath);
     } catch {
       // Sidecar doesn't exist — this is a first seed
       isFirstSeed = true;
@@ -94,7 +107,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Parse plan tasks
     let planText: string;
     try {
-      planText = await readFile(absolutePlanPath, 'utf-8');
+      planText = await fsPromises.readFile(absolutePlanPath, 'utf-8');
     } catch {
       // Plan file not found — create empty status
       planText = '';
@@ -105,7 +118,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Load existing task-status.json
     let existingStatus: TaskStatusFile = { tasks: [] };
     try {
-      const raw = await readFile(statusPath, 'utf-8');
+      const raw = await fsPromises.readFile(statusPath, 'utf-8');
       if (raw && raw.trim()) {
         try {
           existingStatus = JSON.parse(raw);
@@ -230,14 +243,14 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     };
 
     // Atomic write: temp file + rename
-    const tempDir = await mkdtemp(join(tmpdir(), 'task-status-'));
+    const tempDir = await fsPromises.mkdtemp(join(tmpdir(), 'task-status-'));
     try {
       const tempFile = join(tempDir, 'task-status.json');
       const serialized = JSON.stringify(output, null, 2) + '\n';
-      await writeFile(tempFile, serialized);
-      await writeFile(statusPath, serialized);
+      await fsPromises.writeFile(tempFile, serialized);
+      await fsPromises.writeFile(statusPath, serialized);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await fsPromises.rm(tempDir, { recursive: true, force: true });
     }
 
     // Write task evidence (with grandfather stamps if first seed)
@@ -266,7 +279,7 @@ async function resolvePlanPathWithAmbiguityCheck(projectRoot: string, planPath: 
   const plansDir = join(projectRoot, '.docs', 'plans');
   let planFiles: string[];
   try {
-    const files = await readdir(plansDir);
+    const files = await fsPromises.readdir(plansDir);
     planFiles = files.filter(f => f.endsWith('.md')).map(f => join(plansDir, f));
   } catch {
     // Plans directory doesn't exist
