@@ -79,7 +79,7 @@ export type TriageOutcome =
       kind: 'park';
       outputTail: string;
       quarantineRef?: string;
-      preservedPaths?: never;
+      preservedPaths?: string[];
       contractOutcome?: string;
     };
 
@@ -325,12 +325,14 @@ export async function retryPrepareAfterQuarantine(
   logger?: Logger,
 ): Promise<TriageOutcome> {
   // Preserve dirty state and reset working tree to clean
-  const quarantineResult = await quarantine(git, slug, logger);
+  const quarantineAttempt = await quarantine(git, slug, logger);
 
   // If quarantine failed, return park immediately
-  if ('kind' in quarantineResult && quarantineResult.kind === 'park') {
-    return quarantineResult;
+  if ('kind' in quarantineAttempt) {
+    return quarantineAttempt;
   }
+
+  const quarantineResult: QuarantineResult = quarantineAttempt;
 
   // Single retry attempt after quarantine
   try {
@@ -499,7 +501,7 @@ export async function fixSession(
   const dirtyPaths = parsePortcelainPaths(porcelainResult.stdout);
 
   if (dirtyPaths.length > 0) {
-    // Step 6: Tree is dirty after prepare succeeded — park with dirty paths
+    // Step 6: Tree is dirty after prepare succeeded — park, naming the dirty paths
     return {
       kind: 'park',
       outputTail: '',
