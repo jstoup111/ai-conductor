@@ -689,7 +689,7 @@ export async function runDaemon(
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
     if (!deps.requestRestart) return false;
-    log('[daemon] engine stale after rebuild — restarting before next task');
+    log(`[daemon] engine stale after rebuild — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
     const result = await deps.requestRestart({ fromIdentity, targetIdentity });
     return result.fired;
   };
@@ -905,6 +905,8 @@ export async function runDaemon(
                 } else if (!staleEngineRestartRequested) {
                   // All gates still pass, request restart with identities (only once per run)
                   const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
+                  // Task 11: Log the stale verdict with both identities before requesting restart
+                  log(`[daemon] stale engine detected — captured: ${fromIdentity}, target: ${targetIdentity}`);
 
                   if (deps.requestRestart) {
                     const result = await deps.requestRestart({

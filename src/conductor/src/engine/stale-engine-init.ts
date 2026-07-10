@@ -23,6 +23,8 @@ import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
   recordSuppression,
+  clearSuppression,
+  getSuppression,
 } from './restart-intent.js';
 
 /**
@@ -83,16 +85,31 @@ export async function initStaleEngineState(opts: InitStaleEngineStateOpts): Prom
       // Task 10: Suppression — record when fresh identity differs from target
       // (non-convergence at boot). This prevents restart loops when the engine
       // identity hasn't reached the target yet.
+      // Task 1: Record suppression against the marker's targetIdentity (not the fresh identity).
+      // This ensures that when the engine reaches the failed target T, the restart is held.
       if (engineIdentity !== marker.targetIdentity) {
         log(
           `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
         );
-        await recordSuppression(engineIdentity, repoPath, log);
+        await recordSuppression(marker.targetIdentity, repoPath, log);
+      } else {
+        // Task 4: On convergence (fresh === target), clear any pre-existing suppression.
+        // This allows future restarts to proceed if the engine diverges again.
+        await clearSuppression(repoPath, log);
       }
 
       // Clear the marker before the dispatch loop begins
       // This ensures both boot paths observe the same on-disk state
       await clearRestartMarker(repoPath, log);
+    } else {
+      // Task 5: No marker present, but check if suppression exists.
+      // If the fresh identity matches the suppressed target, clear the suppression.
+      // This handles convergence without a marker (the engine reached the target
+      // identity on this boot without needing a restart).
+      const suppression = await getSuppression(repoPath);
+      if (suppression && suppression.suppressedTarget === engineIdentity) {
+        await clearSuppression(repoPath, log);
+      }
     }
   }
 
