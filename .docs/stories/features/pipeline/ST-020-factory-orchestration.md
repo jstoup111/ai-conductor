@@ -21,6 +21,14 @@
 > seeded set, write atomically, and stamp/clear `.pipeline/current-task` for the commit hooks.
 > The scheduling semantics are unchanged; only the mechanism is engine-owned.
 
+> **Amended 2026-07-10 by `adr-2026-07-10-session-hook-task-stamping` (APPROVED, #477):** the
+> orchestrator no longer invokes `conduct-ts task start/done` itself — engine-installed session
+> hooks (PreToolUse/PostToolUse on the subagent-dispatch tool) perform the `in_progress` flip and
+> `.pipeline/current-task` stamp/clear mechanically when the dispatch happens. Each dispatch
+> prompt carries `Task: <id>` or `Task: none` as its first line; an unmarked or unknown-id
+> dispatch is blocked at dispatch time. The CLI remains for operator/recovery use. Scheduling
+> semantics again unchanged; the trigger moved from prompt discipline to machinery.
+
 As a developer building a Medium or Large feature, I want the pipeline skill to orchestrate
 task execution with quality gates, batch evaluation, and rework budgets so that the build
 phase is systematic and quality-controlled.

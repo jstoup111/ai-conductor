@@ -27,6 +27,11 @@ stamp" must therefore be an engine-owned CLI invoked at that step, not a dispatc
    and stamps (`start`) / clears (`done`) `.pipeline/current-task` (plain-text single id).
    `skills/pipeline/SKILL.md` step 0 replaces its hand-edit of `task-status.json` with this call.
    The engine also clears any stale `current-task` at build-step entry (seed time).
+   > **Partially superseded (2026-07-10):** the "SKILL.md step 0 makes this call" trigger is
+   > superseded by `adr-2026-07-10-session-hook-task-stamping` — session hooks installed at
+   > provisioning perform the stamp/flip mechanically at subagent dispatch (#477 closed the
+   > prompt-discipline gap this sentence left open). The CLI, its validation semantics, and the
+   > build-entry stale-stamp clear remain authoritative.
 
 2. **Worktree-local git hooks, copied at provisioning.** Two pure-bash hooks, shipped as assets of
    the installed engine package and **copied by `prepareWorktree` into the build worktree**

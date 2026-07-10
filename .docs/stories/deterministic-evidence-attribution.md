@@ -221,6 +221,13 @@ harness files, and the operator's primary checkout is never affected.
 
 ## Story 7: Pipeline SKILL step 0 delegates to the CLI
 
+> **SUPERSEDED (2026-07-10, #477):** the orchestrator-invokes-the-CLI contract below is
+> superseded by `adr-2026-07-10-session-hook-task-stamping` — engine-installed session hooks
+> now perform the stamp/flip mechanically at subagent dispatch, and SKILL.md step 0 becomes
+> documentation of that machinery plus the line-1 `Task: <id>` / `Task: none` dispatch-prompt
+> contract. The CLI itself remains (operator/recovery use). See
+> `.docs/stories/engine-must-invoke-task-start-done-at-subagent-dis.md` Story 7.
+
 As the harness maintainer, I want the pipeline orchestrator's task bookkeeping reduced to one
 deterministic CLI call so that the last hand-edited attribution surface disappears.
 
