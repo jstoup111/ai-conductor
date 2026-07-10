@@ -7,33 +7,29 @@ describe('verdict-parser', () => {
       const logText = `2026-07-04T11:59:37Z NEW HALT: 2026-07-04T11:58:38.984Z [daemon] ✋ daemon-lifecycle-controls halted
 HALT daemon-lifecycle-controls -> filed #297`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(1);
-      expect(result.entries[0]).toEqual({
-        slug: 'daemon-lifecycle-controls',
-        issue: '297'
-      });
+      expect(result.entries[0].slug).toBe('daemon-lifecycle-controls');
+      expect(result.entries[0].issue).toBe('297');
       expect(result.unparseable).toBe(0);
     });
 
     it('parses verdict embedded within a RESULT line', () => {
       const logText = `2026-07-04T15:02:02Z RESULT: HALT make-daemon-build-push-pr-timing-a-configurable-st -> filed #300`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(1);
-      expect(result.entries[0]).toEqual({
-        slug: 'make-daemon-build-push-pr-timing-a-configurable-st',
-        issue: '300'
-      });
+      expect(result.entries[0].slug).toBe('make-daemon-build-push-pr-timing-a-configurable-st');
+      expect(result.entries[0].issue).toBe('300');
       expect(result.unparseable).toBe(0);
     });
 
     it('ignores covered-by verdicts and only extracts filed verdicts', () => {
       const logText = `2026-07-04T14:39:17Z RESULT: HALT test-spawned-daemons-leak-real-tmux-daemons-persis -> covered by #270`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(0);
       expect(result.unparseable).toBe(0);
@@ -42,13 +38,11 @@ HALT daemon-lifecycle-controls -> filed #297`;
     it('extracts only the filed verdict from double-verdict RESULT line', () => {
       const logText = `2026-07-09T09:00:00Z RESULT: Two unrelated slugs converged in the same triage pass: HALT synthetic-double-verdict-a -> covered by #900 (duplicate of an existing gap), and separately HALT synthetic-double-verdict-b -> filed #901 (new gap, no prior issue covered it).`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(1);
-      expect(result.entries[0]).toEqual({
-        slug: 'synthetic-double-verdict-b',
-        issue: '901'
-      });
+      expect(result.entries[0].slug).toBe('synthetic-double-verdict-b');
+      expect(result.entries[0].issue).toBe('901');
       expect(result.unparseable).toBe(0);
     });
 
@@ -56,8 +50,8 @@ HALT daemon-lifecycle-controls -> filed #297`;
       const logText = `HALT daemon-lifecycle-controls -> filed #297
 HALT make-daemon-build-push-pr-timing-a-configurable-st -> filed #300`;
 
-      const result1 = parseVerdicts(logText);
-      const result2 = parseVerdicts(logText);
+      const result1 = parseVerdicts(logText, 'test-repo');
+      const result2 = parseVerdicts(logText, 'test-repo');
 
       expect(result1.entries).toEqual(result2.entries);
       expect(result1.unparseable).toBe(result2.unparseable);
@@ -67,7 +61,7 @@ HALT make-daemon-build-push-pr-timing-a-configurable-st -> filed #300`;
       const logText = `HALT daemon-lifecycle-controls -> filed #297
 HALT another-slug -> filed #297`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(1);
       expect(result.entries[0].issue).toBe('297');
@@ -76,7 +70,7 @@ HALT another-slug -> filed #297`;
     it('counts malformed verdicts as unparseable', () => {
       const logText = `2026-07-09T09:06:00Z RESULT: HALT -> filed #`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(0);
       expect(result.unparseable).toBe(1);
@@ -87,7 +81,7 @@ HALT another-slug -> filed #297`;
 HALT -> filed #
 HALT make-daemon-build-push-pr-timing-a-configurable-st -> filed #300`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries).toHaveLength(2);
       expect(result.entries.map(e => e.issue)).toEqual(['297', '300']);
@@ -106,7 +100,7 @@ RESULT: HALT make-daemon-build-push-pr-timing-a-configurable-st -> covered by #3
 HALT prd-audit-kickback-preserves-task-status -> filed #385
 RESULT: HALT add-a-judgement-gate-at-the-build-manual-test-seam -> filed #403`;
 
-      const result = parseVerdicts(logText);
+      const result = parseVerdicts(logText, 'test-repo');
 
       expect(result.entries.length).toBeGreaterThan(0);
       // Should only have filed entries, not covered-by entries
@@ -117,6 +111,116 @@ RESULT: HALT add-a-judgement-gate-at-the-build-manual-test-seam -> filed #403`;
       expect(issues).toContain('403');
       expect(issues).not.toContain('270');
       expect(issues).not.toContain('282');
+    });
+
+    describe('Task 3: haltAt and repo parameter', () => {
+      it('accepts repo parameter and includes it in verdict entries', () => {
+        const logText = `HALT daemon-lifecycle-controls -> filed #297`;
+
+        const result = parseVerdicts(logText, 'my-repo');
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toEqual({
+          slug: 'daemon-lifecycle-controls',
+          issue: '297',
+          repo: 'my-repo',
+          haltAt: undefined
+        });
+      });
+
+      it('extracts haltAt timestamp from NEW HALT line', () => {
+        const logText = `2026-07-04T11:59:37Z NEW HALT: 2026-07-04T11:58:38.984Z [daemon] ✋ daemon-lifecycle-controls halted
+HALT daemon-lifecycle-controls -> filed #297`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toEqual({
+          slug: 'daemon-lifecycle-controls',
+          issue: '297',
+          repo: 'test-repo',
+          haltAt: '2026-07-04T11:58:38'
+        });
+      });
+
+      it('uses newest (latest) haltAt timestamp when multiple NEW HALT lines exist for same slug', () => {
+        const logText = `2026-07-04T10:00:00Z NEW HALT: 2026-07-04T10:00:00.000Z [daemon] ✋ test-slug halted
+2026-07-04T12:00:00Z NEW HALT: 2026-07-04T12:00:00.000Z [daemon] ✋ test-slug halted
+2026-07-04T11:00:00Z NEW HALT: 2026-07-04T11:00:00.000Z [daemon] ✋ test-slug halted
+HALT test-slug -> filed #999`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0].haltAt).toBe('2026-07-04T12:00:00');
+      });
+
+      it('correctly maps multiple slugs to their newest haltAt timestamps', () => {
+        const logText = `2026-07-04T10:00:00Z NEW HALT: 2026-07-04T10:00:00.000Z [daemon] ✋ slug-a halted
+2026-07-04T11:00:00Z NEW HALT: 2026-07-04T11:30:00.000Z [daemon] ✋ slug-a halted
+2026-07-04T12:00:00Z NEW HALT: 2026-07-04T12:00:00.000Z [daemon] ✋ slug-b halted
+HALT slug-a -> filed #100
+HALT slug-b -> filed #200`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(2);
+        const slugAEntry = result.entries.find(e => e.slug === 'slug-a');
+        const slugBEntry = result.entries.find(e => e.slug === 'slug-b');
+
+        expect(slugAEntry?.haltAt).toBe('2026-07-04T11:30:00');
+        expect(slugBEntry?.haltAt).toBe('2026-07-04T12:00:00');
+      });
+
+      it('counts malformed verdicts with missing slug', () => {
+        const logText = `HALT -> filed #123`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(0);
+        expect(result.unparseable).toBe(1);
+      });
+
+      it('counts malformed verdicts with missing issue number', () => {
+        const logText = `HALT test-slug -> filed #`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(0);
+        expect(result.unparseable).toBe(1);
+      });
+
+      it('handles mixed valid and malformed verdicts with haltAt', () => {
+        const logText = `2026-07-04T10:00:00Z NEW HALT: 2026-07-04T10:00:00.000Z [daemon] ✋ valid-slug halted
+HALT valid-slug -> filed #500
+HALT -> filed #
+HALT invalid -> filed #`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toEqual({
+          slug: 'valid-slug',
+          issue: '500',
+          repo: 'test-repo',
+          haltAt: '2026-07-04T10:00:00'
+        });
+        expect(result.unparseable).toBe(2);
+      });
+
+      it('handles slug without corresponding NEW HALT line (haltAt undefined)', () => {
+        const logText = `HALT no-new-halt-slug -> filed #888`;
+
+        const result = parseVerdicts(logText, 'test-repo');
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0]).toEqual({
+          slug: 'no-new-halt-slug',
+          issue: '888',
+          repo: 'test-repo',
+          haltAt: undefined
+        });
+      });
     });
   });
 });
