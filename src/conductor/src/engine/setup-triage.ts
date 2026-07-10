@@ -303,7 +303,7 @@ function parsePortcelainPaths(porcelain: string): string[] {
  * 1. Quarantine the dirty tree state to preserve it for inspection
  * 2. Reset the working tree to clean
  * 3. Retry the full prepare process once (runPrepare)
- * 4. On retry success: return quarantined-pass outcome
+ * 4. On retry success: write quarantine sentinel and return quarantined-pass
  * 5. On retry failure: return park outcome (fall through to fix-session)
  *
  * Parameters:
@@ -335,7 +335,8 @@ export async function retryPrepareAfterQuarantine(
   // Single retry attempt after quarantine
   try {
     await runPrepare(worktreePath);
-    // Setup succeeded after retry
+    // Setup succeeded after retry — write quarantine sentinel for build dispatch
+    await writeQuarantineSentinel(worktreePath, quarantineResult.ref, quarantineResult.preservedPaths, logger);
     return {
       kind: 'quarantined-pass',
       outputTail: '',
