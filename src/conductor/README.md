@@ -183,33 +183,48 @@ gap was routable.
 
 **Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
 `.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
-the daemon's build retry loop detects it and routes through `/remediate` before halting:
+`Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
+and routes through `/remediate` before halting:
 
-- **Capture before clear** — `detectAndClearHaltMarker` reads the marker content (the question)
-  and persists it to `.pipeline/build-stall-question.md` before clearing the marker file.
-- **Dispatch `/remediate` with `build_stall` trigger** — the conductor calls `planRemediation`
-  with `hintSource: { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' }`.
-  The planner reasons over the question plus committed artifacts (plan, stories, ADRs,
-  task-status, prior commits) to determine if it's answerable without more human input.
+- **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
+  reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
+  `writeStallQuestionEvidence(this.projectRoot, question)` persists it to
+  `.pipeline/build-stall-question.md` (substituting a placeholder line for empty/whitespace-only
+  questions) and returns the effective question used downstream. `clearHaltMarker` then removes
+  the marker so the retry loop doesn't re-trip on it.
+- **Dispatch `/remediate`** — the conductor calls `this.planRemediation(state, steps, prompt,
+  { source: 'build_stall' | 'build-stall', evidenceFile })` (two call sites: one immediately at
+  stall detection, one later in the retry loop keyed off the saved `stallQuestion`). The planner
+  reasons over the question plus committed artifacts (plan, stories, ADRs, task-status, prior
+  commits) to determine if it's answerable without more human input.
 - **Answerable → in-loop resume, no retry burned** — if `/remediate` returns a `route` outcome
-  targeting `build` with the answer in the hint, the conductor sets `retryHint` to the answer,
-  decrements the attempt counter (`attempt--`), and continues the loop (same no-burn idiom as
-  `sessionExpired` and auth-park failures). The build proceeds with the answer as context.
+  targeting `build`, the conductor executes `retryHint = outcome.hint; attempt--; continue;` —
+  the answer becomes the retry hint, the attempt counter is decremented before the loop's
+  increment, and the loop `continue`s, so this round doesn't count against the step's retry
+  budget (same no-burn idiom as `sessionExpired` and auth-park failures). The build proceeds
+  with the answer as context.
 - **Unanswerable → HALT carrying question** — if `/remediate` returns a `halt` outcome
   (category: `architectural-clarity`, `product-scope`, or `unanswerable`), the conductor writes
-  `.pipeline/HALT` with the original question preserved verbatim (via the
-  `preserveSpecificReason` seam at `conductor.ts:2229-2236`) and breaks the loop.
-- **Fail-safe (unconditional)** — if the remediation dispatch fails, returns `none`, or the
-  `remediationRounds` budget is exhausted, the conductor writes `.pipeline/HALT` **carrying the
-  question verbatim** and halts. Under no path may the question be lost.
-- **Budget** — stall remediations share the existing `MAX_KICKBACKS_PER_GATE` remediation budget.
-  Multiple stalls in one run consume the shared pool; once exhausted, subsequent stalls degrade
-  to HALT without dispatch. Implementation: `src/conductor/src/engine/conductor.ts:1689-1802`
-  (stall detection), `planRemediation` with new hint-source parameter.
+  `.pipeline/HALT` with the original question preserved verbatim, either inline
+  (`effectiveQuestion + '\n\n' + outcome.detail`) at the first call site or via the
+  `writeStallHalt(this.projectRoot, stallQuestion, detail)` helper (`engine/task-progress.ts`) at
+  the second — both paths keep the question as the first line a human sees.
+- **Fail-safe (unconditional)** — if the remediation dispatch throws, returns `none`
+  (malformed/stale `.pipeline/remediation.json` or all dispositions dropped by validation), or a
+  misrouted `route` targets something other than `build`, or the `remediationRounds` budget is
+  already exhausted before dispatch, the conductor writes `.pipeline/HALT` **carrying the
+  question verbatim** via the same inline-or-`writeStallHalt` paths and halts. Under no path may
+  the question be lost.
+- **Budget** — stall remediations share the existing `remediationRounds` counter capped at
+  `MAX_KICKBACKS_PER_GATE` (`conductor.ts`, currently **2**) — the same counter also bounds
+  `/remediate` dispatches for blocking `prd_audit` gaps, so a run with both a build stall and a
+  prd-audit gap draws from one shared pool. Once exhausted, subsequent stalls degrade straight to
+  fail-safe HALT without a dispatch attempt.
 
-See `src/conductor/src/engine/task-progress.ts`, `engine/artifacts.ts` (output contract for
-`build_stall` dispositions), and `src/conductor/README.md` → "Agentic remediation" above for
-the `/remediate` skill contract.
+See `src/conductor/src/engine/task-progress.ts` (`readHaltMarkerContent`,
+`writeStallQuestionEvidence`, `writeStallHalt`, `clearHaltMarker`), `engine/artifacts.ts` (output
+contract for `build_stall` dispositions), and `src/conductor/README.md` → "Agentic remediation"
+above for the `/remediate` skill contract.
 
 **Daemon prd-audit fallback routing (gap-class aware).** In an interactive run a blocking
 `prd_audit` escalates to the recovery menu, where the human picks where to route. In a daemon
@@ -1901,7 +1916,7 @@ with per-gap dispositions.
 - **`halt: 'architectural-clarity'` or `halt: 'product-scope'`** — genuinely human categories;
   the conductor HALTs and opens a draft PR for triage
 
-**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (default 3), so a
+**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (currently 2), so a
 cycle that's not converging HALTs eventually. Daemon prd_audit also has its own
 self-healing fallback: if every blocking row is `impl-gap` (code), the conductor auto-kicks
 back to `build` up to N times before giving up.

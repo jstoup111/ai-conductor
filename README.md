@@ -337,10 +337,14 @@ resolve), the daemon does not immediately halt. Instead:
 - **Unanswerable** — the planner routes to a human (architectural-clarity,
   product-scope, or unanswerable). The conductor writes `.pipeline/HALT` with the
   original question preserved verbatim.
-- **Fail-safe** — if remediation fails or the budget is exhausted, `.pipeline/HALT`
-  still carries the question. The operator never loses sight of what the agent needed.
-- **Budget** — stall remediations share the existing `MAX_KICKBACKS_PER_GATE` budget
-  (no new counter). Multiple stalls in one run share the pool.
+- **Fail-safe** — if remediation fails (dispatch throws), returns no valid disposition, or
+  misroutes to a non-`build` target, `.pipeline/HALT` still carries the question. The operator
+  never loses sight of what the agent needed.
+- **Budget** — stall remediations share the existing `remediationRounds` counter (capped by
+  `MAX_KICKBACKS_PER_GATE`; no new counter was added). Blocking `prd_audit` gaps draw from the
+  same shared pool, so a run with both a build stall and a prd-audit gap can exhaust the budget
+  faster than either alone. See `src/conductor/README.md` → "Daemon build-stall remediation" for
+  the implementation (`readHaltMarkerContent`, `writeStallQuestionEvidence`, `writeStallHalt`).
 
 A blocking SHIP gate tries to self-heal before it halts: the conductor dispatches the
 `/remediate` planner over the gate's gap artifact — a blocking prd-audit
