@@ -1539,6 +1539,86 @@ Work on the literal task-N form.
     expect(incompleteTasks).toHaveLength(3);
     expect(incompleteTasks.sort((a, b) => Number(a) - Number(b))).toEqual(['5', '9', '10']);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 4: deriveCompletion no-anchor path anchors at branch base (#456).
+  //
+  // Previously, calling deriveCompletion(root, planPath) with no anchor
+  // computed the repo's GENESIS commit via `git log --reverse` and used
+  // that as the evidence range boundary — so gate evaluation saw the
+  // entire repo history instead of just the current branch's commits.
+  // Now, an omitted anchor is passed through as '' to getEvidenceRange,
+  // whose resolution ladder derives the branch base (merge-base against
+  // the origin default branch) instead.
+  // ───────────────────────────────────────────────────────────────────────
+  it('with no anchor arg, evaluates a range equal to «merge-base»..HEAD (not repo genesis)', async () => {
+    const autoheal = await loadAutoheal();
+
+    // gitDir already has a "pre-base" commit from beforeEach (README.md).
+    // Set up a bare origin and push that commit as the base of main.
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Record the pre-base commit sha (should NOT be in the derived range).
+    const preBaseLog = await execa('git', ['log', '--format=%H'], { cwd: gitDir });
+    const preBaseSha = preBaseLog.stdout.trim();
+
+    // Create a plan with no specific paths for the task, so a bare trailer
+    // is sufficient corroboration.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // 3 commits on the branch, ahead of origin/main; the last one carries
+    // a corroborating Task: 2 trailer.
+    await writeFile(join(gitDir, 'a.txt'), 'a');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit a'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b.txt'), 'b');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit b'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'c.txt'), 'c');
+    await execa('git', ['add', 'c.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit c\n\nTask: 2\n'], { cwd: gitDir });
+
+    // Compute the expected merge-base..HEAD range independently.
+    const mergeBaseOut = await execa('git', ['merge-base', 'origin/main', 'HEAD'], { cwd: gitDir });
+    const mergeBase = mergeBaseOut.stdout.trim();
+    const expectedRangeOut = await execa('git', ['log', '--format=%H', `${mergeBase}..HEAD`], { cwd: gitDir });
+    const expectedShas = expectedRangeOut.stdout.split('\n').filter(Boolean);
+
+    // No-anchor call form: only root + planPath.
+    const result = await autoheal.deriveCompletion(gitDir, planPath);
+
+    // Task 2 has a corroborating trailer within the branch range → completed.
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+    expect(result['2'].evidencedBy).toBeTruthy();
+    expect(expectedShas).toContain(result['2'].evidencedBy);
+
+    // The pre-base (origin) commit must NOT be part of the evaluated range.
+    expect(expectedShas).not.toContain(preBaseSha);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('no code path invokes `git log --reverse` for anchor resolution', async () => {
+    // Static assertion: the genesis-fallback block that shelled out to
+    // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
+    // been removed from deriveCompletion. Guard against regression by
+    // asserting the source no longer contains that invocation.
+    const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
+    expect(src).not.toMatch(/--reverse/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

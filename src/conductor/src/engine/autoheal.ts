@@ -742,27 +742,13 @@ export async function deriveCompletion(
   commitsArg?: CommitWithTrailers[],
   evidenceArg?: { evidenceStamps: Map<string, { sha: string; form: string }>; write(): Promise<void> },
 ): Promise<DeriveCompletionResult> {
-  let anchor = anchorArg ?? '';
-  if (anchorArg === undefined) {
-    try {
-      // Get the first commit (plan anchor) for evidence range boundary.
-      // NOTE: `-n 1 --reverse` is a classic git footgun — `-n`/`--max-count` is
-      // applied BEFORE `--reverse`, so `-n 1 --reverse HEAD` returns the first
-      // of the newest-first list (i.e. HEAD itself), not the oldest commit.
-      // That made anchor always equal HEAD, so `${anchor}..HEAD` was always an
-      // empty range and every gate evaluation saw zero commits regardless of
-      // real history. Reading the full reversed list and taking its first
-      // line gives the true root commit.
-      const { stdout } = await execa('git', ['log', '--format=%H', '--reverse', 'HEAD'], {
-        cwd: projectRoot,
-        reject: false,
-      });
-      anchor = (stdout || '').split('\n')[0]?.trim() ?? '';
-    } catch {
-      // No commits yet — use empty string, getEvidenceRange will handle it
-      anchor = '';
-    }
-  }
+  // No explicit anchor: pass '' to getEvidenceRange so its resolution ladder
+  // (rung 1: explicit anchor, rung 2+: branch base derivation) determines
+  // the evidence range boundary. Previously this shelled out to git log to
+  // find the repo's first (genesis) commit and used that as the anchor,
+  // which meant every gate evaluation saw the FULL repo history instead of
+  // just the current branch's commits (#456).
+  const anchor = anchorArg ?? '';
 
   const commits = commitsArg ?? (await getEvidenceRange(projectRoot, anchor)).commits;
 
