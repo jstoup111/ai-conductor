@@ -267,37 +267,21 @@ export async function retryPrepareAfterQuarantine(
     return quarantineResult;
   }
 
-  let outputTail = '';
-
-  // First retry attempt
+  // Single retry attempt after quarantine
   try {
     await runPrepare(worktreePath);
-    // Setup succeeded after first retry
+    // Setup succeeded after retry
     return {
       kind: 'quarantined-pass',
       outputTail: '',
       quarantineRef: quarantineResult.ref,
     };
   } catch (err) {
-    // First retry failed, capture the output
-    outputTail = extractErrorOutput(err);
-  }
-
-  // Second retry attempt (check for committed breakage)
-  try {
-    await runPrepare(worktreePath);
-    // Setup succeeded after second retry
-    return {
-      kind: 'quarantined-pass',
-      outputTail: '',
-      quarantineRef: quarantineResult.ref,
-    };
-  } catch (err) {
-    // Both retries failed (committed breakage)
-    const secondOutputTail = extractErrorOutput(err);
+    // Retry failed (committed breakage) — return park with output tail
+    const outputTail = extractErrorOutput(err);
     return {
       kind: 'park',
-      outputTail: secondOutputTail,
+      outputTail,
       quarantineRef: quarantineResult.ref,
     };
   }
