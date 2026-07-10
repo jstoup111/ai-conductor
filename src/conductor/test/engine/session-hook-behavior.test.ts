@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -449,5 +449,90 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       // Overlap guard: stamp removed so the commit hook can't attribute
       expect(existsSync(currentTaskPath)).toBe(false);
     });
+  });
+
+  describe('fail-open on unparseable payloads', () => {
+    function seedTempDirWithStatus(): { pipelineDir: string; statusPath: string; seededStatus: string } {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = JSON.stringify({
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'in_progress' },
+          { id: '7', status: 'pending' },
+        ],
+      });
+      writeFileSync(statusPath, seededStatus, 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      return { pipelineDir, statusPath, seededStatus };
+    }
+
+    it('exits 0 with a stderr diagnostic and no state change when stdin is malformed JSON', () => {
+      const { pipelineDir, statusPath, seededStatus } = seedTempDirWithStatus();
+      const hookPath = join(pipelineDir, '..', 'pre-dispatch-hook.sh');
+
+      const result = spawnSync('bash', [hookPath], {
+        input: 'not json{',
+        cwd: tempDir,
+        encoding: 'utf-8',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    }, 5000);
+
+    it('exits 0 promptly with no state change when stdin is empty', () => {
+      const { pipelineDir, statusPath, seededStatus } = seedTempDirWithStatus();
+      const hookPath = join(pipelineDir, '..', 'pre-dispatch-hook.sh');
+
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: '',
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+
+      expect(exitCode).toBe(0);
+      expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    }, 5000);
+
+    it('exits 0 pass-through with no state change when tool_input.prompt is missing', () => {
+      const { pipelineDir, statusPath, seededStatus } = seedTempDirWithStatus();
+      const hookPath = join(pipelineDir, '..', 'pre-dispatch-hook.sh');
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json');
+      const { prompt: _prompt, ...toolInputWithoutPrompt } = payload.tool_input;
+      const payloadMissingPrompt = { ...payload, tool_input: toolInputWithoutPrompt };
+
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: JSON.stringify(payloadMissingPrompt),
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+
+      expect(exitCode).toBe(0);
+      expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    }, 5000);
   });
 });
