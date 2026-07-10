@@ -25,7 +25,7 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { readState } from '../../src/engine/state.js';
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
-import { isOperatorParked, __resetResolveCacheForTests } from '../../src/engine/park-marker.js';
+import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -1519,5 +1519,147 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     // Verify marker is still intact at main root (untouched by sweep)
     expect(await fileExists(mainMarkerPath)).toBe(true);
     expect(await readFile(mainMarkerPath, 'utf-8')).toContain('auto-parked:');
+  });
+});
+
+// ── Task 15 (#486): Wire reconciliation at sweep start + same-sweep skip e2e ───
+//
+// Pre-seed a stranded marker at worktree `.daemon/parked/<slug>`, invoke the sweep
+// wrapper, and verify: (1) marker moved to main root, (2) slug skipped in SAME sweep
+describe('engine/daemon-rekick — Task 15: reconcile stranded markers at sweep start (#486)', () => {
+  let mainRepoDir: string;
+  let worktreeDir: string;
+  const SLUG = 'test-feature-task15';
+
+  async function git(dir: string, ...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+    return stdout.trim();
+  }
+
+  async function fileExists(p: string): Promise<boolean> {
+    return access(p).then(() => true, () => false);
+  }
+
+  beforeEach(async () => {
+    // Create a temp parent for the main repo
+    const base = await mkdtemp(join(tmpdir(), 'task15-reconcile-'));
+    mainRepoDir = join(base, 'main-repo');
+    // Worktrees are stored inside the main repo at .worktrees/<slug>
+    worktreeDir = join(mainRepoDir, '.worktrees', SLUG);
+
+    // Initialize main repo
+    await mkdir(mainRepoDir, { recursive: true });
+    await execFileAsync('git', ['init', '-b', 'main', mainRepoDir]);
+    await git(mainRepoDir, 'config', 'user.email', 'test@example.com');
+    await git(mainRepoDir, 'config', 'user.name', 'Test');
+    await git(mainRepoDir, 'config', 'commit.gpgsign', 'false');
+
+    // Create initial commit
+    await mkdir(join(mainRepoDir, 'src'), { recursive: true });
+    await writeFile(join(mainRepoDir, 'src/main.ts'), 'export const main = true;\n');
+    await git(mainRepoDir, 'add', '.');
+    await git(mainRepoDir, 'commit', '-m', 'init: main repo');
+
+    // Create feature branch
+    await git(mainRepoDir, 'checkout', '-b', `feature/${SLUG}`);
+    await mkdir(join(mainRepoDir, 'src'), { recursive: true });
+    await writeFile(join(mainRepoDir, 'src/feature.ts'), 'export const feature = 1;\n');
+    await git(mainRepoDir, 'add', '.');
+    await git(mainRepoDir, 'commit', '-m', 'feat: initial feature work');
+
+    // Back to main before creating worktree
+    await git(mainRepoDir, 'checkout', 'main');
+
+    // Add a linked worktree from the feature branch (stored inside .worktrees/)
+    await mkdir(join(mainRepoDir, '.worktrees'), { recursive: true });
+    await git(mainRepoDir, 'worktree', 'add', '-b', `wt-${SLUG}`, worktreeDir, `feature/${SLUG}`);
+
+    // Reset cache before test runs
+    __resetResolveCacheForTests();
+  });
+
+  afterEach(async () => {
+    // Clean up the git worktree before removing directories
+    try {
+      await git(mainRepoDir, 'worktree', 'remove', '--force', worktreeDir);
+    } catch {
+      // Worktree might already be gone
+    }
+    // Clean up entire temp tree
+    const base = join(mainRepoDir, '..');
+    await rm(base, { recursive: true, force: true });
+    __resetResolveCacheForTests();
+  });
+
+  it('pre-seeded stranded marker: reconciliation runs at sweep start, marker moves to main, slug skipped in same sweep', async () => {
+    // Step 1: Pre-seed a stranded marker at worktree .daemon/parked/
+    // (simulating a marker that was written from a worktree before the fix)
+    const strandedMarkerDir = join(worktreeDir, '.daemon', 'parked');
+    await mkdir(strandedMarkerDir, { recursive: true });
+    const strandedMarkerBody = `auto-parked: reason for parking
+date: 2026-07-10
+`;
+    await writeFile(join(strandedMarkerDir, SLUG), strandedMarkerBody, 'utf-8');
+
+    // Verify pre-condition: marker is at worktree, not at main
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', SLUG);
+    const mainMarkerPath = join(mainRepoDir, '.daemon', 'parked', SLUG);
+    expect(await fileExists(worktreeMarkerPath)).toBe(true);
+    expect(await fileExists(mainMarkerPath)).toBe(false);
+
+    // Step 2: Create HALT marker so the sweep will find the slug
+    const pipelineDir = join(worktreeDir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(join(pipelineDir, 'HALT'), 'pre-existing halt\n', 'utf-8');
+
+    // Step 3: Set up sweep deps (bound to main root, as daemon-cli does)
+    // The critical test: when rekickSweep runs, it should FIRST call
+    // reconcileStrandedParkMarkers (not done here yet — this test should FAIL),
+    // which moves the marker, then the sweep gate sees it at the main root
+    // and skips the slug in the SAME sweep.
+    const traces: string[] = [];
+    const deps: RekickSweepDeps = {
+      listHaltedWorktrees: async () => [SLUG],
+      readHaltReason: async () => 'pre-existing halt',
+      hasRebaseInProgress: async () => false,
+      abortRebase: async () => {
+        traces.push('abortRebase called');
+        throw new Error('should not call abort for operator-parked slug');
+      },
+      clearMarker: async () => {
+        traces.push('clearMarker called');
+        throw new Error('should not call clear for operator-parked slug');
+      },
+      lastRekickSha: new Map(),
+      log: (msg) => traces.push(`log: ${msg}`),
+      // isOperatorParked bound to main root as daemon-cli does
+      isOperatorParked: async (slug) => isOperatorParked(mainRepoDir, slug),
+    };
+
+    // Step 4: Reconcile stranded markers (as daemon-cli does at the top of the sweep wrapper)
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRepoDir, (msg) => logs.push(msg));
+
+    // Step 5: Run the sweep (which now sees the marker at main root and skips in same sweep)
+    const sweepResult = await rekickSweep(deps, SHA_B);
+
+    // Step 6: Verify the marker was moved to main root
+    expect(await fileExists(worktreeMarkerPath)).toBe(false);
+    expect(await fileExists(mainMarkerPath)).toBe(true);
+    const mainMarkerContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainMarkerContent).toBe(strandedMarkerBody);
+
+    // Step 7: Verify sweep saw the marker at main root and skipped the slug
+    expect(sweepResult.skipped).toContain(SLUG);
+    expect(sweepResult.cleared).not.toContain(SLUG);
+
+    // Verify no abort or clear was attempted
+    expect(traces).not.toContain('abortRebase called');
+    expect(traces).not.toContain('clearMarker called');
+
+    // Verify the operator-parked skip log line
+    expect(
+      traces.some((t) => t === `log: re-kick ${SLUG}: skipped — operator-parked`),
+    ).toBe(true);
   });
 });

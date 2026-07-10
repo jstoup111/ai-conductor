@@ -62,7 +62,7 @@ import {
   makeFeatureRunnerDeps,
   makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
-import { isOperatorParked } from './engine/park-marker.js';
+import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
@@ -1290,6 +1290,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
       rekickSweep: async (sha) => {
+        // Reconcile stranded park markers at the TOP of the sweep so the same
+        // sweep that moves them also skips them (#486).
+        await reconcileStrandedParkMarkers(projectRoot, log);
         // Fresh resolver per sweep: makeIsProcessed caches the shipped-record
         // listing per instance, and this sweep runs because the base branch
         // just advanced — a run-long cache would miss records merged mid-run.
