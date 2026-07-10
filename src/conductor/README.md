@@ -1336,6 +1336,86 @@ subscriber serializes them generically.
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
 
+### Intra-step build progress & stall events (adr-2026-07-10-intra-step-build-progress-events)
+
+Between `step_started` and `step_completed` for the `build` step, `BuildProgressWatcher`
+(`engine/build-progress-watcher.ts`) polls a tolerant snapshot of build state and emits
+change-driven progress/stall events on the same `ConductorEventEmitter` bus every other
+event travels — no new transport, no new subscriber-registration mechanism.
+
+#### Events (`types/events.ts`)
+
+- **`build_progress`** — `{ step, resolved, total, currentTaskId?, currentTaskName?,
+  commitCount?, noEvidenceAttempts?, featureSlug? }`. Emitted only when something
+  changed: a resolved/total delta, a new current task, a new commit on `HEAD` with no
+  task delta, or a bare `noEvidenceAttempts` bump. An unchanged tick emits nothing.
+  `commitCount` is populated via `git rev-list --count <old>..<new>` when `HEAD` moved
+  (best-effort — omitted if that probe fails).
+- **`build_no_progress`** — `{ step, quietMinutes, resolved, total, currentTaskId?,
+  lastCommitAt?, featureSlug? }`. A quiet-episode warning once `quiet_minutes` elapse
+  with no observed task-status change. Distinct from `build_stall` (a stronger, terminal
+  signal).
+- **`build_stall`** — `{ step, reason: 'no_task_progress' | 'halt_marker',
+  resolvedBefore, resolvedAfter }`.
+
+#### `readSnapshot` / watcher tolerance
+
+`readSnapshot(projectRoot)` and the watcher's internal tick both read
+`.pipeline/task-status.json` (via `normalizeTasks`, tolerating both the `{tasks: [...]}`
+shape and the legacy id-keyed map), `.pipeline/task-evidence.json` (via
+`readNoEvidenceAttempts`), and `git rev-parse HEAD` in `projectRoot`. Every source is
+best-effort: a missing/corrupt task-status file yields the "no data" snapshot (or, on the
+watcher's polling hot path, skips the tick entirely) rather than throwing; a failed git
+probe simply omits `head`. Callers never see these reads throw.
+
+#### Watcher lifecycle
+
+Constructed once per build-step attempt with `{ projectRoot, events, step, featureSlug?,
+config? }`; `start()` begins polling on `poll_seconds` (timer `.unref()`'d so it never
+keeps the process alive on its own), `stop()` — idempotent, safe even if `start()` was
+never called — tears it down. The conductor wires `start()`/`stop()` around the build
+step's await in a `try/finally` so a watcher can never leak past step completion or
+failure.
+
+#### Config (`build_progress:` key, `types/config.ts` `BuildProgressConfig`)
+
+```yaml
+build_progress:
+  poll_seconds: 30       # default: 30
+  quiet_minutes: 15      # default: 15
+  heartbeat_minutes: 5   # default: 5
+  enabled: true          # default: true
+```
+
+Resolved via `resolveBuildProgressConfig()` (`engine/config.ts`) — every field is
+independently defaulted, so a partial block never silently zeroes out an unspecified
+knob. `enabled: false` is a full escape hatch: the watcher's `start()` becomes a no-op.
+Validation is fail-closed (malformed values are rejected at config load, not at watcher
+construction).
+
+#### Per-subscriber rendering
+
+- **daemon.log** (`daemon-cli.ts`) — `build_progress` renders as a cyan `▶` heartbeat
+  (`step resolved/total — task · slug`); `build_no_progress` as a yellow `⚠` quiet-episode
+  line; `build_stall` as a red `✋` stall line with the reason and before/after counts.
+- **TTY dashboard** (`ui/create-renderer.ts`) — analogous progress/no-progress/stall lines
+  rendered into the live region, distinct glyphs (`⠿`/`⚠`/`⛔`) and colors per kind.
+- **OTel exporter** (`engine/otel/span-manager.ts` — `onBuildProgress`,
+  `onBuildNoProgress`, `onBuildStall`) — each event is recorded as a span event
+  (`addEvent`) on the currently active step span, with the event's fields as span
+  attributes. A no-op (single warning, no throw) when no span is available for the step —
+  `otel-visualizer.ts` registers all three kinds alongside the existing gate-loop events.
+- **Event persister** (`engine/event-persister.ts`) — all three kinds are added to the
+  persisted-kind allowlist and written to `.pipeline/events.jsonl` like every other
+  conductor event, with a subscriber-list drift guard so a future new kind can't silently
+  bypass persistence.
+- **UI subscriber fan-out** (`ui/subscriber.ts`) — all three kinds are forwarded to every
+  registered `ui_renderer` plugin, not just the default terminal one.
+
+Tests: `test/build-progress-watcher.test.ts`, `test/build-progress-events.test.ts`,
+`test/build-progress-config.test.ts`, `test/conductor-build-progress.test.ts`,
+`test/acceptance/emit-intra-step-build-progress-and-stall-as-events.acceptance.test.ts`.
+
 ### OpenTelemetry exporter (ADR-014)
 
 The conductor ships an optional OTel observability layer. When the `otel:` block is present

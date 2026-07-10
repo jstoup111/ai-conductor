@@ -8,6 +8,7 @@ import type {
   EffortLevel,
   MarkdownViewerConfig,
   MermaidRendererConfig,
+  BuildProgressConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
@@ -168,6 +169,8 @@ export function validateConfig(
     'memory_provider',
     // Observability
     'otel',
+    // Intra-step build progress events (poll/quiet/heartbeat cadence).
+    'build_progress',
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
@@ -560,6 +563,12 @@ export function validateConfig(
     // suiteCommand is optional and remains undefined if not provided
   }
 
+  // build_progress — intra-step build progress event cadence knobs.
+  if (obj.build_progress !== undefined) {
+    const err = validateBuildProgressBlock(obj.build_progress);
+    if (err) return { ok: false, error: err };
+  }
+
   // build_review — opt-in judgement gate at the build → manual_test seam.
   // Contract (total — never throws, never undefined):
   //   C1  absent / null → { enabled: false } (no warning)
@@ -751,6 +760,72 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
       }
     }
   }
+  return null;
+}
+
+/**
+ * Validate the `build_progress:` block (intra-step build progress event
+ * cadence knobs). Fail-closed: nonsense values are rejected outright rather
+ * than silently coerced to defaults, since these knobs control operator-
+ * facing stall detection — a bad value should surface loudly at config-load
+ * time, not swallow itself into a default that masks the mistake.
+ */
+function validateBuildProgressBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'build_progress must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in build_progress: "${k}"` };
+    }
+  }
+  if (obj.poll_seconds !== undefined) {
+    if (typeof obj.poll_seconds !== 'number' || !Number.isFinite(obj.poll_seconds) || obj.poll_seconds <= 0) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.poll_seconds must be a positive number',
+      };
+    }
+  }
+  if (obj.quiet_minutes !== undefined) {
+    if (typeof obj.quiet_minutes !== 'number' || !Number.isFinite(obj.quiet_minutes) || obj.quiet_minutes <= 0) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.quiet_minutes must be a positive number',
+      };
+    }
+  }
+  if (obj.heartbeat_minutes !== undefined) {
+    if (
+      typeof obj.heartbeat_minutes !== 'number' ||
+      !Number.isFinite(obj.heartbeat_minutes) ||
+      obj.heartbeat_minutes <= 0
+    ) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.heartbeat_minutes must be a positive number',
+      };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'build_progress.enabled must be a boolean' };
+  }
+
+  // Cross-field: the poll cadence must not exceed the quiet/stall window, or
+  // a step could be declared stalled before it was ever polled once.
+  if (
+    typeof obj.poll_seconds === 'number' &&
+    typeof obj.quiet_minutes === 'number' &&
+    obj.poll_seconds > obj.quiet_minutes * 60
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.quiet_minutes (${obj.quiet_minutes}m = ${obj.quiet_minutes * 60}s)`,
+    };
+  }
+
   return null;
 }
 
@@ -1158,4 +1233,44 @@ export async function resolveMemoryProvider(
   }
 
   return registry.tryGet('memory_provider', 'local');
+}
+
+/**
+ * Fully resolved build_progress config — all fields required. Every field
+ * falls back to its documented default when absent from the source config.
+ */
+export type ResolvedBuildProgressConfig = Required<BuildProgressConfig>;
+
+const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
+  poll_seconds: 30,
+  quiet_minutes: 15,
+  heartbeat_minutes: 5,
+  enabled: true,
+};
+
+/**
+ * Resolve the `build_progress:` block from `config`, filling in defaults for
+ * any unset field. A wholly absent block resolves to all defaults
+ * (poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5, enabled: true).
+ * Never throws — unknown/malformed inputs simply fall back to defaults for
+ * the affected field.
+ *
+ * @param config - The HarnessConfig (or partial) to read `build_progress` from.
+ */
+export function resolveBuildProgressConfig(
+  config: Pick<HarnessConfig, 'build_progress'>,
+): ResolvedBuildProgressConfig {
+  const buildProgress = config.build_progress;
+
+  if (!buildProgress) {
+    return { ...BUILD_PROGRESS_DEFAULTS };
+  }
+
+  return {
+    poll_seconds: buildProgress.poll_seconds ?? BUILD_PROGRESS_DEFAULTS.poll_seconds,
+    quiet_minutes: buildProgress.quiet_minutes ?? BUILD_PROGRESS_DEFAULTS.quiet_minutes,
+    heartbeat_minutes:
+      buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
+    enabled: buildProgress.enabled ?? BUILD_PROGRESS_DEFAULTS.enabled,
+  };
 }

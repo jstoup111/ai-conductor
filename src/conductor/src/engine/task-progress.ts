@@ -30,27 +30,63 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
 }
 
 function countFromParsed(parsed: unknown): number {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
+  return normalizeTasks(parsed).filter(
+    (t) => t.status === 'completed' || t.status === 'skipped',
+  ).length;
+}
+
+/** A task row after tolerating both the new array shape and the legacy
+ * id-keyed map shape. `id` and `title` are best-effort — absent/malformed
+ * fields degrade to `undefined` rather than throwing. */
+export interface NormalizedTask {
+  id?: string;
+  title?: string;
+  status?: string;
+}
+
+/**
+ * Tolerant parse shared by `countResolvedTasks` and the build-progress
+ * watcher's `readSnapshot`: accepts the new `{tasks: [...]}` array shape and
+ * the legacy id-keyed map shape (with or without a `tasks` wrapper key).
+ * Never throws — malformed input normalizes to an empty array.
+ */
+export function normalizeTasks(parsed: unknown): NormalizedTask[] {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
   const container = 'tasks' in (parsed as Record<string, unknown>)
     ? (parsed as Record<string, unknown>).tasks
     : parsed;
 
-  const isResolved = (status: unknown): boolean =>
-    typeof status === 'string' && (status === 'completed' || status === 'skipped');
+  const titleOf = (t: Record<string, unknown>): string | undefined => {
+    if (typeof t.title === 'string') return t.title;
+    if (typeof t.name === 'string') return t.name;
+    return undefined;
+  };
+  const statusOf = (t: Record<string, unknown>): string | undefined =>
+    typeof t.status === 'string' ? t.status : undefined;
 
   if (Array.isArray(container)) {
-    return container.filter(
-      (t) => typeof t === 'object' && t !== null && isResolved((t as Record<string, unknown>).status),
-    ).length;
+    return container
+      .filter((t) => typeof t === 'object' && t !== null)
+      .map((t) => {
+        const row = t as Record<string, unknown>;
+        return {
+          id: row.id !== undefined && row.id !== null ? String(row.id) : undefined,
+          title: titleOf(row),
+          status: statusOf(row),
+        };
+      });
   }
   if (container && typeof container === 'object') {
-    let n = 0;
-    for (const v of Object.values(container as Record<string, unknown>)) {
-      if (v && typeof v === 'object' && isResolved((v as Record<string, unknown>).status)) n++;
-    }
-    return n;
+    return Object.entries(container as Record<string, unknown>).map(([id, v]) => {
+      const row = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+      return {
+        id,
+        title: titleOf(row),
+        status: statusOf(row),
+      };
+    });
   }
-  return 0;
+  return [];
 }
 
 /**

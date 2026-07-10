@@ -220,6 +220,23 @@ export interface OtelConfig {
 }
 
 /**
+ * Intra-step build progress event config: polling cadence, quiet/stall
+ * thresholds, and heartbeat cadence for the build progress emitter on the
+ * conductor event bus. All fields optional — absent block resolves to
+ * documented defaults (see `resolveBuildProgressConfig` in engine/config.ts).
+ */
+export interface BuildProgressConfig {
+  /** How often (seconds) to poll for build progress. Defaults to 30. */
+  poll_seconds?: number;
+  /** Minutes of no output before a step is considered stalled. Defaults to 15. */
+  quiet_minutes?: number;
+  /** Minutes between heartbeat events while a step is running. Defaults to 5. */
+  heartbeat_minutes?: number;
+  /** Master on/off switch for build progress events. Defaults to true. */
+  enabled?: boolean;
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -315,6 +332,12 @@ export interface HarnessConfig {
   memory_provider?: string;
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
+  /**
+   * Intra-step build progress event config. Absent block resolves to
+   * defaults: { poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5,
+   * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
+   */
+  build_progress?: BuildProgressConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

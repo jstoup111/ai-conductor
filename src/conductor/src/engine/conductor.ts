@@ -27,6 +27,8 @@ import type { ParallelBranch } from '../types/config.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { resolveBuildProgressConfig } from './config.js';
 import {
   readState,
   writeState,
@@ -1493,16 +1495,44 @@ export class Conductor {
         while (attempt < stepMaxRetries) {
           attempt++;
 
-          const result =
-            step.name === 'complexity'
-              ? await this.runComplexityStep(state)
-              : step.name === 'worktree'
-                ? await this.runWorktreeStep(state)
-                : step.name === 'rebase'
-                  ? await this.runRebaseStep(state)
-                  : this.isSelfBuild() && step.name === 'build'
-                    ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                    : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+          // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
+          // started immediately before the build step's await and stopped in a
+          // `finally` so it can never outlive the attempt, regardless of which
+          // branch below actually resolves (self-build dispatch vs. the normal
+          // stepRunner path) or whether that branch throws. Plan/finish/every
+          // other step never constructs a watcher at all.
+          //
+          // Task 10: `build_progress.enabled: false` is a full escape hatch —
+          // no watcher instance is constructed at all (not merely started as
+          // a no-op), so operators who disable the feature pay zero overhead
+          // and the existing post-hoc stall-breaker (below) is unaffected.
+          const buildWatcher: BuildProgressWatcher | null =
+            step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
+              ? new BuildProgressWatcher({
+                  projectRoot: this.projectRoot,
+                  events: this.events,
+                  step: step.name,
+                  featureSlug: state.feature_desc,
+                  config: this.config,
+                })
+              : null;
+          buildWatcher?.start();
+
+          let result: StepRunResult;
+          try {
+            result =
+              step.name === 'complexity'
+                ? await this.runComplexityStep(state)
+                : step.name === 'worktree'
+                  ? await this.runWorktreeStep(state)
+                  : step.name === 'rebase'
+                    ? await this.runRebaseStep(state)
+                    : this.isSelfBuild() && step.name === 'build'
+                      ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                      : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+          } finally {
+            buildWatcher?.stop();
+          }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).

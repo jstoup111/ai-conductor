@@ -927,6 +927,54 @@ otel:
 See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
 reference.
 
+### Intra-step build progress & stall events (`conduct-ts` only)
+
+Long-running `build` steps used to be a black box between `step_started` and
+`step_completed` — no visibility into whether the agent was making progress or stuck. The
+TypeScript conductor now runs a lightweight `BuildProgressWatcher` alongside the build step
+that polls `.pipeline/task-status.json`, the no-evidence-attempt counter, and git `HEAD`,
+and emits three new events on the existing conductor event bus:
+
+- **`build_progress`** — a change-driven heartbeat emitted whenever resolved/total task
+  counts advance, the current task changes, a new commit lands, or the no-evidence
+  counter bumps. Carries `resolved`, `total`, `currentTaskId`/`currentTaskName`,
+  `commitCount` (new commits since the last tick, best-effort), and `noEvidenceAttempts`.
+- **`build_no_progress`** — a quiet-episode warning emitted once the step has gone
+  `quiet_minutes` without any observed task-status change. Carries `quietMinutes`,
+  `resolved`/`total`, and `lastCommitAt` if tracked.
+- **`build_stall`** — a stronger, terminal no-progress signal (`reason:
+  'no_task_progress' | 'halt_marker'`) with `resolvedBefore`/`resolvedAfter`.
+
+All three subscribers already wired to the event bus render them:
+
+- **daemon.log** (`daemon-cli.ts`) — a cyan `▶` heartbeat line for `build_progress`, a
+  yellow `⚠` quiet-episode line for `build_no_progress`, and a red `✋` stall line for
+  `build_stall`.
+- **TTY dashboard** (`ui/create-renderer.ts`) — matching progress/no-progress/stall lines
+  in the live region.
+- **OTel exporter** (when `otel:` is configured) — recorded as span events
+  (`span-manager.ts#onBuildProgress/onBuildNoProgress/onBuildStall`) on the active step
+  span; a no-op (with a single warning) if no span is available.
+- **Event persister** — all three kinds are persisted to `.pipeline/events.jsonl` like
+  every other conductor event.
+
+**Configuration** — optional `build_progress:` block in project config:
+
+```yaml
+build_progress:
+  poll_seconds: 30       # how often to poll for progress. Default: 30
+  quiet_minutes: 15      # minutes of no task-status change before build_no_progress. Default: 15
+  heartbeat_minutes: 5   # cadence for periodic heartbeats. Default: 5
+  enabled: true          # master on/off switch. Default: true
+```
+
+Absent block → the documented defaults above, watcher enabled. Set `enabled: false` as an
+escape hatch to disable emission entirely without deleting the block.
+
+See `src/conductor/README.md` → "Intra-step build progress & stall events" for the
+implementation reference (watcher lifecycle, snapshot tolerance, and per-subscriber
+rendering).
+
 ### Sandbox auth-expiry park-and-poll
 
 When the daemon builds a feature in a headless (sandbox/self-hosted) environment, the operator's

@@ -53,6 +53,44 @@ export type ConductorEvent =
       resolvedAfter: number;
     }
   | {
+      /**
+       * Intra-step build heartbeat: emitted by BuildProgressWatcher when the
+       * resolved/total task count advances during a running `build` step
+       * (adr-2026-07-10-intra-step-build-progress-events).
+       */
+      type: 'build_progress';
+      step: StepName;
+      /** Count of resolved (completed) tasks at the time of this tick. */
+      resolved: number;
+      /** Total task count at the time of this tick. */
+      total: number;
+      currentTaskId?: string;
+      currentTaskName?: string;
+      /** Number of new commits observed since the last tick, if tracked. */
+      commitCount?: number;
+      /** Consecutive gate-verdict misses with no supporting evidence, if tracked. */
+      noEvidenceAttempts?: number;
+      featureSlug?: string;
+    }
+  | {
+      /**
+       * Intra-step build quiet-episode warning: emitted when the build step
+       * has gone `quietMinutes` without any task-status change
+       * (adr-2026-07-10-intra-step-build-progress-events). Distinct from
+       * `build_stall`, which signals a stronger/terminal no-progress halt.
+       */
+      type: 'build_no_progress';
+      step: StepName;
+      /** Minutes elapsed since the last observed task-status change. */
+      quietMinutes: number;
+      resolved: number;
+      total: number;
+      currentTaskId?: string;
+      /** Epoch ms of the last observed commit, if tracked. */
+      lastCommitAt?: number;
+      featureSlug?: string;
+    }
+  | {
       type: 'renderer_error';
       rendererName: string;
       error: string;
