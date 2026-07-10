@@ -133,7 +133,32 @@ export interface BuildProgressWatcherOptions {
  *
  * The poll timer is `.unref()`'d (ADR D-3) so a pending watcher can never
  * keep the process alive on its own.
+ *
+ * Emission is change-driven (adr-2026-07-10-intra-step-build-progress-events,
+ * Task 5): each tick diffs the freshly-read `TickSnapshot` (resolved, total,
+ * currentTaskId, git HEAD, noEvidenceAttempts) against the last-emitted one
+ * and only calls `events.emit` when something moved. A task-count delta, a
+ * new commit landing on HEAD with no task delta, a current-task change, or a
+ * bare noEvidenceAttempts bump all count as "changed". A HEAD change also
+ * populates `commitCount` via `git rev-list --count <old>..<new>` (best
+ * effort — omitted if that probe fails). An unchanged tick emits nothing.
  */
+
+/**
+ * The subset of {@link BuildProgressSnapshot} the watcher diffs tick-over-tick
+ * to decide whether to emit. `noEvidenceAttempts` is tracked so a bare
+ * evidence-counter change still counts as a change even when task counts and
+ * HEAD are both static.
+ */
+interface TickSnapshot {
+  resolved: number;
+  total: number;
+  currentTaskId?: string;
+  currentTaskName?: string;
+  head?: string;
+  noEvidenceAttempts: number;
+}
+
 export class BuildProgressWatcher {
   private readonly projectRoot: string;
   private readonly events: ConductorEventEmitter;
@@ -141,7 +166,7 @@ export class BuildProgressWatcher {
   private readonly featureSlug?: string;
   private readonly resolvedConfig: ResolvedBuildProgressConfig;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private lastResolved: number | null = null;
+  private lastSnapshot: TickSnapshot | null = null;
 
   constructor(opts: BuildProgressWatcherOptions) {
     this.projectRoot = opts.projectRoot;
@@ -171,11 +196,11 @@ export class BuildProgressWatcher {
   }
 
   private async tick(): Promise<void> {
-    // Deliberately reads only `.pipeline/task-status.json` (via
-    // `normalizeTasks`), not the full `readSnapshot` — the latter also shells
-    // out to `git rev-parse HEAD`, which is unnecessary work on the polling
-    // hot path and doesn't reliably settle under fake timers in tests (a
-    // real subprocess spawn outruns the synthetic-clock microtask flush).
+    // Task-status read keeps its own try/catch and early-return: a
+    // missing/corrupt task-status.json is treated as "no data, skip this
+    // tick" (the watcher keeps polling), whereas the git HEAD probe and
+    // evidence sidecar read below degrade gracefully in place instead of
+    // aborting the whole tick.
     const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
     let tasks: ReturnType<typeof normalizeTasks> = [];
     try {
@@ -189,16 +214,73 @@ export class BuildProgressWatcher {
 
     const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
     const total = tasks.length;
+    const current = tasks.find((t) => t.status === 'in_progress');
 
-    if (this.lastResolved !== null && resolved === this.lastResolved) {
+    let head: string | undefined;
+    try {
+      const git = makeGitRunner(this.projectRoot);
+      const result = await git(['rev-parse', 'HEAD']);
+      if (result.exitCode === 0 && result.stdout.trim()) {
+        head = result.stdout.trim();
+      }
+    } catch {
+      // HEAD probe failed (corrupted worktree, not a repo, etc) — degrade to
+      // task-file-only diffing rather than throwing.
+    }
+
+    let noEvidenceAttempts = 0;
+    try {
+      noEvidenceAttempts = await readNoEvidenceAttempts(this.projectRoot);
+    } catch {
+      // Sidecar read is already tolerant internally; belt-and-suspenders here.
+    }
+
+    const snapshot: TickSnapshot = {
+      resolved,
+      total,
+      currentTaskId: current?.id,
+      currentTaskName: current?.title,
+      head,
+      noEvidenceAttempts,
+    };
+
+    const previous = this.lastSnapshot;
+    const changed =
+      previous === null ||
+      snapshot.resolved !== previous.resolved ||
+      snapshot.total !== previous.total ||
+      snapshot.currentTaskId !== previous.currentTaskId ||
+      snapshot.head !== previous.head ||
+      snapshot.noEvidenceAttempts !== previous.noEvidenceAttempts;
+
+    if (!changed) {
       return;
     }
-    this.lastResolved = resolved;
+
+    let commitCount: number | undefined;
+    if (head && previous?.head && head !== previous.head) {
+      try {
+        const git = makeGitRunner(this.projectRoot);
+        const result = await git(['rev-list', '--count', `${previous.head}..${head}`]);
+        const parsed = Number(result.stdout.trim());
+        if (result.exitCode === 0 && Number.isFinite(parsed)) {
+          commitCount = parsed;
+        }
+      } catch {
+        // Best-effort — omit commitCount rather than throwing.
+      }
+    }
+
+    this.lastSnapshot = snapshot;
     await this.events.emit({
       type: 'build_progress',
       step: this.step,
       resolved,
       total,
+      currentTaskId: snapshot.currentTaskId,
+      currentTaskName: snapshot.currentTaskName,
+      commitCount,
+      noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });
   }
