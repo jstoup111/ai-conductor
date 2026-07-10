@@ -2,6 +2,7 @@ import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
+import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from './session-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -66,7 +67,37 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
+  await writeSessionHooks(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Write the session-lifecycle hook scripts (pre-dispatch.sh, post-dispatch.sh)
+ * to .pipeline/session-hooks/ and make them executable. Fail-open: logs and
+ * continues on any error, never throwing — provisioning failures here must
+ * never block worktree setup.
+ */
+async function writeSessionHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const hooksDir = join(worktreePath, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+
+    const preDispatchPath = join(hooksDir, 'pre-dispatch.sh');
+    await writeFile(preDispatchPath, PRE_DISPATCH_HOOK, 'utf-8');
+    await chmod(preDispatchPath, 0o755);
+
+    const postDispatchPath = join(hooksDir, 'post-dispatch.sh');
+    await writeFile(postDispatchPath, POST_DISPATCH_HOOK, 'utf-8');
+    await chmod(postDispatchPath, 0o755);
+
+    log?.('session hooks: written to .pipeline/session-hooks/');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`session hooks: skipped (${msg})`);
+  }
 }
 
 /**

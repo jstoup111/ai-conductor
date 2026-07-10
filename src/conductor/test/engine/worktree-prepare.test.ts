@@ -11,6 +11,7 @@ import {
   NAMESPACE_VAR,
   SetupFailureError,
 } from '../../src/engine/worktree-prepare.js';
+import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from '../../src/engine/session-hook-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -249,6 +250,41 @@ describe('engine/worktree-prepare', () => {
       await access(join(worktreeDir, 'ran.marker'));
       const env = await readFile(join(worktreeDir, '.env'), 'utf-8');
       expect(env).toContain(NAMESPACE_VAR);
+    });
+  });
+
+  // Task 12: prepareWorktree installs session-hook scripts to
+  // .pipeline/session-hooks/, executable, overwriting any stale file.
+  describe('session hook provisioning (Task 12)', () => {
+    it('writes pre-dispatch.sh and post-dispatch.sh executable with the exported asset content', async () => {
+      await prepareWorktree(dir);
+
+      const preDispatchPath = join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
+      const postDispatchPath = join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh');
+
+      const preContent = await readFile(preDispatchPath, 'utf-8');
+      expect(preContent).toBe(PRE_DISPATCH_HOOK);
+      const preStat = await stat(preDispatchPath);
+      expect(preStat.mode & 0o777).toBe(0o755);
+
+      const postContent = await readFile(postDispatchPath, 'utf-8');
+      expect(postContent).toBe(POST_DISPATCH_HOOK);
+      const postStat = await stat(postDispatchPath);
+      expect(postStat.mode & 0o777).toBe(0o755);
+    });
+
+    it('overwrites stale pre-existing session-hook files', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(join(hooksDir, 'pre-dispatch.sh'), 'stale pre content', 'utf-8');
+      await writeFile(join(hooksDir, 'post-dispatch.sh'), 'stale post content', 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const preContent = await readFile(join(hooksDir, 'pre-dispatch.sh'), 'utf-8');
+      expect(preContent).toBe(PRE_DISPATCH_HOOK);
+      const postContent = await readFile(join(hooksDir, 'post-dispatch.sh'), 'utf-8');
+      expect(postContent).toBe(POST_DISPATCH_HOOK);
     });
   });
 });
