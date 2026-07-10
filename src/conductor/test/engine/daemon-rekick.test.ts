@@ -905,6 +905,36 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
     );
     expect(branchContainsBase).toBe(true);
   });
+
+  it('negative: no runGh recorded (backward compatibility) — zero gh calls, existing flow proceeds unchanged', async () => {
+    const { baseSha } = await initAdvancingRepo();
+    await writeSentinel();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      prUrl: PR_URL,
+      // runGh deliberately omitted — backward-compatible case with no new options wired.
+    } as never);
+
+    // Existing flow: the advanced base IS integrated (rebased), unchanged.
+    expect(res).toBe('rebased');
+    const branchContainsBase = await execFileAsync('git', [
+      '-C',
+      dir,
+      'merge-base',
+      '--is-ancestor',
+      baseSha,
+      'feature/foo',
+    ]).then(
+      () => true,
+      () => false,
+    );
+    expect(branchContainsBase).toBe(true);
+    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+  });
 });
 
 // ── TS-5 (#358) sweep-level: the caller that consumes resumeRebaseFirst's
