@@ -14,6 +14,7 @@
 // All gh access is injected; nothing here touches the network in tests.
 
 import type { ObservationDeclaration } from '../observation-marker.js';
+import type { ObservationEntry } from '../observation-sweep.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -162,6 +163,8 @@ export interface CloseIssueOnMergeDeps {
   log?: (msg: string) => void;
   /** Observation declaration to resolve the issue-ref keyword (Closes vs Refs). */
   declaration?: ObservationDeclaration;
+  /** Optional callback to enroll watched fixes in the observation registry. */
+  enroll?: (entry: ObservationEntry) => Promise<void>;
 }
 
 /**
@@ -177,6 +180,10 @@ export interface CloseIssueOnMergeDeps {
  *   - `sourceRef` but no PR (e.g. build halted) → 'no-pr-url' (logged, no gh call)
  *   - otherwise → 'attempted' (idempotent body edit via injectIssueRef; any gh
  *     failure is swallowed inside injectIssueRef, never thrown).
+ *
+ * When declaration is watched and enroll callback is provided, enrolls the fix in
+ * the observation registry after injection. Enrollment failures are swallowed and
+ * do not change the outcome.
  */
 export async function closeIssueOnImplementationMerge(
   deps: CloseIssueOnMergeDeps,
@@ -199,5 +206,26 @@ export async function closeIssueOnImplementationMerge(
     cwd: deps.cwd,
     log: deps.log,
   });
+
+  // Enroll watched fixes in the observation registry after injection
+  if (deps.declaration?.kind === 'watched' && deps.enroll) {
+    const entry: ObservationEntry = {
+      v: 1,
+      sourceRef: deps.sourceRef,
+      prUrl: deps.prUrl,
+      slug: deps.slug ?? '',
+      signature: deps.declaration.signature,
+      isRegex: deps.declaration.isRegex,
+      windowDays: deps.declaration.windowDays,
+      enrolledAt: Date.now(),
+    };
+    try {
+      await deps.enroll(entry);
+    } catch (err) {
+      // Swallow enrollment errors; they should not affect the injection outcome
+      log(`failed to enroll observation: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   return 'attempted';
 }
