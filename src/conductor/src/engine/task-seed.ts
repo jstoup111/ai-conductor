@@ -3,6 +3,31 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parsePlanTasks, PlanTask } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
+import { removeBuildStepMarker } from './attribution-enforcement.js';
+
+/**
+ * Defensively clear a stale build-step-active marker at step entry (Task 4,
+ * #505). Mirrors the stale `current-task` stamp clearing inside
+ * `seedTaskStatus` below: a marker left behind by a crashed prior session
+ * (or an unclean shutdown mid-build-step) must not leak into the next
+ * step's attribution decisions. Called at EVERY step entry, not just build
+ * steps — a subsequent build step re-writes the marker fresh immediately
+ * after this runs, so clearing here never races the real write.
+ *
+ * Reuses `removeBuildStepMarker`, which is already idempotent (no error if
+ * the marker is absent). Any unexpected error is caught and logged rather
+ * than thrown, so a marker-removal failure can never block step dispatch
+ * (fail-open, matching the current-task stamp clearing pattern).
+ */
+export function clearStaleMarker(projectRoot: string): void {
+  try {
+    removeBuildStepMarker(projectRoot);
+  } catch (err) {
+    console.warn(
+      `[task-seed] Failed to clear stale build-step marker: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
 
 interface TaskStatusRecord {
   id: string;

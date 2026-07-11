@@ -127,7 +127,7 @@ import {
   createTaskEvidence,
   type TaskEvidence,
 } from './task-evidence.js';
-import { seedTaskStatus } from './task-seed.js';
+import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
 import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
@@ -1431,6 +1431,13 @@ export class Conductor {
         state[step.name] = 'in_progress';
 
         await this.events.emit({ type: 'step_started', step: step.name, index: i });
+
+        // #505 TS-4: defensively clear a stale build-step-active marker at
+        // EVERY step entry (not just build steps), guarding against a marker
+        // left behind by a crashed prior session. A build step re-writes the
+        // marker fresh moments later (below); a non-build step simply leaves
+        // it cleared. Idempotent — no error if the marker is already absent.
+        clearStaleMarker(this.projectRoot);
 
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
