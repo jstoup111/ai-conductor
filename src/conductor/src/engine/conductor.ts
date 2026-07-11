@@ -1224,7 +1224,8 @@ export class Conductor {
         // When a gate's verdict says unsatisfied but state says 'done',
         // we must reset it so the loop re-runs it.
         for (const step of steps) {
-          if (verdicts[step.name] && verdicts[step.name].satisfied === false) {
+          const v = verdicts[step.name];
+          if (v && v.satisfied === false) {
             const status = getStepStatus(state, step.name);
             if (status === 'done') {
               (state as Record<string, unknown>)[step.name] = 'pending';
