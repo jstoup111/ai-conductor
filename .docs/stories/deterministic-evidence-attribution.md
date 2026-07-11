@@ -111,8 +111,12 @@ correct commit no longer depends on me remembering trailer grammar (kills #433 C
   `Task: 7` appended via `git interpret-trailers`.
 - Given the message already contains `Task: 9`, when the commit is made, then the message is
   unchanged (existing trailers are never overwritten).
-- Given `current-task` is absent but exactly one `task-status.json` row is `in_progress`, when
-  an untrailered commit is made, then that row's id is stamped (fallback path).
+- ~~Given `current-task` is absent but exactly one `task-status.json` row is `in_progress`, when
+  an untrailered commit is made, then that row's id is stamped (fallback path).~~
+  **SUPERSEDED (2026-07-11, #519):** the unique-in_progress fallback is removed by
+  `adr-2026-07-11-attribution-abstain-or-loud` — with `current-task` absent the hook abstains
+  unconditionally (the fallback proved to be a silent guesser that inherits stale state). See
+  `engine-invoked-task-attribution-494-freezes-curren.md` Story 3.
 
 #### Negative Paths
 - Given `current-task` is absent and zero (or two or more) rows are `in_progress`, when an
@@ -136,7 +140,8 @@ correct commit no longer depends on me remembering trailer grammar (kills #433 C
 
 ### Done When
 - [ ] In a hook-wired test worktree: untrailered commit gains `Task: 7`; pre-trailered commit
-      unchanged; fallback stamps unique `in_progress`; 0-and-2-in_progress abstains; amend and
+      unchanged; ~~fallback stamps unique `in_progress`~~ (superseded 2026-07-11, #519: absent
+      stamp abstains regardless of `in_progress` rows); 0-and-2-in_progress abstains; amend and
       rebase abstain; corrupt JSON abstains.
 - [ ] Hook is pure bash + node stdlib only — `grep -c` proves no invocation of the worktree's
       `src/conductor/dist` (#403 class).

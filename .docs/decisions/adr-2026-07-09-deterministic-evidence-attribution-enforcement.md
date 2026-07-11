@@ -1,6 +1,9 @@
 # ADR: Deterministic evidence attribution — engine-owned task transitions + worktree-local git hooks
 
 Status: APPROVED
+Amended by: adr-2026-07-11-attribution-abstain-or-loud (2026-07-11) — the `prepare-commit-msg`
+unique-in_progress fallback clause is removed (the fallback proved to be a silent guesser that
+converts bookkeeping failures into plausible-but-wrong evidence, #519); all other clauses stand.
 Date: 2026-07-09
 Feature: deterministic-evidence-attribution (#433)
 Related: adr-2026-07-07 evidence-gate id grammar (#417/#418); #302 engine-owned task status;
