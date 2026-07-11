@@ -159,5 +159,7 @@ with existing stories.
 - [ ] Every story has a "Done When" section with concrete, verifiable output checkboxes
 - [ ] Stack-specific negative paths included if tech-context loaded
 - [ ] Stories saved to `.docs/stories/<feature-name>.md`
+- [ ] File ends with the canonical `Status: Accepted` marker and contains no `Status: DRAFT`
+      anywhere — daemon discovery refuses merged specs whose stories are not approved
 - [ ] No duplicate stories with existing content
 - [ ] Stories file carries the canonical `**Status:** Accepted` marker on approval (not DRAFT, not missing)

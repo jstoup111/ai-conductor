@@ -210,6 +210,9 @@ launcher regains control when the operator quits and relaunches you clean for th
       primary tree was never checked out or dirtied
 - [ ] Worktree creation strict-aborted (no primary-tree mutation) if it could not be made
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
+- [ ] Spec is discovery-build-ready: stories end `Status: Accepted` (no DRAFT) and the plan
+      carries a task dependency tree (`**Dependencies:**` lines or a Task Dependency Graph) —
+      discovery warn-skips merged specs missing either, permanently until fixed on main
 - [ ] Spec branch pushed to origin BEFORE `handoff` (`git push -u origin spec/<slug>` from the
       worktree — `gh pr create` fails on an unpushed branch and handoff falls back to a
       local-commit result that opens no PR)
