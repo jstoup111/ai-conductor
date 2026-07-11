@@ -15,6 +15,8 @@ Stories: .docs/stories/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md
 **Files:**
 - src/conductor/test/engine/daemon-rekick.test.ts
 
+**Dependencies:** none
+
 ### Task 2: extract the in-loop rebase-state recording into a shared helper
 **Story:** Story 1 (one shared implementation)
 **Type:** refactor
@@ -27,6 +29,8 @@ Stories: .docs/stories/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md
 - src/conductor/src/engine/conductor.ts
 - src/conductor/src/engine/rebase.ts
 
+**Dependencies:** 1
+
 ### Task 3: GREEN — honorRekick records via the shared helper
 **Story:** Story 1
 **Type:** feature
@@ -36,6 +40,8 @@ Stories: .docs/stories/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md
 2. Commit: "fix(rekick): pre-loop rebase records rebase step state (#436)"
 **Files:**
 - src/conductor/src/engine/daemon-rekick.ts
+
+**Dependencies:** 1, 2
 
 ### Task 4: negative path — conflict outcomes record nothing as done
 **Story:** Story 2
@@ -48,6 +54,8 @@ Stories: .docs/stories/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md
 **Files:**
 - src/conductor/test/engine/daemon-rekick.test.ts
 
+**Dependencies:** 3
+
 ### Task 5: CHANGELOG + docs sweep
 **Story:** Done-when (docs track features)
 **Type:** docs
@@ -58,3 +66,5 @@ Stories: .docs/stories/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md
 **Files:**
 - CHANGELOG.md
 - src/conductor/README.md
+
+**Dependencies:** 3, 4
