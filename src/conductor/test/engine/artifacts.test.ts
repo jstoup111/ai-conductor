@@ -293,6 +293,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/pr_url/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when state.pr_url is set but finish-choice marker is missing', async () => {
@@ -303,12 +304,14 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when neither pr_url nor finish-choice exists', async () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when finish-choice contains an unrecognized value', async () => {
@@ -316,6 +319,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/unrecognized/);
+      expect(result.missing).toBe('recording');
     });
 
     it('trims whitespace around the marker value', async () => {
@@ -334,6 +338,7 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
+      expect(result.missing).toBe('recording');
     });
 
     it('rejects finish-choice="keep" when running in daemon mode', async () => {
@@ -345,6 +350,7 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/keep/);
       expect(result.reason).toMatch(/daemon/i);
+      expect(result.missing).toBe('other');
     });
 
     it('rejects finish-choice="merge-local" when running in daemon mode', async () => {

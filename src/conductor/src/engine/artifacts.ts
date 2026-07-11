@@ -308,6 +308,14 @@ export interface CompletionResult {
   done: boolean;
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
+  /**
+   * Machine-readable facet code for why `done` is false. 'recording' marks
+   * misses caused by the finish skill failing to record its outcome (missing/
+   * stale/invalid finish-choice marker, or missing pr_url for choice='pr');
+   * 'other' covers everything else. Undefined for backward compat (done:true,
+   * or predicates that don't classify).
+   */
+  missing?: 'recording' | 'other';
 }
 
 /**
@@ -1114,18 +1122,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} is missing — the finish skill must record the chosen outcome (pr | merge-local | keep | discard)`,
+        missing: 'recording',
       };
     }
     if (!(FINISH_CHOICE_VALUES as readonly string[]).includes(choice)) {
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} contains unrecognized value "${choice}" — expected one of ${FINISH_CHOICE_VALUES.join(', ')}`,
+        missing: 'recording',
       };
     }
     if (!(await fileIsFreshSinceSession(choicePath, ctx.sessionStartedAt))) {
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} is stale (mtime predates this session) — finish must re-run`,
+        missing: 'recording',
       };
     }
     // LEADING branch: Daemon mode non-convergence check.
@@ -1135,6 +1146,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `Daemon mode cannot converge on '${choice}': requires operator decision`,
+        missing: 'other',
       };
     }
     if (choice === 'pr') {
@@ -1146,6 +1158,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
+            missing: 'recording',
           };
         }
         prUrl = state.pr_url;
@@ -1153,6 +1166,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
+          missing: 'recording',
         };
       }
       // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
@@ -1166,6 +1180,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+            missing: 'other',
           };
         }
       } catch {
@@ -1184,12 +1199,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             return {
               done: false,
               reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+              missing: 'other',
             };
           }
           if (pushed === null) {
             return {
               done: false,
               reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
+              missing: 'other',
             };
           }
           // pushed === true: continue to done: true
@@ -1197,6 +1214,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+            missing: 'other',
           };
         }
       }
