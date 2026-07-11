@@ -207,6 +207,53 @@ describe('reapLeakedDaemonSessions (#437) — two-signal kill decision', () => {
   });
 });
 
+describe('reapLeakedDaemonSessions (#437) — uncorroborated sessions are reported, never killed', () => {
+  it('new session with a non-tmpdir pane cwd (repo cwd) ⇒ not killed, reported in indeterminate', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-a\ncc-daemon-prod\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 0, stdout: '/home/user/code/repo\n', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const snapshot = { sessions: ['cc-daemon-a'], failed: false };
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+
+    expect(result.killed).toEqual([]);
+    expect(result.indeterminate).toHaveLength(1);
+    expect(result.indeterminate[0]).toContain('cc-daemon-prod');
+    expect(result.indeterminate[0]).toContain('/home/user/code/repo');
+    expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+  });
+
+  it('new session whose display-message fails (cwd unresolvable) ⇒ not killed, reported in indeterminate', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-a\ncc-daemon-gone\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 1, stdout: '', stderr: "can't find pane" };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const snapshot = { sessions: ['cc-daemon-a'], failed: false };
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+
+    expect(result.killed).toEqual([]);
+    expect(result.indeterminate).toHaveLength(1);
+    expect(result.indeterminate[0]).toContain('cc-daemon-gone');
+    expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+  });
+});
+
 describe('reapLeakedDaemonSessions (#437) — teardown-time listing failure degrades to silent no-kill', () => {
   it('successful baseline but teardown-time listing fails ⇒ empty result, no kill attempted', () => {
     const calls: string[][] = [];
