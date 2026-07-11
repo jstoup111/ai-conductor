@@ -76,7 +76,10 @@ describe('integration/session-hooks-provisioning (Task 15)', () => {
 
     expect(commandPaths.length).toBeGreaterThan(0);
     for (const cmdPath of commandPaths) {
-      const s = await stat(cmdPath);
+      // A command may carry argv after the script path (e.g. the mutation
+      // gate's surface flag: "…/mutation-gate.sh write") — stat the script.
+      const scriptPath = cmdPath.split(' ')[0];
+      const s = await stat(scriptPath);
       expect(s.mode & 0o111).not.toBe(0);
     }
 

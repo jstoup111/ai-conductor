@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- `session-hooks-provisioning` integration test parses hook command strings
+  as `path [argv…]` instead of stat-ing the whole string — the mutation
+  gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
+  assumption and failed CI on every run since the #509 merge.
+
+
 ### Changed
 
 - Skill checklist accuracy sweep: verification checklists across six skills
