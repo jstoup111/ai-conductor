@@ -195,12 +195,12 @@ async function wireSessionHookSettings(
     hooks.PreToolUse = replaceSessionHookEntry(
       hooks.PreToolUse,
       'mutation-gate.sh',
-      { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: mutationGatePath }] },
+      { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: `${mutationGatePath} write` }] },
     );
     hooks.PreToolUse = replaceSessionHookEntry(
       hooks.PreToolUse,
       'mutation-gate.sh',
-      { matcher: 'Bash', hooks: [{ type: 'command', command: mutationGatePath }] },
+      { matcher: 'Bash', hooks: [{ type: 'command', command: `${mutationGatePath} bash` }] },
     );
 
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');

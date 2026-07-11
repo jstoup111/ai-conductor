@@ -476,7 +476,8 @@ describe('engine/worktree-prepare', () => {
       const entry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh');
       expect(entry).toBeDefined();
       const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
-      expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+      // Surface flag: write-matcher invocations fail closed without payload.
+      expect(cmd).toBe(`${join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh')} write`);
     });
 
     it('adds a Bash PreToolUse matcher entry pointing at mutation-gate.sh', async () => {
@@ -488,7 +489,8 @@ describe('engine/worktree-prepare', () => {
       const entry = findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh');
       expect(entry).toBeDefined();
       const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
-      expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+      // Surface flag: bash-matcher invocations keep payload-dependent logic.
+      expect(cmd).toBe(`${join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh')} bash`);
     });
 
     it('preserves the pre-existing Task|Agent dispatch matcher entries alongside the new mutation-gate entries', async () => {
