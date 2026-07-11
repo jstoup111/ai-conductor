@@ -7,6 +7,8 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
+import { readObservationDeclaration } from './engine/observation-marker.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
@@ -790,6 +792,25 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       log,
     });
 
+    // Halt-PR rehabilitation (adr-2026-07-03-halt-pr-rehabilitation-at-finish):
+    // if the recorded PR was born as a needs-remediation halt PR, flip it ready,
+    // clear the label, and ensure the issue-ref keyword (Refs for watched,
+    // Closes for close-on-merge/legacy) — warn-only, never affects the feature outcome.
+    const finalPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
+    if (finalPrUrl) {
+      const declaration = await readObservationDeclaration(wt.path, item.slug, { warn: (msg) => log(msg) });
+      const outcome = await rehabilitateHaltPr({
+        gh: ghRunner,
+        cwd: wt.path,
+        prUrl: finalPrUrl,
+        sourceRef: item.sourceRef,
+        declaration,
+        log,
+      });
+      if (outcome !== 'not-halt-pr') {
+        log(`[${item.slug}] halt-pr rehabilitation: ${outcome} (${finalPrUrl})`);
+      }
+    }
   };
 
   // Task 15: Production wiring of setup-failure triage in daemon-cli.

@@ -20,7 +20,8 @@
 
 import type { GhRunner } from './pr-labels.js';
 import { cleanupHaltPresentation, readHaltPresentation, setReady, defaultSleep } from './pr-labels.js';
-import { injectIssueRef } from './engineer/issue-ref.js';
+import { injectIssueRef, resolveIssueRefKeyword } from './engineer/issue-ref.js';
+import type { ObservationDeclaration } from './observation-marker.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
 export const NEEDS_REMEDIATION_LABEL = 'needs-remediation';
@@ -37,6 +38,7 @@ export interface RehabilitateHaltPrDeps {
   prUrl: string;
   sourceRef: string | undefined | null;
   log?: (msg: string) => void;
+  declaration?: ObservationDeclaration;
 }
 
 interface PrViewState {
@@ -74,7 +76,7 @@ function parsePrView(stdout: string): PrViewState {
 export async function rehabilitateHaltPr(
   deps: RehabilitateHaltPrDeps,
 ): Promise<RehabilitationOutcome> {
-  const { gh, cwd, prUrl, sourceRef } = deps;
+  const { gh, cwd, prUrl, sourceRef, declaration } = deps;
   const log = deps.log ?? (() => {});
 
   let view: PrViewState;
@@ -97,9 +99,12 @@ export async function rehabilitateHaltPr(
   const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log);
   const anyFailed = cleanupResult === 'partial';
 
-  // Idempotent Closes injection — injectIssueRef swallows gh failures internally
-  // (warn-only) and no-ops when the ref is already present or sourceRef is unusable.
-  await injectIssueRef({ gh, prUrl, keyword: 'Closes', sourceRef, cwd, log });
+  // Idempotent issue-reference injection — keyword is resolved based on the
+  // observation declaration (Refs for watched, Closes for close-on-merge/legacy).
+  // injectIssueRef swallows gh failures internally (warn-only) and no-ops when
+  // the ref is already present or sourceRef is unusable.
+  const keyword = resolveIssueRefKeyword(declaration);
+  await injectIssueRef({ gh, prUrl, keyword, sourceRef, cwd, log });
 
   return anyFailed ? 'partial' : 'rehabilitated';
 }
