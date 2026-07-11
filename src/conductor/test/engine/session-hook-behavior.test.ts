@@ -535,6 +535,102 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
     }, 5000);
   });
+
+  describe('dispatch-count sentinel', () => {
+    function runHook(tempDirParam: string, prompt: string): number {
+      const hookPath = join(tempDirParam, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', { prompt });
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDirParam,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+      return exitCode;
+    }
+
+    it('appends one line to .pipeline/dispatch-count for a valid "Task: <id>" dispatch', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+      writeFileSync(
+        join(pipelineDir, 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }),
+        'utf-8',
+      );
+
+      const exitCode = runHook(tempDir, 'Task: 7');
+
+      expect(exitCode).toBe(0);
+      const countPath = join(pipelineDir, 'dispatch-count');
+      expect(existsSync(countPath)).toBe(true);
+      const lines = readFileSync(countPath, 'utf-8').split('\n').filter((l) => l.length > 0);
+      expect(lines.length).toBe(1);
+    });
+
+    it('appends one line to .pipeline/dispatch-count for a "Task: none" dispatch', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const exitCode = runHook(tempDir, 'Task: none');
+
+      expect(exitCode).toBe(0);
+      const countPath = join(pipelineDir, 'dispatch-count');
+      expect(existsSync(countPath)).toBe(true);
+      const lines = readFileSync(countPath, 'utf-8').split('\n').filter((l) => l.length > 0);
+      expect(lines.length).toBe(1);
+    });
+
+    it('accumulates multiple lines across multiple dispatches', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+      writeFileSync(
+        join(pipelineDir, 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '7', status: 'pending' }, { id: '8', status: 'pending' }] }),
+        'utf-8',
+      );
+
+      runHook(tempDir, 'Task: none');
+      runHook(tempDir, 'Task: 7');
+      runHook(tempDir, 'Task: 8');
+
+      const countPath = join(pipelineDir, 'dispatch-count');
+      const lines = readFileSync(countPath, 'utf-8').split('\n').filter((l) => l.length > 0);
+      expect(lines.length).toBe(3);
+    });
+
+    it('appends nothing for an unparseable payload (fail-open)', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      let exitCode = 0;
+      try {
+        execFileSync('bash', [hookPath], {
+          input: 'not valid json{{{',
+          cwd: tempDir,
+          stdio: 'pipe',
+        });
+      } catch (err) {
+        const execErr = err as { status?: number };
+        exitCode = execErr.status ?? 1;
+      }
+
+      expect(exitCode).toBe(0);
+      expect(existsSync(join(pipelineDir, 'dispatch-count'))).toBe(false);
+    });
+  });
 });
 
 describe('POST_DISPATCH_HOOK behavior', () => {
