@@ -186,6 +186,34 @@ describe('rewriteObservationWatch', () => {
       rewriteObservationWatch('/no/such/directory/here', []),
     ).resolves.toBeUndefined();
   });
+
+  it('preserves entries enrolled concurrently between read and rewrite', async () => {
+    // Simulate concurrency: read registry → enroll new entry → rewrite
+    const entryA = entry({ sourceRef: '#42', prUrl: 'https://github.com/foo/bar/pull/42' });
+    const entryB = entry({ sourceRef: '#43', prUrl: 'https://github.com/foo/bar/pull/43' });
+
+    // 1. Enroll entry A
+    await enrollObservation(tmpDir, entryA);
+
+    // 2. Read registry into survivors
+    const survivors = await readObservationWatch(tmpDir);
+    expect(survivors).toHaveLength(1);
+    expect(survivors[0].sourceRef).toBe('#42');
+
+    // 3. While simulating a rewrite, separately enroll entry B
+    // This happens concurrently with the rewrite
+    await enrollObservation(tmpDir, entryB);
+
+    // 4. Call rewriteObservationWatch with survivors (only A)
+    await rewriteObservationWatch(tmpDir, survivors);
+
+    // 5. Read registry again
+    const final = await readObservationWatch(tmpDir);
+
+    // Expected: both A and B present in the final registry
+    expect(final).toHaveLength(2);
+    expect(final.map((e) => e.sourceRef).sort()).toEqual(['#42', '#43']);
+  });
 });
 
 describe('ObservationEntry schema validation', () => {

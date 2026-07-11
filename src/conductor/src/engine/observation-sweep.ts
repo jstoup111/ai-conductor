@@ -10,6 +10,10 @@
  * Tolerant IO: skips malformed JSON lines, skips unknown schema versions (v != 1),
  * logs warnings but never crashes. Enables daemon to restart and recover state
  * without loss, even if the registry file becomes partially corrupted.
+ *
+ * Concurrency model: rewriteObservationWatch re-reads the current registry before writing
+ * to merge any entries that were enrolled after the original read. Deduplication is by prUrl.
+ * This ensures append operations during a sweep rewrite do not lose data.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -162,8 +166,40 @@ export async function readObservationWatch(
 }
 
 /**
+ * Merge survivors (entries that passed the sweep) with any entries that were
+ * enrolled concurrently after the initial read. Deduplication is by prUrl.
+ * Survivors take precedence (they've been processed by sweep logic).
+ *
+ * When survivors is empty, return empty (can't establish reference for concurrent).
+ */
+function mergeSurvivorsWithConcurrent(
+  survivors: ObservationEntry[],
+  current: ObservationEntry[],
+): ObservationEntry[] {
+  if (survivors.length === 0) {
+    // No survivors = can't establish reference point to detect concurrent enrollments
+    // Preserve original semantics: empty survivors = empty file
+    return [];
+  }
+
+  const survivorsByUrl = new Map(survivors.map((e) => [e.prUrl, e]));
+  const currentByUrl = new Map(current.map((e) => [e.prUrl, e]));
+
+  // Keep survivors (they passed sweep logic)
+  // Add any entries from current that weren't in survivors (newly enrolled)
+  for (const [url, entry] of currentByUrl) {
+    if (!survivorsByUrl.has(url)) {
+      survivorsByUrl.set(url, entry);
+    }
+  }
+
+  return Array.from(survivorsByUrl.values());
+}
+
+/**
  * Overwrite the observation watch registry with the given entries.
- * Swallows write failures.
+ * Re-reads the current registry before writing to merge any entries enrolled
+ * concurrently. Swallows write failures.
  */
 export async function rewriteObservationWatch(
   registryPath: string,
@@ -171,9 +207,15 @@ export async function rewriteObservationWatch(
   log?: Logger,
 ): Promise<void> {
   try {
+    // Read current registry to get any entries added since the sweep started
+    const current = await readObservationWatch(registryPath, log);
+
+    // Merge: entries from survivors + any new entries from current that aren't in survivors
+    const merged = mergeSurvivorsWithConcurrent(survivors, current);
+
     const content =
-      survivors.length > 0
-        ? survivors.map((e) => JSON.stringify(e)).join('\n') + '\n'
+      merged.length > 0
+        ? merged.map((e) => JSON.stringify(e)).join('\n') + '\n'
         : '';
     await writeFile(join(registryPath, OBSERVATION_WATCH_FILE), content);
   } catch (err) {
