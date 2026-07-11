@@ -502,6 +502,28 @@ else
   done
 fi
 
+# ── Pipeline SKILL.md — no imperative CLI stamping text ────────────────────────
+# skills/pipeline/SKILL.md documents session-hook machinery for task
+# start/done stamping (adr-2026-07-10-session-hook-task-stamping.md); it must
+# never instruct the orchestrator to imperatively run the CLI as a per-task
+# step. Mentions of `conduct-ts task start/done` as operator/recovery
+# machinery (descriptive, not imperative) are fine.
+_pipeline_skill="${HARNESS_DIR}/skills/pipeline/SKILL.md"
+if [ -f "$_pipeline_skill" ]; then
+  _imperative_cli_hits=$(grep -nE '(^|[^\`])Run `conduct-ts task (start|done)' "$_pipeline_skill" || true)
+  if [ -z "$_imperative_cli_hits" ]; then
+    assert "pipeline SKILL.md — no imperative 'Run \`conduct-ts task start/done\`' text" 0
+  else
+    assert "pipeline SKILL.md — imperative CLI stamping text found (should describe session hooks instead)" 1
+    echo "$_imperative_cli_hits" | while read -r hit; do
+      [ -z "$hit" ] && continue
+      echo -e "    ${RED}Violation:${NC} ${hit}"
+    done
+  fi
+else
+  assert "pipeline SKILL.md exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
