@@ -43,16 +43,16 @@ export function applyTeardownDecision(
 
   if (indeterminate.length > 0) {
     logger(
-      `tmux daemon-session(s) appeared during the run but could not be corroborated ` +
-        `as leaks (baseline snapshot failure or non-tmpdir pane cwd) — left running, ` +
-        `investigate manually: ${indeterminate.join('; ')}`
+      `tmux-leak-guard: NOT killed (fail-closed): tmux daemon-session(s) appeared during ` +
+        `the run but could not be corroborated as leaks (baseline snapshot failure or ` +
+        `non-tmpdir pane cwd) — left running, investigate manually: ${indeterminate.join('; ')}`
     );
   }
 
   if (killed.length > 0) {
     throw new Error(
-      `tmux daemon-session leak during test run (killed at teardown, but the ` +
-        `spawning path must be fixed — see #377): ${killed.join('; ')}`
+      `tmux-leak-guard: KILLED leaked session(s) during test run (killed at teardown, ` +
+        `but the spawning path must be fixed — see #377): ${killed.join('; ')}`
     );
   }
 }

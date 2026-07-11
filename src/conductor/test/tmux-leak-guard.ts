@@ -10,6 +10,24 @@
 //
 // Sessions that existed BEFORE the suite (the operator's real repo daemon,
 // e.g. `cc-daemon-james-stoup-agents-*`) are never touched.
+//
+// TWO-SIGNAL FAIL-CLOSED CONTRACT (#437, TR-1/TR-2/TR-3):
+// A session is only ever killed when BOTH corroborating signals are present:
+//   1. Baseline snapshot succeeded (`snapshot.failed === false`) — a failed
+//      baseline means "not in before" can't be trusted as "new", so it must
+//      never be used to authorize a kill.
+//   2. The session's pane cwd resolves AND is tmpdir-rooted
+//      (`isTmpdirRooted(cwd)` — see below). A pane cwd outside os.tmpdir()
+//      (e.g. the operator's real repo) is never a leak candidate.
+// Missing EITHER signal degrades to report-only: the session is left running
+// and named in the `indeterminate` bucket, never killed. A failed baseline
+// snapshot disables reaping entirely for that run — every live session is
+// reported as indeterminate rather than killed, so a transient snapshot
+// failure can never take down a production daemon session. Report messages
+// use fixed, greppable, mutually non-overlapping prefixes so a killed leak
+// and an indeterminate (fail-closed, left running) report are never
+// confusable in logs: `tmux-leak-guard: KILLED leaked session…` vs
+// `tmux-leak-guard: NOT killed (fail-closed): …`.
 
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
