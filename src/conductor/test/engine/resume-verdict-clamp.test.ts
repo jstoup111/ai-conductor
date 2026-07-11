@@ -102,8 +102,13 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('the #532 fixture resumes at build, not finish', async () => {
       await seed532Fixture();
       const { runner, log } = trackingRunner();
+      // Daemon parity (daemon-cli.ts passes verifyArtifacts: true): the clamp
+      // enters at build, and the artifact gate keeps finish unreachable while
+      // the build gate is unsatisfied — the tail selector is the only
+      // satisfaction authority (adr-2026-07-11-verdict-aware-resume-entry §5).
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+        verifyArtifacts: true,
       });
 
       await conductor.run();
@@ -120,7 +125,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        resume: true, daemon: true,
+        resume: true, daemon: true, verifyArtifacts: true,
       });
       await conductor.run();
 
@@ -228,8 +233,15 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
-    it('three kickback verdicts over done state resumes at build (earliest kicked-back gate)', async () => {
-      const seed = seedDoneThrough('finish'); // build..rebase all 'done'
+    it('three post-navigateBack kickback verdicts resume at build (earliest kicked-back gate)', async () => {
+      const seed = seedDoneThrough('finish');
+      // Post-kickback disk state exactly as navigateBack (the in-loop
+      // demotion authority) left it: the kicked-back target is 'pending',
+      // its downstream 'stale'. Resume never rewrites statuses itself —
+      // adr-2026-07-11-verdict-aware-resume-entry rejected Option C.
+      seed.build = 'pending';
+      seed.build_review = 'stale';
+      seed.manual_test = 'stale';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
@@ -246,6 +258,8 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
     it('only manual_test kicked back resumes at manual_test', async () => {
       const seed = seedDoneThrough('finish');
+      // navigateBack left only the kicked-back target demoted (see above).
+      seed.manual_test = 'pending';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });

@@ -2604,6 +2604,10 @@ describe('engine/conductor', () => {
     const started: StepName[] = [];
     events.on('step_started', (e: { step: StepName }) => started.push(e.step));
 
+    // Daemon parity: the daemon always passes verifyArtifacts: true
+    // (daemon-cli.ts), so the tail's artifact gate — the single satisfaction
+    // authority (adr-2026-07-11-verdict-aware-resume-entry §5) — keeps finish
+    // unreachable while the build gate is unsatisfied.
     const conductor = new Conductor({
       projectRoot: dir,
       stateFilePath: statePath,
@@ -2611,6 +2615,7 @@ describe('engine/conductor', () => {
       events,
       resume: true,
       daemon: true,
+      verifyArtifacts: true,
     });
 
     await conductor.run();
@@ -2766,9 +2771,12 @@ describe('engine/conductor', () => {
       },
     };
 
-    // Resume with finish in_progress but verdicts unsatisfied. The clamp must apply.
+    // Resume with finish in_progress but verdicts unsatisfied. The clamp must
+    // apply. Daemon parity (verifyArtifacts: true, daemon-cli.ts): the artifact
+    // gate keeps finish unreachable while the build gate is unsatisfied.
     const conductor = new Conductor({
       projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      verifyArtifacts: true,
     });
 
     await conductor.run();
@@ -2878,8 +2886,10 @@ describe('engine/conductor', () => {
   it('post-rebase kickback verdicts steer resume to earliest kicked-back gate (Story 3, happy path a)', async () => {
     // Story 3 happy path (a): All three gates (build, build_review, manual_test) have kickback
     // verdicts from rebase. When resuming, the run should start at build (earliest).
-    // State has all three gates done, but rebase wrote kickback verdicts to invalidate them.
-    // Rebase is done, so resume can proceed.
+    // The on-disk state is what navigateBack (the in-loop demotion authority) left
+    // behind when the kickbacks were processed: target 'pending', downstream 'stale'.
+    // Resume itself never rewrites statuses (adr-2026-07-11-verdict-aware-resume-entry
+    // rejected Option C). Rebase is done, so resume can proceed.
 
     const kickback: GateVerdict['kickback'] = {
       from: 'rebase',
@@ -2900,6 +2910,9 @@ describe('engine/conductor', () => {
     }
     seed.rebase = 'done';
     seed.last_step = 'finish';
+    seed.build = 'pending';
+    seed.build_review = 'stale';
+    seed.manual_test = 'stale';
     await writeState(statePath, seed as ConductState);
 
     // Write kickback verdicts (unsatisfied) for all three gates from rebase.
@@ -2956,6 +2969,9 @@ describe('engine/conductor', () => {
     }
     seed.rebase = 'done';
     seed.last_step = 'finish';
+    // navigateBack left only the kicked-back target demoted; build and
+    // build_review were re-verified satisfied and stay 'done'.
+    seed.manual_test = 'pending';
     await writeState(statePath, seed as ConductState);
 
     // Write verdicts: build and build_review are satisfied (re-verified), only manual_test is unsatisfied.

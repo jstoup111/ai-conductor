@@ -1216,21 +1216,12 @@ export class Conductor {
 
         // Clamp backward (min) only — never move startIndex forward.
         // If earliestGateIdx is valid and precedes the candidate, use it.
+        // The clamp on the local startIndex is the ONLY resume-entry mechanism
+        // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
+        // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
+        // demotion inside the loop.
         if (earliestGateIdx >= 0 && earliestGateIdx < startIndex) {
           startIndex = earliestGateIdx;
-        }
-
-        // Reset unsatisfied gates to 'pending' so the main loop doesn't skip them.
-        // When a gate's verdict says unsatisfied but state says 'done',
-        // we must reset it so the loop re-runs it.
-        for (const step of steps) {
-          const v = verdicts[step.name];
-          if (v && v.satisfied === false) {
-            const status = getStepStatus(state, step.name);
-            if (status === 'done') {
-              (state as Record<string, unknown>)[step.name] = 'pending';
-            }
-          }
         }
       } catch (err) {
         // Verdict reading errors (missing file, parse failures) are non-fatal.
@@ -3352,24 +3343,11 @@ export class Conductor {
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
   ): Promise<number | null | 'halt'> {
-    // The gate-driven tail engages when completion is verified against
-    // artifacts (verifyArtifacts=true). Additionally, it activates when
-    // resuming with pre-existing unsatisfied gate verdicts, even if
-    // verifyArtifacts=false — this ensures verdict-driven routing steers
-    // the loop correctly.
-    if (!this.verifyArtifacts) {
-      // Check if there are any pre-existing unsatisfied verdicts
-      const verdicts = await readAllVerdicts(this.projectRoot);
-      let hasUnsatisfied = false;
-      for (const v of Object.values(verdicts)) {
-        if (v && v.satisfied === false) {
-          hasUnsatisfied = true;
-          break;
-        }
-      }
-      if (!hasUnsatisfied) return null;
-      // Fall through: verdict-driven routing enabled due to unsatisfied verdicts
-    }
+    // The gate-driven tail engages only when completion is verified against
+    // artifacts (verifyArtifacts=true) — the single satisfaction authority
+    // (adr-2026-07-11-verdict-aware-resume-entry, Decision item 5). The daemon
+    // production path always sets verifyArtifacts: true (daemon-cli.ts).
+    if (!this.verifyArtifacts) return null;
 
     const topo = deriveGateTopology(steps);
 
