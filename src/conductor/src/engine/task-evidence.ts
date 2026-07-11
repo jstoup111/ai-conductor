@@ -12,18 +12,33 @@ import * as crypto from 'node:crypto';
  * Tracks:
  * - evidenceStamps: Map<taskId, {sha, form}> — evidence for engine-owned task status
  * - noEvidenceAttempts: number — count of no-evidence attempt retries
+ * - noEvidenceReasons: string[] — reason tags accrued alongside noEvidenceAttempts
+ *   (e.g. `zero_work_product` — #505 TS-16). Append-only per miss; cleared
+ *   whenever the counter itself resets on progress.
  * - migrationGrandfather: Set<string> — task IDs grandfathered during migration
  */
 export interface TaskEvidence {
   evidenceStamps: Map<string, { sha: string; form: string }>;
   noEvidenceAttempts: number;
+  noEvidenceReasons: string[];
   migrationGrandfather: Set<string>;
   write(): Promise<void>;
 }
 
+/**
+ * Human-readable descriptions for known `noEvidenceReasons` tags, used when
+ * rendering ledger/report output. #505 TS-16: `zero_work_product` is the
+ * first tag — a build step that dispatched no work or produced no commits.
+ */
+export const NO_EVIDENCE_REASON_DESCRIPTIONS: Record<string, string> = {
+  zero_work_product:
+    'Build step dispatched no work, or dispatched work produced no new commits',
+};
+
 interface SerializedEvidenceData {
   evidenceStamps: Record<string, { sha: string; form: string }>;
   noEvidenceAttempts: number;
+  noEvidenceReasons?: string[];
   migrationGrandfather: string[];
 }
 
@@ -40,6 +55,7 @@ export async function createTaskEvidence(projectRoot: string): Promise<TaskEvide
   let data: SerializedEvidenceData = {
     evidenceStamps: {},
     noEvidenceAttempts: 0,
+    noEvidenceReasons: [],
     migrationGrandfather: [],
   };
 
@@ -80,6 +96,9 @@ function createInstance(
   const instance: TaskEvidence = {
     evidenceStamps,
     noEvidenceAttempts: data.noEvidenceAttempts || 0,
+    noEvidenceReasons: Array.isArray(data.noEvidenceReasons)
+      ? [...data.noEvidenceReasons]
+      : [],
     migrationGrandfather,
 
     async write() {
@@ -93,6 +112,7 @@ function createInstance(
       const serialized: SerializedEvidenceData = {
         evidenceStamps: Object.fromEntries(instance.evidenceStamps),
         noEvidenceAttempts: instance.noEvidenceAttempts,
+        noEvidenceReasons: [...instance.noEvidenceReasons],
         migrationGrandfather: Array.from(instance.migrationGrandfather),
       };
 
@@ -122,21 +142,32 @@ function createInstance(
 
 /**
  * Increment the no-evidence attempts counter by 1 and persist to sidecar.
- * Returns the new counter value.
+ * Returns the new counter value. An optional `reason` tag (e.g.
+ * `zero_work_product`, #505 TS-16) is appended to `noEvidenceReasons`
+ * alongside the increment.
  */
-export async function incrementNoEvidenceAttempts(projectRoot: string): Promise<number> {
+export async function incrementNoEvidenceAttempts(
+  projectRoot: string,
+  reason?: string,
+): Promise<number> {
   const evidence = await createTaskEvidence(projectRoot);
   evidence.noEvidenceAttempts++;
+  if (reason) {
+    evidence.noEvidenceReasons.push(reason);
+  }
   await evidence.write();
   return evidence.noEvidenceAttempts;
 }
 
 /**
  * Reset the no-evidence attempts counter to zero and persist to sidecar.
+ * Also clears `noEvidenceReasons` — the reasons array tracks tags accrued
+ * alongside the counter, so it resets in lockstep.
  */
 export async function resetNoEvidenceAttempts(projectRoot: string): Promise<void> {
   const evidence = await createTaskEvidence(projectRoot);
   evidence.noEvidenceAttempts = 0;
+  evidence.noEvidenceReasons = [];
   await evidence.write();
 }
 
