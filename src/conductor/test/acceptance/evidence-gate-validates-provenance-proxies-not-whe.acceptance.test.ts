@@ -384,6 +384,9 @@ describe('acceptance: escape-corpus replay through the judged lane (Story 12)', 
     });
 
     expect((result as { stampedTaskIds: string[] }).stampedTaskIds).toEqual(['9']);
+
+    // Same evaluation cycle: re-derive/re-apply picks up the judged stamps
+    await deriveAndApply(repo, planPath);
     const rowsAfter = await readStatusRows(repo);
     expect(unresolvedIds(rowsAfter)).toEqual([]);
   });
@@ -927,6 +930,9 @@ describe('acceptance: residue resolves to judged stamps and the gate goes green 
     });
 
     expect((result as { stampedTaskIds: string[] }).stampedTaskIds).toEqual(['7']);
+
+    // Same evaluation cycle: re-derive/re-apply picks up the judged stamps
+    await deriveAndApply(repo, planPath);
     const rowsAfter = await readStatusRows(repo);
     expect(unresolvedIds(rowsAfter)).toEqual(['9']);
   });
@@ -1163,9 +1169,9 @@ describe('acceptance: fail-closed verdict parse composed with the real lane (Sto
   it('parseAttributionVerdict itself coerces an unparseable/truncated file to all-no-verdict (pinning the module boundary this file relies on)', async () => {
     const verdictMod = await loadAttributionVerdict();
     const parsed = verdictMod.parseAttributionVerdict('{ this is not valid json', ['1', '2'], 'deadbeef');
-    const asRecord = parsed as Record<string, { verdict: string }>;
+    const asMap = parsed as Map<string, string>;
     for (const id of ['1', '2']) {
-      expect(asRecord[id]?.verdict).toBe('no-verdict');
+      expect(asMap.get(id)).toBe('no-verdict');
     }
   });
 });

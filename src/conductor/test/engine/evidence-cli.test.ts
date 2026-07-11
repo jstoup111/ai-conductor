@@ -203,6 +203,23 @@ describe('runEvidenceJudge — full-resolution recovery tail (Task 21)', () => {
       await mkdir(gitDir, { recursive: true });
       await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/main\n');
 
+      // Pre-populate evidence to mark task as fully resolved
+      const evidenceFile = join(pipelineDir, 'task-evidence.json');
+      await writeFile(
+        evidenceFile,
+        JSON.stringify({
+          evidenceStamps: {
+            '1': {
+              sha: 'abc123',
+              form: 'semantic-verified',
+            },
+          },
+          noEvidenceAttempts: 0,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        }),
+      );
+
       // Mock resolver
       const result = await runEvidenceJudge({
         featureSlug: 'test-feature',

@@ -14,17 +14,18 @@ import { validateCitations } from './attribution-validate.js';
 import { markerPath } from './attribution-enforcement.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 
 export type EvidenceDispatch =
   | { kind: 'guide' }
-  | { kind: 'judge'; slug: string };
+  | { kind: 'judge'; slug: string; dryRun?: boolean };
 
 /**
  * Parse argv for the `evidence` subcommand.
- *   conduct evidence judge <slug>    → {kind:'judge', slug:'<slug>'}
- *   conduct evidence [malformed]     → {kind:'guide'}
- *   (any other sub)                  → null
+ *   conduct evidence judge <slug>           → {kind:'judge', slug:'<slug>'}
+ *   conduct evidence judge <slug> --dry-run → {kind:'judge', slug:'<slug>', dryRun:true}
+ *   conduct evidence [malformed]            → {kind:'guide'}
+ *   (any other sub)                         → null
  */
 export function detectEvidenceCommand(argv: string[]): EvidenceDispatch | null {
   const sub = argv[2];
@@ -42,7 +43,11 @@ export function detectEvidenceCommand(argv: string[]): EvidenceDispatch | null {
     if (!slug) {
       return { kind: 'guide' };
     }
-    return { kind: 'judge', slug };
+
+    // Check for --dry-run flag at argv[5]
+    const dryRun = argv[5] === '--dry-run';
+
+    return { kind: 'judge', slug, dryRun: dryRun ? true : undefined };
   }
 
   // Unknown subcommand
@@ -233,9 +238,9 @@ export async function runEvidenceJudge(
     const derived = await deriveCompletion(
       worktreeRoot,
       planPath,
-      evidence.evidenceStamps,
-      [],
-      evidence,
+      undefined, // anchor
+      [],        // commits
+      evidence,  // evidence
     );
 
     // Extract residue (unresolved task IDs)
@@ -243,6 +248,22 @@ export async function runEvidenceJudge(
 
     if (residueIds.length === 0) {
       // No residue; all tasks already resolved
+      // Recovery tail: drop HALT marker when all tasks are fully resolved
+      const pipelineDir = join(projectRoot, '.pipeline');
+      const haltPath = join(pipelineDir, 'HALT');
+      const rekickPath = join(pipelineDir, 'REKICK');
+
+      // Ensure .pipeline directory exists
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Drop HALT marker if it exists
+      if (existsSync(haltPath)) {
+        await rm(haltPath, { force: true });
+      }
+
+      // Write REKICK sentinel
+      await writeFile(rekickPath, '', 'utf-8');
+
       return {
         ok: true,
         stampedTaskIds: [],
@@ -340,13 +361,32 @@ export async function runEvidenceJudge(
     const derivedAfter = await deriveCompletion(
       worktreeRoot,
       planPath,
-      evidence.evidenceStamps,
-      [],
-      evidence,
+      undefined, // anchor
+      [],        // commits
+      evidence,  // evidence
     );
     const afterResidueCount = planTaskIds.filter((id) => !derivedAfter[id]?.completed).length;
 
     const remainingTaskIds = planTaskIds.filter((id) => !derivedAfter[id]?.completed);
+
+    // Recovery tail: drop HALT marker and write REKICK sentinel only when fully resolved
+    // Runs if we had residue at start and the judge fully resolved all of it
+    if (beforeResidueCount > 0 && afterResidueCount === 0) {
+      const pipelineDir = join(projectRoot, '.pipeline');
+      const haltPath = join(pipelineDir, 'HALT');
+      const rekickPath = join(pipelineDir, 'REKICK');
+
+      // Ensure .pipeline directory exists
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Drop HALT marker if it exists
+      if (existsSync(haltPath)) {
+        await rm(haltPath, { force: true });
+      }
+
+      // Write REKICK sentinel
+      await writeFile(rekickPath, '', 'utf-8');
+    }
 
     return {
       ok: true,
