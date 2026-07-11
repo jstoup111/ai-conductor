@@ -309,7 +309,10 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after RED (test reviewed for domain integrity)
 - [ ] Implementation is minimal (passes scope check)
 - [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Full test suite passes before commit
+- [ ] Scoped affected-test set passes before commit (the full suite runs at the feature's
+      final verification task, not per-task)
+- [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
+      `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
 - [ ] Linter passes before commit
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit

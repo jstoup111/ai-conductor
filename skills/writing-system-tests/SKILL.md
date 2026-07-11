@@ -522,3 +522,16 @@ Unit tests (TDD per-model/module)  — Domain/model logic in isolation
 **Each layer tests something the others don't.** If a test could live in a lower layer, it should.
 Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
 lower level. This skill handles the top layer. TDD handles the bottom two.
+
+## Verify
+
+- [ ] Acceptance specs generated for every story's happy AND negative paths
+- [ ] The new specs were EXECUTED, not just written — a spec that never ran does not
+      establish RED
+- [ ] The real RED run's results recorded to `.pipeline/acceptance-specs-red.json`
+      (command, targetSpecs, executed/passed/failed/skipped/errors counts) — the
+      completion gate validates this file and rejects runs where the feature's own
+      specs were skipped, deselected, or errored at collection
+- [ ] Failures are for the RIGHT reason (missing implementation), not
+      import/syntax/collection errors
+- [ ] Specs use the project's own test framework and directory conventions
