@@ -12,8 +12,20 @@
 // e.g. `cc-daemon-james-stoup-agents-*`) are never touched.
 
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 export const DAEMON_SESSION_PREFIX = 'cc-daemon-';
+
+/** TR-2: kill requires pane cwd resolved AND under os.tmpdir(). Lexical
+ * resolve only — no realpath, so a deleted /tmp fixture dir still matches.
+ * Exact-or-prefix (with trailing separator) check, so
+ * `${tmpdir}-evil/x` does NOT falsely match `tmpdir`. */
+export function isTmpdirRooted(cwd: string): boolean {
+  const tmp = path.resolve(os.tmpdir());
+  const resolved = path.resolve(cwd);
+  return resolved === tmp || resolved.startsWith(tmp + path.sep);
+}
 
 /** Result of a single tmux invocation. `spawnError` means the process never
  * ran at all (e.g. tmux not installed) — distinct from a clean exec that
@@ -51,14 +63,48 @@ function tmux(args: string[], runner: TmuxRunner): TmuxResult {
   return runner(args);
 }
 
+/** Result of a snapshot attempt — `failed: true` means the classification
+ * could not confirm genuine emptiness, so callers must fail closed rather
+ * than treat `sessions: []` as "nothing running". */
+export type SnapshotResult = {
+  sessions: string[];
+  failed: boolean;
+};
+
+const GENUINE_EMPTY_STDERR_PATTERNS = [
+  /no server running/,
+  /error connecting to .*no such file or directory/,
+];
+
+/**
+ * Snapshot live `cc-daemon-*` tmux sessions, distinguishing a genuinely
+ * empty tmux server (no server running yet — not a failure) from a true
+ * failure to query tmux (spawn error or unrecognized non-zero exit).
+ */
+export function snapshotDaemonSessions(runner: TmuxRunner = realTmuxRunner): SnapshotResult {
+  const result = tmux(['list-sessions', '-F', '#{session_name}'], runner);
+
+  if (result.code === 0) {
+    const sessions = result.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.startsWith(DAEMON_SESSION_PREFIX));
+    return { sessions, failed: false };
+  }
+
+  if (
+    !result.spawnError &&
+    GENUINE_EMPTY_STDERR_PATTERNS.some((pattern) => pattern.test(result.stderr.toLowerCase()))
+  ) {
+    return { sessions: [], failed: false };
+  }
+
+  return { sessions: [], failed: true };
+}
+
 /** Names of live `cc-daemon-*` tmux sessions (empty when tmux is absent/idle). */
 export function listDaemonSessions(runner: TmuxRunner = realTmuxRunner): string[] {
-  const result = tmux(['list-sessions', '-F', '#{session_name}'], runner);
-  if (result.code !== 0) return [];
-  return result.stdout
-    .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.startsWith(DAEMON_SESSION_PREFIX));
+  return snapshotDaemonSessions(runner).sessions;
 }
 
 /** Pane cwd of a session's active pane — the leak's fixture-dir fingerprint. */
