@@ -349,59 +349,149 @@ async function prStateWithMergedAt(
 }
 
 /**
+ * Extract owner/repo from a GitHub PR URL.
+ * Example: https://github.com/owner/repo/pull/123 → ['owner', 'repo']
+ */
+function extractOwnerRepo(prUrl: string): [string, string] {
+  const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+  return [match?.[1] || '', match?.[2] || ''];
+}
+
+/**
+ * Detect if an error is from GitHub indicating the issue is already closed (422).
+ */
+function isAlreadyClosedError(err: any): boolean {
+  return err?.message?.includes('already') || err?.code === 422;
+}
+
+/**
  * Sweep the observation watch registry: poll awaiting-merge entries for PR state,
- * record mergedAt when merged, and prune closed PRs.
+ * record mergedAt when merged, and prune closed PRs. Scan watching entries for
+ * observations and close issues on first match.
  *
- * Per-entry throttle: skip entries polled in the last 5 minutes.
- * Survivors are entries that passed sweep logic (transition to watching or retry).
- * Pruned entries (CLOSED unmerged PRs) are removed from the registry.
+ * Per-entry throttle:
+ *   - Awaiting-merge: skip entries polled in the last 5 minutes.
+ *   - Watching: skip entries scanned in the last 60 seconds.
+ *
+ * Survivors are entries that passed sweep logic (transition to watching/retry, or
+ * continue watching). Pruned entries (CLOSED unmerged PRs, or closed issues) are
+ * removed from the registry.
  */
 export async function sweepObservationWatch(
   registryPath: string,
   deps: {
     gh: GhRunner;
+    logDir?: string;
     log?: Logger;
   },
 ): Promise<void> {
   const entries = await readObservationWatch(registryPath, deps.log);
   const survivors: ObservationEntry[] = [];
   const now = Date.now();
-  const throttleMs = 5 * 60 * 1000; // 5 minutes
+  const pollThrottleMs = 5 * 60 * 1000; // 5 minutes for PR polls
+  const scanThrottleMs = 60 * 1000; // 60 seconds for log scans
 
   for (const entry of entries) {
-    // Skip if not due for poll (5-minute throttle)
-    if (entry.lastPollAt && now - entry.lastPollAt < throttleMs) {
+    // Awaiting-merge state: no mergedAt yet
+    if (!entry.mergedAt) {
+      // Skip if not due for poll (5-minute throttle)
+      if (entry.lastPollAt && now - entry.lastPollAt < pollThrottleMs) {
+        survivors.push(entry);
+        continue;
+      }
+
+      // Poll PR state
+      try {
+        const prState = await prStateWithMergedAt(deps.gh, entry.prUrl, deps.log);
+        if (!prState) {
+          // gh error — retry later
+          survivors.push({
+            ...entry,
+            lastPollAt: now,
+          });
+          continue;
+        }
+
+        if (prState.state === 'MERGED') {
+          // Transition to watching
+          survivors.push({
+            ...entry,
+            mergedAt: prState.mergedAt,
+            lastPollAt: now,
+          });
+        } else if (prState.state === 'CLOSED') {
+          // Cancel and prune
+          deps.log?.(`[daemon] observing: cancelled ${entry.sourceRef}`);
+          // Don't add to survivors (prune)
+        }
+      } catch (err) {
+        deps.log?.(`[observation-sweep] sweep failed for ${entry.prUrl}: ${err}`);
+        survivors.push(entry);  // Retry later
+      }
+      continue;
+    }
+
+    // Watching state: mergedAt is set
+    // Skip if scanned recently (60-second throttle)
+    if (entry.lastScanAt && now - entry.lastScanAt < scanThrottleMs) {
       survivors.push(entry);
       continue;
     }
 
-    // Poll PR state
-    try {
-      const prState = await prStateWithMergedAt(deps.gh, entry.prUrl, deps.log);
-      if (!prState) {
-        // gh error — retry later
-        survivors.push({
-          ...entry,
-          lastPollAt: now,
-        });
-        continue;
-      }
+    // Scan logs for observation
+    if (!deps.logDir) {
+      // No log dir provided — skip scan, keep entry
+      survivors.push(entry);
+      continue;
+    }
 
-      if (prState.state === 'MERGED') {
-        // Transition to watching
-        survivors.push({
-          ...entry,
-          mergedAt: prState.mergedAt,
-          lastPollAt: now,
-        });
-      } else if (prState.state === 'CLOSED') {
-        // Cancel and prune
-        deps.log?.(`[daemon] observing: cancelled ${entry.sourceRef}`);
-        // Don't add to survivors (prune)
+    try {
+      const match = await findObservation(
+        deps.logDir,
+        entry.signature,
+        entry.isRegex,
+        entry.mergedAt,
+      );
+
+      if (match) {
+        // Close issue with comment quoting the match
+        const comment = `Observation: ${match.line}\n\nTimestamp: ${new Date(match.timestamp).toISOString()}`;
+        try {
+          const [owner, repo] = extractOwnerRepo(entry.prUrl);
+          const issueNum = entry.sourceRef.replace(/^#/, '');
+          await deps.gh(
+            [
+              'issue',
+              'close',
+              '--repo',
+              `${owner}/${repo}`,
+              issueNum,
+              '--comment',
+              comment,
+            ],
+            { cwd: process.cwd() },
+          );
+
+          deps.log?.(`[daemon] observe: closed ${entry.sourceRef}`);
+          // Prune entry (don't add to survivors)
+        } catch (err) {
+          // Close failed — check if it's expected (already closed)
+          if (isAlreadyClosedError(err)) {
+            deps.log?.(`[daemon] observe: ${entry.sourceRef} already closed`);
+            // Prune anyway (expected race condition)
+          } else {
+            deps.log?.(`[daemon] observe: close failed for ${entry.sourceRef}: ${err}`);
+            // Retry: update lastScanAt for throttle and add to survivors
+            survivors.push({ ...entry, lastScanAt: now });
+          }
+        }
+      } else {
+        // No match yet — update scan time and continue watching
+        survivors.push({ ...entry, lastScanAt: now });
       }
     } catch (err) {
-      deps.log?.(`[observation-sweep] sweep failed for ${entry.prUrl}: ${err}`);
-      survivors.push(entry);  // Retry later
+      deps.log?.(`[daemon] observe: scan failed for ${entry.sourceRef}: ${err}`);
+      survivors.push(entry);  // Retry with same lastScanAt
     }
   }
 
