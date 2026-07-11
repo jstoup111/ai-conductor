@@ -1243,6 +1243,10 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     );
   }
 
+  async function fileExists(p: string): Promise<boolean> {
+    return access(p).then(() => true, () => false);
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'rekick-436-'));
     events = new ConductorEventEmitter();
@@ -1286,5 +1290,71 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     expect(stateResult.ok).toBe(true);
     const state = stateResult.ok ? stateResult.value : {};
     expect(state.rebase).toBe('done');
+  });
+
+  // Negative path: a conflicted pre-loop rebase must NOT stamp state.rebase.
+  // recordRebaseStepCompletion is still called (same call site as the clean
+  // path above) but is a no-op on 'conflict_halt' outcomes — the shared
+  // helper gates on outcome kind, not on whether it ran at all. This test
+  // distinguishes "never ran" (state.rebase undefined, no HALT) from "ran
+  // but conflicted" (state.rebase ALSO undefined, but a HALT is present) —
+  // only the HALT file tells the two apart.
+  it('conflicted play-forward rebase (resolution exhausted): state.rebase stays unset and HALT is left in place', async () => {
+    // Branch and base edit the SAME file differently → guaranteed conflict
+    // (mirrors initConflictRepo in the FR-12 describe block above).
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base');
+    await git('checkout', 'feature/foo');
+
+    await writeInitialConductState();
+
+    // Confirm the "never ran" baseline: no HALT, no state.rebase, before
+    // resumeRebaseFirst is even invoked.
+    expect(await readVerdict(dir, 'rebase')).toBeNull();
+    const beforeState = await readState(join(dir, STATE_PATH_REL));
+    const before = beforeState.ok ? beforeState.value : {};
+    expect(before.rebase).toBeUndefined();
+
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      // No resolver wired → resolution is exhausted immediately and the
+      // conflict is re-parked via the existing HALT path (mirrors the
+      // FR-12 "no resolver wired" test above).
+    });
+
+    expect(res).toBe('halted');
+
+    // The HALT is present — the rebase DID run and DID hit a real conflict.
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
+
+    // Yet conduct-state.json's `rebase` field is STILL undefined — the
+    // shared helper's outcome gate means a conflict_halt outcome is a
+    // no-op, so this is indistinguishable from "never ran" by state alone.
+    // Only the HALT file (asserted above) tells the two states apart.
+    const stateResult = await readState(join(dir, STATE_PATH_REL));
+    expect(stateResult.ok).toBe(true);
+    const state = stateResult.ok ? stateResult.value : {};
+    expect(state.rebase).toBeUndefined();
+
+    // Sanity: unaffected fields from before the re-kick are left untouched.
+    expect(state.build).toBe('done');
   });
 });
