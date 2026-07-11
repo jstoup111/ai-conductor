@@ -64,6 +64,16 @@ Present 2-3 approaches with clear trade-offs and a recommendation; the user deci
 **Pros:** … **Cons:** … **Best when:** …
 ```
 
+**Embedded Design Divergence Rule:** When the incoming idea carries an embedded solution design
+(identified as a filer hypothesis from the engineer step):
+
+- The hypothesis enters as **at most one candidate approach** (not privileged, but present)
+- At least **one genuine alternative NOT derived from the filer's sketch MUST be generated** and weighed
+- The hypothesis **may still be recommended when it wins on merits** — this rule prevents default adoption
+  (anchoring bias), not the idea itself
+
+When the idea has no embedded design, behavior is unchanged; no added ceremony.
+
 ### 4. Decide the Track (product vs technical)
 
 Classify the work and **get the operator to confirm** — this gates whether a PRD is authored:
