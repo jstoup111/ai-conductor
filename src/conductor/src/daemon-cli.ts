@@ -90,6 +90,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
+import { sweepObservationWatch } from './engine/observation-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -1509,6 +1510,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               }
             },
           },
+        });
+      },
+      // Task 15: wire observation sweep for production observation of fixes
+      sweepObservationWatch: async () => {
+        const daemonDir = join(projectRoot, '.daemon');
+        const ghRunner = async (args: string[], opts: { cwd: string }) => {
+          const r = await execFile('gh', args, { cwd: opts.cwd });
+          return { stdout: String(r.stdout) };
+        };
+        await sweepObservationWatch(daemonDir, {
+          gh: ghRunner,
+          logDir: daemonDir,
+          log,
         });
       },
       // Task T28: check for pending restart marker at idle boundary.

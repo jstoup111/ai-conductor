@@ -221,6 +221,7 @@ export async function closeIssueOnImplementationMerge(
     };
     try {
       await deps.enroll(entry);
+      log(`[daemon] observe: enrolled ${deps.sourceRef}`);
     } catch (err) {
       // Swallow enrollment errors; they should not affect the injection outcome
       log(`failed to enroll observation: ${err instanceof Error ? err.message : String(err)}`);

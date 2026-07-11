@@ -363,6 +363,17 @@ export interface DaemonDeps {
    */
   sweepMergeableLabels?: () => Promise<void>;
 
+  /**
+   * Task 15: sweep observation watch registry on startup (after mergeable labels)
+   * and once per idle poll tick. Watches for production observation of fixes and
+   * closes issues when observed. Optional: absent → no-op (no observation sweep).
+   * Best-effort: a throw is caught and logged; daemon loop is never disrupted.
+   * The caller binds registryPath + gh + logDir when wiring production deps —
+   * this core accepts a pre-bound zero-arg function so it needs no knowledge
+   * of projectRoot or gh.
+   */
+  sweepObservationWatch?: () => Promise<void>;
+
   // ── Task T28: daemon self-restart at idle boundary ──────────────────────
   /**
    * Check whether a pending restart marker exists (e.g., `.daemon/RESTART-PENDING`).
@@ -531,7 +542,7 @@ export async function runDaemon(
   const now = deps.now ?? (() => Date.now());
   const log = deps.log ?? (() => {});
 
-  /** Task 18 + FR-14: best-effort sweep; reconcile halt-PRs before merge-sweep; never throws, never disrupts the daemon loop. */
+  /** Task 18 + FR-14: best-effort sweep; reconcile halt-PRs before merge-sweep, then observation sweep; never throws, never disrupts the daemon loop. */
   const sweepBestEffort = async (): Promise<void> => {
     try {
       await deps.reconcileHaltPrs?.();
@@ -542,6 +553,14 @@ export async function runDaemon(
       await deps.sweepMergeableLabels?.();
     } catch (err) {
       log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // Task 15: observation sweep as best-effort third sweep (after mergeable labels)
+    if (deps.sweepObservationWatch) {
+      try {
+        await deps.sweepObservationWatch();
+      } catch (err) {
+        log(`[daemon] observation sweep failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   };
   // FR-1 (Task 13): `isPaused` is a caller-injected predicate — it can throw
