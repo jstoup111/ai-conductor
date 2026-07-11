@@ -364,6 +364,21 @@ export interface HarnessConfig {
    */
   attribution_enforcement_cutover?: string;
   /**
+   * Attribution judge cutover (Task 11): the ISO-8601 instant on/after which
+   * the semantic attribution judgment gate activates. Validated at load time —
+   * a malformed date is REJECTED. Absent → judgment disabled. Mirrors the
+   * attribution_enforcement_cutover contract.
+   */
+  attribution_judge_cutover?: string;
+  /**
+   * Attribution audit sample percentage (Task 11): integer percentage [0, 100]
+   * of audit events to sample. Out-of-range values are clamped with a startup
+   * warning. Absent → defaults to 10 (audit enabled but sampled). Inert when
+   * attribution_judge_cutover is absent (judgment gate controls whether audits
+   * run at all).
+   */
+  attribution_audit_sample_pct?: number;
+  /**
    * Maximum number of Claude-assisted conflict-resolution attempts inside the
    * rebase step before the engine halts for operator intervention.
    * Default: 3. Set to 0 to disable automated resolution (conflict always

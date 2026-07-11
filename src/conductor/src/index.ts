@@ -82,6 +82,7 @@ import {
   dispatchDaemonPark,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
+import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -364,6 +365,15 @@ async function main(): Promise<void> {
   const taskCmd = detectTaskCommand(process.argv);
   if (taskCmd) {
     const code = await dispatchTaskCommand(taskCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Evidence subcommand (`evidence judge <slug>`, Task 19) runs NON-INTERACTIVELY and exits —
+  // routes to semantic attribution evidence gate operations. Dispatched before the daemon
+  // commands, mirroring the task-cli dispatch pattern.
+  const evidenceCmd = detectEvidenceCommand(process.argv);
+  if (evidenceCmd) {
+    const code = await dispatchEvidence(evidenceCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 

@@ -176,6 +176,9 @@ export function validateConfig(
     'owner_gate_cutover',
     // Attribution enforcement cutover (#505): gate activation instant.
     'attribution_enforcement_cutover',
+    // Attribution judge cutover + audit sample pct (Task 11): semantic judgment gate.
+    'attribution_judge_cutover',
+    'attribution_audit_sample_pct',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
@@ -525,6 +528,43 @@ export function validateConfig(
           'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
       );
     }
+  }
+
+  // attribution_judge_cutover — the instant on/after which semantic
+  // attribution judgment gates activate (Task 11). Same contract as
+  // attribution_enforcement_cutover: malformed values are a hard load-time
+  // error. Absent → judgment disabled.
+  if (obj.attribution_judge_cutover !== undefined) {
+    if (typeof obj.attribution_judge_cutover !== 'string') {
+      return errVal('attribution_judge_cutover must be an ISO-8601 date string');
+    }
+    if (Number.isNaN(Date.parse(obj.attribution_judge_cutover))) {
+      return errVal(
+        `attribution_judge_cutover is not a parseable date: "${obj.attribution_judge_cutover}". ` +
+          'Use an ISO-8601 instant (e.g. 2026-07-15T00:00:00Z).',
+      );
+    }
+  }
+
+  // attribution_audit_sample_pct — audit sampling percentage [0, 100]
+  // (Task 11). Numeric type required; out-of-range values are clamped with
+  // a startup warning. Absent → defaults to 10 (audit enabled but sampled).
+  // Inert when attribution_judge_cutover is absent.
+  if (obj.attribution_audit_sample_pct !== undefined) {
+    if (typeof obj.attribution_audit_sample_pct !== 'number') {
+      return errVal('attribution_audit_sample_pct must be a number');
+    }
+    // Clamp to [0, 100] with warning
+    if (obj.attribution_audit_sample_pct < 0 || obj.attribution_audit_sample_pct > 100) {
+      const clamped = Math.max(0, Math.min(100, obj.attribution_audit_sample_pct));
+      warnings.push(
+        `attribution_audit_sample_pct out of range [0, 100]; clamped to ${clamped}.`,
+      );
+      obj.attribution_audit_sample_pct = clamped;
+    }
+  } else {
+    // Absent → default to 10
+    obj.attribution_audit_sample_pct = 10;
   }
 
   // harness_self_host — self-host guardrail activation override + per-gate

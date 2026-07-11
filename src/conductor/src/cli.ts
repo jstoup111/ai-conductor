@@ -155,6 +155,16 @@ export function createProgram(): Command {
         '  conduct task start rem-fr10-1      Start task with alphanumeric id\n',
     );
 
+  // Evidence subcommand (Task 19). NON-INTERACTIVE: dispatched by index.ts
+  // (detectEvidenceCommand) before the pipeline boots. Routes to evidence judge
+  // command. Declared here so `--help` lists it.
+  const evidence = program
+    .command('evidence')
+    .description('Semantic attribution evidence gate: resolve features to worktrees and judge completeness');
+  evidence
+    .command('judge <slug>')
+    .description('Resolve feature slug to worktree and run semantic attribution verification');
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
