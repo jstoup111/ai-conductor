@@ -117,3 +117,157 @@ describe('evidence judge command — feature resolution errors', () => {
     expect(code).not.toBe(0);
   });
 });
+
+// ─── 5. Dry-run flag: detectEvidenceCommand parses --dry-run ────────────────
+
+describe('detectEvidenceCommand — dry-run flag parsing (Task 21)', () => {
+  it('parses --dry-run flag from argv[5]', async () => {
+    const { detectEvidenceCommand } = await import('../../src/engine/evidence-cli.js');
+    const result = detectEvidenceCommand(['node', 'conduct', 'evidence', 'judge', 'my-feature', '--dry-run']);
+    expect(result).not.toBeNull();
+    expect(result?.kind).toBe('judge');
+    expect((result as any)?.slug).toBe('my-feature');
+    expect((result as any)?.dryRun).toBe(true);
+  });
+
+  it('detects missing dry-run flag as false', async () => {
+    const { detectEvidenceCommand } = await import('../../src/engine/evidence-cli.js');
+    const result = detectEvidenceCommand(['node', 'conduct', 'evidence', 'judge', 'my-feature']);
+    expect(result).not.toBeNull();
+    expect((result as any)?.dryRun).toBeUndefined();
+  });
+});
+
+// ─── 6. Active-build guard: evidence judge rejects during active build ──────
+
+describe('runEvidenceJudge — active-build guard (Task 21)', () => {
+  it('returns error when .pipeline/build-step-active exists', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-judge-'));
+    try {
+      // Create .pipeline/build-step-active marker
+      const pipelineDir = join(tmpDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'build-step-active'), '');
+
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath: join(tmpDir, '.docs', 'plans', 'test-feature.md'),
+        projectRoot: tmpDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: tmpDir, branch: 'main' }),
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/active|build/i);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── 7. Full-resolution recovery: HALT marker + REKICK sentinel (Task 21) ────
+
+describe('runEvidenceJudge — full-resolution recovery tail (Task 21)', () => {
+  it('drops HALT marker and writes REKICK sentinel when fully resolved', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { existsSync } = await import('node:fs');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-judge-recovery-'));
+    try {
+      // Set up minimal worktree with HALT marker
+      const pipelineDir = join(tmpDir, '.pipeline');
+      const docsDir = join(tmpDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Create HALT marker
+      const haltPath = join(pipelineDir, 'HALT');
+      await writeFile(haltPath, 'build was incomplete\n');
+
+      // Create minimal plan with one task
+      const planPath = join(docsDir, 'test-feature.md');
+      await writeFile(planPath, '### Task 1\n\n**Files:** `src/test.ts`\n');
+
+      // Create git repo structure
+      const gitDir = join(tmpDir, '.git');
+      await mkdir(gitDir, { recursive: true });
+      await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/main\n');
+
+      // Mock resolver
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath,
+        projectRoot: tmpDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: tmpDir, branch: 'main' }),
+        dispatchVerifier: async () => {
+          // No residue verifier dispatch for fully-resolved case
+        },
+      });
+
+      // When all tasks are resolved, HALT should be dropped and REKICK written
+      expect(existsSync(haltPath)).toBe(false);
+      expect(existsSync(join(pipelineDir, 'REKICK'))).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves HALT marker untouched when partially resolved', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { existsSync } = await import('node:fs');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-judge-partial-'));
+    try {
+      // Set up minimal worktree with HALT marker
+      const pipelineDir = join(tmpDir, '.pipeline');
+      const docsDir = join(tmpDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Create HALT marker
+      const haltPath = join(pipelineDir, 'HALT');
+      await writeFile(haltPath, 'build has remaining tasks\n');
+
+      // Create plan with multiple tasks (to ensure partial resolution)
+      const planPath = join(docsDir, 'test-feature.md');
+      await writeFile(
+        planPath,
+        '### Task 1\n\n**Files:** `src/test.ts`\n\n### Task 2\n\n**Files:** `src/test2.ts`\n',
+      );
+
+      // Create git repo structure
+      const gitDir = join(tmpDir, '.git');
+      await mkdir(gitDir, { recursive: true });
+      await writeFile(join(gitDir, 'HEAD'), 'ref: refs/heads/main\n');
+
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath,
+        projectRoot: tmpDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: tmpDir, branch: 'main' }),
+      });
+
+      // When partially resolved (remaining tasks exist), HALT should remain
+      expect(existsSync(haltPath)).toBe(true);
+      expect(existsSync(join(pipelineDir, 'REKICK'))).toBe(false);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

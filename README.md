@@ -1046,6 +1046,73 @@ attribution_enforcement_cutover: "2026-07-01T00:00:00Z"   # ISO-8601 instant; ab
   trailer are never blocked — these are legitimate patterns that predate or fall
   outside normal attributed build work.
 
+
+### Semantic attribution verification lane (build evidence gate, `conduct-ts` only)
+
+After the deterministic evidence gate evaluates provenance proxies (commit trailers,
+path corroboration), unresolved tasks may remain. The semantic verification lane
+runs an engine-embedded judge to validate those residue tasks by analyzing the
+candidate diffs and running scoped tests. The judge is disabled by default and
+controls whether the evidence gate reaches a green state for builds with real work
+but misattributed metadata.
+
+**Configuration:**
+
+```yaml
+# .ai-conductor/config.yml
+
+# Semantic attribution judgment gate cutover (ISO-8601 instant)
+# Absent or future date → judge lane disabled (default, no judgment runs)
+# Past date → judge lane enabled for unresolved task residue
+# Read once at daemon/conductor start; restart to apply
+attribution_judge_cutover: "2026-07-11T08:30:00Z"
+
+# Spot-audit sampling percentage for measurement (0-100, optional)
+# Default: 10 (sample 10% of audit events when judge is active)
+# Out-of-range values are clamped to [0, 100] with a startup warning
+# Inert when attribution_judge_cutover is absent (judgment gate controls audits)
+attribution_audit_sample_pct: 10
+```
+
+**How it works:**
+
+1. **Trigger** — after deterministic derivation, if unresolved tasks remain, the
+   cutover is active, and the residue is new (not memoized), the engine dispatches
+   the judge.
+
+2. **Memoization** — verdicts are keyed by `(HEAD sha, sorted residue ids)`. An
+   unchanged key never re-dispatches; the prior verdict (or abstention) is reused
+   at zero cost.
+
+3. **Judge dispatch** — fresh UUID session, `opus/high`, input-starved: only residue
+   task definitions, candidate commits (diffs not yet cited), and scoped test paths.
+   The session gets no maker transcript, prior verdicts, or task-status narrative.
+
+4. **Validation** — the engine mechanically verifies every cited SHA before stamping:
+   - Reachable from `HEAD` (`git merge-base --is-ancestor`)
+   - Not empty, not a bookkeeping commit (`CONDUCT_ENGINE_COMMIT`)
+   - Diff overlaps declared task paths (when provided)
+
+5. **Stamping** — validated verdicts become `semantic-verified` evidence stamps
+   (adr-2026-07-11-attribution-verdict-interface). Unsatisfied verdicts feed into
+   the next build try's `pendingRetryHints` (operator and agent both see exactly
+   which tasks remain unresolved).
+
+6. **Spot-audit** — the `attribution_audit_sample_pct` (default 10) samples a
+   fraction of audit events for separate measurement. Every judge dispatch emits a
+   fact to `.pipeline/attribution-audit.jsonl`, including the decision outcome;
+   spot-audit post-processes this ledger to measure judge accuracy over time
+   (adr-2026-07-11-attribution-spot-audit-measurement).
+
+**Safe defaults:**
+- Absent `attribution_judge_cutover` → judgment disabled, deterministic evidence only
+- Absent `attribution_audit_sample_pct` → defaults to 10% sampling
+- Both are inert when the judgment gate is inactive
+
+See `adr-2026-07-11-semantic-attribution-verification-lane.md` for the full design,
+constraints, and trade-offs.
+
+
 ### OpenTelemetry observability (`conduct-ts` only)
 
 The TypeScript conductor can export run/step traces and metrics to any OTel-compatible
