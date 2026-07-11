@@ -1702,7 +1702,10 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     await mkdir(originDir);
 
     // Initialize bare origin repo
-    await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
+    // -b main: bare origin's HEAD must point at main even without a global
+    // init.defaultBranch (CI runners) — heal resolves the root's default
+    // branch from origin HEAD, and a master-pointing HEAD disengages it.
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
 
     // Initialize main repo with initial commit
     await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
