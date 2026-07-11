@@ -26,6 +26,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Attribution enforcement gate surfaces (commit-msg + mutation gate) for inline
+  build-work attribution (#505).** Two engine-owned hook surfaces, gated behind
+  project config `attribution_enforcement_cutover` (absent/future = off, default;
+  past ISO-8601 instant = on; read once at engine start, so a config edit requires
+  a restart to take effect): the **commit-msg gate** rejects a build-step commit
+  lacking a `Task:` trailer while `.pipeline/build-step-active` is present, and the
+  **session mutation gate** (`PreToolUse`, matcher `Edit|Write|NotebookEdit|Bash`)
+  blocks a direct file mutation or `git commit` invocation made outside a stamped
+  subagent dispatch while a build step is active. Both gates share three
+  abstention/exemption surfaces — merge commits, amend of a pre-enforcement commit,
+  and an empty commit carrying a resolvable `Evidence: satisfied-by <sha>` trailer —
+  and fail open on an unparseable hook payload. Documented in the main README and
+  `src/conductor/README.md` (§ Attribution enforcement) and `skills/pipeline/SKILL.md`
+  (§ Attribution enforcement (engine gate surfaces)) as engine machinery, not a new
+  orchestrator rule. See `adr-2026-07-10-inline-work-attribution-enforcement.md`.
+
 - **New `/intake` skill — assisted authoring of intake issues (#490 companion).**
   Guides filing GitHub intake issues in the WHAT/OUTCOMES shape the intake
   convention requires: gather verbatim evidence first (exact commands + output,
@@ -1315,6 +1331,37 @@ no action needed — the token requirement is skipped.
   the updated `/remediate` and `/pipeline` SKILL.md for full details.
 
 ## Migration
+
+Inline build-work attribution enforcement (commit-msg gate + session mutation gate)
+ships as new hook assets written by `prepareWorktree` at worktree provisioning time
+(`.pipeline/git-hooks/`, `.pipeline/session-hooks/`). Enforcement itself defaults OFF
+(no `attribution_enforcement_cutover` in project config), so no worktree's behavior
+changes on update. The new hook assets only land in worktrees **provisioned after**
+this update, though — a worktree created by an older daemon build will not have the
+new `MUTATION_GATE_HOOK`/updated `COMMIT_MSG_HOOK` scripts until it is re-provisioned.
+Restart the daemon so it picks up the updated provisioning code for any worktree it
+creates going forward; for a worktree already in flight, remove and let the daemon
+recreate it (only necessary once a project actually sets
+`attribution_enforcement_cutover` — until then the absent hooks have nothing to
+enforce).
+
+```bash migration
+# Restart a running daemon so subsequently-created worktrees get the updated
+# session-hook / git-hook provisioning code (no-op if no daemon is running).
+if [ -f .daemon/daemon.pid ]; then
+  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    echo "Stopped daemon (pid $pid) so it picks up updated worktree hook provisioning on restart."
+    echo "Restart with: conduct-ts daemon start"
+  else
+    echo "No live daemon detected. Existing worktrees keep their current hooks until re-provisioned."
+  fi
+else
+  echo "No daemon pidfile found. Existing worktrees keep their current hooks until re-provisioned."
+fi
+echo "Enforcement stays OFF until attribution_enforcement_cutover is set in .ai-conductor/config.yml."
+```
 
 The build daemon is now hosted inside a tmux session instead of a detached background process.
 Any daemon currently running as a detached process must be stopped once so the first

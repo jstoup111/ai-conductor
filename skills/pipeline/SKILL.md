@@ -136,6 +136,39 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
+### Attribution enforcement (engine gate surfaces)
+
+Task stamping (above) makes attribution *available*; attribution enforcement makes it
+*mandatory* once a project opts in via `attribution_enforcement_cutover` (project
+config, absent/future = off, past ISO-8601 instant = on, requires an engine restart
+to take effect — see the main README → "Attribution enforcement"). Like task
+stamping, both surfaces are engine machinery — nothing here is a new orchestrator
+step or instruction you must remember to run:
+
+- **Surface A — commit-msg gate.** While `.pipeline/build-step-active` is present
+  (written by the engine immediately before dispatching a build-work step, removed
+  immediately after), a commit lacking a `Task:` trailer is rejected at `git commit`
+  time with instructive stderr.
+- **Surface B — session mutation gate.** A `PreToolUse` hook wired to
+  `Edit|Write|NotebookEdit|Bash` blocks a direct file mutation or `git commit`
+  invocation made in the orchestrator session — i.e. outside a stamped subagent
+  dispatch — while a build step is active. The redirect message tells you to dispatch
+  the work via the Agent tool with a `Task: <id>` (or `Task: none`) line-1 marker
+  instead of mutating files directly.
+
+**Three exemption surfaces (both gates abstain rather than reject):**
+
+1. **Merge commits** — a merge legitimately carries no `Task:` trailer.
+2. **Amend of a pre-enforcement commit** — amending a commit that predates
+   enforcement is never restamped or rejected.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
+   intentional evidence-only commit (no diff) is accepted when it names a resolvable
+   satisfying commit; an empty commit with neither a `Task:` trailer nor a resolvable
+   `Evidence:` trailer is rejected.
+
+When enforcement is off (the default), both surfaces pass through unchanged — this
+section describes dormant machinery, not a behavior change to existing projects.
+
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
 session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
 `conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
