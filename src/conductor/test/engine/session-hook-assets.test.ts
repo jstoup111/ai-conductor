@@ -211,4 +211,63 @@ describe('MUTATION_GATE_HOOK', () => {
     });
     expect(result.status).toBe(0);
   });
+
+  it('fails open on a truncated JSON payload even when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: '{"tool_name": "Edit", "tool_input": {',
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped Edit when the marker is absent, regardless of stamp state', () => {
+    const result = runMutationGateHook({
+      marker: false,
+      stamp: '',
+      payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through a stamped Bash mutation when the marker is absent, regardless of stamp state', () => {
+    const result = runMutationGateHook({
+      marker: false,
+      stamp: '7',
+      payload: { tool_name: 'Bash', tool_input: { command: 'git commit -m "wip"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('treats an empty stamp file as absent and blocks an Edit when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      stamp: '',
+      payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+  });
+
+  it('treats a whitespace-only stamp file as absent and blocks a Write when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      stamp: '   \n\t \n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '/tmp/x.ts' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+  });
+
+  it('blocks an unstamped Edit under a "Task: none" dispatch (no stamp by design)', () => {
+    // A "Task: none" dispatch (e.g. /simplify during pipeline) intentionally
+    // writes no .pipeline/current-task stamp — mutations remain blocked,
+    // same as any other unstamped context (ADR-2026-07-10).
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/Task: <id>/);
+    expect(result.stderr).toMatch(/Task: none/);
+  });
 });
