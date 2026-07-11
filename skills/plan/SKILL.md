@@ -36,6 +36,9 @@ before the steps.
 **GATE: Refuse to produce a plan without these artifacts:**
 
 - [ ] Stories exist in `.docs/stories/` for the feature being planned
+- [ ] Every task carries a `**Dependencies:**` line (use `none` when independent) or the plan
+      includes a `## Task Dependency Graph` section — daemon discovery refuses merged specs
+      whose plans lack a dependency tree
 - [ ] Every story has both happy and negative paths
 - [ ] Conflict-check has passed (check `.docs/conflicts/` for recent clean pass, or no blocking conflicts)
 
