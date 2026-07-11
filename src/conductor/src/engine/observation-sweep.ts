@@ -14,10 +14,15 @@
  * Concurrency model: rewriteObservationWatch re-reads the current registry before writing
  * to merge any entries that were enrolled after the original read. Deduplication is by prUrl.
  * This ensures append operations during a sweep rewrite do not lose data.
+ *
+ * Log-scan matcher: After a fix merges, scans daemon logs for observation signatures
+ * (substring or regex). Respects log rotation (daemon.log + daemon.log.1) and only
+ * counts matches timestamped after the merge.
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import * as path from 'node:path';
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
@@ -51,6 +56,71 @@ export interface ObservationEntry {
 }
 
 const OBSERVATION_WATCH_FILE = '.daemon/observation-watch.jsonl';
+
+// ── Log-scan matcher result ────────────────────────────────────────────────────
+
+/**
+ * Result of a log-scan matcher: the matched line and its timestamp.
+ */
+export interface LogMatch {
+  /** The full matched line from the log. */
+  line: string;
+  /** Unix timestamp of the log line (extracted from ISO-8601 prefix). */
+  timestamp: number;
+}
+
+/**
+ * Scan daemon logs for observation matches (substring or regex) that occurred
+ * after a fix merged. Checks both daemon.log and daemon.log.1 (most recent and one backup).
+ *
+ * - Only counts matches timestamped strictly after `after` (mergedAt).
+ * - Ignores lines without leading ISO-8601 timestamp.
+ * - Returns first match found, or null if no match.
+ *
+ * @param logDir — Path to the `.daemon` directory
+ * @param signature — Substring or regex pattern to search for
+ * @param isRegex — If true, treat signature as regex; else literal substring
+ * @param after — Unix timestamp; only count matches after this time
+ * @returns LogMatch if found, null otherwise
+ */
+export async function findObservation(
+  logDir: string,
+  signature: string,
+  isRegex: boolean,
+  after: number,
+): Promise<LogMatch | null> {
+  // Build regex pattern
+  const pattern = isRegex ? new RegExp(signature) : null;
+
+  // Check both daemon.log and daemon.log.1 (most recent first)
+  for (const logFile of [path.join(logDir, 'daemon.log'), path.join(logDir, 'daemon.log.1')]) {
+    try {
+      const content = await readFile(logFile, 'utf-8');
+      const lines = content.split('\n');
+
+      for (const line of lines) {
+        // Extract ISO timestamp from line start
+        const isoMatch = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
+        if (!isoMatch) continue; // Stampless line — skip
+
+        const timestamp = new Date(isoMatch[1]).getTime();
+        if (timestamp <= after) continue; // Before mergedAt — skip
+
+        // Check match
+        const matches = pattern ? pattern.test(line) : line.includes(signature);
+
+        if (matches) {
+          return { line, timestamp };
+        }
+      }
+    } catch {
+      // File not found or read error — continue to next
+      continue;
+    }
+  }
+
+  return null;
+}
 
 // ── Logger type ────────────────────────────────────────────────────────────────
 
