@@ -282,15 +282,39 @@ export async function landSpec(
   //     should watch for fixes becoming observable in production (watched or close-on-merge).
   const markerStem = planStem(planFile);
   const markerPath = join(worktreePath, '.docs', 'observation', `${markerStem}.md`);
+  const observationDir = join(worktreePath, '.docs', 'observation');
   let markerContent: string;
   try {
     markerContent = await readFile(markerPath, 'utf-8');
   } catch {
+    // Marker not found at expected path. Check if a marker exists for a different plan stem.
+    let mismatchedStem: string | null = null;
+    try {
+      const entries = await readdir(observationDir, { withFileTypes: true });
+      const markerFiles = entries.filter((e) => e.isFile() && String(e.name).endsWith('.md'));
+      if (markerFiles.length > 0) {
+        // Extract the stem from the first marker file found (there should ideally be only one).
+        const foundFile = String(markerFiles[0].name);
+        mismatchedStem = foundFile.slice(0, -3); // Remove .md extension
+      }
+    } catch {
+      // Directory doesn't exist or can't be read — no mismatch to report, just missing.
+    }
+
+    if (mismatchedStem && mismatchedStem !== markerStem) {
+      throw new Error(
+        `landSpec: observation marker stem mismatch. ` +
+          `Plan file "${markerStem}.md" requires marker at ".docs/observation/${markerStem}.md", ` +
+          `but found marker for "${mismatchedStem}.md" instead. ` +
+          `Marker files must match the plan stem. Rename or create the marker for "${markerStem}".`,
+      );
+    }
+
     throw new Error(
-      `landSpec: observation marker is missing at "${markerPath}". ` +
+      `landSpec: observation marker required at ".docs/observation/${markerStem}.md". ` +
         'A marker file is required before landing — it specifies how the daemon watches ' +
         'for the fix to become observable in production. ' +
-        'Create ".docs/observation/' + markerStem + '.md" with either watched or close-on-merge mode.',
+        `Create ".docs/observation/${markerStem}.md" with either watched or close-on-merge mode.`,
     );
   }
 
@@ -298,7 +322,7 @@ export async function landSpec(
   const markerParseResult = parseObservationMarker(markerContent);
   if (markerParseResult.kind === 'parse_error') {
     throw new Error(
-      `landSpec: observation marker at "${markerPath}" failed to parse: ${markerParseResult.message}. ` +
+      `landSpec: observation marker at ".docs/observation/${markerStem}.md" has parse error: ${markerParseResult.message}. ` +
         'Fix the marker format (watched or close-on-merge mode) and try again.',
     );
   }

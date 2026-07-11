@@ -228,4 +228,75 @@ Rationale: This fix resolves the underlying issue; closing on merge is safe.`,
       )
     ).rejects.toThrow(/observation.*test-plan|\.docs\/observation\/test-plan\.md/i);
   });
+
+  it('landSpec fails with malformed marker and quotes parse error', async () => {
+    const mod = await load();
+    const landSpec = requireFn(mod, 'landSpec');
+
+    await createRequiredArtifacts('test-plan');
+
+    // Create a malformed marker (missing required fields for watched mode)
+    const observationDir = join(worktreePath, '.docs', 'observation');
+    await mkdir(observationDir, { recursive: true });
+    await writeFile(
+      join(observationDir, 'test-plan.md'),
+      `# This is malformed
+
+Invalid content with no required fields.`,
+      'utf-8'
+    );
+
+    // Provide owner config and gh runner to bypass identity gate
+    const opts = {
+      ownerConfig: { spec_owner: 'test-owner' },
+      gh: async () => ({ user: { login: 'test-owner' } }),
+    };
+
+    // landSpec should fail with parse error message from parseObservationMarker
+    await expect(
+      landSpec(
+        { name: 'test-repo', canonicalPath: repoPath },
+        'test feature',
+        worktreePath,
+        undefined,
+        opts
+      )
+    ).rejects.toThrow(/parse.*error|missing.*field|signature/i);
+  });
+
+  it('landSpec fails with stem mismatch', async () => {
+    const mod = await load();
+    const landSpec = requireFn(mod, 'landSpec');
+
+    // Create artifacts with plan named 'test-plan'
+    await createRequiredArtifacts('test-plan');
+
+    // But create the observation marker with a DIFFERENT stem (test-other)
+    const observationDir = join(worktreePath, '.docs', 'observation');
+    await mkdir(observationDir, { recursive: true });
+    await writeFile(
+      join(observationDir, 'test-other.md'),
+      `Signature: error-fixed
+Surface: daemon-log
+Window-days: 14`,
+      'utf-8'
+    );
+
+    // Provide owner config and gh runner to bypass identity gate
+    const opts = {
+      ownerConfig: { spec_owner: 'test-owner' },
+      gh: async () => ({ user: { login: 'test-owner' } }),
+    };
+
+    // landSpec should fail with a message indicating the stem mismatch
+    await expect(
+      landSpec(
+        { name: 'test-repo', canonicalPath: repoPath },
+        'test feature',
+        worktreePath,
+        undefined,
+        opts
+      )
+    ).rejects.toThrow(/stem|mismatch|test-plan|test-other/i);
+  });
 });
