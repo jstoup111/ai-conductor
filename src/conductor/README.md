@@ -1035,6 +1035,93 @@ silent pass-through on error; a lease-protected push that cannot overwrite a con
 change; and best-effort, non-blocking escalation on any failure so a bad resolution never
 reaches `main` unlabeled.
 
+#### CI feedback loop on shipped PRs (`ci_watch`)
+
+Once a feature ships, its PR's CI checks are still running — and until now nothing watched
+whether they went red. `ci_watch` closes that gap: it extends the same watch-registry sweep
+that drives the `mergeable` label (above) to also observe each watched PR's
+`statusCheckRollup`, and drives bounded auto-remediation of red ships, entirely fail-safe
+by default.
+
+**Config** (`CiWatchConfig`, `types/config.ts`, validated in `engine/config.ts`):
+
+```yaml
+# pipeline.yml / .ai-conductor/config.yml
+ci_watch:
+  enabled: true           # default: true — on by default (fail-safe)
+  cooldownMinutes: 60     # default: 60 — minimum gap between CI-fix attempts per PR
+```
+
+Both keys are optional; an absent `ci_watch` block leaves the feature **enabled** — unlike
+`mergeable_autoresolve`, this feature defaults ON. A malformed `enabled` value (non-boolean)
+also resolves to `true` without throwing, so a typo in project config can never silently
+disable observation of red CI.
+
+**Pipeline** — on every sweep tick (`sweepMergeableLabels`, `engine/mergeable-sweep.ts`), each
+watched PR's checks are classified via `classifyChecksOutcome` (`engine/pr-labels.ts`) into
+`failed` / `pending` / `green` / `none` (failed wins over pending; malformed rollup entries
+classify as pending, fail-safe):
+
+1. **`failed`** — the sweep idempotently ensures+adds a `ci-failed` label and, if `ci_watch` is
+   enabled, considers the PR a candidate for a bounded auto-remediation attempt. A `ci_failed`
+   event (`detected` phase) fires once, on the label-absent→present transition — repeat sweeps
+   of an already-labeled PR emit nothing further, so the daemon log and any halt-monitor never
+   spam the same PR every tick.
+2. **`green`** — the sweep removes `ci-failed` (idempotent) and resets the `ciFixAttempts`
+   counter to 0, so a PR that goes red, gets fixed, then goes red again later starts a fresh
+   attempt budget. This is also how a human-applied fix (pushed outside the daemon) clears the
+   state.
+3. **`pending`** / **`none`** — no-op; no label, event, or dispatch.
+
+**Eligibility** (`isEligibleForCiFix`, `engine/ci-fix.ts`) gates a dispatch, in order:
+
+1. `ci_watch.enabled` is true (config gate)
+2. Checks are `failed`
+3. `ciFixAttempts < 2` — the **bound**; a PR that has already burned both attempts is never
+   dispatched again automatically
+4. PR does not carry `needs-remediation` — sticky: once escalated (see below), auto-remediation
+   never re-engages until a human clears the label
+5. `mergeable !== 'CONFLICTING'` — conflict resolution (`mergeable_autoresolve`, above) takes
+   precedence over a CI fix on the same PR
+6. No resolution already in flight (shared serial guard with `mergeable_autoresolve` — the two
+   features never race the same worktree machinery concurrently)
+7. `cooldownMinutes` elapsed since the last CI-fix attempt on this PR
+
+Exactly one dispatch runs per sweep tick, and the attempt counter + `lastCiFixAt` timestamp are
+bumped on the watch registry **before** the dispatch runs (crash-safe: a daemon crash mid-fix
+still counts as a consumed attempt, never an unbounded retry loop).
+
+**Resolver** (`runCiFix`, `engine/ci-fix.ts`, reusing `autoresolve.ts` primitives): fetches the
+PR branch, creates an isolated worktree at the branch tip (never touches the primary checkout),
+builds a RETRY hint from the failing check names plus a bounded `gh run view --log-failed`
+excerpt (degrades gracefully to names+links if log fetch fails), and runs an injected fix-runner
+seam inside the worktree. If the fix-runner reports a change, the same acceptance guards and
+suite gate used by `mergeable_autoresolve` run before a lease-protected
+`git push --force-with-lease` — any guard or gate failure skips the push and logs an escalated
+outcome without throwing. The resolver never merges a PR and never touches the shipped-work
+ledger; it only ever pushes a refresh to the PR's existing branch.
+
+**Escalation (exhaustion).** Once `ciFixAttempts` reaches 2 and checks are still `failed`, the
+sweep escalates instead of dispatching a third attempt: it ensures+adds the sticky
+`needs-remediation` label, upserts a marker-tagged PR comment naming the failing checks and
+attempt history (reusing the build-failure-escalation comment path), and emits a HALT-grade
+`ci_failed` event (`exhausted` phase) that daemon-log rendering marks with the ✋ marker for
+halt-monitor tailing. Because `needs-remediation` is the same sticky suppressor eligibility gate
+4 checks, escalation fires exactly once per red streak — a PR that stays exhausted-red across
+many sweep ticks never re-escalates. A comment-post failure is tolerated (label is applied,
+error is logged, sweep continues); a PR found merged/closed between detection and escalation is
+pruned instead, with no comment or label mutation.
+
+**Labels used:** `ci-failed` (checks currently failing — non-sticky, cleared on green) and
+`needs-remediation` (attempt budget exhausted — sticky, shared with the HALT-escalation and
+`mergeable_autoresolve` contracts elsewhere in the daemon; see "PR labeling" above).
+
+**Safety guarantees:** on by default but strictly bounded (max 2 automatic attempts per red
+streak); sticky escalation prevents runaway retries; shares the serial in-flight guard and
+acceptance-guard/suite-gate chain with `mergeable_autoresolve` so both features are governed by
+the same fail-closed push discipline; never merges, never touches the ledger; best-effort,
+non-blocking label/event/comment side effects so a `gh` hiccup never stalls the sweep.
+
 #### Halt-PR presentation reliability (verify-after-write + reconciliation, ai-conductor#274)
 
 When a daemon feature HALTs irrecoverably, it escalates by opening a **draft PR labeled

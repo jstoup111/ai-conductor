@@ -37,7 +37,7 @@ async function git(args: string[], cwd: string): Promise<string> {
 // ---------------------------------------------------------------------------
 async function makeGitRepo(suffix: string): Promise<{ repoPath: string; defaultBranch: string }> {
   const repoPath = await mkdtemp(join(tmpdir(), `cross-repo-isolation-${suffix}-`));
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoPath });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });
   // Initial commit so the repo has a default branch and HEAD

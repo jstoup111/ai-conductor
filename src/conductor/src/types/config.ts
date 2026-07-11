@@ -410,6 +410,12 @@ export interface HarnessConfig {
    * `steps.build_review.disable: true` is rejected by `validateConfig()`.
    */
   build_review?: BuildReviewConfig;
+  /**
+   * CI watch feature that observes shipped PRs' CI and drives bounded
+   * auto-remediation of red ships. Absent → enabled (true, fail-safe).
+   * Malformed values also resolve to enabled without throwing.
+   */
+  ci_watch?: CiWatchConfig;
 }
 
 /**
@@ -433,4 +439,16 @@ export interface MergeableAutoresolveConfig {
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: false (off, legacy topology). */
   enabled?: boolean;
+}
+
+/**
+ * Configuration for the `ci_watch` feature that observes shipped PRs' CI and
+ * drives bounded auto-remediation. Every field is optional and follows the
+ * safe-by-default principle: absent/malformed → enabled (on, fail-safe).
+ */
+export interface CiWatchConfig {
+  /** Enable CI watch and auto-remediation. Default: true (on, fail-safe). */
+  enabled?: boolean;
+  /** Polling cooldown in minutes between CI fix attempts. Default: 60. */
+  cooldownMinutes?: number;
 }

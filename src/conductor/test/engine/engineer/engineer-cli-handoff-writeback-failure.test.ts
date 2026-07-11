@@ -109,7 +109,7 @@ beforeEach(async () => {
   repoPath = join(workDir, 'test-proj');
   await mkdir(engineerDir, { recursive: true });
   await mkdir(repoPath, { recursive: true });
-  await git(['init', '-q']);
+  await git(['init', '-b', 'main', '-q']);
   await git(['config', 'user.email', 'test@test.com']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repoPath, 'README.md'), '# repo\n');

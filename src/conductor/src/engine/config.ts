@@ -188,6 +188,8 @@ export function validateConfig(
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
     'build_review',
+    // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
+    'ci_watch',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -621,6 +623,32 @@ export function validateConfig(
     }
   } else {
     obj.build_review = { enabled: false };
+  }
+
+  // ci_watch — CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
+  // Contract (total — never throws, never undefined):
+  //   C1  absent / null → { enabled: true } (no warning)
+  //   C2  { enabled: true|false } → as given (no warning)
+  //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
+  //       { enabled: true } without warning (fail-safe)
+  if (obj.ci_watch !== undefined && obj.ci_watch !== null) {
+    if (isPlainObject(obj.ci_watch)) {
+      const cw = obj.ci_watch as Record<string, unknown>;
+      const unknownKey = Object.keys(cw).find((k) => k !== 'enabled');
+      if (unknownKey !== undefined) {
+        obj.ci_watch = { enabled: true };
+      } else if (cw.enabled === undefined) {
+        obj.ci_watch = { enabled: true };
+      } else if (typeof cw.enabled === 'boolean') {
+        obj.ci_watch = { enabled: cw.enabled };
+      } else {
+        obj.ci_watch = { enabled: true };
+      }
+    } else {
+      obj.ci_watch = { enabled: true };
+    }
+  } else {
+    obj.ci_watch = { enabled: true };
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };

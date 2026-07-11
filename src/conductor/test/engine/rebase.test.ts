@@ -513,7 +513,7 @@ describe('Task 13: Evidence bar not lowered — corroboration + forged negatives
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'task13-'));
     // Initialize a minimal git repo for evidence extraction
-    await execa('git', ['init', '-q'], { cwd: dir });
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
   });

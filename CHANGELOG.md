@@ -281,6 +281,17 @@ their skill symlinks refreshed or `/intake` resolves as an unknown command:
 
 ### Added
 
+- `ci_watch` config block (default `enabled: true`): the daemon now watches each shipped PR's
+  CI check rollup and drives bounded auto-remediation of red ships — up to 2 automatic fix
+  attempts per PR (isolated worktree, RETRY hint from failing checks + log excerpts, guarded by
+  the same acceptance guards/suite gate/lease-push discipline as `mergeable_autoresolve`), a
+  non-sticky `ci-failed` label while checks are red, and escalation to a sticky
+  `needs-remediation` label + PR comment + HALT-grade `ci_failed` event once attempts are
+  exhausted. Documented in README.md and `src/conductor/README.md` (Task 25).
+- Structural fixture-portability guard extended with `unref` and
+  `tmp-outside-target-dir` matchers (with falsifiability fixtures) and armed
+  over the full `src/conductor` tree; the legitimate `.unref()` call in
+  `daemon-log.ts` is annotated with a `// portability-ok:` reason (Task 29).
 - **Setup-failure triage — two-stage deterministic recovery (#446).** The daemon now runs a
   bounded two-stage recovery when `bin/setup` fails, eliminating the wedge pattern where a dead
   agent corrupts the worktree and leaves no mechanism to dispatch a fix-session.

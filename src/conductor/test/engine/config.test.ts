@@ -1228,4 +1228,76 @@ complexity:
       expect(result.config.mergeable_autoresolve?.cooldownMinutes).toBe(45);
     });
   });
+
+  describe('ci_watch config field (Task 4)', () => {
+    it('resolves absent key to enabled, no warning', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:false to disabled, no warning', () => {
+      const result = validateConfig({ ci_watch: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:true to enabled, no warning', () => {
+      const result = validateConfig({ ci_watch: { enabled: true } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves null to enabled silently', () => {
+      const result = validateConfig({ ci_watch: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves a string value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: 'yes' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('resolves a number value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: 42 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('resolves a non-boolean enabled value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('never throws — always returns ok: true', () => {
+      const testCases = [
+        { ci_watch: { enabled: true } },
+        { ci_watch: { enabled: false } },
+        { ci_watch: 'yes' },
+        { ci_watch: 1 },
+        { ci_watch: [] },
+        { ci_watch: {} },
+        { ci_watch: null },
+        {},
+      ];
+      for (const testCase of testCases) {
+        const result = validateConfig(testCase);
+        expect(result.ok).toBe(true);
+      }
+    });
+  });
 });

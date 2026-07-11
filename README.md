@@ -374,6 +374,18 @@ if configured, a fail-closed `suiteCommand` before a lease-protected
 instead of retrying blindly. See `src/conductor/README.md` → "Auto-resolve conflicts on open
 watched PRs" for the full pipeline.
 
+On by default (`ci_watch: { enabled: true }`, no config needed), the daemon also watches each
+shipped PR's CI checks and drives bounded auto-remediation of red ships: a failed check rollup
+gets a `ci-failed` label and, if attempts remain, an isolated-worktree fix attempt using a
+RETRY hint built from the failing check names and log excerpts — capped at **2 attempts per
+PR**, gated by a cooldown, and never engaging while the PR is `CONFLICTING` (conflict
+resolution takes precedence) or already carries `needs-remediation`. A green result clears the
+`ci-failed` label and resets the attempt counter; exhausting both attempts escalates exactly
+once — sticky `needs-remediation` label, an upserted comment with the failure history, and a
+HALT-grade `ci_failed` event tailed by the halt-monitor. Set `ci_watch: { enabled: false }` to
+opt out. See `src/conductor/README.md` → "CI feedback loop on shipped PRs" for the full
+pipeline.
+
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
 terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a

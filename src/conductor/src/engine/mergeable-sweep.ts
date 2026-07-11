@@ -27,8 +27,37 @@ import {
   removeLabel,
   prMergeState,
   isMergeable,
+  upsertComment,
   type PrMergeState,
 } from './pr-labels.js';
+import type { ConductorEvent } from '../types/events.js';
+
+// ── Task 21: exhaustion escalation ──────────────────────────────────────────
+
+/** Stable hidden marker identifying the CI-exhaustion escalation comment. */
+const CI_EXHAUSTION_MARKER = '<!-- conductor:ci-exhaustion -->';
+
+/** Attempt cap mirrored from `ci-fix.ts#evaluateEligibilityGates` (Gate 1). */
+const CI_FIX_ATTEMPT_CAP = 2;
+
+/**
+ * Build the escalation comment body: failing check names + attempt history.
+ */
+function buildExhaustionComment(entry: WatchEntry, state: PrMergeState): string {
+  const checkNames =
+    state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [];
+  const attempts = entry.ciFixAttempts ?? 0;
+  return [
+    '## CI fix exhausted',
+    '',
+    `Automated CI-fix attempts exhausted after ${attempts} attempt(s).`,
+    '',
+    'Failing checks:',
+    ...(checkNames.length > 0 ? checkNames.map((n) => `- ${n}`) : ['- (none reported)']),
+    '',
+    'Manual remediation is required.',
+  ].join('\n');
+}
 
 // ── Watch entry ───────────────────────────────────────────────────────────────
 
@@ -38,6 +67,8 @@ export interface WatchEntry {
   repoCwd: string;
   resolveAttempts?: number;
   lastResolveAt?: string;
+  ciFixAttempts?: number;
+  lastCiFixAt?: string;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -90,6 +121,10 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               resolveAttempts: typeof raw.resolveAttempts === 'number' ? raw.resolveAttempts : 0,
               // lastResolveAt is optional; only include if present
               ...(typeof raw.lastResolveAt === 'string' && { lastResolveAt: raw.lastResolveAt }),
+              // Zero-default normalization for ciFix fields
+              ciFixAttempts: typeof raw.ciFixAttempts === 'number' ? raw.ciFixAttempts : 0,
+              // lastCiFixAt is optional; only include if present
+              ...(typeof raw.lastCiFixAt === 'string' && { lastCiFixAt: raw.lastCiFixAt }),
             };
             return [entry];
           }
@@ -151,12 +186,48 @@ export interface AutoresolveDispatchOpts {
   now?: () => Date;
 }
 
+/**
+ * Task 10: sweep-driven CI fix dispatch, injected so the sweep can pick
+ * the first eligible failed PR after the label pass and hand it off to
+ * the CI fix pipeline — without the sweep needing to know how that
+ * pipeline works (worktree prep, fix session, guards, etc. live elsewhere).
+ *
+ * `enabled` is read by the caller from `ci_watch.enabled` so the
+ * sweep stays byte-identical to today when the feature is off (AC4).
+ */
+export interface CiFixDispatchOpts {
+  /** Config gate — when false, the sweep runs exactly as before (no new work). */
+  enabled: boolean;
+  /**
+   * Eligibility check for a single entry (cooldown, attempt cap, sticky
+   * labels, etc. — see `ci-fix.ts#isEligibleForCiFix`). Injected so
+   * this module never imports the CI fix pipeline directly.
+   */
+  isEligible: (
+    entry: WatchEntry,
+    state: PrMergeState,
+  ) => Promise<{ eligible: boolean; reason?: string }>;
+  /**
+   * Dispatch CI fix for the chosen entry. Called with the entry AFTER
+   * its attempt counter has already been bumped and `lastCiFixAt` set
+   * (AC3) — the git work itself happens inside this callback.
+   * Returns the outcome kind so the sweep can reset the counter on success.
+   */
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' } | void>;
+  /** Clock override for tests; defaults to `new Date()`. */
+  now?: () => Date;
+}
+
 export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
   /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
   autoresolve?: AutoresolveDispatchOpts;
+  /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
+  ciFix?: CiFixDispatchOpts;
+  /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
+  onEvent?: (event: ConductorEvent) => void;
 }
 
 /**
@@ -168,6 +239,8 @@ export async function sweepMergeableLabels({
   log,
   runGh,
   autoresolve,
+  ciFix,
+  onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   try {
@@ -177,6 +250,10 @@ export async function sweepMergeableLabels({
     // during the label pass so the autoresolve dispatch below never re-fetches
     // PR state. Only populated/consulted when autoresolve is configured.
     const conflictingCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
+    // Task 10 (AC1/AC2): PRs whose `checksOutcome` is 'failed', gathered
+    // during the label pass so the ciFix dispatch below never re-fetches
+    // PR state. Only populated/consulted when ciFix is configured.
+    const failedCandidates: Array<{ entry: WatchEntry; state: PrMergeState }> = [];
 
     for (const entry of entries) {
       try {
@@ -214,30 +291,142 @@ export async function sweepMergeableLabels({
         }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
-        if (state.labels.includes('needs-remediation')) {
-          if (state.labels.includes('mergeable')) {
-            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+        let hasRemediation = state.labels.includes('needs-remediation');
+
+        // Task 21: exhaustion — escalate exactly once. Gated on the
+        // label-absent→present transition so a sweep that finds
+        // needs-remediation already present (sticky) performs zero new gh
+        // mutations or events, matching the Task 8 ci_failed transition
+        // pattern above.
+        if (
+          !hasRemediation &&
+          state.checksOutcome === 'failed' &&
+          (entry.ciFixAttempts ?? 0) >= CI_FIX_ATTEMPT_CAP
+        ) {
+          // Task 22 (AC2): re-check PR state immediately before escalating —
+          // the PR may have been merged/closed by a human between the
+          // detection read above and this point in the sweep. Racing an
+          // escalation comment onto an already-resolved PR is pure noise, so
+          // prune the entry and skip the label/comment/event work entirely.
+          const freshState = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+          if (
+            freshState.state === 'MERGED' ||
+            freshState.state === 'CLOSED' ||
+            freshState.state === 'NOTFOUND'
+          ) {
+            log?.(
+              `[mergeable-sweep] pruning ${entry.prUrl} (state changed to ${freshState.state} before escalation)`,
+            );
+            const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+            if (idx >= 0) survivors.splice(idx, 1);
+            continue;
           }
-          // Never add `mergeable` when `needs-remediation` is present.
-          continue;
+
+          // label-before-comment ordering (AC1/AC3): apply the sticky label
+          // first so it persists as evidence of exhaustion even if the
+          // escalation comment call throws — a hard failure here must never
+          // leave the PR silently unlabeled, and must never crash the sweep.
+          try {
+            await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
+            await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+          } catch (err) {
+            log?.(`[mergeable-sweep] needs-remediation label error for ${entry.prUrl}: ${err}`);
+          }
+          try {
+            await upsertComment(
+              gh,
+              entry.repoCwd,
+              entry.prUrl,
+              CI_EXHAUSTION_MARKER,
+              buildExhaustionComment(entry, freshState),
+              log,
+            );
+          } catch (err) {
+            log?.(`[mergeable-sweep] exhaustion comment error for ${entry.prUrl}: ${err}`);
+          }
+          onEvent?.({
+            type: 'ci_failed',
+            prUrl: entry.prUrl,
+            slug: entry.slug,
+            checks: freshState.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
+            attempts: entry.ciFixAttempts ?? 0,
+            phase: 'exhausted',
+          });
+          hasRemediation = true;
         }
 
-        // FR-10 / C2: add `mergeable` only when not already present.
-        if (isMergeable(state)) {
-          if (!state.labels.includes('mergeable')) {
-            await ensureLabel(gh, entry.repoCwd, 'mergeable', '0E8A16', log);
-            await addLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
-          }
-        } else {
-          // FR-11 / C2: remove `mergeable` only when currently present.
+        if (hasRemediation) {
           if (state.labels.includes('mergeable')) {
             await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+          }
+        } else {
+          // Task 10 (AC1): track failed PRs for the post-label-pass
+          // ciFix dispatch below. Only added when needs-remediation is NOT present
+          // (needs-remediation sticky label takes precedence over CI fix dispatch).
+          // Collected unconditionally (cheap) but only ever consulted when `ciFix`
+          // is configured, so a disabled config leaves the sweep's observable behavior
+          // unchanged (AC4).
+          if (state.checksOutcome === 'failed') {
+            failedCandidates.push({ entry, state });
+          }
+        }
+
+        // Task 6: ci-failed label on failed checks (idempotent)
+        // Add `ci-failed` label when checks outcome is 'failed' and not already present.
+        // This happens regardless of needs-remediation status.
+        if (state.checksOutcome === 'failed') {
+          if (!state.labels.includes('ci-failed')) {
+            await ensureLabel(gh, entry.repoCwd, 'ci-failed', 'E8451F', log);
+            await addLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+            // Task 8: emit ci_failed event on label-absent→present transition (detected phase)
+            onEvent?.({
+              type: 'ci_failed',
+              prUrl: entry.prUrl,
+              slug: entry.slug,
+              checks: state.statusCheckRollup?.map((c) => c.name ?? '?').filter(Boolean) ?? [],
+              attempts: (entry.ciFixAttempts ?? 0) + 1,
+              phase: 'detected',
+            });
+          }
+        }
+
+        // Task 7: green path removes ci-failed and resets attempts (idempotent)
+        // When checks outcome is 'green', remove `ci-failed` if present and reset ciFixAttempts.
+        if (state.checksOutcome === 'green') {
+          if (state.labels.includes('ci-failed')) {
+            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+          }
+          // Reset ciFixAttempts to 0 on green
+          const greenIdx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+          if (greenIdx >= 0) {
+            survivors[greenIdx] = { ...survivors[greenIdx], ciFixAttempts: 0 };
+          }
+        }
+
+        // FR-10 / C2 / FR-12: add/remove `mergeable` only when needs-remediation is absent.
+        if (!hasRemediation) {
+          if (isMergeable(state)) {
+            if (!state.labels.includes('mergeable')) {
+              await ensureLabel(gh, entry.repoCwd, 'mergeable', '0E8A16', log);
+              await addLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+            }
+          } else {
+            // FR-11 / C2: remove `mergeable` only when currently present.
+            if (state.labels.includes('mergeable')) {
+              await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+            }
           }
         }
       } catch (err) {
-        // Per-PR exception: log + skip, continue with other entries (FR-15).
+        // Per-PR exception (including gh label ensure/add/remove failures):
+        // log + skip, continue with other entries (FR-15, Task 9). The entry
+        // may already be in survivors (pushed above once its state was read
+        // as live) — only push again here if it never made it in, so a
+        // label-operation error never duplicates the entry in the registry.
         log?.(`[mergeable-sweep] error processing ${entry.prUrl}: ${err}`);
-        survivors.push(entry);
+        if (!survivors.some((s) => s.prUrl === entry.prUrl)) {
+          survivors.push(entry);
+        }
       }
     }
 
@@ -271,6 +460,46 @@ export async function sweepMergeableLabels({
         const dispatchResult = await autoresolve.dispatch(updated);
         if (dispatchResult?.kind === 'refreshed') {
           survivors[idx] = { ...updated, resolveAttempts: 0 };
+        }
+      }
+    }
+
+    // Task 10: after the label pass, dispatch CI fix for the first
+    // eligible failed PR this tick; any further eligible PR is deferred
+    // (AC2). Attempt counter + lastCiFixAt are bumped on the survivor entry
+    // BEFORE dispatch runs any git work (AC3). Entirely skipped when
+    // ciFix is absent or disabled, so the sweep stays byte-identical to
+    // today (AC4).
+    if (ciFix?.enabled) {
+      let dispatched = false;
+      for (const { entry, state } of failedCandidates) {
+        const elig = await ciFix.isEligible(entry, state);
+        if (!elig.eligible) continue;
+
+        if (dispatched) {
+          log?.(`[mergeable-sweep] deferring ${entry.prUrl} (skip reason: in-flight)`);
+          continue;
+        }
+
+        dispatched = true;
+        const now = ciFix.now ? ciFix.now() : new Date();
+        const updated: WatchEntry = {
+          ...entry,
+          ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1,
+          lastCiFixAt: now.toISOString(),
+        };
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        if (idx >= 0) survivors[idx] = updated;
+
+        try {
+          const dispatchResult = await ciFix.dispatch(updated);
+          if (dispatchResult?.kind === 'green-verified') {
+            survivors[idx] = { ...updated, ciFixAttempts: 0 };
+          }
+        } catch (err) {
+          // Task 11: dispatch error is logged but not propagated (AC1b)
+          // The bumped counter persists (already written to survivors[idx])
+          log?.(`[mergeable-sweep] ciFix dispatch error: ${err}`);
         }
       }
     }

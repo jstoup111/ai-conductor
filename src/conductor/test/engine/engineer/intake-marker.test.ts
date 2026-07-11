@@ -69,7 +69,7 @@ async function git(args: string[], cwd = repoPath): Promise<string> {
 
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'intake-marker-'));
-  await git(['init', '-q']);
+  await git(['init', '-b', 'main', '-q']);
   await git(['config', 'user.email', 'test@test.com']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repoPath, 'README.md'), '# repo\n');

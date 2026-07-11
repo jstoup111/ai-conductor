@@ -71,6 +71,32 @@ describe('renderDaemonEvent', () => {
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
   });
 
+  it('renders ci_failed event with ✋ halt-monitor marker', () => {
+    expect(
+      lines({
+        type: 'ci_failed',
+        prUrl: 'https://github.com/org/repo/pull/123',
+        slug: 'org/repo',
+        checks: ['test', 'lint'],
+        attempts: 1,
+        phase: 'detected',
+      }),
+    ).toEqual(['· ✋ ci_failed[org/repo]: phase=detected attempts=1 checks=[test,lint]']);
+  });
+
+  it('renders ci_failed exhausted phase', () => {
+    expect(
+      lines({
+        type: 'ci_failed',
+        prUrl: 'https://github.com/org/repo/pull/456',
+        slug: 'myorg/myrepo',
+        checks: ['build'],
+        attempts: 2,
+        phase: 'exhausted',
+      }),
+    ).toEqual(['· ✋ ci_failed[myorg/myrepo]: phase=exhausted attempts=2 checks=[build]']);
+  });
+
   it('shows only UNSATISFIED gate verdicts (satisfied ones are routine)', () => {
     expect(lines({ type: 'gate_verdict', step: 'plan', satisfied: true })).toEqual([]);
     expect(
@@ -195,6 +221,14 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'rebase_resolution_succeeded' },
       { type: 'rebase_resolution_failed' },
       { type: 'rebase_resolution_exhausted' },
+      {
+        type: 'ci_failed',
+        prUrl: 'https://github.com/org/repo/pull/1',
+        slug: 'org/repo',
+        checks: ['test'],
+        attempts: 1,
+        phase: 'detected',
+      },
     ];
 
     const renderingTypes = new Set(
@@ -216,6 +250,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     const expected = new Set([
       ...previousRenderingTypes,
       'navigation_back',
+      'ci_failed',
       'build_progress',
       'build_no_progress',
       'build_stall',

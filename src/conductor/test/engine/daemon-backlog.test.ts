@@ -644,7 +644,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-fr24-'));
-    await execFile('git', ['init', '-q'], { cwd: dir });
+    await execFile('git', ['init', '-b', 'main', '-q'], { cwd: dir });
     await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await writeFile(join(dir, 'README.md'), 'init\n');
@@ -1702,10 +1702,13 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
     await mkdir(originDir);
 
     // Initialize bare origin repo
-    await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
+    // -b main: bare origin's HEAD must point at main even without a global
+    // init.defaultBranch (CI runners) — heal resolves the root's default
+    // branch from origin HEAD, and a master-pointing HEAD disengages it.
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
 
     // Initialize main repo with initial commit
-    await execFile('git', ['init', '-q'], { cwd: dir });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
     await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });

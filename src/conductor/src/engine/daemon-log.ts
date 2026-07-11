@@ -194,7 +194,7 @@ export function followDaemonLog(
       void poll();
     }, intervalMs);
     // Don't keep the event loop alive solely for the poll timer.
-    if (typeof timer.unref === 'function') timer.unref();
+    if (typeof timer.unref === 'function') timer.unref(); // portability-ok: guarded typeof check; only detaches this internal poll interval from process exit, no effect on daemon lifecycle or output
   }
 
   return { stop, poll };

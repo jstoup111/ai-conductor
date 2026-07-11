@@ -113,7 +113,7 @@ beforeEach(async () => {
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   planPath = join(dir, '.docs/plans/p.md');
   await writeFile(planPath, '### Task 1\n**Files:** `src/a.ts`\n');
-  await git('init', '-q');
+  await git('init', '-q', '-b', 'main');
   await writeFile(join(dir, 'README.md'), 'init\n');
   await git('add', 'README.md');
   await git('commit', '-q', '-m', 'init');

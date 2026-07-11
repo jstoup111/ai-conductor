@@ -131,7 +131,7 @@ export interface BuildProgressWatcherOptions {
  * teardown call — this is the leak-prevention contract Task 9 wires around
  * the conductor's build-step await.
  *
- * The poll timer is `.unref()`'d (ADR D-3) so a pending watcher can never
+ * The poll timer is unref-ed (ADR D-3) so a pending watcher can never
  * keep the process alive on its own.
  *
  * Emission is change-driven (adr-2026-07-10-intra-step-build-progress-events,

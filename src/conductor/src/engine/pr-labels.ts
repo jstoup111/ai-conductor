@@ -196,6 +196,8 @@ export interface PrMergeState {
   mergeable: string;
   hasFailingOrPendingChecks: boolean;
   labels: string[];
+  checksOutcome: 'failed' | 'pending' | 'green' | 'none';
+  statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }>;
 }
 
 /** Safe sentinel returned when the gh runner fails with a transient/unknown error. */
@@ -204,6 +206,7 @@ const ERROR_SENTINEL: PrMergeState = {
   mergeable: 'UNKNOWN',
   hasFailingOrPendingChecks: true,
   labels: [],
+  checksOutcome: 'none',
 };
 
 /**
@@ -216,6 +219,7 @@ const NOTFOUND_SENTINEL: PrMergeState = {
   mergeable: 'UNKNOWN',
   hasFailingOrPendingChecks: true,
   labels: [],
+  checksOutcome: 'none',
 };
 
 /** Patterns whose presence in an error message indicate a PR is genuinely gone. */
@@ -262,6 +266,60 @@ function isCheckFailingOrPending(c: {
   return false;
 }
 
+/**
+ * Classify the overall outcome of a check rollup into one of four states:
+ * - 'failed': rollup contains at least one failed check (FAILURE, ERROR, TIMED_OUT, etc.)
+ * - 'pending': rollup contains only passing or pending/running checks, but at least one is not complete
+ * - 'green': all checks in the rollup have completed successfully (SUCCESS conclusion)
+ * - 'none': rollup is empty, null, or undefined
+ *
+ * Failed wins over pending (if both are present, 'failed' is returned).
+ * Malformed entries (missing status/conclusion) are treated as pending (fail-safe).
+ */
+export function classifyChecksOutcome(
+  checks: Array<{ status?: string | null; conclusion?: string | null }> | null | undefined,
+): 'failed' | 'pending' | 'green' | 'none' {
+  // Empty or absent rollup → 'none'
+  if (!checks || checks.length === 0) {
+    return 'none';
+  }
+
+  let hasFailed = false;
+  let hasPending = false;
+
+  for (const check of checks) {
+    const conclusion = (check.conclusion ?? '').toUpperCase();
+
+    // Check if this entry has a failed conclusion
+    if (FAILING_OR_PENDING.has(conclusion)) {
+      hasFailed = true;
+      break; // Failed wins, no need to check further
+    }
+
+    // Check if conclusion is missing (still running) or status indicates pending
+    if (!check.conclusion) {
+      hasPending = true;
+    } else if (conclusion === 'SUCCESS') {
+      // Passing check, no action needed
+    } else {
+      // Malformed or unknown conclusion → treat as pending (fail-safe)
+      hasPending = true;
+    }
+  }
+
+  // Failed wins over pending
+  if (hasFailed) {
+    return 'failed';
+  }
+
+  if (hasPending) {
+    return 'pending';
+  }
+
+  // All checks are SUCCESS
+  return 'green';
+}
+
 interface GhPrViewJson {
   state?: string;
   mergeable?: string;
@@ -292,16 +350,17 @@ export async function prMergeState(
     const hasFailingOrPendingChecks =
       checks.length > 0 && checks.some(isCheckFailingOrPending);
     const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
-    return { state, mergeable, hasFailingOrPendingChecks, labels };
+    const checksOutcome = classifyChecksOutcome(checks);
+    return { state, mergeable, hasFailingOrPendingChecks, labels, checksOutcome, statusCheckRollup: checks };
   } catch (err) {
     log?.(`[pr-labels] prMergeState(${prUrl}) error: ${err}`);
     // Classify the error: a genuinely gone PR returns NOTFOUND so the sweep can
     // prune it (FR-13). A transient/unknown error returns UNKNOWN so the sweep
     // keeps the entry and retries next cycle (FR-15).
     if (isNotFoundError(err)) {
-      return { ...NOTFOUND_SENTINEL };
+      return { ...NOTFOUND_SENTINEL, checksOutcome: 'none' };
     }
-    return { ...ERROR_SENTINEL };
+    return { ...ERROR_SENTINEL, checksOutcome: 'none' };
   }
 }
 

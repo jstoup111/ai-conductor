@@ -63,7 +63,7 @@ async function git(...args: string[]): Promise<string> {
 async function initRepo(): Promise<void> {
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
-  await git('init', '-q');
+  await git('init', '-q', '-b', 'main');
   // A merge-base target: origin/main. autoheal.ts's listCommits resolves
   // `git merge-base origin/main HEAD`, so an initial commit stands in for the
   // "already-shipped base" and a remote ref points at it.

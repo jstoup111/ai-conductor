@@ -35,7 +35,7 @@ async function show(branch: string, rel: string): Promise<string | null> {
 
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), 'track-marker-'));
-  await git(['init', '-q']);
+  await git(['init', '-b', 'main', '-q']);
   await git(['config', 'user.email', 't@t.com']);
   await git(['config', 'user.name', 'T']);
   await writeFile(join(repo, 'README.md'), '# r\n');

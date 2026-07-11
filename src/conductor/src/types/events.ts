@@ -225,4 +225,14 @@ export type ConductorEvent =
       type: 'halt_cleared';
       step?: StepName;
       cause: 'operator' | 'rekick';
+    }
+  // ── Ship→CI feedback loop (Task 5): CI failure events ──
+  | {
+      /** CI checks failed on a shipped PR (halt-monitor grade). */
+      type: 'ci_failed';
+      prUrl: string;
+      slug: string;
+      checks: string[];
+      attempts: number;
+      phase: 'detected' | 'dispatched' | 'exhausted';
     };
