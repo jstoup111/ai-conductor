@@ -663,6 +663,39 @@ conduct-ts brain stop    # kill the session
   `src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
   same ledger.
 
+### Intake-Issue Shape: WHAT vs. HOW
+
+Intake issues follow a strict format that separates **WHAT** (the problem and desired state)
+from **HOW** (the solution approach). This division ensures that intake captures observable
+facts and outcomes, while implementation decisions remain the engineer's (DECIDE phase) responsibility.
+
+**The four sections:**
+
+1. **Observed** (required) — Evidence of the problem. What did you actually observe?
+   Factual description of the current state, without jumping to solutions.
+
+2. **Impact** (optional) — Who or what is hurting, and how often? Describes the scope
+   and frequency of the problem to help prioritize.
+
+3. **Desired outcome** (required) — Observable behavior that must hold afterward.
+   State what success looks like in measurable, observable terms, not in terms of implementation.
+
+4. **Hypotheses** (optional) — Your guesses about HOW to solve this. These are candidate
+   ideas—DECIDE treats them as one option among many and may discard them in favor of alternatives.
+   Hypotheses are the ONLY place for implementation suggestions in an intake issue.
+
+**WHAT vs. HOW principle:** Intake issues state the **WHAT** (problem definition and desired outcomes);
+the engineer during the DECIDE phase owns the **HOW** (implementation, design, technical approach).
+Never prescribe implementation details, technology choices, or internal mechanisms in the Observed,
+Impact, or Desired outcome sections — those belong in Hypotheses *only*, and even there they're
+advisory, not binding.
+
+**References:**
+- [Intake idea issue template](`.github/ISSUE_TEMPLATE/intake.yml`) — The template that enforces
+  this shape when filing issues on the web or via `gh issue create`.
+- [HARNESS.md Key Conventions](HARNESS.md#behavioral-rules) — "Intake states WHAT and outcomes — DECIDE owns HOW"
+  documents this rule in detail.
+
 ## Choosing a Conductor
 
 Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
