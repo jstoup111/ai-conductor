@@ -210,6 +210,9 @@ launcher regains control when the operator quits and relaunches you clean for th
       primary tree was never checked out or dirtied
 - [ ] Worktree creation strict-aborted (no primary-tree mutation) if it could not be made
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
+- [ ] Spec branch pushed to origin BEFORE `handoff` (`git push -u origin spec/<slug>` from the
+      worktree — `gh pr create` fails on an unpushed branch and handoff falls back to a
+      local-commit result that opens no PR)
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
 - [ ] On success the per-idea worktree was removed and `spec/<slug>` stayed reachable; on failure it
       was kept for inspection

@@ -365,6 +365,14 @@ After executing the chosen option:
 - [ ] Test suite ran fresh (not cached) — output read
 - [ ] If the fresh suite failed: flake-check performed; real failures recorded in `.pipeline/test-failures.md`; NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
+- [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
+      completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
+      `pr` without a recorded URL fails the gate
+- [ ] Reused halt-PR fully rehabilitated BEFORE completing: title/body rewritten from the
+      actual diff (no `needs-remediation:` prefix), `needs-remediation` label removed, draft
+      flag cleared (`gh pr ready`)
+- [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
+      `refs/remotes/origin/<branch>` contains HEAD)
 - [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog former-head) before `--force-with-lease` (never pulled)
 - [ ] On unproven staleness (foreign commits): stopped with no force of any kind
 - [ ] On lease failure: stopped with no plain `--force`, no pull, no `finish-choice`

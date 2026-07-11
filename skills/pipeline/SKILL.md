@@ -566,6 +566,10 @@ mid-task telemetry. Write the file while the data is still in context.
 - [ ] Autonomy level set (default: Standard)
 - [ ] Implementation plan loaded and validated
 - [ ] Each task follows TDD cycle (not skipping RED or DOMAIN phases)
+- [ ] Every subagent dispatch's line 1 is exactly `Task: <id>` (bare plan id) so the session
+      hooks stamp `.pipeline/current-task` and commits auto-carry the trailer
+- [ ] No `completed` status was ever hand-written — completion derives solely from
+      commit-anchored evidence (trailers / `Evidence:` forms / engine stamps)
 - [ ] Quality gates enforced after each task
 - [ ] Rework budget tracked (escalate at 3 cycles)
 - [ ] State tracked in `.pipeline/` with audit trail

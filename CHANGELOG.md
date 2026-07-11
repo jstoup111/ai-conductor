@@ -12,6 +12,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Skill checklist accuracy sweep: verification checklists across six skills
+  now enforce what the engine's gates actually check. `pipeline` gains line-1
+  dispatch-marker and never-hand-write-completed items; `tdd` corrects the
+  stale full-suite-per-commit item to the scoped-verify reality and adds
+  trailer verification; `finish` gains finish-record (choice + PR URL),
+  halt-PR rehabilitation (title/label/draft), and push-evidence items;
+  `manual-test` gains the `.pipeline/manual-test-results.md` recording
+  contract; `engineer` gains the push-spec-branch-before-handoff guard;
+  `writing-system-tests` gains a previously-missing Verify section covering
+  the executed-RED evidence contract.
+
+
+### Changed
+
 - `/architecture-review --as-built` now performs a **production reachability
   sweep**: every primitive the feature's diff introduces (exports, hook
   scripts, config keys, ADR-promised events/log lines) must cite one
