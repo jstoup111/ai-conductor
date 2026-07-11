@@ -12,6 +12,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Engine-invoked task start/done stamping at subagent dispatch (#477).** The
+  conductor now installs a Claude-session `PreToolUse`/`PostToolUse` hook pair
+  (`pre-dispatch.sh`, `post-dispatch.sh`) into every feature worktree's
+  `.pipeline/session-hooks/`, wired via that worktree's untracked
+  `.claude/settings.local.json` with matcher `Task|Agent`. The `PreToolUse`
+  hook parses **line 1 only** of the dispatched subagent prompt against the
+  exact grammar `Task: <id>` | `Task: none`: a valid id flips that task's row
+  to `in_progress` in `.pipeline/task-status.json` and writes
+  `.pipeline/current-task` (atomic temp-file + rename); an existing stamp for
+  a different id is removed (overlap guard); `Task: none` is a no-op
+  pass-through. Unparseable payloads are **fail-open** (exit 0, no state
+  change — abstain per #452); a parsed-but-invalid marker (unknown id,
+  missing/malformed line-1 marker, e.g. `Task:7`, `task: 7`, or two ids on
+  one line) is **fail-closed** (exit 2, blocks dispatch, stderr names the
+  problem). The `PostToolUse` hook removes a matching stamp on subagent
+  return and never writes `completed` — completion still flows through the
+  evidence gate (#456/#463). This replaces prompt-discipline stamping with
+  engine-mechanical stamping at the moment a subagent is actually dispatched,
+  independent of whether the dispatching agent remembers to run
+  `conduct-ts task start|done`. Hook scripts are embedded engine assets
+  (`src/conductor/src/engine/session-hook-assets.ts`, mirroring
+  `git-hook-assets.ts`), provisioned by `prepareWorktree`
+  (`worktree-prepare.ts`) alongside the existing git-hook wiring; the
+  provisioning merge preserves any unrelated `settings.local.json` keys and
+  backs up a corrupt file rather than discarding it. All dispatch templates
+  (`pipeline`, `code-review`, `simplify`, micro-retro, memory-checkpoint) now
+  carry the line-1 `Task: <id>` / `Task: none` contract explicitly. See
+  `README.md` and `src/conductor/README.md`.
 - Intra-step build progress and stall events on the conductor event bus
   (`conduct-ts` only): `build_progress` (change-driven heartbeat: resolved/total
   tasks, current task, commit count, no-evidence attempts), `build_no_progress`
@@ -30,6 +58,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `no-issue` items still lead, unchanged). Parser accepts the exact label
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
+
+### Migration
+
+**Session-hook wiring for #477 (hook wiring is a canonical breaking surface).**
+
+Feature worktrees provisioned by an older engine build have the old hook wiring
+(git-hook attribution only, no `PreToolUse`/`PostToolUse` session hooks). That
+stale wiring does not break anything — the worktree keeps building normally —
+but subagent dispatch inside it will not get engine-mechanical task start/done
+stamping until the worktree is re-provisioned by a build using this version.
+
+No manual consumer action is required beyond re-running `bin/install` (which
+refreshes the engine build the daemon dispatches from). To pick up the new
+session hooks immediately in any worktree already in flight, prune stale
+worktrees so the next provisioning pass re-installs the hooks fresh:
+
+```bash migration
+# Optional: force old worktrees to re-provision the new session hooks now,
+# instead of waiting for their natural lifecycle to recycle them.
+cd src/conductor && npm run build   # or: bin/install, to refresh the engine build
+git worktree list | awk '/\.worktrees\// {print $1}' | while read -r wt; do
+  git worktree remove --force "$wt" 2>/dev/null || true
+done
+git worktree prune
+# The daemon re-provisions worktrees on its next dispatch, installing the new
+# .pipeline/session-hooks/{pre,post}-dispatch.sh and wiring
+# .claude/settings.local.json automatically. No further action needed.
+```
 
 ### Changed
 

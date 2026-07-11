@@ -1668,6 +1668,91 @@ Assets include shebang (`#!/bin/bash`), error handling, and a version header for
 `engine/task-cli.ts` (task start/done logic), test coverage in `test/engine/git-hooks-attribution.test.ts`,
 `test/integration/git-hooks-attribution.test.ts`.
 
+### Session-hook task stamping at subagent dispatch (#477)
+
+Git-trailer attribution (above) proves a task's commits are load-bearing, but it only fires at
+commit time. This mechanism stamps task state a layer earlier — at the moment the daemon actually
+**dispatches** a subagent — so `in_progress`/in-flight state is engine-mechanical, not dependent on
+the dispatching agent remembering to invoke `conduct-ts task start|done` itself.
+
+#### Mechanism
+
+`prepareWorktree` (`worktree-prepare.ts`) provisions two additional steps beyond the git-hook wiring
+above, in this order: `writeGitHooksAndWire` → `writeSessionHooks` → `wireSessionHookSettings` →
+`runProjectSetup`.
+
+- **`writeSessionHooks`** writes two bash scripts, embedded as engine assets in
+  `engine/session-hook-assets.ts` (mirroring `git-hook-assets.ts`: bash + inline `node -e` only, zero
+  `dist/`/`conduct-ts` references — the #403 class of staleness bug), to
+  `.pipeline/session-hooks/pre-dispatch.sh` and `.pipeline/session-hooks/post-dispatch.sh` (mode
+  `0755`, overwritten on every provisioning pass so they stay in sync with the engine version).
+- **`wireSessionHookSettings`** merges hook wiring into the worktree's `.claude/settings.local.json`:
+  `hooks.PreToolUse` and `hooks.PostToolUse`, each with `matcher: "Task|Agent"` and a `command`
+  pointing at the absolute path of the corresponding script. The merge replaces only entries whose
+  command contains `session-hooks/` (so re-provisioning is idempotent and never duplicates entries)
+  and leaves every unrelated key untouched. A missing file is treated as `{}`; a file that exists but
+  fails to parse is renamed aside to `<path>.bak-<timestamp>` (never silently discarded) before a
+  fresh settings object is written. This step is fail-open end-to-end — any error is logged and
+  swallowed, never thrown, since hook-wiring failure must not block worktree provisioning.
+
+Both steps run unconditionally on every `prepareWorktree` call, alongside (not instead of) the
+existing git-hook wiring — the two mechanisms are complementary layers (dispatch-time stamp vs.
+commit-time trailer), not alternatives.
+
+#### Hook behavior
+
+**`pre-dispatch.sh` (`PreToolUse`, fires before a subagent runs):** reads the hook payload JSON from
+stdin (bounded read), parses **line 1 only** of `tool_input.prompt` against the exact grammar
+`Task: <id>` | `Task: none`.
+
+- `Task: none` → exit 0, pass-through, no state change.
+- `Task: <id>` where `<id>` matches a row in `.pipeline/task-status.json` → flips that row to
+  `in_progress` (temp-file + rename, atomic — replicates `runTaskStart`, `task-cli.ts`) and writes
+  `.pipeline/current-task`. If a *different* id was already stamped (overlap), that stamp is removed
+  as part of the same pass before the new one is written.
+- Unparseable payload (e.g. malformed JSON) → **fail-open**: exit 0, no state change. This mirrors
+  #452's abstain-on-unreadable-signal path.
+- Payload parses but line 1 is invalid — unknown id, no marker at all, wrong format (`Task:7`,
+  `task: 7`), or two ids on one line (`Task: 7 and Task: 8`) — → **fail-closed**: exit 2 (blocks the
+  dispatch), no state change, stderr names the problem (offending text plus, for unknown ids, the
+  valid id list). Only line 1 is ever inspected; a `Task:`-shaped token elsewhere in the prompt body
+  (e.g. commit-trailer authoring instructions) has no effect.
+
+**`post-dispatch.sh` (`PostToolUse`, fires after the subagent returns):** removes
+`.pipeline/current-task` iff its content still matches the id that was stamped for this dispatch.
+It never writes `completed` — task completion is derived solely from the evidence gate
+(`engine/artifacts.ts`, #456/#463), never from session-hook state.
+
+#### Contract with dispatch templates
+
+Every dispatch template's prompt (skills that use the `Agent`/`Task` tool to launch a subagent) MUST
+open with exactly one of `Task: <id>` or `Task: none` as its literal first line — this is what the
+hook parses. `skills/pipeline/SKILL.md`'s per-task DISPATCH step (implementation work) uses
+`Task: <id>`; non-implementation dispatch templates (evaluator/`code-review`, `/simplify`,
+micro-retro, memory-checkpoint) use `Task: none`. Getting this wrong is a fail-closed dispatch block,
+not a silent drift — the machinery, not prompt discipline, enforces the contract (see the harness's
+"Design Principles": deterministic enforcement over prompt discipline).
+
+#### `settings.local.json` ownership
+
+`.claude/settings.local.json` inside a feature worktree is **untracked and engine-managed**. The
+daemon writes/merges it on every `prepareWorktree` pass; it is never committed, never treated as
+project config, and a hand-edit made inside a build worktree will be overwritten (merged, not
+appended) by the next provisioning pass, since hook entries are matched and replaced by the
+`session-hooks/` path in their `command`.
+
+#### Fixtures and tests
+
+Hook behavior is exercised by invoking the emitted bash scripts directly with real captured
+headless dispatch payloads on stdin (`test/fixtures/session-hook-payloads/`, captured from a
+2026-07-10 spike — not synthetic shapes). Unit coverage lives in
+`test/engine/session-hook-assets.test.ts` and `test/engine/session-hook-behavior.test.ts`; chained
+integration coverage (provisioning → wiring → hook execution) follows the
+`git-hooks-attribution.test.ts` pattern in `test/integration/`.
+
+**Modules:** `engine/session-hook-assets.ts` (hook script bodies), `engine/worktree-prepare.ts`
+(`writeSessionHooks`, `wireSessionHookSettings`), test coverage as above.
+
 ### Task Status (engine-owned)
 
 The conductor engine is the **single authority** for `.pipeline/task-status.json`, which

@@ -219,6 +219,63 @@ automation is not disabled. The engine's hooks run first, and exit codes propaga
 For implementation details and hook asset definitions, see `src/conductor/src/engine/git-hook-assets.ts`
 and `src/conductor/README.md` → "Task attribution automation".
 
+**Session-hook stamping at subagent dispatch (#477)** — Git-trailer attribution proves a task's
+commits happened, but it fires at commit time, after the fact. A second, earlier layer stamps task
+state at the moment a subagent is actually **dispatched**, independent of whether the dispatching
+agent remembers to call `conduct-ts task start|done` itself.
+
+When the daemon provisions a feature worktree, it writes two scripts —
+`.pipeline/session-hooks/pre-dispatch.sh` and `.pipeline/session-hooks/post-dispatch.sh` — and wires
+them as Claude-session `PreToolUse`/`PostToolUse` hooks (matcher `Task|Agent`) in that worktree's
+`.claude/settings.local.json`. Every subagent dispatch (the `Task`/`Agent` tool call) passes through
+these hooks before and after the subagent runs.
+
+**The line-1 dispatch-marker contract:** every dispatch template's prompt MUST start with exactly one
+of these as its first line:
+
+```
+Task: <id>
+```
+```
+Task: none
+```
+
+`<id>` is the bare task id from the plan header (e.g. `7`), matching a row in
+`.pipeline/task-status.json`. Templates that dispatch implementation work (the `pipeline` skill's
+per-task DISPATCH step) use `Task: <id>`; templates that dispatch non-implementation work
+(evaluator/`code-review`, `/simplify`, micro-retro, memory-checkpoint) use `Task: none`. Only line 1
+is parsed — a later line, or an unrelated `Task:`-looking token in the prompt body (e.g. commit
+trailer instructions), is invisible to the hook.
+
+**What the hooks do:**
+- `pre-dispatch.sh` (`PreToolUse`) parses line 1 of the dispatched prompt. `Task: <id>` flips that
+  task's row to `in_progress` in `.pipeline/task-status.json` and writes `.pipeline/current-task`
+  (atomic temp-file + rename); an existing stamp for a *different* id is removed first (overlap
+  guard). `Task: none` is a pass-through no-op.
+- `post-dispatch.sh` (`PostToolUse`) removes the `.pipeline/current-task` stamp if it still matches,
+  once the subagent returns. It never writes `completed` — task completion is still derived from the
+  evidence gate (#456/#463), not from the hooks.
+
+**Fail-open vs. fail-closed:** the two failure regimes are deliberately different.
+- **Fail-open (exit 0, no state change):** the hook cannot parse the payload at all (e.g. malformed
+  JSON on stdin). This mirrors #452's abstain path — an unreadable signal must never block dispatch.
+- **Fail-closed (exit 2, blocks dispatch):** the payload parses but line 1 violates the grammar —
+  unknown task id, missing marker, wrong format (`Task:7`, `task: 7`), or two ids on one line. stderr
+  names the problem so it's actionable. This is a deliberate machinery-enforced guard against
+  drift in dispatch-template authoring (see this repo's "Design Principles": deterministic
+  enforcement over prompt discipline).
+
+**`settings.local.json` ownership:** `.claude/settings.local.json` inside a feature worktree is
+**untracked and engine-managed** — the daemon writes/merges it on every worktree provisioning pass,
+preserving any unrelated keys and backing up (not discarding) a corrupt file before rebuilding it.
+It is never committed and never read as project config; do not hand-edit it inside a build worktree,
+since the next provisioning pass will merge over the hook entries again (identified by the
+`session-hooks/` path in the wired command).
+
+For implementation details, see `src/conductor/src/engine/session-hook-assets.ts` (hook script
+bodies), `src/conductor/src/engine/worktree-prepare.ts` (provisioning/wiring), and
+`src/conductor/README.md` → "Session-hook task stamping at subagent dispatch".
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
