@@ -7,6 +7,8 @@ import { promisify } from 'node:util';
 
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -421,6 +423,84 @@ describe('git-hook-assets — embedding hook scripts', () => {
       const res = await commitFile('unknown.txt', 'unknown', 'feat: bad id\n\nTask: 999');
       expect(res.code).not.toBe(0);
       expect(res.stderr).toMatch(/not found in task-status\.json/);
+    });
+  });
+
+  describe('Engine commit spawn sites set CONDUCT_ENGINE_COMMIT=1 (#505 Task 8)', () => {
+    // Real hook-wired repos, no mocking: if a spawn site failed to set the
+    // marker, these trailer-less commits would be REJECTED by the commit-msg
+    // hook (Task 7) while the build-step-active marker is present. Landing
+    // cleanly is the proof the env var was actually threaded through.
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-task8-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('rebase.ts makeGitRunner: a trailer-less `git commit` lands under an active build-step marker', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'engine-a.txt'), 'a', 'utf-8');
+      const run = makeGitRunner(repoDir);
+      const add = await run(['add', 'engine-a.txt']);
+      expect(add.exitCode).toBe(0);
+
+      const commit = await run(['commit', '-m', 'chore: engine bookkeeping via makeGitRunner']);
+      expect(commit.exitCode).toBe(0);
+
+      const log = await git('log', '-1', '--format=%s');
+      expect(log.stdout).toBe('chore: engine bookkeeping via makeGitRunner');
+    });
+
+    it('rebase.ts makeGitRunner: does NOT set the marker for non-commit git invocations', async () => {
+      // Sanity check the marker is scoped to `commit` — a plain `status` call
+      // must not somehow bypass anything unrelated (regression guard on the
+      // args[0] === 'commit' gate in makeGitRunner).
+      const run = makeGitRunner(repoDir);
+      const status = await run(['status', '--porcelain']);
+      expect(status.exitCode).toBe(0);
+    });
+
+    it('shipped-record-cli.ts dispatchShippedRecord: commits the shipped record trailer-less under an active build-step marker', async () => {
+      await writeMarker();
+      await mkdir(join(repoDir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(repoDir, '.docs', 'stories'), { recursive: true });
+      await writeFile(join(repoDir, '.docs', 'plans', 'demo-slug.md'), '# Implementation Plan: demo\n');
+      await writeFile(join(repoDir, '.docs', 'stories', 'demo-slug.md'), '# Stories: demo\n');
+
+      const exitCode = await dispatchShippedRecord(
+        { kind: 'write', slug: 'demo-slug', pr: 'local' },
+        repoDir,
+      );
+      expect(exitCode).toBe(0);
+
+      const log = await git('log', '-1', '--format=%s');
+      expect(log.stdout).toBe('shipped record: demo-slug');
     });
   });
 });

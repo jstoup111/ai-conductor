@@ -40,6 +40,7 @@ import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
 import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
+import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 
@@ -299,7 +300,7 @@ export async function landSpec(
   await execFile(
     'git',
     ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
-    { cwd: worktreePath },
+    { cwd: worktreePath, env: withEngineCommitEnv() },
   );
 
   return { slug, branch, repoPath: worktreePath };
