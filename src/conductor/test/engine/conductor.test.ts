@@ -3090,6 +3090,89 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('explore');
   });
 
+  it('resume in front half is not dragged forward by pending loop gates (Story 4, front-half guard)', async () => {
+    // Story 4 negative path (a): front-half guard
+    // Resume at a front-half step (architecture_review, pending) with all gates pending and no verdicts.
+    // The clamp must NOT apply: the start step should remain architecture_review, not move forward to
+    // any later gate (which would contradict the backward-only rule).
+
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'architecture_review') {
+        seed[s.name] = 'pending';
+        break;
+      }
+      seed[s.name] = 'done';
+    }
+    seed.last_step = 'architecture_review';
+    await writeState(statePath, seed as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // The clamp is backward-only; pending gates ahead should not drag the entry forward.
+    expect(stepsRun[0]).toBe('architecture_review');
+  });
+
+  it('clamp does not attract back to tier-skipped steps without verdicts (Story 4, skipped-tier no-attract)', async () => {
+    // Story 4 negative path (b): skipped-tier no-attract
+    // On tier S, retro and architecture_review_as_built are tier-skipped. With no verdict files,
+    // they read as satisfied (skipped → satisfied via isSkipped logic). The clamp should not
+    // pull back to them.
+
+    const seed: Record<string, unknown> = { complexity_tier: 'S' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'prd_audit') {
+        seed[s.name] = 'pending';
+        break;
+      }
+      if (s.name !== 'rebase') {
+        seed[s.name] = 'done';
+      }
+    }
+    seed.rebase = 'done';
+    seed.last_step = 'prd_audit';
+    await writeState(statePath, seed as ConductState);
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // First step is prd_audit (first unsatisfied gate).
+    // The clamp should not be pulled back by tier-skipped steps (retro, architecture_review_as_built)
+    // because they read as satisfied (skipped status via isSkipped logic).
+    expect(stepsRun[0]).toBe('prd_audit');
+  });
+
 
 
   it('emits step_failed event with correct payload on failure', async () => {

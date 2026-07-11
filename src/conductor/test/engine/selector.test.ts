@@ -327,4 +327,49 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     const planIdx = ALL_STEPS.findIndex((s) => s.name === 'plan');
     expect(idx).toBe(planIdx);
   });
+
+  it('when regionStart is after a pending step, scans from regionStart only (front-half guard parity)', () => {
+    // Story 4 negative path (a) — selector parity for front-half guard
+    // If resuming at a front-half step before regionStart, earliestUnsatisfiedGateIndex scans
+    // from regionStart onwards. Any unsatisfied gates found will be at or after regionStart.
+
+    const state: ConductState = {
+      ...frontDone(),
+      architecture_review: 'pending',
+      stories: 'pending',
+      conflict_check: 'pending',
+      plan: 'pending',
+      build: 'pending',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {};
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+
+    // The scan starts from regionStart='stories', so it returns 'stories' index, NOT 'architecture_review'.
+    const storiesIdx = ALL_STEPS.findIndex((s) => s.name === 'stories');
+    const archReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'architecture_review');
+    expect(idx).toBe(storiesIdx);
+    expect(idx).toBeGreaterThan(archReviewIdx);
+  });
+
+  it('tier-skipped steps without verdicts are skipped (skipped-tier no-attract parity)', () => {
+    // Story 4 negative path (b) — selector parity for skipped-tier no-attract
+    // On tier S, retro is tier-skipped and pending. With no verdict, it reads as satisfied
+    // (skipped → satisfied). The selector should not include it in unsatisfied scan.
+
+    const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      build_review: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
+      rebase: VSAT,
+      finish: VSAT,
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+
+    // All gates from regionStart onwards are satisfied or skipped (retro is tier-skipped).
+    // Should return -1 (no unsatisfied gates).
+    expect(idx).toBe(-1);
+  });
 });
