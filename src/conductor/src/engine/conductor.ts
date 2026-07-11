@@ -94,6 +94,9 @@ import {
   countResolvedTasks,
   haltMarkerExists,
   clearHaltMarker,
+  readHaltMarkerContent,
+  writeStallQuestionEvidence,
+  writeStallHalt,
 } from './task-progress.js';
 import {
   makeGitRunner,
@@ -1491,6 +1494,10 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+        // Task 8: Capture stall question for error handling in degraded remediation exits.
+        // Set when a stall is detected, used to build HALT with the question when
+        // remediation dispatch fails or returns a degraded outcome.
+        let stallQuestion: string | null = null;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -1914,12 +1921,188 @@ export class Conductor {
                     resolvedBefore: resolvedTasksBefore,
                     resolvedAfter: resolvedTasksAfter,
                   });
+
+                  // Task 3: capture halt marker content before clearing
+                  let effectiveQuestion: string | null = null;
+                  if (stalled === 'halt_marker') {
+                    const question = await readHaltMarkerContent(this.projectRoot);
+                    effectiveQuestion = await writeStallQuestionEvidence(
+                      this.projectRoot,
+                      question,
+                    );
+                    // Task 8: save the question for use in degraded remediation error handling
+                    stallQuestion = question;
+                  }
+
                   await clearHaltMarker(this.projectRoot);
                   await this.events.emit({
                     type: 'halt_cleared',
                     step: step.name,
                     cause: 'operator',
                   });
+
+                  // Task 4-8: Daemon mode remediation dispatch for build stall
+                  // In daemon mode with budget, dispatch /remediate to plan how to
+                  // close the stall, then route deterministically from the plan.
+                  // Interactive mode (this.mode !== 'auto') skips dispatch — the REPL
+                  // is shown instead.
+                  if (this.daemon && this.mode === 'auto' && effectiveQuestion) {
+                    // Task 8: Budget exhausted — fail-safe HALT with question
+                    if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                      const haltContent =
+                        effectiveQuestion +
+                        '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                  }
+
+                  if (
+                    this.daemon &&
+                    this.mode === 'auto' &&
+                    remediationRounds < MAX_KICKBACKS_PER_GATE &&
+                    effectiveQuestion
+                  ) {
+                    remediationRounds++;
+                    let outcome;
+                    try {
+                      outcome = await this.planRemediation(
+                        state,
+                        steps,
+                        `Remediate build stall: ${effectiveQuestion}`,
+                        { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+                      );
+                    } catch (err) {
+                      // Task 8: Degraded remediation exit (throw). Write HALT with question.
+                      // The /remediate dispatch itself crashed; log it and use the question
+                      // to halt the run so a human can investigate.
+                      console.error('build-stall remediation dispatch threw:', err);
+                      const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+
+                    if (outcome.kind === 'route') {
+                      // Task 5: answerable build stall — resume within the retry loop
+                      // instead of rewinding to the outer step loop. When remediation
+                      // returns target='build', extract the answer and continue the
+                      // build retry loop without burning a retry attempt (attempt--).
+                      if (outcome.target === 'build') {
+                        await this.events.emit({
+                          type: 'kickback',
+                          from: step.name,
+                          to: outcome.target,
+                          evidence: outcome.evidence,
+                          count: remediationRounds,
+                        });
+                        retryHint = outcome.hint;
+                        attempt--;
+                        continue;
+                      }
+
+                      // Task 7: Fail-closed route validation. A build-stall remediation
+                      // outcome must route back to 'build' (answering the stall question).
+                      // If remediation misroutes to a non-build step, halt with the
+                      // question to signal the human that remediation is broken.
+                      const detail =
+                        `misrouted to '${outcome.target}': build stall answers must be ` +
+                        `disposition='build', not routed elsewhere.`;
+                      const haltContent = effectiveQuestion + '\n\n' + detail;
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome.kind === 'halt') {
+                      // Task 6: Write HALT with question first, then disposition detail.
+                      // This preserves the human question context that the /remediate skill
+                      // determined requires human DECIDE, avoiding the generic
+                      // "retries exhausted" message and ensuring the question is the
+                      // first line the human sees.
+                      const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome.kind === 'none') {
+                      // Task 8: Degraded remediation exit (malformed/stale/dropped).
+                      // No valid dispositions from /remediate; halt with the question
+                      // so human can investigate why remediation failed.
+                      const haltContent =
+                        effectiveQuestion +
+                        '\n\nremediation produced no valid dispositions ' +
+                        '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                  }
 
                   // Hand off: open an interactive Claude session so the user
                   // can break the stall. After the REPL exits, re-check
@@ -2147,6 +2330,96 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
+            // Task 8: Stall remediation with error handling for degraded exits.
+            // When a build stall is detected (stallQuestion is set), attempt to dispatch
+            // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
+            // and check outcome.kind for malformed JSON / stale file / dropped dispositions.
+            // Budget is checked before dispatch to implement fail-safe immediate HALT for
+            // exhausted budget (Task 8 E). Any error or degraded outcome writes HALT with
+            // the question (TR-5), never a generic retries-exhausted message.
+            if (this.daemon && step.name === 'build' && stallQuestion !== null) {
+              // Budget check: if we've already exhausted the remediation budget on prior
+              // stalls in this run, skip dispatch and go straight to fail-safe HALT.
+              if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                const detail = `Remediation budget exhausted (${remediationRounds} stalls attempted, cap ${MAX_KICKBACKS_PER_GATE})`;
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+
+              // Attempt remediation dispatch with error handling
+              try {
+                const outcome = await this.planRemediation(
+                  state,
+                  steps,
+                  'Build stall detected. Agent needs input to proceed. A question is at ' +
+                    '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
+                    'skill and write .pipeline/remediation.json.',
+                  { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+                );
+
+                if (outcome.kind === 'route') {
+                  remediationRounds++;
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'build',
+                    to: outcome.target,
+                    evidence: outcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(outcome.target, outcome.hint);
+
+                  // Task 7: Merged-PR guard on stall remediation kickback (TS-1).
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  const nav = navigateBack(state, outcome.target, steps);
+                  state = nav.state;
+                  (state as Record<string, unknown>).build = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  continue;
+                }
+
+                if (outcome.kind === 'halt') {
+                  const reason = stallQuestion + '\n\n' + outcome.detail;
+                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail);
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                // outcome.kind === 'none' (no valid dispositions after validation,
+                // malformed JSON, or stale file) — fall through to fail-safe HALT below.
+                const detail = 'Remediation plan missing or invalid (no routable dispositions found)';
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              } catch (err) {
+                // Remediation dispatch threw an error — fail-safe HALT with the question
+                const detail = `Remediation dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
             }

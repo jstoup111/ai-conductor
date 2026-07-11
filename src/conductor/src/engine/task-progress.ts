@@ -1,4 +1,4 @@
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, unlink, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -116,6 +116,22 @@ export async function haltMarkerExists(projectRoot: string): Promise<boolean> {
 }
 
 /**
+ * Read the content of the halt marker file exactly as written. Returns null
+ * if the file doesn't exist (ENOENT or any other error). Returns the raw
+ * string content (possibly empty) if the file exists.
+ *
+ * Used by skills to retrieve the reason or context for a stall from the
+ * halt marker body.
+ */
+export async function readHaltMarkerContent(projectRoot: string): Promise<string | null> {
+  try {
+    return await readFile(haltMarkerPath(projectRoot), 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Clear the halt marker once the conductor has acknowledged it (handed off
  * to interactive mode). Silent on missing file — idempotent.
  */
@@ -123,4 +139,67 @@ export async function clearHaltMarker(projectRoot: string): Promise<void> {
   await unlink(haltMarkerPath(projectRoot)).catch(() => {
     // Marker absent — nothing to clear.
   });
+}
+
+/**
+ * Write the build stall question (the reason for the halt) to an evidence file
+ * at `.pipeline/build-stall-question.md`. If content is null, empty, or
+ * whitespace-only, writes a placeholder line instead. Creates the `.pipeline`
+ * directory if needed (mkdir -p semantics).
+ *
+ * Returns the exact string written (either the content or the placeholder),
+ * for reuse by callers (e.g. to include in the HALT marker body).
+ *
+ * Used by the build-stall logic to persist the question asked during halt
+ * for debugging and audit purposes.
+ */
+export async function writeStallQuestionEvidence(
+  projectRoot: string,
+  content: string | null,
+): Promise<string> {
+  const placeholder = '(agent wrote no reason into halt-user-input-required)';
+
+  // Determine the effective text: use placeholder if content is null, empty, or whitespace-only
+  const effectiveText =
+    content === null || (typeof content === 'string' && content.trim() === '')
+      ? placeholder
+      : content;
+
+  // Create .pipeline directory if needed
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  // Write to .pipeline/build-stall-question.md
+  const evidencePath = join(pipelineDir, 'build-stall-question.md');
+  await writeFile(evidencePath, effectiveText, 'utf-8');
+
+  return effectiveText;
+}
+
+/**
+ * Write a fail-safe HALT marker for a degraded remediation exit. Combines
+ * the stall question with a detail about what went wrong (threw, malformed
+ * JSON, stale file, dispositions dropped, or budget exhausted). Always
+ * writes to `.pipeline/HALT` with the question on the first non-empty line,
+ * then the detail. Used when planRemediation fails or returns a degraded outcome.
+ *
+ * Creates the `.pipeline` directory if needed (mkdir -p semantics).
+ */
+export async function writeStallHalt(
+  projectRoot: string,
+  question: string | null,
+  detail: string,
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const effectiveQuestion =
+    question === null || (typeof question === 'string' && question.trim() === '')
+      ? '(agent wrote no reason into halt-user-input-required)'
+      : question;
+
+  const haltContent = [effectiveQuestion, detail].filter(Boolean).join('\n\n');
+
+  const haltPath = join(pipelineDir, 'HALT');
+  await writeFile(haltPath, haltContent + '\n', 'utf-8');
 }

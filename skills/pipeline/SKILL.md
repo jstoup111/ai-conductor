@@ -315,7 +315,7 @@ echo "Need user decision: <one-line summary of the blocker>" > \
   .pipeline/halt-user-input-required
 ```
 
-The conductor's build-retry loop checks for this file after each attempt. When
+**Interactive mode (unchanged):** The conductor's build-retry loop checks for this file after each attempt. When
 present, it:
 
 1. Emits a `build_stall` event (reason: `halt_marker`).
@@ -325,6 +325,35 @@ present, it:
 4. Re-checks the completion predicate once the REPL exits.
 5. Either succeeds (user + Claude resolved enough tasks) or falls into the
    normal recovery menu.
+
+This REPL escalation path is unaffected by daemon-mode routing below — it applies only
+when the conductor is attached to an interactive terminal.
+
+**Daemon mode (ADR-2026-07-10):** The daemon's build-retry loop has no interactive REPL to
+fall back to, so it routes the halt marker through a single bounded `/remediate` pass before
+escalating to a human:
+
+1. **Capture first.** The marker content (the question) is read and written verbatim to
+   `.pipeline/build-stall-question.md` *before* the halt marker itself is cleared
+   (`clearHaltMarker`) — the question is durably captured on disk before the ack, so it can
+   never be lost between detection and dispatch.
+2. Dispatches the `/remediate` skill once with `hintSource: { source: 'build_stall',
+   evidenceFile: '.pipeline/build-stall-question.md' }`. This is a single bounded attempt —
+   daemon mode does not loop `/remediate` against the same stall.
+3. **If answerable** — the planner returns a `build` disposition with the answer in `rationale`
+   and `tasks: []`. The conductor resumes the retry loop (no retry burned) with the answer
+   as context, and the build proceeds with the agent's question resolved.
+4. **If unanswerable** — the planner returns a `halt` disposition (category: `architectural-clarity`,
+   `product-scope`, or `unanswerable`). The conductor writes `.pipeline/HALT` with the original
+   question preserved verbatim and escalates for human triage.
+5. **Fail-safe** — if remediation fails, the budget is exhausted, or `/remediate` returns
+   `none`, the conductor writes `.pipeline/HALT` **carrying the question verbatim** and stops.
+   The operator never loses sight of what the agent needed.
+
+**Budget:** Stall remediations share the existing `MAX_KICKBACKS_PER_GATE` remediation budget
+(not a separate counter). Multiple stalls in one run consume the shared budget; once exhausted,
+subsequent stalls go straight to HALT without remediation dispatch. This prevents ask→answer→ask
+loops while keeping the fallback path safe.
 
 **Also triggered implicitly** when two consecutive build attempts produce zero
 new task completions (measured via `.pipeline/task-status.json` resolved count).

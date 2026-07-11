@@ -1288,6 +1288,14 @@ no action needed — the token requirement is skipped.
   gate on try 1 of every ship. Invoked by `engine/step-runners.ts` in
   daemon auto mode, and also runnable manually. See `src/conductor/README.md`
   for the full flag reference.
+- **Daemon routes halt-user-input-required through /remediate before halting (#459).** When the
+  build step stalls with `.pipeline/halt-user-input-required` (a question the agent could not
+  resolve), the daemon dispatches the `/remediate` planner to determine if the question is
+  answerable from committed artifacts. Answerable questions are answered in-loop with no retry
+  burned; unanswerable questions halt with the original question preserved verbatim in
+  `.pipeline/HALT`, so operators never lose sight of what the agent needed. Stall remediations
+  share the existing `MAX_KICKBACKS_PER_GATE` budget (no new counter). See ADR-2026-07-10 and
+  the updated `/remediate` and `/pipeline` SKILL.md for full details.
 
 ## Migration
 

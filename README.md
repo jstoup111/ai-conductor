@@ -323,6 +323,29 @@ already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
 
+**Daemon stall remediation (ADR-2026-07-10).** When the build step writes
+`.pipeline/halt-user-input-required` (a question the agent couldn't autonomously
+resolve), the daemon does not immediately halt. Instead:
+
+- **Capture question** — the conductor reads the marker content before clearing it,
+  persisting it to `.pipeline/build-stall-question.md` as evidence.
+- **Dispatch `/remediate`** — the planner reasons over the question plus committed
+  artifacts (plan, stories, ADRs, task-status) to determine if it's answerable.
+- **Answerable** — the planner returns the answer in `.pipeline/remediation.json`
+  with `tasks: []`. The conductor resumes the build retry loop with the answer as
+  context (no retry burned), and the build proceeds.
+- **Unanswerable** — the planner routes to a human (architectural-clarity,
+  product-scope, or unanswerable). The conductor writes `.pipeline/HALT` with the
+  original question preserved verbatim.
+- **Fail-safe** — if remediation fails (dispatch throws), returns no valid disposition, or
+  misroutes to a non-`build` target, `.pipeline/HALT` still carries the question. The operator
+  never loses sight of what the agent needed.
+- **Budget** — stall remediations share the existing `remediationRounds` counter (capped by
+  `MAX_KICKBACKS_PER_GATE`; no new counter was added). Blocking `prd_audit` gaps draw from the
+  same shared pool, so a run with both a build stall and a prd-audit gap can exhaust the budget
+  faster than either alone. See `src/conductor/README.md` → "Daemon build-stall remediation" for
+  the implementation (`readHaltMarkerContent`, `writeStallQuestionEvidence`, `writeStallHalt`).
+
 A blocking SHIP gate tries to self-heal before it halts: the conductor dispatches the
 `/remediate` planner over the gate's gap artifact — a blocking prd-audit
 (`.pipeline/prd-audit.md`), a failed finish verification (`.pipeline/test-failures.md`), or a
