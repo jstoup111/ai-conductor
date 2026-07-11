@@ -335,6 +335,7 @@ export interface RunAttributionLaneOptions {
   isZeroWorkProduct: boolean;
   git: (args: string[]) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   dispatchVerifier: (inputs: { residueIds: string[] }) => Promise<unknown>;
+  bookkeepingCommits?: Set<string>;
 }
 
 /**
@@ -360,6 +361,7 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     isZeroWorkProduct,
     git,
     dispatchVerifier,
+    bookkeepingCommits,
   } = opts;
 
   // If cutover is not armed, skip the lane entirely — gate-miss handling
@@ -452,28 +454,25 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
         // Validate citations against the task's declared paths
         if (Array.isArray(citations) && citations.length > 0 && testEvidence) {
           const taskPaths = planTaskPaths.get(taskId) ?? new Set<string>();
+          const normalizedCitations = citations.map((c: unknown) => {
+            const cObj = c as Record<string, unknown>;
+            return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };
+          });
           const validationResult = await validateCitations(
             git,
             { taskId, paths: taskPaths },
             {
               taskId,
               verdict: 'satisfied',
-              citations: citations.map((c: unknown) => {
-                const cObj = c as Record<string, unknown>;
-                return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };
-              }),
-              testEvidence: {
-                command: String(testEvidence.command ?? ''),
-                exit: Number(testEvidence.exit ?? -1),
-                summary: testEvidence.summary ? String(testEvidence.summary) : undefined,
-              },
+              citations: normalizedCitations,
             },
             headSha,
+            bookkeepingCommits,
           );
 
           if (validationResult.valid) {
             // Collect validated task with its cited SHA and full metadata
-            const citedShas = citations.map((c: unknown) => String((c as Record<string, unknown>).sha));
+            const citedShas = normalizedCitations.map((c) => c.sha);
             validated.push({
               taskId,
               sha: citedShas[0], // Primary SHA is the first citation
@@ -493,8 +492,8 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
           // No valid citations or test evidence: add to refused list
           refused.push(taskId);
         }
-      } else if (verdict !== 'satisfied') {
-        // Unsatisfied or no-verdict: add to refused list
+      } else {
+        // Unsatisfied, no-verdict, or undefined: add to refused list
         refused.push(taskId);
       }
     }
