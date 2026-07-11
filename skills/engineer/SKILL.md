@@ -79,6 +79,10 @@ that came from the CLI arg or chat — omit `--source-ref` in steps 4–5 for th
 - Carry it into DECIDE and `/explore` **labeled explicitly as a candidate, not the chosen approach**.
 - Frame the idea for routing and discovery by its **problem statement + desired outcomes**, not the sketch.
 
+The target shape (Observed / Impact / Desired outcome / Hypotheses) and its quality bar are defined
+by the `/intake` skill. This step *consumes* ideas already in the queue; when instead **filing** an
+intake issue on the operator's behalf (`gh issue create`), author it with `/intake`.
+
 **Pure-sketch case (no stated problem or outcomes).** If the idea is a design sketch with no stated
 problem or outcomes:
 

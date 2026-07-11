@@ -407,7 +407,9 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   DECIDE treats hypotheses as one candidate among alternatives, never as requirements.
   **Covers agents filing intake issues via `gh issue create`** on the operator's behalf:
   issue templates auto-apply only on web/mobile, but agents must follow the same
-  Observed / Impact / Desired outcome / Hypotheses shape.
+  Observed / Impact / Desired outcome / Hypotheses shape — use the `/intake` skill,
+  which drives evidence-first authoring, the observable-outcome litmus, and the
+  pre-file gate for exactly this.
 - Plans assume zero-context executor — all detail included
 - Negative path stories are mandatory, not optional
 - No implementation plan without clean conflict-check

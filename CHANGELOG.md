@@ -26,6 +26,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   issue; exact `priority: <band>` label vocabulary with the REST fallback for
   label edits). Registered in the HARNESS.md model-selection table
   (`inherits caller` — authoring runs in whatever session observed the problem).
+  Cross-linked from the intake-convention rule in HARNESS.md (agents filing via
+  `gh issue create` are pointed at `/intake`) and from `/engineer`'s capture
+  step (queue consumption vs. filing on the operator's behalf).
 
 - **Engine-invoked task start/done stamping at subagent dispatch (#477).** The
   conductor now installs a Claude-session `PreToolUse`/`PostToolUse` hook pair
