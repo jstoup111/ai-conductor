@@ -138,11 +138,29 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
+    // Judgement gate at the build → manual_test seam: an objective, non-human
+    // reviewer verdict on the just-built code before it reaches manual test.
+    // Gating loop member so a non-passing verdict can block the tail; sits
+    // strictly between build and manual_test.
+    name: 'build_review',
+    label: 'Build Review',
+    phase: 'BUILD',
+    enforcement: 'gating',
+    prerequisites: ['build'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    loopGate: true,
+  },
+  {
     name: 'manual_test',
     label: 'Manual Test',
     phase: 'SHIP',
-    enforcement: 'advisory',
-    prerequisites: ['build'],
+    // Gating (#367): a failing manual test must be able to block the tail.
+    // While advisory, auto mode silently skipped it after retries exhausted —
+    // one of the two false-ship paths behind incident PR #364. Matches the
+    // enforcement the manual-test SKILL.md frontmatter has always declared.
+    enforcement: 'gating',
+    prerequisites: ['build_review'],
     skippableForTiers: [],
     isCheckpoint: true,
     skillName: 'manual-test',

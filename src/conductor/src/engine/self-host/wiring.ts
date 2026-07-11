@@ -12,6 +12,8 @@
 import {
   relinkSkillsForSelfBuild,
   resolveHarnessRoot,
+  resolveInstalledHarnessRoot,
+  type InstalledRootResolution,
   type RelinkPreflightOptions,
 } from '../install-freshness.js';
 import {
@@ -31,6 +33,12 @@ import type { GateVerdict } from './gate-halt.js';
 export interface SelfHostGuardrails {
   /** Locate the installed harness root (dir with bin/install), or null. */
   resolveHarnessRoot(): Promise<string | null>;
+  /**
+   * Resolve the INSTALLED main-checkout root — never a worktree (#363). Used
+   * only where the root authorizes operator-global writes (sandbox
+   * harnessRoot); detection keeps using `resolveHarnessRoot` above.
+   */
+  resolveInstalledHarnessRoot(): Promise<InstalledRootResolution>;
   /** Relink harness skills before a self-build dispatch (TR-4). */
   relink(opts?: RelinkPreflightOptions): Promise<void>;
   /** Provision the throwaway CLAUDE_CONFIG_DIR sandbox (TR-5/6). */
@@ -44,6 +52,7 @@ export interface SelfHostGuardrails {
 /** The production bundle: every member forwards to its real primitive. */
 export const defaultSelfHostGuardrails: SelfHostGuardrails = {
   resolveHarnessRoot,
+  resolveInstalledHarnessRoot,
   relink: relinkSkillsForSelfBuild,
   provisionSandbox: provisionSandboxBuildEnv,
   versionGate: runVersionApprovalGate,

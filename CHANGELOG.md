@@ -10,8 +10,743 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- Armed `attribution_enforcement_cutover` (2026-07-11T08:30Z) in the committed
+  project config: daemon builds now enforce inline-work attribution
+  fail-closed (#505 machinery live, not just loaded). Canary evidence: with
+  hooks stamping but enforcement unarmed, 4 of 5 canary commits auto-carried
+  trailers and the one inline refactor escaped — the class this arming ends.
+
+
+### Fixed
+
+- `session-hooks-provisioning` integration test parses hook command strings
+  as `path [argv…]` instead of stat-ing the whole string — the mutation
+  gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
+  assumption and failed CI on every run since the #509 merge.
+
+
+### Changed
+
+- Skill checklist accuracy sweep: verification checklists across six skills
+  now enforce what the engine's gates actually check. `pipeline` gains line-1
+  dispatch-marker and never-hand-write-completed items; `tdd` corrects the
+  stale full-suite-per-commit item to the scoped-verify reality and adds
+  trailer verification; `finish` gains finish-record (choice + PR URL),
+  halt-PR rehabilitation (title/label/draft), and push-evidence items;
+  `manual-test` gains the `.pipeline/manual-test-results.md` recording
+  contract; `engineer` gains the push-spec-branch-before-handoff guard;
+  `writing-system-tests` gains a previously-missing Verify section covering
+  the executed-RED evidence contract.
+
+
+### Changed
+
+- `/architecture-review --as-built` now performs a **production reachability
+  sweep**: every primitive the feature's diff introduces (exports, hook
+  scripts, config keys, ADR-promised events/log lines) must cite one
+  production caller (`file:line`) from a real entry point. No caller ⇒
+  BLOCKED as an "unreachable rung" (green-but-unwired guard, #462 stopgap);
+  the skill text itself is deterministic/self-contained (no issue-number
+  references) and the verification checklist enforces the sweep per run;
+  statically-reachable-but-unobserved behavior is recorded as `UNEXERCISED`
+  with its observation signature for the close-on-observation flow (#492).
+  Skill-level enforcement now; engine machinery remains #462's follow-up.
+
+
 ### Added
 
+- **Attribution enforcement gate surfaces (commit-msg + mutation gate) for inline
+  build-work attribution (#505).** Two engine-owned hook surfaces, gated behind
+  project config `attribution_enforcement_cutover` (absent/future = off, default;
+  past ISO-8601 instant = on; read once at engine start, so a config edit requires
+  a restart to take effect): the **commit-msg gate** rejects a build-step commit
+  lacking a `Task:` trailer while `.pipeline/build-step-active` is present, and the
+  **session mutation gate** (`PreToolUse`, matcher `Edit|Write|NotebookEdit|Bash`)
+  blocks a direct file mutation or `git commit` invocation made outside a stamped
+  subagent dispatch while a build step is active. Both gates share three
+  abstention/exemption surfaces — merge commits, amend of a pre-enforcement commit,
+  and an empty commit carrying a resolvable `Evidence: satisfied-by <sha>` trailer —
+  and fail open on an unparseable hook payload. Documented in the main README and
+  `src/conductor/README.md` (§ Attribution enforcement) and `skills/pipeline/SKILL.md`
+  (§ Attribution enforcement (engine gate surfaces)) as engine machinery, not a new
+  orchestrator rule. See `adr-2026-07-10-inline-work-attribution-enforcement.md`.
+
+- **New `/intake` skill — assisted authoring of intake issues (#490 companion).**
+  Guides filing GitHub intake issues in the WHAT/OUTCOMES shape the intake
+  convention requires: gather verbatim evidence first (exact commands + output,
+  log excerpts with sources, `file:line`/SHA/PR references, repro steps,
+  frequency data) while context is warm, state Impact honestly, write Desired
+  outcomes as observable acceptance signals (litmus: verifiable without knowing
+  the implementation), and quarantine every HOW into an explicitly-labeled
+  Hypotheses section. Includes a pre-file GATE checklist (verbatim artifact
+  present, outcomes observable, no HOW leakage, claims calibrated per
+  verify-claims), symptom-not-solution title guidance, and filing mechanics
+  (`gh issue create --assignee @me` so the engineer's intake poll captures the
+  issue; exact `priority: <band>` label vocabulary with the REST fallback for
+  label edits). Registered in the HARNESS.md model-selection table
+  (`inherits caller` — authoring runs in whatever session observed the problem).
+  Cross-linked from the intake-convention rule in HARNESS.md (agents filing via
+  `gh issue create` are pointed at `/intake`) and from `/engineer`'s capture
+  step (queue consumption vs. filing on the operator's behalf).
+
+- **Engine-invoked task start/done stamping at subagent dispatch (#477).** The
+  conductor now installs a Claude-session `PreToolUse`/`PostToolUse` hook pair
+  (`pre-dispatch.sh`, `post-dispatch.sh`) into every feature worktree's
+  `.pipeline/session-hooks/`, wired via that worktree's untracked
+  `.claude/settings.local.json` with matcher `Task|Agent`. The `PreToolUse`
+  hook parses **line 1 only** of the dispatched subagent prompt against the
+  exact grammar `Task: <id>` | `Task: none`: a valid id flips that task's row
+  to `in_progress` in `.pipeline/task-status.json` and writes
+  `.pipeline/current-task` (atomic temp-file + rename); an existing stamp for
+  a different id is removed (overlap guard); `Task: none` is a no-op
+  pass-through. Unparseable payloads are **fail-open** (exit 0, no state
+  change — abstain per #452); a parsed-but-invalid marker (unknown id,
+  missing/malformed line-1 marker, e.g. `Task:7`, `task: 7`, or two ids on
+  one line) is **fail-closed** (exit 2, blocks dispatch, stderr names the
+  problem). The `PostToolUse` hook removes a matching stamp on subagent
+  return and never writes `completed` — completion still flows through the
+  evidence gate (#456/#463). This replaces prompt-discipline stamping with
+  engine-mechanical stamping at the moment a subagent is actually dispatched,
+  independent of whether the dispatching agent remembers to run
+  `conduct-ts task start|done`. Hook scripts are embedded engine assets
+  (`src/conductor/src/engine/session-hook-assets.ts`, mirroring
+  `git-hook-assets.ts`), provisioned by `prepareWorktree`
+  (`worktree-prepare.ts`) alongside the existing git-hook wiring; the
+  provisioning merge preserves any unrelated `settings.local.json` keys and
+  backs up a corrupt file rather than discarding it. All dispatch templates
+  (`pipeline`, `code-review`, `simplify`, micro-retro, memory-checkpoint) now
+  carry the line-1 `Task: <id>` / `Task: none` contract explicitly. See
+  `README.md` and `src/conductor/README.md`.
+- **Intake convention: issues state WHAT and desired outcomes; DECIDE owns HOW.** New intake issue form (`.github/ISSUE_TEMPLATE/intake.yml`) replaces open-ended problem statements with a structured shape: `Observed` (evidence), `Impact` (stakeholders/frequency), `Desired outcome` (observable behavior post-fix), and optional `Hypotheses` (filer's guesses about solutions). HARNESS.md now specifies the intake convention as a load-bearing rule (§Intake Artifacts Separate WHAT from HOW): intake issues capture *problem + desired state*, never solution design; the `engineer`/`explore` skills own the DECIDE phase (alternative approaches, track decision, architecture). On intake capture, `engineer` reframes embedded solution content as a hypothesis candidate (explicitly marked "not the chosen approach"), passed to `/explore` for divergence analysis. `explore`'s **Embedded Design Divergence Rule** (SKILL.md) ensures hypotheses enter as candidates (not privileged), at least one genuine alternative is generated, but the hypothesis can still win on merits. New test: `test_harness_integrity.sh` now validates issue-template YAML well-formedness and enforces the `blank_issues_enabled` guard. Updates: `README.md` documents the intake shape and routing flow; `skills/engineer/SKILL.md` documents hypothesis reframing (§Hypothesis reframing for embedded solution content); `skills/explore/SKILL.md` documents the divergence rule (§Embedded Design Divergence Rule). Refs issue #490.
+- Intra-step build progress and stall events on the conductor event bus
+  (`conduct-ts` only): `build_progress` (change-driven heartbeat: resolved/total
+  tasks, current task, commit count, no-evidence attempts), `build_no_progress`
+  (quiet-episode warning after `quiet_minutes` with no task-status change), and
+  `build_stall` (terminal no-progress signal). Emitted by a new
+  `BuildProgressWatcher` polling `.pipeline/task-status.json`/git `HEAD` during
+  the `build` step, with a leak-safe start/stop lifecycle. Rendered by
+  daemon.log, the TTY dashboard, the OTel exporter (as span events), and
+  persisted to `.pipeline/events.jsonl`. Configurable via an optional
+  `build_progress:` block (`poll_seconds`, `quiet_minutes`,
+  `heartbeat_minutes`, `enabled`; all default-populated, `enabled: false` as a
+  full escape hatch). See `README.md` and `src/conductor/README.md`.
+- `priority: critical` backlog band, above `high`: reserved for fixes to
+  things that completely break or cause very severe degradation. The daemon
+  dispatches critical-labeled work first among issue-linked items (unlinked
+  `no-issue` items still lead, unchanged). Parser accepts the exact label
+  `priority: critical`; band ladder is now no-issue → critical → high →
+  medium → low → unlabeled. READMEs document the new vocabulary.
+
+### Migration
+
+**Session-hook wiring for #477 (hook wiring is a canonical breaking surface).**
+
+Feature worktrees provisioned by an older engine build have the old hook wiring
+(git-hook attribution only, no `PreToolUse`/`PostToolUse` session hooks). That
+stale wiring does not break anything — the worktree keeps building normally —
+but subagent dispatch inside it will not get engine-mechanical task start/done
+stamping until the worktree is re-provisioned by a build using this version.
+
+No manual consumer action is required beyond re-running `bin/install` (which
+refreshes the engine build the daemon dispatches from). To pick up the new
+session hooks immediately in any worktree already in flight, prune stale
+worktrees so the next provisioning pass re-installs the hooks fresh:
+
+```bash migration
+# Optional: force old worktrees to re-provision the new session hooks now,
+# instead of waiting for their natural lifecycle to recycle them.
+cd src/conductor && npm run build   # or: bin/install, to refresh the engine build
+git worktree list | awk '/\.worktrees\// {print $1}' | while read -r wt; do
+  git worktree remove --force "$wt" 2>/dev/null || true
+done
+git worktree prune
+# The daemon re-provisions worktrees on its next dispatch, installing the new
+# .pipeline/session-hooks/{pre,post}-dispatch.sh and wiring
+# .claude/settings.local.json automatically. No further action needed.
+```
+
+**New `/intake` skill (skill symlink targets is a canonical breaking surface).**
+
+`skills/intake/` is a new skill directory; installed harness consumers need
+their skill symlinks refreshed or `/intake` resolves as an unknown command:
+
+```bash migration
+# Link the new intake skill into ~/.claude/skills.
+./bin/install
+```
+
+### Changed
+
+- `conduct-ts engineer claim` now serves pending ideas by priority band
+  (critical first) before capturedAt FIFO, reading labels at claim time and
+  failing open to FIFO on gh outages (#461).
+
+### Fixed
+
+- tmux-leak-guard fails closed — a failed suite-start snapshot disables
+  reaping and every kill requires a tmpdir-rooted pane cwd (#437).
+
+- `bin/install` never hard-fails on missing dependencies. Every optional phase
+  (permissions/hooks configuration, dependency bootstrap, conductor config,
+  viewer/renderer selection) is now failure-isolated — a missing python3, npm,
+  brew, curl, or viewer tool degrades to a warning instead of aborting the
+  whole install under `set -e`. python3-dependent phases preflight and skip
+  with an actionable message; `configure_conductor` no longer reports a false
+  "Created/Refreshed" when python3 is absent; core symlink steps warn-and-
+  continue per item. Verified: full install exits 0 with warnings only on a
+  PATH containing nothing but coreutils. The two intentional fatal guards
+  (missing skills directory, worktree-root refusal #363) are unchanged.
+- `bin/install` now offers to install `uv` (Serena's installer) when it's
+  missing, via a platform-agnostic ladder: brew when present, else the
+  official installer (`astral.sh/uv/install.sh` → `~/.local/bin`) via curl or
+  wget, picking up `~/.local/bin` on PATH for the same run. Interactive-only
+  (non-tty runs keep the previous skip-with-warning), and every rung is
+  best-effort — a failed uv install degrades to the manual-install warning.
+- Evidence-range no-anchor derivation now anchors at branch base, not repo
+  genesis: `getEvidenceRange` walks a 4-rung ladder (reachable explicit
+  anchor → `merge-base --fork-point origin/<default> HEAD` → plain
+  `merge-base origin/<default> HEAD` → fail-closed zero commits + anomaly)
+  instead of falling back to `root-commit..HEAD` or a hardcoded `origin/main`
+  (#456).
+- Build gate now accepts evidence stamps only; first-seed grandfather
+  stamping retired. `engine/artifacts.ts`'s H6/H7/H8 completion check no
+  longer consults the legacy `migrationGrandfather` field — a task counts as
+  done only when it has a real `evidenceStamps` entry re-derived from git on
+  every gate pass. `task-seed.ts` no longer writes new grandfather entries
+  (#463).
+
+### Added
+
+- **Deterministic task attribution automation via `conduct-ts task` CLI and worktree-scoped git hooks.** The
+  pipeline now automates task progress tracking via CLI subcommands owned by the conductor engine, not prompt
+  discipline. Two new subcommands: `conduct-ts task start <id>` (flip status to in_progress before dispatching
+  a subagent), `conduct-ts task done <id>` (mark task completed after subagent commit lands). Both are
+  idempotent and fail-open (never block the build on status-file corruption). Wired into the pipeline
+  orchestration step 0 (DISPATCH phase).
+- **Engine-provisioned worktree-scoped git hooks for task attribution.** When the daemon provisions a feature
+  worktree, the conductor writes two deterministic attribution hooks (`prepare-commit-msg`, `commit-msg`) to
+  `.pipeline/git-hooks/` and wires them via `git config --worktree core.hooksPath` scoped to that worktree
+  only. The `prepare-commit-msg` hook auto-injects the `Task: <id>` trailer from `.pipeline/current-task`
+  into every commit (amends malformed trailers). The `commit-msg` hook validates the trailer format. Both
+  hooks are fail-open (provisioning skips gracefully on errors, build never halts). Host checkout and
+  other worktrees are unaffected; if the repository has its own hooks, both run (engine's hooks first,
+  exit codes propagate for chaining). Hook scripts are embedded as engine assets, written fresh to each
+  worktree, and kept in sync with the engine version. The completion gate derives task completion from
+  git trailers, proving code commits are load-bearing (no stray empty-commit trailers).
+- Documentation added to README.md and src/conductor/README.md explaining task CLI and hook wiring
+  behavior (fail-open design, chaining with repo hooks, worktree-scoped wiring).
+
+### Changed
+
+- **Pipeline SKILL step 0 (DISPATCH) now uses `conduct-ts task start|done` for task progress tracking.**
+  The orchestrator no longer hand-edits `.pipeline/task-status.json` or relies on the subagent to inject
+  the task trailer via prompt discipline. The conductor runs `conduct-ts task start <id>` before dispatching
+  the subagent and `conduct-ts task done <id>` after the commit lands, ensuring deterministic and
+  repeatable task attribution independent of subagent behavior. See skills/pipeline/SKILL.md §Per-Task
+  Execution, steps 0 and 6.
+
+### Fixed
+
+- Mid-run merged-PR guard (#358): when the daemon's kickback rewind discovers the feature's
+  recorded PR has been merged out-of-band (operator manual merge during a retry cycle), the daemon
+  stops the run at the earliest checkpoint (kickback re-entry, rebase entry, or rekick play-forward)
+  and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious
+  rebase conflicts. Guard invoked at three sites: kickback routes, rebase entry, and rekick
+  play-forward.
+- Tests no longer park child processes on undrained stdio pipes.
+  `daemon-stale-respawn-e2e` spawned real daemons with `stdio: ['ignore',
+  'pipe', 'pipe']` and never read either stream, so a chatty daemon wedged
+  mid-write once the 64KB pipe buffer filled while `isProcessAlive` checks
+  still passed — the four spawn sites now use `'ignore'`.
+  `memory-store-concurrency` drained stderr but not stdout of its vite-node
+  children; stdout is now explicitly discarded with `resume()`.
+- Stories and plan gate predicates now scope to the FEATURE's own docs
+  (`resolveFeatureStoriesPath`, mirroring #407's plan resolver) instead of
+  validating the entire `.docs/stories`/`.docs/plans` corpus (#441). Legacy
+  landed artifacts (49 story blocks predating the gate-audit-2026-06-23
+  structural convention) made any kickback-selected stories gate permanently
+  unsatisfiable, and cross-file numeric story-ID collisions let unrelated
+  plans falsely satisfy coverage. Unresolvable scoping now fails explicitly
+  and never falls back to a corpus-wide scan.
+- Stale-engine initialization residuals from auto-restart work (#369):
+  orphaned `initStaleEngineState` call site in `daemon-cli.ts` (#307),
+  stale verdict log missing engine identities (#320, #321), and suppression
+  records incorrectly storing boot identity instead of durable identity (#478).
+  All three are now wired correctly: `initStaleEngineState` called once at
+  daemon startup with its result used by the stale-engine checker,
+  identities consistently captured and logged, and suppression records identity
+  properly to allow cache invalidation on identity changes.
+
+### Added
+
+- `ci_watch` config block (default `enabled: true`): the daemon now watches each shipped PR's
+  CI check rollup and drives bounded auto-remediation of red ships — up to 2 automatic fix
+  attempts per PR (isolated worktree, RETRY hint from failing checks + log excerpts, guarded by
+  the same acceptance guards/suite gate/lease-push discipline as `mergeable_autoresolve`), a
+  non-sticky `ci-failed` label while checks are red, and escalation to a sticky
+  `needs-remediation` label + PR comment + HALT-grade `ci_failed` event once attempts are
+  exhausted. Documented in README.md and `src/conductor/README.md` (Task 25).
+- Structural fixture-portability guard extended with `unref` and
+  `tmp-outside-target-dir` matchers (with falsifiability fixtures) and armed
+  over the full `src/conductor` tree; the legitimate `.unref()` call in
+  `daemon-log.ts` is annotated with a `// portability-ok:` reason (Task 29).
+- **Setup-failure triage — two-stage deterministic recovery (#446).** The daemon now runs a
+  bounded two-stage recovery when `bin/setup` fails, eliminating the wedge pattern where a dead
+  agent corrupts the worktree and leaves no mechanism to dispatch a fix-session.
+  - **Stage 1: Deterministic quarantine + retry** — when setup exits nonzero, if the working tree
+    has uncommitted changes, the engine preserves them to a quarantine branch
+    (`wip/setup-quarantine-<slug>`) via `git add -A + commit`, then `reset --hard HEAD` to return
+    to clean HEAD, and re-runs `bin/setup` exactly once (full prepare flow). All dirty state is
+    committed and preserved before any reset, so a resuming agent can recover WIP deliberately via
+    `git show wip/setup-quarantine-<slug>`. If setup succeeds at clean HEAD, the feature proceeds;
+    if it still fails, advance to stage 2.
+  - **Stage 2: Bounded fix-session** — if setup still fails at clean HEAD, dispatch exactly ONE
+    fix-session with a fresh LLM session. Prompt carries the setup stderr tail (last 50 lines) and
+    an explicit success contract: `bin/setup` exits 0 AND the working tree is clean (fix committed).
+    The engine verifies the contract mechanically by re-running the full prepare flow — never trusts
+    the agent's claim. Success ⇒ proceed to build. Failure ⇒ diagnostic HALT naming the setup error
+    tail, the quarantine ref (where dirty state was preserved), and the contract verification outcome.
+  - **Surfacing:** daemon log records each stage with the quarantine ref and setup stderr tail.
+    `.pipeline/QUARANTINE` sentinel surfaces the ref + preserved paths to the resuming build agent.
+    HALT evidence includes the error, quarantine ref, and contract outcome.
+  - **Constraints:** exactly one retry (stage 1), exactly one fix-session (stage 2), all uncommitted
+    state preserved before any reset (no data loss), daemon-only (no change to interactive `/conduct`
+    or manual repair), zero cost to happy path (setup exit 0 ⇒ no triage).
+  - **Modules:** `engine/setup-triage.ts` (triage core, dependency-injected), `worktree-prepare.ts`
+    (SetupFailureError classification), `daemon-runner.ts` (wiring at prepare seam),
+    `step-runners.ts` (fix-session dispatch + contract verification).
+  - See `src/conductor/README.md` → "Setup-failure triage" and
+    `.docs/decisions/adr-2026-07-09-setup-failure-triage.md` (APPROVED).
+- CLAUDE.md "Design Principles" section codifying deterministic-first design:
+  machinery (engine code, git hooks, gates) wherever possible, LLM agents only
+  for steps that genuinely need judgement; repeated agent rule violations get
+  fixed with enforcement at the point of violation, not stronger prompts
+  (precedents: #426, #433, the H6/H7 evidence gate).
+
+### Fixed
+
+- Gate-writeback skip notices now log once per (slug, reason) per daemon run
+  with benign will-retry wording (#379).
+- Build evidence gate's path corroboration now sources each task's expected
+  paths from its `**Files:**` line (#424) instead of scanning the whole task
+  section for backtick tokens. Plain-text and backticked paths (`;`/`,`
+  separated), template-form bullets under `**Files likely touched:**`, the
+  `same` / `same as Task N` inheritance shorthand, and `none` (trailer-alone)
+  all resolve correctly; stray backtick tokens in Steps prose (module-import
+  strings, runtime artifact names) no longer become required corroboration
+  paths that false-halt builds with correct commits. Tasks without a Files
+  line keep the legacy whole-section scan (remediation-append blocks are
+  unaffected).
+- Build evidence gate's path corroboration no longer rejects real evidence when
+  plans declare "Files likely touched" as basenames or partial paths (#425):
+  commit files now match plan paths exactly OR by `/`-segment-anchored suffix
+  (`push-evidence.ts` matches `src/conductor/src/engine/push-evidence.ts`;
+  `trail.ts` never matches `audit-trail.ts`). One helper backs all three
+  overlap sites. The plan skill now also instructs repo-relative paths.
+
+### Fixed
+
+- Derive diagnostics no longer flood the daemon pane (#405): the autoheal
+  path-corroboration near-miss and pinned-stamp demotion-prevention notices
+  now warn once per (task, commit) per daemon run instead of on every
+  build-gate re-derivation, and the daemon tees engine `console.warn`/
+  `console.error` lines into `.daemon/daemon.log` (tagged `[warn]`/`[error]`)
+  so post-hoc forensics see what the operator saw in the pane. Verdicts and
+  audit entries are unchanged — presentation/dedup only.
+- Test suite can no longer leak real `cc-daemon-*` tmux daemons (#377): the
+  `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch now also refuses `respawn-pane`
+  against `cc-daemon-*` sessions (previously only `new-session`), and a new
+  suite-level teardown guard (`test/tmux-leak-guard.ts`, wired in
+  `test/global-setup.ts`) diffs live sessions against the suite-start
+  snapshot, kills every leaked session, and fails the run naming each one
+  with its pane cwd — leaks become red builds instead of resident daemons
+  idle-polling deleted /tmp fixture repos.
+- Build completion gate no longer evaluates an unrelated feature's plan when
+  multiple plans exist in the shared `.docs/plans/` (#407). `completionCtx` now
+  resolves the plan scoped to the current feature via `resolveFeaturePlanPath`:
+  engine-recorded `activePlanPath` first, then the plan named after
+  `feature_desc` (the daemon convention), then a single plan file; on true
+  ambiguity it passes no plan and the gate fails closed instead of upserting
+  someone else's tasks into `task-status.json` and halting on every re-kick.
+- Evidence gate id-grammar unification (#417) — guarded `task-N` trailer alias in derive,
+  one id grammar + trailer discipline across tdd/pipeline skills, operator-gated recovery
+  runbook for parked features (see `docs/runbooks/evidence-backfill-recovery.md`).
+
+### Added
+
+- Opt-in `build_review` judgement gate at the build → manual_test seam
+  (`build_review.enabled: true` in `pipeline.yml` / `.ai-conductor/config.yml`): a
+  fresh-session, input-starved Opus grader records an objective PASS/FAIL verdict
+  (`.pipeline/build-review.json`) on the diff before it reaches manual test. A FAIL kicks
+  back to `build` with the reasons as evidence, capped by the shared
+  `MAX_KICKBACKS_PER_GATE` constant before HALTing; absent config preserves the legacy
+  `build → manual_test` topology. Gating built-in once enabled (`steps.build_review.disable: true` is rejected
+  by `validateConfig()`). See `src/conductor/README.md` → "Judgement gate at the build →
+  manual_test seam".
+- Self-host release gate (TR-10) now accepts a committed waiver as a third way
+  to satisfy the migration-block check (`evaluateWaiver` in
+  `src/engine/self-host/release-gate.ts`, adr-2026-07-06-migration-gate-waiver,
+  fix #354): an internal-only edit to a breaking surface (e.g. `bin/conduct`,
+  hook wiring) can commit `.docs/release-waivers/<plan-stem>.md` with a
+  `Waives:` list of canonical surface names and a `Rationale:` instead of a
+  `## Migration` block. Fail-closed throughout — a stale (not in this diff),
+  malformed, or partial-coverage waiver still HALTs, and an undeterminable
+  change set stays unwaivable. See CLAUDE.md's "Release & Update Gates" for
+  the authoring format.
+- `conduct-ts --interactive` RunMode: conversational steps open a live REPL session
+  instead of headless print-mode dispatch (`step-runners.ts` respects the RunMode for
+  all conversational steps).
+
+- New `conduct-ts brain start|stop|status` verbs (`brain-supervisor-cli.ts`) host the
+  GitHub-issues intake poll as a host-wide, tmux-hosted background loop — an alternative to
+  cron for keeping idea capture running without a scheduled task or a live terminal. `start`
+  is idempotent (no duplicate session), `stop` kills the session, `status` reports
+  `running|stopped` plus the queued-issue count from the status surface below.
+- `intake-loop --continuous|--once` CLI subcommand (`intake-loop-cli.ts` +
+  `engine/engineer/intake/intake-loop.ts`) for background polling: `--continuous` runs the
+  poll→enqueue→notify tick forever (the mode `brain start` launches under tmux); `--once`
+  runs a single tick for cron/manual use. `--interval-ms <n>` is configurable (default 5
+  minutes) and validated against non-finite/non-positive values, with a core-level 60s
+  fallback as defense-in-depth against a zero-delay busy-loop. Never spawns `claude` or
+  opens a PR — zero-token execution.
+- `intake_notifier` config block (mirrors the existing `mermaid_renderer` pattern) — optional,
+  best-effort push notification alongside the loop's status-file write; a push failure is
+  caught and logged without blocking the tick.
+- Desktop push notifications on non-empty intake ticks: when the intake loop discovers new
+  issues, it fires a push notification via the existing `sendNotification` transport
+  (osascript on macOS, notify-send on Linux, terminal-bell fallback). Transport failures
+  are caught and logged without blocking the tick, and the status file is always written
+  regardless of push success — both surfaces (durable status file + best-effort notification)
+  work together to surface new captured ideas to the operator.
+- Status surface durably tracks notified issues: `<engineer-dir>/intake-status.json`
+  (`count`, `sourceRefs`, `timestamp`, `message`) is only rewritten when a tick finds new
+  issues, and the notifier's de-dup set prevents re-notifying the same `sourceRef` across
+  loop restarts.
+- Launcher defers to the brain loop when live: `engine/engineer/brain-liveness.ts`'s
+  `brainLoopAlive()` (tmux session or pidfile check) causes the interactive
+  `conduct-ts engineer` launcher to skip its own `prePoll` step, enforcing a single writer
+  on the intake ledger/inbox when the background loop is already running.
+- `bin/install --allow-worktree-root` — explicit override for the new worktree-root guard.
+  The flag is stripped before mode dispatch, so it combines with any mode (e.g.
+  `--update --allow-worktree-root`) and is accepted but inert on a non-worktree checkout.
+  Documented in `bin/install --help`, README, and covered by the new real-binary smoke
+  `test/test_install_worktree_guard.sh`.
+- Owner-gate write-back now also announces on the originating GitHub issue: when a gated
+  spec's committed intake marker carries `Source-Ref: owner/repo#N`, `announceGatedIssue`
+  (src/conductor/src/engine/gate-writeback.ts) applies the `owner-gated` label and upserts
+  the same marker comment on that issue, using the shared `parseSourceRef` parser
+  (`engine/engineer/issue-ref.ts`). Independent of the existing PR announcement path — a
+  failure on one surface never affects the other, and repo-level warnings never trigger a
+  GitHub write for the issue step (Task 20).
+- Wired gate write-back into the daemon's discovery tick: `daemon-cli.ts`'s single
+  `onGatedDiscovered` call site now announces every owner-gated spec via
+  `announceGatedPr`/`announceGatedIssue` (src/conductor/src/engine/gate-writeback.ts),
+  right after writing `.daemon/gated.json`. The spec's implementation PR URL (when a prior
+  build attempt already opened one) is read from its per-slug `.pipeline/conduct-state.json`
+  in `.worktrees/<slug>/`; its `Source-Ref` is threaded through the new optional
+  `GatedSpecItem.sourceRef` field (`daemon-backlog.ts`). Both announcements are best-effort —
+  a `gh` failure never blocks or aborts the discovery pass (Task 21).
+- The `GATED` dashboard group (`daemon-dashboard.ts`) now always renders explicitly —
+  including `GATED (0)` — whenever a `gated` list is present (even empty), instead of being
+  omitted for a zero count; a `kind: 'repo'` warning row now reads "building NOTHING —
+  identity unresolved" / "un-owned specs skipped — no owner_gate_cutover configured" rather
+  than the raw `warning` enum value; and a gated spec slug already covered by the PROCESSED
+  group (stale-ledger dedup) is excluded from GATED, matching the existing HALTED/PROCESSED
+  precedence contract.
+- Event-driven re-dispatch on HALT clear (Task 18): when a parked feature's `.pipeline/HALT`
+  marker is removed, the daemon detects it via filesystem watch (chokidar) and immediately
+  re-dispatches without waiting for the next idle poll. Sub-second response vs. 5-60s polling.
+  Fallback: `--no-watch` flag disables filesystem watching and relies on polling only.
+- `--no-watch` flag for daemon (conduct-ts daemon): disables filesystem watching, falls back
+  to polling-only. Use when chokidar watch fails or for testing. Pairs with `--idle-poll`.
+- Transition-only daemon logging (Task 18): daemon logs only slug status transitions (park/unpark,
+  dispatch/halt/done), no idle-polling spam. One line per state change, no per-tick chatter.
+- Resume marker for re-dispatches (Task 18): when a parked feature is re-dispatched, the daemon
+  logs `↻ resume` instead of `▶ start` to distinguish fresh dispatch from re-kick. Feature state
+  and logging remain clean and audit-friendly.
+- **Halt-PR presentation reliability — verify-after-write + reconciliation sweep (ai-conductor#274).**
+  Daemon halt PRs now reliably carry `needs-remediation` label + draft status + durable body
+  marker via two mechanisms: (1) **Verify-after-write on escalation:** `ensureHaltPresentation()`
+  writes draft, label, and body marker, then re-reads to confirm all three (bounded retry 3×,
+  100ms backoff), moving on even if unconfirmed (best-effort); (2) **Reconciliation sweep on
+  startup + idle tick:** `reconcileHaltPrs()` enumerates open PRs carrying the body marker and
+  heals any missing draft or label (idempotent, no-throw, injected dep hook). Finish cleanup
+  removes all three markers via `cleanupHaltPresentation()` verify-after-write so remediated
+  PRs exit halt state permanently and cannot be re-halted by the sweep. Together: halt PRs
+  cannot present as mergeable; pre-existing broken PRs self-heal; both mechanisms cover each
+  other's failure modes. Modules: `pr-labels.ts` (`ensureHaltPresentation`, `cleanupHaltPresentation`),
+  `halt-pr-reconciliation.ts` (`reconcileHaltPrs`), `daemon.ts` (sweep wiring). See
+  `adr-2026-07-05-halt-pr-presentation-reliability.md` (D1–D5 decisions) and README/`src/conductor/README.md`.
+- **RateLimitEpisode coordinator (Tasks 10–16):** in-process episode tracker with shared
+  deadline management. When a provider signals rate-limiting (HTTP 429, session-limit messages,
+  or usage-limit text), the coordinator captures a timezone-aware deadline and coordinates N
+  concurrent workers to wake up together at that deadline (instead of retreating into
+  independent, competing waits). New `engine/rate-limit-episode.ts` module + wiring in
+  `daemon-cli.ts`, `conductor.ts`, `daemon-backlog.ts`, `daemon-rekick.ts`. Resolves the
+  2026-07-03 cascading-HALT + 300s wedge incident.
+- **Dispatch gate:** pause NEW feature dispatch while rate-limit episode active (in-flight
+  work continues untouched). Entry point: `engine/daemon-backlog.ts` checks
+  `episode.isActive()` before discovery and dispatch.
+- **Session-limit classification (PRIMARY fix):** detect session/usage-limit messages beyond
+  HTTP 429 as rate-limited signals. `isRateLimitError(output)` in `engine/recovery.ts` matches
+  `/(rate limit|429|overloaded|usage limit)/i`. Catches subtle API responses that don't set
+  HTTP status but clearly signal exhaustion in the message body.
+- **Timezone-aware reset parsing:** extract deadline from provider message (e.g.,
+  `retry-reset-at: 3:20pm America/New_York`) into absolute wall-clock milliseconds. Parses
+  time zone, handles locale-specific formats, computes epoch-relative deadline.
+- **Pre-step rate-limit handling (Task 15):** when a rate-limit episode is active and
+  unexpired, skip a pending step and escalate as `rateLimited: true` (prevents a redundant
+  wait inside the step). Entry point: `Conductor.runBuildStep()` pre-flight check.
+- **Episode-caused HALT recovery (Task 22):** automatically re-kick previously-halted
+  features when the episode clears (deadline passed), without re-kicking them on every
+  base-SHA advance. Entry point: `daemon-rekick.ts` checks episode state and clears sentinel.
+- **SIGTERM-responsive wait (abortable rate-limit wait):** `episode.waitUntilReady()` is
+  abortable via AbortController. Daemon registers in-flight waits with the coordinator;
+  on SIGTERM, all are aborted immediately and conductors escalate to HALT. Preserves graceful
+  shutdown under rate-limiting.
+- **Jitter and staggered resumption:** `waitUntilReady()` staggers wake-up times so N workers
+  don't all resume at the exact deadline instant (prevents thundering herd on retry).
+- **Engineer handoff write-back now surfaces failures with a `writebackPending` ledger marker
+  and copy/paste-retryable remediation (#290).** `IntakePort.report()` returns a `ReportOutcome`
+  (`{ ok: true }` or `{ ok: false, remediation: string[] }`); on a failed `done` write-back,
+  `reportDone` (`src/engine/engineer/intake/writeback.ts`) sets `writebackPending: true` on the
+  ledger entry (cleared only on a subsequent `ok: true` outcome, per TR-3 — a pre-existing flag is
+  never silently dropped by an absent port or missing outcome). `remediation` carries the fully
+  substituted `gh` command for the specific step that failed (issue comment or label-add), which
+  `dispatchEngineer`'s `handoff`/`land` primitives print to stderr without affecting stdout or the
+  exit code — a stalled write-back never turns a successful handoff into a failure.
+- **Main-checkout leak triage with byte-identity-gated auto-heal (#380, adr-2026-07-08).** When
+  `maybeFastForward` discovers a dirty working tree, before giving up it now runs leak triage:
+  classifies every dirty file/untracked stray against candidate branch heads (daemon worktrees
+  prioritized, then local `feat/*`), and if a SINGLE candidate explains EVERY dirty entry via
+  byte-identity match, auto-heals by restoring tracked files and deleting strays, then proceeds
+  with fast-forward. Operator work is protected: heal requires whole-tree explanation by one
+  branch, so any ambiguity keeps hands off. Unexplained dirty files escalate from a one-line skip
+  to a loud LEAK-SUSPECT WARN with per-file diff-stat so the stall is never silent. Restore/delete
+  selection matches a file's full `allExplainedBy` set against the chosen branch, not just its
+  first-matched candidate, so a file explained by more than one branch is never dropped from an
+  otherwise-valid all-or-nothing heal.
+- **Write-fence sandbox for self-host builds (#380, adr-2026-07-08).** A daemon-owned PreToolUse
+  hook is provisioned into the self-build sandbox's `settings.json` to block writes targeting the
+  harness main checkout outside the build worktree. Edit/Write/MultiEdit/NotebookEdit targeting
+  paths under the harness root but outside `.worktrees/` are blocked with guidance to use the
+  worktree path; Bash commands referencing main-checkout paths are heuristically screened and
+  blocked (the deterministic leak-triage/auto-heal layer is the fallback). The fence never fires
+  on worktree-internal paths, temp directories, or unrelated repos (scoped to self-host builds).
+
+### Changed
+
+- **Daemon now owns build-auth token separately from operator OAuth (Tasks 5–17, TR-2, TR-3).**
+  The daemon maintains its own build-auth token at a configured path
+  (`harness_self_host.build_auth.token_path`), independent of the operator's
+  `.credentials.json` OAuth token. Pre-flight validation (`build-auth-preflight.ts`,
+  Task 6) fails closed with mint instructions when the token is missing or
+  unreadable — operator runs `claude setup-token` to mint and configure the path.
+  The `BuildAuthProvider` seam (`daemon-build-token.ts`, Task 5) reads the token at
+  runtime, enabling future platform-identity swaps (EKS) without code changes. Token
+  state is classified as `ok` / `missing` / `error` with trimmed, fail-closed defaults;
+  sandbox builds inject the token via `--build-auth-token` CLI argument, preserving
+  the operator's OAuth for non-build steps. See HARNESS.md "Daemon Build Auth" and
+  `.docs/specs/2026-07-07-isolate-daemon-build-auth-from-operator-oauth.md`.
+- **Post-rebase gate-first mechanical re-verify (Task 14):** file-changing finish-time rebases
+  no longer unconditionally dispatch the build agent. Instead, the rebase step pre-verifies the
+  build gate's objective completion predicate against the freshly-rebased tree. If the predicate
+  (git evidence trailers, `root-commit..HEAD`) remains satisfied post-rebase, dispatch is skipped
+  and a `rebase_gate_reverified` event is emitted with the step and optional reason
+  (`skippedDispatch: false` for re-dispatch, `true` for mechanical skip). If pre-verify fails or
+  throws, build is kicked back and re-dispatched as before (fail-closed). Scope: **`build` only**
+  — `build_review` and `manual_test` remain unconditionally invalidated. Consequence: the ~45–60 min
+  build-agent lap on every evidence-complete file-changing rebase drops to ~1–2 min mechanical
+  derivation; evidence-missing rebases re-dispatch normally. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+- `--idle-poll` default raised: 5s → 60s (Task 18). Event-driven wake now handles the hot
+  path (HALT clear detection), so the polling fallback can be slower. Override with
+  `--idle-poll 5` to restore legacy behavior or when filesystem watch is unavailable.
+- Daemon idle timeout behavior improved (Task 11): unref'd timer no longer blocks process
+  exit when daemon is idle. Features in-flight still drain before exit, but idle sleeping
+  doesn't prevent process termination. Fixes "hanging daemon on SIGTERM when idle" issue.
+
+- **`manual_test` is now a gating step, and its enforcement is locked (#367).** While it was
+  advisory, an auto-mode run whose manual test kept failing was silently auto-skipped after
+  retries — one of the two false-ship paths behind incident PR #364. It now HALTs
+  (auto/daemon) or opens the recovery menu (interactive) instead, matching the enforcement
+  the manual-test SKILL.md frontmatter always declared. `manual_test` joined
+  `ENFORCEMENT_LOCKED_STEPS` (`engine/skill-resolver.ts`), so a project-local skill override
+  cannot downgrade it, and disabling it in project config is now rejected by validation.
+  Manual-test results are append-only per attempt: the skill records an
+  `## Attempt N — <timestamp>` section per run and the gate evaluates only the latest
+  section (sectionless files still scan whole, back-compat).
+- **Conductor rate-limit wait now abortable and deadline-first (Tasks 11, 14):**
+  `episode.waitUntilReady()` is now abortable via AbortController, computing
+  `delayMs = deadline - now()` and respecting SIGTERM signals (wait resolves with
+  `{aborted: true}`, conductor escalates to HALT). If the deadline has already passed, the
+  wait returns immediately (no spurious delay). Jitter internal to `waitUntilReady()` spreads
+  worker wake-up times so they don't collide at the deadline instant.
+- **Pre-step rate-limit handling (Task 15):** when a rate-limit episode is active and
+  unexpired, `Conductor.runBuildStep()` skips the pending step and escalates it as
+  `rateLimited: true` instead of entering the step and waiting there (prevents redundant
+  waits and allows earlier dispatch-gate pausing).
+- **HALT recovery from rate-limit episodes (Task 22):** when a base-SHA advance triggers a
+  re-kick sweep, the conductor checks whether a halted feature was caused by an active
+  episode. If the episode has now cleared (`now() >= deadline`), the HALT is automatically
+  cleared and the feature is re-kicked, enabling automatic recovery without re-kicking on
+  every base-SHA advance.
+- **Autonomous restart preserves rate-limit episode (Tasks 19, 20):** when the daemon
+  auto-restarts on a stale engine, the `RateLimitEpisode` coordinator is re-created fresh
+  but any in-flight `waitUntilReady()` calls in the old workers are already aborted
+  (via `onSignal` before restart fires), so waits do not get orphaned.
+
+### Fixed
+
+- #400: Fixed stale-engine respawn stacking multiple daemon generations. Single-generation handoff now enforced: requester exits unconditionally, bounded-wait lock takeover, lock-losers exit cleanly. Restores `auto_restart_on_stale_engine` flag, reverting temporary disable from #402.
+
+- **Daemon restart no longer leaves the daemon stopped when origin is ahead (#353).** Stale-engine
+  restarts now respawn in place within the live tmux session: skills relinked via
+  `bin/install --update` before the handoff, `remain-on-exit` armed at session creation, and
+  the flow is detect drift → relink → write marker → respawn (no exit/pidfile-release/dead
+  session). An operator on `conduct-ts daemon connect` stays connected across the respawn.
+  Modules: `daemon-tmux.ts`, `daemon-cli.ts`, `daemon.ts`; capstone specs in
+  `daemon-stale-respawn-e2e.test.ts` + `daemon-tmux-smoke.test.ts`
+  (adr-2026-07-06-stale-engine-respawn-in-place).
+
+- Re-enabled bin/setup worktree smoke by invoking the worktree's own `bin/setup` (#334).
+
+- **Continuous daemon no longer dies silently at its first idle poll (#329 regression).**
+  `createDefaultSleep` unref'd its timer, so during an idle poll with no wake-watchers
+  registered (a fully drained backlog) the sleep timer was the process's only pending work —
+  the node event loop emptied and the daemon exited 0 mid-await with no log, no HALT, and no
+  restart marker (observed 2026-07-07: three consecutive silent boot-deaths ~10s after
+  startup). The idle-poll timer now holds the event loop; a regression test pins the timer's
+  ref via a test-only seam (an await-based test is a false green — the vitest runner itself
+  keeps the loop alive).
+
+- **Daemon false-ship guard: daemon no longer records shipped markers for outcomes missing verified PR evidence.** Done-outcomes with null prUrl or non-pr finishChoice now halt with HALT markers, DONE markers deleted, and worktrees kept for operator inspection (#337).
+- **Rate-limit cascades now prevented by coordinated episode wait (resolves 2026-07-03
+  incident).** Previously, N concurrent workers hitting a rate-limit all waited independently
+  (e.g., 300s fixed), then retried at once → thundering herd → cascading HALTs + 300s wedges
+  that ignored SIGTERM. With the coordinator active, all workers wake up at a single shared
+  deadline (extracted from the provider message, timezone-aware), then resume with jitter so
+  they spread out instead of colliding. Episode-caused HALTs are automatically recovered when
+  the deadline passes.
+- **Session-limit and usage-limit signals now properly classified as rate-limited (PRIMARY
+  fix for 2026-07-03 incident).** Subtle API responses that don't set HTTP 429 but clearly
+  signal exhaustion in the message body (e.g., "session limit exceeded") are now detected by
+  `isRateLimitError(output)` and trigger rate-limit coordination instead of being silently
+  treated as a step failure.
+- Backfilled the missing intake marker `.docs/intake/2026-06-30-background-intake-conduct-loop.md`
+  (`Owner: jstoup111`): the spec landed without an owner stamp, so the post-cutover owner gate
+  held it as `unowned-post-cutover` and the daemon never built it. With the marker committed on
+  the default branch, `readSpecOwnerStamp` resolves the owner and the spec re-enters the
+  dispatchable backlog.
+- **Engineer handoff write-back no longer spawns `gh` with `ENOENT` (recurring; ledger advanced
+  anyway) (#290).** `report()` in `src/engine/engineer/intake/github-issues.ts` previously fell
+  back to `process.cwd()` when the poll-cache had no entry for a repo (e.g. write-back invoked
+  without a prior `poll()`), spawning `gh` from whatever directory the daemon happened to be
+  running in — which could be missing/deleted and fail with `ENOENT`, or simply target the wrong
+  repo. The new `resolveReportCwd()` resolves cwd in order — poll-cache → registry lookup (matched
+  by `ghRepo`/`name`) → `os.homedir()` — with each candidate `existsSync`-checked; every `gh` call
+  already passes `-R <owner/repo>`, so any existing directory is sufficient.
+- **Daemon-lock handoff race can no longer end with zero daemons (ai-conductor#374).**
+  `clearStaleLockForRestart` and `ensureRunning`'s acquire-then-unlink step briefly own the
+  pidfile with their OWN live pid; a concurrent `ensureRunning` observing that transient
+  record (or the phantom `pid: -1` owner left when it vanished mid-read) concluded "live
+  daemon, no-op" and returned — while the transient holder unlinked and returned too,
+  leaving nothing running (the flaky `daemon-restart-lock` AC3b failure that blocked CI on
+  unrelated PRs, and the production shape of `daemon restart` racing an engineer-claim
+  nudge). Handoff records are now marked `transient: true` (`PidRecord`, additive) and
+  `ensureRunning` treats a live transient or phantom owner as in-transition — it spawns;
+  the spawned daemon's boot-time acquire and the idempotent tmux session arbitrate any
+  duplicate. Live NON-transient owners still strictly no-op (FR-21/ADR-005 unchanged).
+- **manual_test FAILs can no longer be whitewashed or shipped (#367, incident PR #364).**
+  The completion gate (`engine/artifacts.ts`) now records the worktree HEAD sha in
+  `.pipeline/manual-test-fail-evidence.json` when it observes FAIL rows (via the new
+  injectable `CompletionContext.getHeadSha` seam; fail-open without a repo) and refuses a
+  later FAIL-free results file unless HEAD has moved — a PASS rewrite with no fix commits
+  no longer satisfies the gate. In daemon runs, a manual_test that exhausts its retries
+  with FAIL rows recorded is routed deterministically back to `build` with the FAIL rows as
+  the retry hint (kickback `manual_test → build`, bounded by `MAX_KICKBACKS_PER_GATE`),
+  then HALTs naming the exhausted budget; a non-FAIL gate miss (missing/stale results)
+  HALTs directly.
+
+- Worktree-rooted installs can no longer brick the operator environment (ai-conductor#363):
+  (1) `bin/install` refuses global-mutating modes (default, `--update`) when its own checkout
+  physically resolves under `.worktrees/` — exiting non-zero before any global write, with the
+  resolved root and remedy in the message (`--check`/`--help`/`--uninstall` unaffected);
+  (2) a new `resolveInstalledHarnessRoot()` ladder (`src/conductor/src/engine/install-freshness.ts`,
+  adr-2026-07-06-installed-root-resolution-for-global-writes) derives the installed main checkout
+  from the git common dir and hard-rejects worktree roots — the self-build relink preflight now
+  throws `InstallStaleError` (→ `.pipeline/HALT`, no dispatch) instead of running
+  `bin/install --update` at a worktree, and `runSelfBuildDispatch` passes the installed root to
+  `provisionSandbox` so the sandbox `settings.json` retarget (main → worktree) actually fires.
+  `resolveHarnessRoot` is untouched (self-host detection unchanged — regression-locked in
+  `detector.test.ts`).
+- Every conductor step now starts on a fresh LLM session unconditionally (ai-conductor#325):
+  the step-boundary `resetSession()` in `engine/conductor.ts` is no longer gated behind the
+  daemon-only `freshContextPerStep` flag, which left interactive `/conduct` and the DECIDE
+  front half sharing one persistent session across steps (context bloat + cross-step
+  leakage). The flag is removed from `ConductorOptions` and from the daemon's conductor
+  construction (`daemon-cli.ts`); within-step retries still resume the step's own session.
+
+- Daemon re-kick play-forward rebase now routes a conflict through the same gated `/rebase`
+  resolution loop the finish-time step uses (bounded by `rebase_resolution_attempts`) before
+  parking for a human, instead of hard-HALTing on the first conflict. Extracted the shared
+  `runGatedRebaseResolution` helper so both `conductor.ts:runRebaseStep` and
+  `daemon-rekick.ts:resumeRebaseFirst` resolve identically (#300)
+- gitignore `.engine-staging-*/` so an orphaned publish-engine scratch dir can no
+  longer dirty the working tree. `publish-engine` stages the built engine into a
+  `.engine-staging-<rand>/` temp dir and renames it into place; an interrupted or
+  crashed publish leaves one behind. Because the pattern was unignored, that orphan
+  made `git status` report the tree dirty, and the daemon's fast-forward guard then
+  permanently logged `skip fast-forward: working tree not clean` — the checkout fell
+  ~20 commits behind `origin/main`, the engine was never rebuilt, and a stale engine
+  ran for hours (root cause of #338; downstream halt #336). Ignoring the scratch
+  pattern stops a single orphan from wedging the daemon into staleness. Deeper
+  cleanup (publish-engine self-sweep on crash + fast-forward guard ignoring
+  daemon-owned build scratch) tracked in #338.
+- Prevent re-dispatch of delivered and stranded intake entries via claim-time delivery guard (#243)
+- CI: skipped the `publish-interrupted` `bin/setup worktree compatibility` smoke
+  pending #334. It was authored to self-skip until `bin/setup` existed; `bin/setup`
+  landed (#269) and un-skipped it, but the script resolves its target from its own
+  location (`$0/..`), so invoking the primary's `bin/setup` from a worktree
+  rebuilds the primary and never creates the worktree's `dist` (ENOENT). A
+  pre-existing defect the new CI is the first to exercise; tracked in #334 and
+  skipped so the suite is honestly green rather than red on unrelated breakage.
+- CI: the `engineer-agent-hosted` acceptance suite failed under the new PR
+  workflow (#322) because `dispatchEngineer({kind:'land'})` resolves a
+  machine-scoped owner-gate identity from `~/.ai-conductor/config.yml` (where
+  `spec_owner` wins over the `gh` fallback). With no `spec_owner` and no `gh`
+  auth on the CI runner the land path exited *"identity unresolved"* before
+  reaching the behavior under test — six tests green locally (dev is gh-authed)
+  but red in CI. Fixed by pointing `HOME` at a hermetic fake home carrying
+  `spec_owner` in the suite's `beforeEach` (the same pattern the sibling
+  `engineer-cli-land-owner` and `conductor-owner-stamp` suites already use),
+  so identity resolves deterministically and independently of ambient gh auth.
+
+### Added
+
+- **`verify-claims` skill — correctness & assumption gate (gating, phase: all).** A cross-cutting
+  correctness discipline other skills apply at their decision points: it attaches a grounded
+  confidence % (with basis — verified / inferred / unverified) to non-trivial claims and theories,
+  surfaces every assumption, and HARD-BLOCKS any specced or built work resting on an unconfirmed
+  *load-bearing* assumption until the operator approves it (autonomous runs HALT with the assumption
+  ledger rather than silently picking the likely value). Armed at load-bearing points by a new
+  HARNESS.md **Correctness & Assumption Gate** rule (not an always-on tax) and cited by two roles:
+  **authors** that surface assumptions and hard-block before an artifact locks (`explore`, `prd`,
+  `architecture-review`, `stories`, `plan`, `writing-system-tests`), and **verifiers/judges** that
+  attach a grounded confidence % to every finding/verdict and never assert an unverified one
+  (`assess`, `conflict-check`, `code-review`, `prd-audit`, `manual-test`, `remediate`, `debugging`).
+  Execution/orchestration/mechanical steps (e.g. `tdd`, `pipeline`, `conduct`, `finish`) rely on the
+  rule and surrounding gates rather than self-citing. Each citing skill also declares `verify-claims`
+  in its `requires` frontmatter. Added to the generated model-selection table (`inherits caller` —
+  runs in the invoking skill's context). The verifier discipline is also propagated into the agent
+  personas that actually author findings (so the gate isn't orphaned in the calling skill): a
+  **Confidence Calibration** section in `evaluator`, `prd-auditor`, `remediation-planner`,
+  `domain-reviewer`, `cto-orchestrator`, and the 9 `cto-*` specialists, plus assumption-surfacing in
+  `planner` (the `generator` is deliberately left heads-down).
+- `engineer resolve` recovery subcommand to mark stranded entries delivered (recover from write-back failures)
+- Local-commit and pr-skipped handoff outcomes now record branch evidence for auditing
+- CI: added a PR-triggered GitHub Actions workflow that runs the harness integrity test suite and the conductor build/vitest suite on every pull request.
 - writing-system-tests: FR→acceptance-spec coverage gate — product-track runs emit a per-FR coverage table (`.pipeline/fr-coverage.md`) and refuse to complete while any FR is unresolved (spec-covered / unit-covered / already-tested dispositions with citations). (#244)
 - **Deep-seam tmux guard prevents real daemon sessions under AI_CONDUCTOR_NO_REAL_EXEC kill-switch (#257).** The default tmux runner in `engine/daemon-tmux.ts` checks the `AI_CONDUCTOR_NO_REAL_EXEC` environment variable before creating a new tmux session. When set to '1' and a daemon session name is targeted, the runner throws an error instead of executing, preventing test suites from leaking real tmux daemon sessions into the system. The kill-switch is set globally by vitest, ensuring all conductor tests run in isolation without spawning long-lived daemon processes.
 - **Daemon self-termination on missing repo root with repo_root_missing stop reason (#257).** The daemon now checks at the start of each loop iteration whether its repo root has disappeared (e.g., a worktree deleted out from under it). On definitive absence, it logs the missing path, sets `stoppedReason: 'repo_root_missing'`, and cleanly exits after draining in-flight workers to completion. This enables safe self-termination and cleanup when the underlying repository is removed without leaving the daemon process orphaned.
@@ -33,9 +768,36 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the reused PR's title/body, and the finish completion gate fails (fail-open on gh
   read errors) while the recorded PR title still starts with `needs-remediation:`
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+- **Engine-owned task-status.json with git-evidence auto-heal (#302).** The conductor
+  engine is now the single authority for `.pipeline/task-status.json`, which tracks
+  per-task completion state across build retries. Completion evidence is derived from
+  git log (commits with `Task: <id>` trailers). The auto-heal step (`engine/autoheal.ts`)
+  reconciles stale in-flight state before a gate retry by matching commits to tasks via
+  trailer match and content-hash, flipping `pending` tasks to `completed` when evidence
+  is unambiguous (word-boundary name match + file-path overlap with plan). All
+  reconciliations logged to `.pipeline/audit-trail/` for audit. Engine seeds task-status
+  on merge/upsert from plan; the trailer contract (`Task: <id>` in commit messages) is
+  verified by the rebase completion gate (FR-9, commit preservation).
+- **Daemon auto-park on N-attempt trigger (#302).** When the daemon encounters N
+  consecutive no-evidence gate misses (a gate showing no new commit evidence since its
+  prior attempt) or an empty/missing plan at seed time, it auto-parks the feature instead
+  of re-kicking infinitely. Auto-park writes `.daemon/parked/<slug>` with provenance
+  `auto` and the reason in the marker body (e.g., `'empty plan'` or `'no evidence after
+  2 attempts'`), emits a `ConductorEvent` of type `auto_park`, and halts gracefully.
+  Unpark (`conduct daemon unpark <slug>`) removes the park marker and resets the
+  evidence counter. The daemon dashboard's PARKED group displays provenance (`— auto-parked`
+  for machine-triggered, `— operator` for human-placed), distinguishing the two halt
+  styles. Auto-park is deterministic (triggered after N consecutive no-evidence misses);
+  operator park is human-triggered via the `conduct daemon park` subcommand.
 
 ### Changed
 
+- **manual-test now routes an unexplained failure through `/debugging` before fixing.** The Bug
+  Loop added an explicit root-cause-discovery step: a manual FAIL gives the symptom, not the cause,
+  so when the cause is not obvious the skill dispatches the `/debugging` protocol (root cause before
+  fix, no fixes without evidence) instead of guessing a reproducing test or patch. Previously
+  `/debugging` was cited only for the design-conformance gate. (Complements the existing
+  `tdd` → `/debugging` escalation when GREEN won't go green.)
 - Armed `auto_restart_on_stale_engine: true` in this repo's committed `.ai-conductor/config.yml` — the idle daemon now respawns in place when a local rebuild makes its running engine stale (#256/PR #307 feature, default-inert until armed).
 
 - **Daemon restart now preserves session and respects pause state.** The restart verb (`conduct restart`, formerly kill-session + new-session) is now respawn-in-place: uses tmux respawn-pane -k to remain in the same session with the same window layout. An operator watching a connected daemon stays connected through restart. Restart gating honors pause state — a paused daemon's restart is queued, not immediate. Follows adr-2026-07-04-respawn-in-place-restart.
@@ -45,6 +807,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   frozen value, ending the per-feature version-gate HALT + manual `.pipeline/version-approval`
   round-trip. Read at daemon startup (restart to apply); update or remove at the 1.0 cut.
 - **pipeline: per-task VERIFY now runs the scoped affected-test set with fallback-to-full-suite triggers; batch-boundary full suite unchanged (#245).** Implementation subagents now scope each task's VERIFY step to the test files affected by that task's code changes, reducing feedback latency and test noise. Fallback triggers—shared/core modules (3+ importers), config/migrations/test infrastructure, empty scoped set, or low-confidence mapping—revert to full suite when a task's scope is indeterminate. Batch-boundary verification continues to run the full test suite. Scoped sets are reported per-task and visible in the pipeline dispatch output.
+
+### Removed
+
+- Removed `check_harness_config` (consumer CLAUDE.md → HARNESS.md auto-upgrade) from `bin/conduct`; detection is retained by the session-start context hook. Unblocks the v1.0 bin/conduct removal (#226).
 
 ### Migration
 
@@ -68,6 +834,59 @@ If you have daemons running:
 
 Reverting is not supported: if you revert past this version, the `dist` symlink structure will block the old build flow. Instead, keep forward and use `conduct pause --all` + `npm run build` + `conduct restart --all` for a controlled engine upgrade.
 
+**`manual_test` can no longer be disabled or downgraded (#367).**
+
+`manual_test` is now a gating step with locked enforcement. A project config that disables it
+(legal while it was advisory) now fails config validation at startup with
+`Cannot disable gating step: "manual_test"`. Remove the disable before updating:
+
+```bash migration
+# Only needed if your project config disables manual_test.
+# Remove the `manual_test:` disabled block from .ai-conductor/config.yml, e.g.:
+if [ -f .ai-conductor/config.yml ] && grep -qE 'manual_test:' .ai-conductor/config.yml; then
+  echo "manual_test step config found in .ai-conductor/config.yml —"
+  echo "if it sets 'disabled: true', delete that line (gating steps cannot be disabled)."
+  grep -n -A2 'manual_test:' .ai-conductor/config.yml
+else
+  echo "No manual_test step config found — nothing to do."
+fi
+```
+
+Project-local manual-test skill overrides keep working, but an `enforcement:` value in their
+frontmatter is now ignored (locked to `gating`).
+
+**Daemon-owned build-auth token — guarded mint with no clobber (Tasks 5–17, TR-2/TR-3).**
+
+The daemon now owns its build-auth token separately from operator OAuth. Before any dispatch
+in daemon-token mode, run `claude setup-token` to mint a token and configure its path in
+`harness_self_host.build_auth.token_path`. The pre-flight check fails closed if the token is
+missing or unreadable, printing mint instructions.
+
+```bash migration
+# Set up daemon build-token if not already present
+BUILD_AUTH_TOKEN_PATH="${HOME}/.ai-conductor/build-auth"
+
+# Only mint if the file doesn't exist (no clobber of operator's existing token)
+if [ ! -f "$BUILD_AUTH_TOKEN_PATH" ]; then
+  echo "Setting up daemon build-auth token…"
+  claude setup-token
+  chmod 600 "$BUILD_AUTH_TOKEN_PATH"
+else
+  echo "Build-auth token already present at $BUILD_AUTH_TOKEN_PATH — no action needed."
+fi
+
+# Then configure the path in your harness config (.ai-conductor/config.yml):
+echo "Configure in your harness config:"
+echo "  harness_self_host:"
+echo "    build_auth:"
+echo "      token_path: $BUILD_AUTH_TOKEN_PATH"
+```
+
+If you use daemon-token mode, ensure `harness_self_host.build_auth.token_path` points to
+your build token file (default: `~/.ai-conductor/build-auth`). The daemon reads this on
+each dispatch; the pre-flight check will guide you if the token is missing. For api-key mode,
+no action needed — the token requirement is skipped.
+
 ### Fixed
 
 - **Stale-engine checker was silently disabled by a wrong engine path — no daemon ever auto-restarted.** The daemon hashed `<projectRoot>/dist/index.js` for its engine identity, but the harness engine lives at `<projectRoot>/src/conductor/dist/index.js` (`<conductorRoot>/dist`, the symlink `publish`/`flipCurrent` maintain). The wrong path never exists, so `captureEngineIdentity` returned `null`, `createStaleEngineChecker(null)` returned a permanently-disabled checker that always reports `current`, and both the idle-boundary restart (#307) and the dispatch-boundary rebuild-and-restart (#320) were inert — the daemon logged `ARMED` yet also `Engine identity capture failed; stale-engine checker disabled`. Fixed by resolving the entry via a new `engineEntryPathForRepo(projectRoot)`. The identity primitive had unit coverage but its real wiring was never exercised against a self-host layout (orphaned-primitive class); added a regression test that drives the wired path against a real `src/conductor/dist` tree.
@@ -76,7 +895,7 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
 - **Engine build artifacts are no longer committed (#303).** `src/conductor/dist` (symlink) and `dist-versions/` snapshots are untracked and gitignored. They were never meant to be in git — `.gitignore` always ignored `src/conductor/dist/`, but the trailing-slash (directory-only) pattern stopped matching once the lifecycle feature made `dist` a symlink, and builds began committing it plus snapshots. Committed artifacts guaranteed merge conflicts on every engine-touching PR and version drift between committed snapshot and `src/`. Fresh checkouts build locally: `bin/install` runs `npm install + npm run build` in `src/conductor`, and `bin/conduct-ts` fails loudly with a rebuild hint when `dist` is absent. Supersedes the committed-snapshot sync in PR #308.
 - Committed engine snapshot synced to post-#307 source: `dist` now points at `dist-versions/20260704T212629Z-36f3f9fa74f5` (contains the stale-engine auto-restart code) and the superseded pre-#307 snapshot is dropped — fresh clones no longer run an engine older than `src/` (#303).
 - **Engine publish is now idempotent — unchanged content no longer mints a snapshot or flips `dist` (#303).** Every `conduct-ts` entry that runs `npm run build` (daemon start, `bin/install`, test suites) re-published a byte-identical engine, creating a duplicate `dist-versions/<ts>-<hash>/` snapshot and re-pointing the `dist` symlink each time. On a main checkout that churn showed up as `M src/conductor/dist` + untracked snapshots, which made the daemon **skip origin fast-forward tracking** ("working tree not clean") — silently freezing base-advance re-kicks. `publish()` now compares the freshly-built content hash against the current `dist` target and cleanly no-ops when identical (staging removed, current versionId returned); a dangling or incomplete current target still publishes to heal itself. Also repairs the `resolve(readlink(dist))` sites in `publish-engine`/`publish-interrupted` tests, which resolved the now-relative symlink target against process cwd and were latently red since the relative-symlink fix in PR #296.
-- **Test suite now detects and fails on `.pipeline` leak into process cwd.** The conductor test suite leaked a real `.pipeline/HALT`/`gates/`/`DONE` into the process working directory, poisoning live daemon worktrees when tests ran concurrent to a build. `Conductor.projectRoot` is now required and the suite fails loudly on any cwd `.pipeline` leak (#252).
+- test suite leaked a real `.pipeline/HALT`/`gates/`/`DONE` into the process cwd (poisoning live daemon worktrees); `Conductor.projectRoot` is now required and the suite fails on any cwd `.pipeline` leak (#252).
 - **Sandbox auth-expiry park-and-poll — wait for operator credentials refresh instead of failing (#210).** When a daemon headless/sandbox build encounters an expired operator token or an auth-failure step output ("Not logged in" / "Invalid API key"), the conductor now parks the feature and polls for the operator's credentials to refresh (via `claude login` file mtime + freshness check) instead of burning the retry budget. Pre-flight expiry check (before sandbox provision) detects common case; per-step auth-failure detector catches runtime cases. Polling is bounded by `auth_park_timeout_minutes` (default 60 minutes, configurable, opt-out via 0 or negative). Park consumes zero retries — budget is preserved for post-park-resume. Timeout or operator refresh triggers standard HALT remediation (clear marker + re-kick via base-SHA advance or manual dispatch). Modules: `operator-credentials.ts` (reader + wait primitive), `claude-provider.ts` classifier, `conductor.ts` wiring (pre-flight + retry-loop branch + timeout). Configuration: `auth_park_timeout_minutes` in project config.
 - engineer land keys the intake marker by the plan stem (was idea slug), so owner-gate and issue auto-close resolve land-authored specs (#207)
 - **`engineer migrate-issue-deps` now writes dependency links the live GitHub API accepts.**
@@ -526,8 +1345,69 @@ Reverting is not supported: if you revert past this version, the `dist` symlink 
   explicit Effort column and explicit complexity/as-built rows (previously folded into prose or
   omitted); regenerate via `bin/generate-model-table` after editing the source files, do not
   edit the generated block directly.
+- Documented the `mergeable_autoresolve` config block and behavior (detection, Tier-1/Tier-2
+  resolution, acceptance guards, fail-closed suite gate, lease-protected push, and
+  `needs-remediation` escalation) in `README.md` and `src/conductor/README.md`.
+- `skills/retro/SKILL.md` Data Collection now names `.pipeline/audit-trail/events.jsonl` as the
+  primary source for gate/rework history (replacing `.pipeline/gates/` files), documents that a
+  missing/empty audit trail despite executed steps must be reported INCOMPLETE rather than read
+  as a clean run, and keeps raw `.pipeline/events.jsonl` as the retry-escalation source for Part
+  C (issue #328, Story 7).
+- New `conduct-ts finish-record --choice pr|keep [--pr-url <url>] --pipeline-dir
+  <abs-path>` subcommand: the only supported way to record a finish outcome
+  (`.pipeline/finish-choice` marker, and for `pr`, `pr_url` in
+  `conduct-state.json`). Fail-closed — any gate failure (unverifiable PR,
+  unpushed `HEAD`, corrupt state, bad/missing flags) exits 1 with **no
+  writes**. Fixes the bug where the daemon's auto-mode finish step exited
+  without ever writing `.pipeline/finish-choice`, permanently stalling the
+  gate on try 1 of every ship. Invoked by `engine/step-runners.ts` in
+  daemon auto mode, and also runnable manually. See `src/conductor/README.md`
+  for the full flag reference.
+- **Daemon routes halt-user-input-required through /remediate before halting (#459).** When the
+  build step stalls with `.pipeline/halt-user-input-required` (a question the agent could not
+  resolve), the daemon dispatches the `/remediate` planner to determine if the question is
+  answerable from committed artifacts. Answerable questions are answered in-loop with no retry
+  burned; unanswerable questions halt with the original question preserved verbatim in
+  `.pipeline/HALT`, so operators never lose sight of what the agent needed. Stall remediations
+  share the existing `MAX_KICKBACKS_PER_GATE` budget (no new counter). See ADR-2026-07-10 and
+  the updated `/remediate` and `/pipeline` SKILL.md for full details.
+- Rekick pre-loop rebase now records rebase step state (#436): the re-kick
+  play-forward path (`resumeRebaseFirst`) now calls `recordRebaseStepCompletion`,
+  the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
+  rebase stamps `state.rebase` instead of leaving it silently unmarked.
 
 ## Migration
+
+Inline build-work attribution enforcement (commit-msg gate + session mutation gate)
+ships as new hook assets written by `prepareWorktree` at worktree provisioning time
+(`.pipeline/git-hooks/`, `.pipeline/session-hooks/`). Enforcement itself defaults OFF
+(no `attribution_enforcement_cutover` in project config), so no worktree's behavior
+changes on update. The new hook assets only land in worktrees **provisioned after**
+this update, though — a worktree created by an older daemon build will not have the
+new `MUTATION_GATE_HOOK`/updated `COMMIT_MSG_HOOK` scripts until it is re-provisioned.
+Restart the daemon so it picks up the updated provisioning code for any worktree it
+creates going forward; for a worktree already in flight, remove and let the daemon
+recreate it (only necessary once a project actually sets
+`attribution_enforcement_cutover` — until then the absent hooks have nothing to
+enforce).
+
+```bash migration
+# Restart a running daemon so subsequently-created worktrees get the updated
+# session-hook / git-hook provisioning code (no-op if no daemon is running).
+if [ -f .daemon/daemon.pid ]; then
+  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    echo "Stopped daemon (pid $pid) so it picks up updated worktree hook provisioning on restart."
+    echo "Restart with: conduct-ts daemon start"
+  else
+    echo "No live daemon detected. Existing worktrees keep their current hooks until re-provisioned."
+  fi
+else
+  echo "No daemon pidfile found. Existing worktrees keep their current hooks until re-provisioned."
+fi
+echo "Enforcement stays OFF until attribution_enforcement_cutover is set in .ai-conductor/config.yml."
+```
 
 The build daemon is now hosted inside a tmux session instead of a detached background process.
 Any daemon currently running as a detached process must be stopped once so the first
@@ -575,6 +1455,25 @@ else
 fi
 # Reminder: bare single-word feature descriptions are now rejected — quote
 # multi-word descriptions instead, e.g.:  conduct "add user auth"
+```
+
+The `post-commit-pipeline-sync.sh` hook has been removed (Task 15). Task-status.json completion is now
+owned by the engine; third-party writers are no longer registered. It has been replaced by
+`post-commit-derive-feedback.sh` (Task 28), which provides fast-feedback warnings on commits
+lacking a `Task: <id>` trailer. If you have the old hook from a prior harness version, it can be
+safely deleted — the engine will own task-status updates, and the new hook runs
+non-fatally to warn on missing evidence:
+
+```bash migration
+rm -f .claude/hooks/claude/post-commit-pipeline-sync.sh
+# Install the new fast-feedback derive hook in your project's .git/hooks:
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo '.')"
+HARNESS_ROOT="${PROJECT_ROOT}/.claude/harness"  # or wherever the harness is checked out
+if [ -d "$PROJECT_ROOT/.git" ] && [ -f "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" ]; then
+  cp "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
+  chmod +x "$PROJECT_ROOT/.git/hooks/post-commit"
+  echo "Installed fast-feedback post-commit hook"
+fi
 ```
 
 ### Changed

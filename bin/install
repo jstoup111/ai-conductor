@@ -18,6 +18,11 @@ HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 # harness update.
 UPDATE_MODE=false
 
+# ALLOW_WORKTREE_ROOT=true bypasses the worktree-root guard (issue #363). Set
+# via the --allow-worktree-root flag, which is stripped from "$@" before the
+# mode dispatch so it composes with any mode (e.g. --update).
+ALLOW_WORKTREE_ROOT=false
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -45,6 +50,37 @@ if [ ${#SKILLS[@]} -eq 0 ]; then
   fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
   exit 1
 fi
+
+# ─── Worktree-root guard (issue #363) ─────────────────────────────────────────
+
+# Refuse global-mutating installs when this checkout is a build worktree.
+# A daemon self-build once ran `bin/install --update` rooted at a worktree:
+# every global bin/skill symlink and settings.json hook path was repointed at
+# a directory that ship-time worktree removal then deleted, bricking the
+# operator environment. The guard keys on the PHYSICAL path (pwd -P) so a
+# symlinked logical path cannot hide the `.worktrees` segment. Read-only modes
+# (--check, --help) and --uninstall never call this.
+guard_worktree_root() {
+  if [ "$ALLOW_WORKTREE_ROOT" = true ]; then
+    return 0
+  fi
+  local physical_root
+  physical_root="$(cd "$HARNESS_DIR" && pwd -P)"
+  case "$physical_root" in
+    */.worktrees/*)
+      fail "Refusing to install from a build worktree."
+      echo ""
+      echo "  Resolved harness root: ${physical_root}"
+      echo ""
+      echo "  Installing from a worktree would repoint your global bins, skills, and"
+      echo "  settings.json hooks at a directory that is deleted when the build ships."
+      echo ""
+      echo "  Fix: run bin/install from the main checkout, or pass --allow-worktree-root"
+      echo "  if you really mean to install from this worktree."
+      exit 1
+      ;;
+  esac
+}
 
 # ─── Check Mode ───────────────────────────────────────────────────────────────
 
@@ -117,7 +153,7 @@ check_installation() {
   echo ""
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
     local mv_cmd
-    mv_cmd=$(python3 -c "import yaml,sys; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('markdown_viewer') or {}).get('command',''))" 2>/dev/null)
+    mv_cmd=$(python3 -c "import yaml,sys; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('markdown_viewer') or {}).get('command',''))" 2>/dev/null || true)
     if [ -n "$mv_cmd" ] && command -v "$mv_cmd" &>/dev/null; then
       ok "markdown viewer: ${mv_cmd} (artifact review)"
     else
@@ -128,8 +164,8 @@ check_installation() {
   fi
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^mermaid_renderer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
     local mr_preset mr_cmd
-    mr_preset=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('preset',''))" 2>/dev/null)
-    mr_cmd=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('command',''))" 2>/dev/null)
+    mr_preset=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('preset',''))" 2>/dev/null || true)
+    mr_cmd=$(python3 -c "import yaml; c=yaml.safe_load(open('$HARNESS_USER_CONFIG')) or {}; print((c.get('mermaid_renderer') or {}).get('command',''))" 2>/dev/null || true)
     if [ -z "$mr_cmd" ] || command -v "$mr_cmd" &>/dev/null; then
       ok "mermaid renderer: ${mr_preset:-unset} (diagram approval gates)"
     else
@@ -200,6 +236,11 @@ HARNESS_PERMISSIONS=(
 configure_permissions() {
   local settings_file=$1
 
+  if ! command -v python3 &>/dev/null; then
+    warn "python3 not found — skipping permissions configuration (re-run bin/install after installing python3)"
+    return 1
+  fi
+
   # Write permissions list to a temp file for python to read
   local perms_file
   perms_file=$(mktemp)
@@ -257,6 +298,11 @@ PYEOF
 configure_hooks() {
   local settings_file=$1
   local hooks_dir="${HARNESS_DIR}/hooks/claude"
+
+  if ! command -v python3 &>/dev/null; then
+    warn "python3 not found — skipping hooks configuration (re-run bin/install after installing python3)"
+    return 1
+  fi
 
   local output
   output=$(python3 << PYEOF
@@ -324,9 +370,14 @@ harness_hooks = {
             "matcher": "Bash",
             "hooks": [
                 {
+                    # Fast-feedback derive on commit (ADR engine-owned
+                    # task-status, post-landing amendment): engine-invoking,
+                    # strictly advisory — warns when a commit evidences no
+                    # task. Occupies the PostToolUse/Bash slot the removed
+                    # legacy pipeline-sync hook vacated.
                     "type": "command",
-                    "command": f"{hooks_dir}/post-commit-pipeline-sync.sh",
-                    "timeout": 10
+                    "command": f"{hooks_dir}/post-commit-derive-feedback.sh",
+                    "timeout": 15
                 }
             ]
         }
@@ -421,14 +472,15 @@ install_dependencies() {
     info "Installing rtk (token usage reduction)..."
     local rtk_installed=false
     if command -v brew &>/dev/null; then
-      brew install rtk 2>/dev/null && rtk_installed=true
+      # `|| true`: a failed brew install must not abort the script under set -e
+      brew install rtk 2>/dev/null && rtk_installed=true || true
     fi
     if ! $rtk_installed && command -v cargo &>/dev/null; then
-      cargo install --git https://github.com/rtk-ai/rtk 2>/dev/null && rtk_installed=true
+      cargo install --git https://github.com/rtk-ai/rtk 2>/dev/null && rtk_installed=true || true
     fi
     # Fallback: official install script (installs to ~/.local/bin)
     if ! $rtk_installed; then
-      if curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh 2>/dev/null; then
+      if curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh 2>/dev/null | sh 2>/dev/null; then
         rtk_installed=true
       fi
     fi
@@ -468,6 +520,43 @@ install_dependencies() {
   # Serena — optional LSP-backed semantic code toolkit (oraios/serena), used as an
   # MCP server. Opt-in: heavyweight, so we prompt rather than auto-install like rtk.
   # /bootstrap auto-registers it as a user-scope MCP server once it's on PATH.
+  #
+  # uv is Serena's installer. When it's missing, offer to install it first —
+  # platform-agnostic ladder: brew when present, else the official installer
+  # (https://astral.sh/uv/install.sh → ~/.local/bin) via curl or wget. Every
+  # rung is best-effort; failure degrades to the manual-install warning below.
+  if ! command -v serena &>/dev/null && ! command -v uv &>/dev/null && [ -t 0 ]; then
+    printf "  ${CYAN}→${NC} Install uv (Python tool manager — needed for Serena)? [y/N]: "
+    local uv_choice=""
+    read -r uv_choice || uv_choice=""
+    if [[ "$uv_choice" =~ ^[Yy]$ ]]; then
+      info "Installing uv..."
+      local uv_installed=false
+      if command -v brew &>/dev/null; then
+        brew install uv 2>/dev/null && uv_installed=true || true
+      fi
+      if ! $uv_installed; then
+        if curl -LsSf https://astral.sh/uv/install.sh 2>/dev/null | sh 2>/dev/null; then
+          uv_installed=true
+        elif wget -qO- https://astral.sh/uv/install.sh 2>/dev/null | sh 2>/dev/null; then
+          uv_installed=true
+        fi
+      fi
+      # The official installer lands in ~/.local/bin, which may not be on this
+      # shell's PATH yet — pick it up so the Serena prompt below can run now.
+      if ! command -v uv &>/dev/null && [ -x "${HOME}/.local/bin/uv" ]; then
+        export PATH="${HOME}/.local/bin:${PATH}"
+      fi
+      if command -v uv &>/dev/null; then
+        ok "uv installed"
+      else
+        warn "uv install failed — install manually: https://docs.astral.sh/uv/"
+      fi
+    else
+      info "Skipped uv — install later from https://docs.astral.sh/uv/"
+    fi
+  fi
+
   if command -v serena &>/dev/null; then
     ok "Serena already installed"
   elif ! command -v uv &>/dev/null; then
@@ -476,7 +565,7 @@ install_dependencies() {
     info "Serena available (oraios/serena) — install later with: uv tool install -p 3.13 serena-agent"
   else
     printf "  ${CYAN}→${NC} Install Serena semantic code toolkit (oraios/serena)? [y/N]: "
-    read -r serena_choice
+    read -r serena_choice || serena_choice=""
     if [[ "$serena_choice" =~ ^[Yy]$ ]]; then
       info "Installing Serena via uv..."
       if uv tool install -p 3.13 serena-agent 2>/dev/null; then
@@ -843,7 +932,7 @@ configure_conductor() {
         *) channel="tagged" ;;
       esac
     fi
-    CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" CHANNEL="$channel" NOW="$now" python3 -c '
+    if CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" CHANNEL="$channel" NOW="$now" python3 -c '
 import json, os
 from pathlib import Path
 cfg = {
@@ -853,11 +942,14 @@ cfg = {
     "lastCheckedAt": os.environ["NOW"],
 }
 Path(os.environ["CFG_PATH"]).write_text(json.dumps(cfg, indent=2) + "\n")
-'
-    ok "Created ${CONDUCTOR_CONFIG} (channel: ${channel}, version: ${detected})"
+' 2>/dev/null; then
+      ok "Created ${CONDUCTOR_CONFIG} (channel: ${channel}, version: ${detected})"
+    else
+      warn "python3 unavailable — ${CONDUCTOR_CONFIG} not created (update checks off until bin/install re-runs with python3)"
+    fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
-    CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" NOW="$now" python3 -c '
+    if CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" NOW="$now" python3 -c '
 import json, os
 from pathlib import Path
 p = Path(os.environ["CFG_PATH"])
@@ -870,8 +962,11 @@ cfg.setdefault("autoCheck", True)
 cfg["currentVersion"] = os.environ["DETECTED"]
 cfg["lastCheckedAt"] = os.environ["NOW"]
 p.write_text(json.dumps(cfg, indent=2) + "\n")
-'
-    ok "Refreshed ${CONDUCTOR_CONFIG} (version: ${detected})"
+' 2>/dev/null; then
+      ok "Refreshed ${CONDUCTOR_CONFIG} (version: ${detected})"
+    else
+      warn "python3 unavailable — ${CONDUCTOR_CONFIG} not refreshed"
+    fi
   fi
 }
 
@@ -948,13 +1043,15 @@ build_conduct_ts() {
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
+  guard_worktree_root
+
   echo -e "${BOLD}${CYAN}Installing James Stoup Agents Harness${NC}"
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
 
   # 1. Ensure directories exist
-  mkdir -p "$SKILLS_DIR"
-  mkdir -p "$LOCAL_BIN"
+  mkdir -p "$SKILLS_DIR" || warn "Could not create $SKILLS_DIR"
+  mkdir -p "$LOCAL_BIN" || warn "Could not create $LOCAL_BIN"
   ok "Created directories"
 
   # 2. Symlink skills
@@ -976,14 +1073,14 @@ install() {
         continue  # Already correct
       fi
       # Update stale symlink
-      ln -sfn "$source" "$target"
+      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink update failed"; continue; }
       updated=$((updated + 1))
     else
       if [ -e "$target" ]; then
         warn "Skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
-        mv "$target" "${target}.bak"
+        mv "$target" "${target}.bak" || { warn "Skill: ${skill} — backup failed, skipping"; continue; }
       fi
-      ln -sfn "$source" "$target"
+      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink failed"; continue; }
       installed=$((installed + 1))
     fi
   done
@@ -1002,13 +1099,13 @@ install() {
     local current
     current=$(readlink -f "$conduct_target" 2>/dev/null || echo "")
     if [ "$current" != "$conduct_source" ]; then
-      ln -sfn "$conduct_source" "$conduct_target"
+      ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink update failed"
       ok "Updated conduct script symlink"
     else
       ok "conduct script already current"
     fi
   else
-    ln -sfn "$conduct_source" "$conduct_target"
+    ln -sfn "$conduct_source" "$conduct_target" || warn "conduct symlink failed"
     ok "Installed conduct script to ${conduct_target}"
   fi
 
@@ -1032,13 +1129,13 @@ install() {
       local current_ts
       current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")
       if [ "$current_ts" != "$conduct_ts_source" ]; then
-        ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+        ln -sfn "$conduct_ts_source" "$conduct_ts_target" || warn "conduct-ts symlink update failed"
         ok "Updated conduct-ts script symlink"
       else
         ok "conduct-ts script already current"
       fi
     else
-      ln -sfn "$conduct_ts_source" "$conduct_ts_target"
+      ln -sfn "$conduct_ts_source" "$conduct_ts_target" || warn "conduct-ts symlink failed"
       ok "Installed conduct-ts script to ${conduct_ts_target}"
     fi
   else
@@ -1052,13 +1149,18 @@ install() {
     fi
   fi
 
-  # 4. Configure Claude Code permissions and hooks
+  # 4. Configure Claude Code permissions and hooks.
+  # Every phase from here on is called through `|| warn` — bash suppresses
+  # `set -e` inside a function whose exit status is tested, so no missing
+  # optional dependency (python3, brew, npm, viewer tools, ...) can abort the
+  # install. Failures degrade to a warning; only the skills-dir check and the
+  # worktree-root guard remain fatal.
   local settings_file="${HOME}/.claude/settings.json"
-  configure_permissions "$settings_file"
-  configure_hooks "$settings_file"
+  configure_permissions "$settings_file" || warn "Permissions configuration incomplete — continuing"
+  configure_hooks "$settings_file" || warn "Hooks configuration incomplete — continuing"
 
-  # 5. Check PATH
-  if echo "$PATH" | tr ':' '\n' | grep -q "\.local/bin"; then
+  # 5. Check PATH (pure bash — no external tools, so it can never abort)
+  if [[ ":$PATH:" == *".local/bin"* ]]; then
     ok "~/.local/bin is on PATH"
   else
     warn "~/.local/bin is NOT on PATH"
@@ -1069,15 +1171,15 @@ install() {
   if [ "$UPDATE_MODE" = true ]; then
     info "Update mode — skipping dependency bootstrap"
   else
-    install_dependencies
+    install_dependencies || warn "Optional dependency bootstrap incomplete — continuing"
   fi
 
   # 6b. Seed or refresh the AI-conductor config (channel prompt only on first run)
-  configure_conductor
+  configure_conductor || warn "Conductor config refresh incomplete — continuing"
 
   # 6c. Prompt for a markdown viewer (skipped on --update)
-  configure_md_viewer
-  configure_mermaid_renderer
+  configure_md_viewer || warn "Markdown viewer configuration incomplete — continuing"
+  configure_mermaid_renderer || warn "Mermaid renderer configuration incomplete — continuing"
 
   # 7. Check Claude Code
   if command -v claude &>/dev/null; then
@@ -1135,17 +1237,34 @@ uninstall() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+# Strip --allow-worktree-root from "$@" before the mode dispatch so it can be
+# combined with any mode (e.g. `--update --allow-worktree-root`).
+_filtered_args=()
+for _arg in "$@"; do
+  if [ "$_arg" = "--allow-worktree-root" ]; then
+    ALLOW_WORKTREE_ROOT=true
+  else
+    _filtered_args+=("$_arg")
+  fi
+done
+set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
+unset _filtered_args _arg
+
 case "${1:-}" in
   --check)     check_installation; exit $? ;;
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
+    echo "  --allow-worktree-root"
+    echo "                Bypass the refusal to install from a .worktrees/ checkout"
+    echo "                (installs from a worktree normally repoint global symlinks"
+    echo "                at a directory that is deleted at ship time)"
     echo "  -h, --help    Show this help"
     ;;
   *)           install ;;

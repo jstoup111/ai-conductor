@@ -11,6 +11,7 @@ import {
   detectCodebase,
   hasTechnicalAssessment,
   runProjectPrelude,
+  invokeSkill,
   daysSince,
 } from '../../src/engine/project-prelude.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -154,6 +155,72 @@ describe('daysSince', () => {
   it('returns a large positive number for an old timestamp', () => {
     const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
     expect(daysSince(tenDaysAgo)).toBe(10);
+  });
+});
+
+describe('invokeSkill return type', () => {
+  it('propagates rateLimited: true from provider', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: true,
+        output: '',
+        exitCode: 0,
+        rateLimited: true,
+      }),
+      invokeInteractive: vi.fn(),
+    } as unknown as LLMProvider;
+
+    const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
+    expect(result.success).toBe(true);
+    expect(result.rateLimited).toBe(true);
+  });
+
+  it('propagates success without rateLimited flag when not rate-limited', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: true,
+        output: '',
+        exitCode: 0,
+        rateLimited: false,
+      }),
+      invokeInteractive: vi.fn(),
+    } as unknown as LLMProvider;
+
+    const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
+    expect(result.success).toBe(true);
+    expect(result.rateLimited).toBe(false);
+  });
+
+  it('propagates genuine failures (success: false, not rate-limited)', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        output: 'Error message',
+        exitCode: 1,
+        rateLimited: false,
+      }),
+      invokeInteractive: vi.fn(),
+    } as unknown as LLMProvider;
+
+    const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
+    expect(result.success).toBe(false);
+    expect(result.rateLimited).toBe(false);
+  });
+
+  it('distinguishes rate-limit from other failures', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        output: '',
+        exitCode: 429,
+        rateLimited: true,
+      }),
+      invokeInteractive: vi.fn(),
+    } as unknown as LLMProvider;
+
+    const result = await invokeSkill(provider, 'session-1', '/test', 'Test prompt');
+    expect(result.success).toBe(false);
+    expect(result.rateLimited).toBe(true);
   });
 });
 

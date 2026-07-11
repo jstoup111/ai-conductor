@@ -4,7 +4,7 @@ description: "Use after /finish to validate stories via curl (API) or browser (f
 enforcement: gating
 phase: ship
 standalone: false
-requires: [finish]
+requires: [finish, verify-claims]
 ---
 
 ## Purpose
@@ -12,6 +12,11 @@ requires: [finish]
 Validates that implemented stories actually work by exercising the running application.
 Automated tests verify code correctness; manual testing verifies the system works end-to-end
 as a user would experience it.
+
+**Correctness gate:** a "story X passes" result is a claim. Per the `/verify-claims` protocol, a
+pass is `verified` — you actually observed the response/behavior — never assumed from the code or
+inferred from a green unit test. If a story was not actually exercised, do not claim it passed;
+report it as untested rather than presenting an assumption as a result.
 
 **Runs AFTER `/finish` and BEFORE `/retro`.**
 
@@ -102,24 +107,30 @@ Display results to the user in the conversation AND save the same table to
 `.pipeline/manual-test-results.md`. The conductor's completion gate reads this
 file to verify manual-test ran for the current feature — without it, the
 step has no objective on-disk evidence and cannot pass. This is run evidence,
-not a committed design artifact: it lives under `.pipeline/` (gitignored),
-uses a stable filename, and is overwritten each run.
+not a committed design artifact: it lives under `.pipeline/` (gitignored) and
+uses a stable filename.
+
+**Append, never overwrite.** Each run of this skill adds a new
+`## Attempt N — <ISO timestamp>` section to the file (create the file with
+`## Attempt 1 — …` on the first run). The conductor's gate evaluates only the
+LATEST attempt section, so a fixed old FAIL doesn't block you — but the history
+of what earlier attempts found is preserved for audit. Rewriting or deleting a
+previous attempt's rows destroys run evidence; do not do it.
 
 Use this format (both in chat and in the file):
 
 ```
 # Manual Test Results
-**Date:** YYYY-MM-DD
 **Server:** localhost:3000
 **Tester:** Claude (automated curl) / User (browser)
 
-## Results
+## Attempt 1 — 2026-07-06T10:00:00Z
 
 | Story | Criterion | Result | Notes |
 |---|---|---|---|
 | ... | ... | PASS/FAIL | ... |
 
-## Bugs Found
+### Bugs Found
 1. **BUG-001:** Invalid URL returns 500 instead of 422 (story: create-link, negative path: invalid input)
 2. **BUG-002:** ...
 ```
@@ -129,17 +140,34 @@ which is what the conductor's freshness check needs (the file's mtime must be
 newer than the current session's start; a committed copy from a prior run
 would defeat that).
 
+**Whitewash guard (#367):** when the gate observes FAIL rows it records the
+current commit sha; a later attempt whose rows are all PASS is accepted only if
+new commits exist since that sha. Recording PASS without actually committing a
+fix will be refused by the gate — the fix in Step C below MUST land as commits
+before the re-verify attempt. In daemon runs, a manual_test that keeps failing
+is kicked back to the build step with the FAIL rows as evidence (bounded), then
+HALTs for a human if the bug survives the kickback budget.
+
 ### 6. Bug Loop
 
 **Any FAIL result becomes a bug that loops back through `/tdd`:**
 
-**Before fixing, confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
+**Step A — Confirm the buggy code path is supposed to exist** (the `/debugging` Phase 4
 GATE). Manual-test surfaces defects on *shipped* code — read the governing APPROVED ADR/PRD for
 the affected component first. If the buggy path violates or is superseded by an approved
 decision, the fix is a **conformance finding (kickback), not a patch** — a bug on a condemned
 path is a removal signal. This cheap design check precedes the expensive RED→fix→suite cycle.
 
-1. For each bug, write a failing test that reproduces it (RED)
+**Step B — If the cause is not obvious, discover it before fixing.** A manual FAIL gives you the
+*symptom* (e.g. "500 instead of 422"), not the *cause*. When you cannot point to the root cause
+with confidence from the failure alone, do NOT guess a fix or a reproducing test — dispatch the
+`/debugging` protocol (root cause before fix; no fixes without evidence) in a fresh sub-session,
+handing it the failing story, the observed-vs-expected result, and any server output/logs. Come
+back with an evidence-backed root cause, then proceed. Skip this step only when the cause is
+genuinely self-evident from the failure.
+
+**Step C — Fix via TDD, now that the cause is known:**
+1. Write a failing test that reproduces the bug at the right layer (RED)
 2. Fix it (GREEN)
 3. Commit
 4. Re-run the manual test for that story to verify
@@ -147,7 +175,7 @@ path is a removal signal. This cheap design check precedes the expensive RED→f
 **Do NOT proceed to `/retro` with known bugs.** The manual test gate must be clean.
 
 ```
-/finish → /manual-test → bugs found? → /tdd (fix each bug) → /manual-test (re-verify) → /retro
+/finish → /manual-test → bugs found? → /debugging (discover cause, if not obvious) → /tdd (fix each bug) → /manual-test (re-verify) → /retro
 ```
 
 The loop continues until all stories pass manual testing.
@@ -168,6 +196,9 @@ docker compose down
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
 - [ ] Results displayed to user
+- [ ] Per-story PASS/FAIL results written to `.pipeline/manual-test-results.md` BEFORE
+      exiting — the completion gate reads this file; a run that tests everything but
+      records nothing fails the step
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly

@@ -44,8 +44,13 @@ describe('bin/install --update — real relink smoke (TR-4)', () => {
         const probe = 'conduct'; // a skill that definitely exists in skills/
         expect(existsSync(join(HARNESS_ROOT, 'skills', probe))).toBe(true);
 
-        // Run the REAL binary with the REAL argv the adapter uses.
-        await execa(INSTALLER, ['--update'], {
+        // Run the REAL binary with the REAL argv the adapter uses, plus
+        // --allow-worktree-root: this suite itself runs from build worktrees,
+        // where the #363 guard would otherwise (correctly) refuse before the
+        // relink step this test smokes. The flag is inert on a main checkout;
+        // the guard's own refusal paths are covered by
+        // test/test_install_worktree_guard.sh.
+        await execa(INSTALLER, ['--update', '--allow-worktree-root'], {
           cwd: HARNESS_ROOT,
           reject: false,
           env: { HOME: home, PATH: `${shim}:${process.env.PATH ?? ''}` },

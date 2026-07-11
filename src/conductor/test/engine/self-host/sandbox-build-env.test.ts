@@ -8,6 +8,8 @@ import {
   readdir,
   realpath,
   lstat,
+  chmod,
+  stat,
 } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,11 +18,13 @@ import {
   provisionSandboxBuildEnv,
   withSandboxBuildEnv,
   sandboxLinkTargets,
-  refreshSandboxCredentials,
   SandboxProvisionError,
   realSandboxFs,
   type SandboxFs,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
+// Task 10 & 11: refreshSandboxCredentials must not be exported
+// (Task 11 implements re-reading the daemon token on park-resume instead)
+import * as sandboxBuildEnvModule from '../../../src/engine/self-host/sandbox-build-env.js';
 
 // Phase 3 (TR-5/TR-6) — the safety core. A harness self-build must run against a
 // THROWAWAY CLAUDE_CONFIG_DIR linked to its worktree, and must NEVER mutate the
@@ -108,16 +112,12 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     }
   });
 
-  it('copies the operator credentials into the sandbox so the headless build can authenticate — as a COPY, not a symlink to global (TR-6)', async () => {
+  it('sandbox does NOT copy operator credentials — auth via CLAUDE_CODE_OAUTH_TOKEN injection instead', async () => {
     await writeFile(join(globalConfig, '.credentials.json'), '{"token":"secret"}');
     const sandbox = await provisionSandboxBuildEnv(opts());
     try {
       const credPath = join(sandbox.configDir, '.credentials.json');
-      expect(existsSync(credPath)).toBe(true);
-      expect(await readFile(credPath, 'utf-8')).toBe('{"token":"secret"}');
-      // It is a real file, not a symlink resolving back into global config.
-      expect((await lstat(credPath)).isSymbolicLink()).toBe(false);
-      expect((await realpath(credPath)).startsWith(await realpath(globalConfig))).toBe(false);
+      expect(existsSync(credPath)).toBe(false);
     } finally {
       await sandbox.teardown();
     }
@@ -144,6 +144,37 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
       expect(written).not.toContain(`${mainReal}/hooks/claude`);
       // Personal path (outside the harness checkout) is left alone.
       expect(written).toContain(`${globalReal}/hooks/personal.sh`);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('retarget content lock (#363 / TR-4): hook command + statusLine rewritten to the worktree, personal hooks untouched, ZERO harness-root paths remain', async () => {
+    const mainReal = await realpath(mainCheckout);
+    const globalReal = await realpath(globalConfig);
+    const settings = JSON.stringify({
+      statusLine: { type: 'command', command: `${mainReal}/bin/statusline` },
+      hooks: {
+        PreToolUse: [
+          { command: `${mainReal}/hooks/claude/block-destructive-git.sh` }, // harness hook → retarget
+          { command: `${globalReal}/hooks/personal.sh` }, // personal hook → untouched
+        ],
+      },
+    });
+    await writeFile(join(globalConfig, 'settings.json'), settings);
+
+    const sandbox = await provisionSandboxBuildEnv(opts({ harnessRoot: mainCheckout }));
+    try {
+      const written = await readFile(join(sandbox.configDir, 'settings.json'), 'utf-8');
+      const worktreeReal = await realpath(worktree);
+      // Both harness-owned paths rewritten to the worktree…
+      expect(written).toContain(`${worktreeReal}/hooks/claude/block-destructive-git.sh`);
+      expect(written).toContain(`${worktreeReal}/bin/statusline`);
+      // …the personal path untouched…
+      expect(written).toContain(`${globalReal}/hooks/personal.sh`);
+      // …and NOT ONE main-checkout-prefixed harness path survives (the incident
+      // mode: a no-op retarget leaves the build on the operator's live hooks).
+      expect(written).not.toContain(`${mainReal}/`);
     } finally {
       await sandbox.teardown();
     }
@@ -341,38 +372,109 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     expect(await readFile(stateFile, 'utf-8')).toBe(before);
   });
 
-  // ── Re-copy primitive (refreshSandboxCredentials) ──────────────────────────
-  // After provisioning a sandbox, the operator's credentials may be updated
-  // (e.g., token refresh). refreshSandboxCredentials re-copies the source
-  // .credentials.json into the sandbox, overwriting stale credentials.
 
-  it('refreshSandboxCredentials re-copies .credentials.json from source to sandbox, overwriting with new content', async () => {
-    // Initial credentials in global config.
-    const sourceCredsPath = join(globalConfig, '.credentials.json');
-    await writeFile(sourceCredsPath, '{"token":"old-token"}');
+  // ── Write-fence provisioning (TR-4) ─────────────────────────────────────────
+  // The sandbox provisions a write-fence script that blocks edits to the live
+  // harness checkout (outside the worktree) while permitting edits within the
+  // worktree and unrelated repositories. The script is wired into settings.json
+  // as a PreToolUse hook and materialized on disk with +x mode.
 
-    // Provision a sandbox with the initial credentials.
+  it('provisions the write-fence script into the sandbox: settings.json contains fence entry, script exists and is executable, no placeholder residue', async () => {
     const sandbox = await provisionSandboxBuildEnv(opts());
     try {
-      const sandboxCredsPath = join(sandbox.configDir, '.credentials.json');
-      expect(existsSync(sandboxCredsPath)).toBe(true);
-      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"old-token"}');
+      // settings.json contains the fence PreToolUse entry
+      const settingsPath = join(sandbox.configDir, 'settings.json');
+      const settingsContent = await readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(settingsContent);
+      expect(settings.hooks).toBeDefined();
+      expect(Array.isArray(settings.hooks.PreToolUse)).toBe(true);
+      const fenceEntry = settings.hooks.PreToolUse.find(
+        (hook: Record<string, unknown>) =>
+          typeof hook === 'object' &&
+          hook !== null &&
+          'matcher' in hook &&
+          hook.matcher === 'Edit|Write|MultiEdit|NotebookEdit|Bash' &&
+          'hooks' in hook &&
+          Array.isArray(hook.hooks) &&
+          hook.hooks.some(
+            (h: unknown) =>
+              typeof h === 'object' &&
+              h !== null &&
+              'command' in h &&
+              (h as Record<string, unknown>).command?.toString().includes('write-fence.sh'),
+          ),
+      );
+      expect(fenceEntry).toBeDefined();
 
-      // Mutate the source credentials (simulating an operator token refresh).
-      await writeFile(sourceCredsPath, '{"token":"new-token"}');
+      // The write-fence.sh script exists
+      const scriptPath = join(sandbox.configDir, 'write-fence.sh');
+      expect(existsSync(scriptPath)).toBe(true);
 
-      // Re-copy from source to sandbox.
-      await refreshSandboxCredentials(globalConfig, sandbox.configDir);
+      // Script is executable (+x mode)
+      const stats = await stat(scriptPath);
+      // Check if the owner execute bit is set (mode & 0o100)
+      expect((stats.mode & 0o100) !== 0).toBe(true);
 
-      // Sandbox credentials are now updated to the new value.
-      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"new-token"}');
-
-      // It is a regular file, not a symlink (TR-6).
-      expect((await lstat(sandboxCredsPath)).isSymbolicLink()).toBe(false);
-      expect((await lstat(sandboxCredsPath)).isFile()).toBe(true);
+      // Script content has no placeholder residue (baked roots verified)
+      const scriptContent = await readFile(scriptPath, 'utf-8');
+      expect(scriptContent).toContain(`WORKTREE_ROOT="${worktree}"`);
+      expect(scriptContent).toContain(`HARNESS_ROOT="${worktree}"`);
+      // No placeholder patterns (bash scripts legitimately contain < for comparisons)
+      expect(scriptContent).not.toContain('{{');
+      expect(scriptContent).not.toContain('}}');
+      expect(scriptContent).not.toContain('<placeholder>');
+      expect(scriptContent).not.toContain('PLACEHOLDER');
     } finally {
       await sandbox.teardown();
     }
+  });
+
+  it('fails closed when fence script write fails (fs error): SandboxProvisionError thrown, partial sandbox cleaned up, build not launched', async () => {
+    let createdConfigDir = '';
+    const failingFs: SandboxFs = {
+      ...realSandboxFs,
+      mkdtemp: async (prefix) => {
+        createdConfigDir = await realSandboxFs.mkdtemp(prefix);
+        return createdConfigDir;
+      },
+      writeFile: async (path, data) => {
+        // Fail when writing the write-fence.sh script
+        if (path.includes('write-fence.sh')) {
+          throw Object.assign(new Error('ENOSPC: no space left on device'), {
+            code: 'ENOSPC',
+            path,
+          });
+        }
+        return realSandboxFs.writeFile(path, data);
+      },
+    };
+
+    const err = await provisionSandboxBuildEnv(opts({ fs: failingFs })).catch((e) => e);
+    expect(err).toBeInstanceOf(SandboxProvisionError);
+    expect(String(err.message)).toContain('write-fence.sh');
+
+    // Partial sandbox removed — never launched
+    expect(createdConfigDir).not.toBe('');
+    expect(existsSync(createdConfigDir)).toBe(false);
+    expect(await readdir(base)).toEqual([]);
+  });
+
+  it('teardown removes the write-fence.sh script (no residue after sandbox cleanup)', async () => {
+    const sandbox = await provisionSandboxBuildEnv(opts());
+    const scriptPath = join(sandbox.configDir, 'write-fence.sh');
+    expect(existsSync(scriptPath)).toBe(true);
+
+    await sandbox.teardown();
+
+    expect(existsSync(scriptPath)).toBe(false);
+    expect(existsSync(sandbox.configDir)).toBe(false);
+  });
+
+  // Task 10: refreshSandboxCredentials must not be exported.
+  // The park-resume path (Task 11) re-reads the daemon token instead of
+  // re-copying stale credentials.
+  it('does not export refreshSandboxCredentials (Task 10, Task 11 pairing)', () => {
+    expect('refreshSandboxCredentials' in sandboxBuildEnvModule).toBe(false);
   });
 });
 

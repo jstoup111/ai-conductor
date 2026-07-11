@@ -112,6 +112,17 @@ This is a sampling review — you cannot check every negative path. Focus on:
 2. Data mutation negative paths (create/update/destroy with invalid input)
 3. External dependency failure paths (what happens when the third-party call fails?)
 
+## Confidence Calibration (verify-claims)
+
+Every finding you report is a claim, and a confident-but-wrong one does real damage — it triggers
+wasted work or masks a real risk. Apply the `verify-claims` discipline to each finding:
+
+- Attach a **confidence %** and its **basis**: `verified` (you traced it in the code) or
+  `inferred` (derived from adjacent evidence, not directly observed).
+- **Never assert a finding you have not verified.** If you could not confirm it, say so.
+- A finding below high confidence is **tentative** — label it; do not state it as a confirmed issue.
+- Do not inflate severity or certainty beyond what the evidence supports.
+
 ## Output Format
 
 Write your output to `.pipeline/assessment/cto-testing.md` using the following structure:

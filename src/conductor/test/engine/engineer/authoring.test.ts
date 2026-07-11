@@ -33,7 +33,7 @@ async function git(args: string[], cwd: string): Promise<string> {
 // ---------------------------------------------------------------------------
 async function makeGitRepo(): Promise<{ repoPath: string; defaultBranch: string }> {
   const repoPath = await mkdtemp(join(tmpdir(), 'authoring-test-'));
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoPath });
   // Set a user so commits work in CI
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });
@@ -191,7 +191,44 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
       expect([cmd, ...args].join(' ')).not.toMatch(/\bclaude\b\s+-p\b/);
     }
   });
+
+  it('#505 Task 8: runAuthoring commits CONDUCT_ENGINE_COMMIT=1 — lands trailer-less under an active commit-msg gate', async () => {
+    // Wire the real hook scripts (from a location outside repoPath, so the
+    // main tree's dirty-guard check stays clean) and a build-step-active
+    // marker committed BEFORE the hook is wired (a pre-enforcement commit).
+    // If runAuthoring's spec-branch `git commit` did NOT set
+    // CONDUCT_ENGINE_COMMIT=1, this would be rejected trailer-less.
+    const { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } = await import('../../../src/engine/git-hook-assets.js');
+    const execFileFn = promisify(execFileCb);
+
+    await mkdirForMarker(repoPath);
+    await writeFile(join(repoPath, '.pipeline', 'build-step-active'), 'active\n');
+    await execFileFn('git', ['add', '.pipeline/build-step-active'], { cwd: repoPath });
+    await execFileFn('git', ['commit', '-m', 'test: seed build-step-active marker'], { cwd: repoPath });
+
+    const hooksDir = await mkdtemp(join(tmpdir(), 'authoring-task8-hooks-'));
+    const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');
+    const commitMsgPath = join(hooksDir, 'commit-msg');
+    await writeFile(prepareCommitMsgPath, PREPARE_COMMIT_MSG_HOOK, 'utf-8');
+    await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
+    await execFileFn('chmod', ['+x', prepareCommitMsgPath, commitMsgPath]);
+    await execFileFn('git', ['config', 'core.hooksPath', hooksDir], { cwd: repoPath });
+
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+
+    await execFileFn('git', ['checkout', result.branch], { cwd: repoPath });
+    const { stdout: subject } = await execFileFn('git', ['log', '-1', '--format=%s'], { cwd: repoPath });
+    expect(subject.trim()).toContain('spec: author artifacts for "CSV export"');
+
+    await rm(hooksDir, { recursive: true, force: true });
+  });
 });
+
+async function mkdirForMarker(repoPath: string): Promise<void> {
+  const { mkdir } = await import('fs/promises');
+  await mkdir(join(repoPath, '.pipeline'), { recursive: true });
+}
 
 // ---------------------------------------------------------------------------
 // Task 33: runAuthoring regression guards — no stub/DRAFT/subprocess (FR-6, C2)

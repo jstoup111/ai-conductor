@@ -10,9 +10,8 @@
 // Fix: for a self-build only, run the build step with a THROWAWAY
 // CLAUDE_CONFIG_DIR that:
 //   - symlinks skills/ + hooks/ into the build worktree (the edited harness);
-//   - COPIES the operator's `.credentials.json` so the headless `claude -p` build
-//     can authenticate — a fresh CLAUDE_CONFIG_DIR has no auth, and the daemon
-//     cannot re-auth interactively (auth is subscription creds, not an env key);
+//   - Authenticates via CLAUDE_CODE_OAUTH_TOKEN env injection (daemon-provided
+//     token); no credential copy needed — the sandbox inherits the daemon's auth.
 //   - COPIES `settings.json` and RETARGETS every harness-checkout absolute path
 //     (hook commands, statusLine, …) to the worktree, so the build exercises its
 //     OWN edited hooks rather than the live checkout's. Personal `~/.claude/hooks`
@@ -26,9 +25,9 @@
 //     fabricates a trust grant the operator has not made.
 // The sandbox is torn down after the build (pass OR fail) under a try/finally
 // guarantee; global ~/.claude is never touched. Isolation is a contract:
-//   - Credentials/settings are COPIED, never symlinked — no sandbox symlink ever
-//     resolves to a global-config target (TR-6 invariant); the two symlinks
-//     (skills/hooks) resolve only into the worktree.
+//   - Settings are COPIED (not symlinked) — no sandbox symlink ever resolves to a
+//     global-config target (TR-6 invariant); the two symlinks (skills/hooks) resolve
+//     only into the worktree.
 //   - A missing worktree skills//hooks/ dir FAILS CLOSED (SandboxProvisionError) —
 //     a dangling-link sandbox is never launched (TR-5).
 //   - Teardown runs on the crash branch (withSandboxBuildEnv finally), asserted.
@@ -37,6 +36,7 @@
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
@@ -51,6 +51,8 @@ export interface SandboxFs {
   writeFile(path: string, data: string): Promise<void>;
   /** Copy `src` → `dest`; callers guard with `pathExists` first. */
   copyFile(src: string, dest: string): Promise<void>;
+  /** Set file mode (permissions) — used to make scripts executable. */
+  chmod(path: string, mode: number): Promise<void>;
 }
 
 export const realSandboxFs: SandboxFs = {
@@ -62,6 +64,7 @@ export const realSandboxFs: SandboxFs = {
   readFile: (path) => fsp.readFile(path, 'utf-8').then((t) => t, () => null),
   writeFile: (path, data) => fsp.writeFile(path, data, 'utf-8'),
   copyFile: (src, dest) => fsp.copyFile(src, dest),
+  chmod: (path, mode) => fsp.chmod(path, mode),
 };
 
 /** Thrown when the sandbox cannot be provisioned; names the failed path. */
@@ -97,8 +100,8 @@ export interface ProvisionOptions {
    */
   harnessRoot: string;
   /**
-   * The operator's live config dir — the source of `.credentials.json` +
-   * `settings.json`. Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+   * The operator's live config dir — the source of `settings.json`.
+   * Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
    */
   globalConfigDir?: string;
   /** Base dir for the throwaway config dir (defaults to the OS temp dir). */
@@ -119,7 +122,6 @@ export interface ProvisionOptions {
 /** The two links a sandbox exposes into the worktree. */
 const LINKED_DIRS = ['skills', 'hooks'] as const;
 /** Config files copied (never symlinked) from the operator's global config. */
-const CREDENTIALS_FILE = '.credentials.json';
 const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
 const STATE_FILE = '.claude.json';
@@ -134,7 +136,15 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 
   childEnv(): NodeJS.ProcessEnv {
     // Copy — never mutate the parent env (no bleed back into the daemon).
-    return { ...this.parentEnv, CLAUDE_CONFIG_DIR: this.configDir };
+    // Task 9 (TR-2): Include the current CLAUDE_CODE_OAUTH_TOKEN from process.env
+    // (if present). The token is set dynamically around step execution and may change
+    // during retries/parks, so we capture the current value at call time.
+    const env: Record<string, string | undefined> = { ...this.parentEnv };
+    env.CLAUDE_CONFIG_DIR = this.configDir;
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+    return env as NodeJS.ProcessEnv;
   }
 
   async teardown(): Promise<void> {
@@ -147,10 +157,11 @@ class ThrowawaySandbox implements SandboxBuildEnv {
 
 /**
  * Provision a throwaway CLAUDE_CONFIG_DIR: skills/ + hooks/ symlinked into the
- * build worktree, with `.credentials.json` + a hook-retargeted `settings.json`
- * copied in. On ANY provisioning failure (including a missing worktree
- * skills//hooks/ dir), removes the partial sandbox and throws
- * SandboxProvisionError — the caller must not launch a build against it.
+ * build worktree, with a hook-retargeted `settings.json` copied in. Auth is via
+ * daemon-provided CLAUDE_CODE_OAUTH_TOKEN env injection; no credential copy.
+ * On ANY provisioning failure (including a missing worktree skills//hooks/ dir),
+ * removes the partial sandbox and throws SandboxProvisionError — the caller must
+ * not launch a build against it.
  */
 export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<SandboxBuildEnv> {
   const fs = opts.fs ?? realSandboxFs;
@@ -175,20 +186,20 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       await fs.symlink(target, join(configDir, name));
     }
 
-    // Auth: copy the operator's credentials so the headless build authenticates.
-    // Copy (not symlink) keeps the TR-6 no-global-symlink invariant intact.
-    // Copy-if-present: an env-key auth (ANTHROPIC_API_KEY) needs no creds file.
-    await copyIfPresent(
-      fs,
-      join(globalConfigDir, CREDENTIALS_FILE),
-      join(configDir, CREDENTIALS_FILE),
-    );
-
     // settings.json: copy + retarget harness-checkout paths to the worktree, so
     // hooks declared by absolute path fire against the EDITED hooks.
     await provisionSettings(fs, {
       src: join(globalConfigDir, SETTINGS_FILE),
       dest: join(configDir, SETTINGS_FILE),
+      harnessRoot: opts.harnessRoot,
+      worktreeRoot: opts.worktreeRoot,
+    });
+
+    // write-fence.sh: provision the fence script that blocks edits to the live
+    // harness checkout. The script is materialized with +x mode and wired into
+    // settings.json as a PreToolUse hook.
+    await provisionWriteFence(fs, {
+      configDir,
       harnessRoot: opts.harnessRoot,
       worktreeRoot: opts.worktreeRoot,
     });
@@ -233,6 +244,32 @@ async function provisionSettings(
   if (raw === null) return; // no global settings.json → nothing to provision
   const rewritten = await retargetHarnessPaths(fs, raw, args.harnessRoot, args.worktreeRoot);
   await fs.writeFile(args.dest, rewritten);
+}
+
+/** Generate and provision the write-fence script, then merge it into settings.json. */
+async function provisionWriteFence(
+  fs: SandboxFs,
+  args: { configDir: string; harnessRoot: string; worktreeRoot: string },
+): Promise<void> {
+  // Generate the fence script with baked-in roots
+  const scriptContent = generateFenceScript(args.worktreeRoot, args.harnessRoot);
+  const scriptPath = join(args.configDir, 'write-fence.sh');
+
+  // Write the script to disk
+  await fs.writeFile(scriptPath, scriptContent);
+
+  // Make it executable (mode 0o755 for rwxr-xr-x, but we only care about +x for owner)
+  await fs.chmod(scriptPath, 0o755);
+
+  // Read the settings.json that was just written
+  const settingsPath = join(args.configDir, 'settings.json');
+  const settingsJson = await fs.readFile(settingsPath);
+
+  // Merge the fence entry into settings.json with the script path
+  const updatedSettings = mergeFenceIntoSettings(settingsJson, scriptPath);
+
+  // Write the updated settings back to disk
+  await fs.writeFile(settingsPath, updatedSettings);
 }
 
 /**
@@ -356,21 +393,3 @@ export async function sandboxLinkTargets(
   };
 }
 
-/**
- * Re-copy `.credentials.json` from source config dir to sandbox config dir,
- * overwriting any existing sandbox credentials. Used when the operator's
- * credentials are refreshed (e.g., token expiry) and the running sandbox
- * build needs updated credentials without tearing down the sandbox.
- *
- * The copy is a regular file, never a symlink (TR-6 invariant). If the source
- * file does not exist, this is a no-op (no error thrown — the caller is
- * responsible for ensuring the source exists when needed).
- */
-export async function refreshSandboxCredentials(
-  sourceConfigDir: string,
-  sandboxConfigDir: string,
-): Promise<void> {
-  const src = join(sourceConfigDir, CREDENTIALS_FILE);
-  const dest = join(sandboxConfigDir, CREDENTIALS_FILE);
-  await copyIfPresent(realSandboxFs, src, dest);
-}

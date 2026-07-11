@@ -72,6 +72,24 @@ that came from the CLI arg or chat — omit `--source-ref` in steps 4–5 for th
 > The bare `conduct-ts engineer` launcher pre-polls GitHub issues before this session starts, so a
 > `claim` here returns work captured at launch. You do not poll yourself — just claim.
 
+**Hypothesis reframing for embedded solution content.** If the captured idea embeds solution content
+(e.g., "Fix direction", "Design sketch", "Proposal", named seams/functions — template-shaped or not):
+
+- Treat the sketch as the **filer's hypothesis**, not the requirement.
+- Carry it into DECIDE and `/explore` **labeled explicitly as a candidate, not the chosen approach**.
+- Frame the idea for routing and discovery by its **problem statement + desired outcomes**, not the sketch.
+
+The target shape (Observed / Impact / Desired outcome / Hypotheses) and its quality bar are defined
+by the `/intake` skill. This step *consumes* ideas already in the queue; when instead **filing** an
+intake issue on the operator's behalf (`gh issue create`), author it with `/intake`.
+
+**Pure-sketch case (no stated problem or outcomes).** If the idea is a design sketch with no stated
+problem or outcomes:
+
+- Do **not** spec the sketch verbatim as the requirement.
+- Derive the WHAT (problem + outcomes) from the sketch or ask the operator to state it.
+- Confirm the WHAT with the operator before proceeding to step 2 (routing).
+
 ### 2. Route to a target repo
 Read the registry: `conduct-ts engineer projects` (JSON: `{name, path, description, tags}` per project).
 Reason **in chat** about the best-fit project — this is your own judgment over the registry, not a
@@ -102,8 +120,10 @@ order**, honoring each skill's own clarity loops and human gates. The engineer o
 DECIDE phase — the daemon only builds — so produce the complete, build-ready artifact set (every
 `.docs/` artifact is written **inside the worktree**, never the primary checkout):
 
-1. `/explore` → context + approaches; decide + confirm the **track** (product/technical) →
-   `.docs/track/<stem>.md`. Ephemeral notes only (no `.docs/` design doc).
+1. `/explore` → Pass the **problem statement + desired outcomes** as primary framing; if an embedded
+   hypothesis exists from step 1, pass it explicitly marked as "a candidate, not the chosen approach".
+   Run discovery and confirm the **track** (product/technical) → `.docs/track/<stem>.md`. Ephemeral
+   notes only (no `.docs/` design doc).
 2. **Complexity assessment** → classify the feature **S / M / L** (same signals conduct uses:
    models, integrations, auth, state machines, story count). Write the tier to
    `.docs/complexity/<plan-stem>.md` with a `Tier: <S|M|L>` line (plus rationale). The stem
@@ -190,6 +210,12 @@ launcher regains control when the operator quits and relaunches you clean for th
       primary tree was never checked out or dirtied
 - [ ] Worktree creation strict-aborted (no primary-tree mutation) if it could not be made
 - [ ] All artifacts + the `spec/<slug>` branch landed inside the resolved target repo only
+- [ ] Spec is discovery-build-ready: stories end `Status: Accepted` (no DRAFT) and the plan
+      carries a task dependency tree (`**Dependencies:**` lines or a Task Dependency Graph) —
+      discovery warn-skips merged specs missing either, permanently until fixed on main
+- [ ] Spec branch pushed to origin BEFORE `handoff` (`git push -u origin spec/<slug>` from the
+      worktree — `gh pr create` fails on an unpushed branch and handoff falls back to a
+      local-commit result that opens no PR)
 - [ ] Spec PR opened to the target repo; nothing built, nothing merged
 - [ ] On success the per-idea worktree was removed and `spec/<slug>` stayed reachable; on failure it
       was kept for inspection

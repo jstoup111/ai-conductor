@@ -252,3 +252,96 @@ describe('runDaemon — PR #109 no-advance invariant under re-kick (FR-8)', () =
     expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
   });
 });
+
+// ── Task 18: reconcileHaltPrs wiring (ADR-013 pattern) ──────────────────────────
+
+describe('runDaemon — reconcileHaltPrs injection (Task 18)', () => {
+  it('reconcileHaltPrs invoked on startup, before any dispatch', async () => {
+    const order: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => items(1),
+      runFeature: async (it) => {
+        order.push(`dispatch:${it.slug}`);
+        return { slug: it.slug, status: 'done' };
+      },
+      reconcileHaltPrs: async () => {
+        order.push('reconcile');
+      },
+    };
+    await runDaemon(deps, { concurrency: 1, once: true });
+
+    const reconcileIdx = order.indexOf('reconcile');
+    const firstDispatchIdx = order.findIndex((e) => e.startsWith('dispatch:'));
+    expect(reconcileIdx).toBeGreaterThanOrEqual(0);
+    expect(reconcileIdx).toBeLessThan(firstDispatchIdx);
+  });
+
+  it('reconcileHaltPrs invoked once per idle poll tick', async () => {
+    let reconcileCount = 0;
+    let sleptCount = 0;
+
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => [],
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      sleep: async () => {
+        sleptCount++;
+      },
+      reconcileHaltPrs: async () => {
+        reconcileCount++;
+      },
+    };
+    await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 3 });
+
+    // 1 startup reconcile + 3 idle-poll reconciles (one per sleep/tick).
+    expect(sleptCount).toBe(3);
+    expect(reconcileCount).toBe(4); // startup + 3 idle
+  });
+
+  it('reconcileHaltPrs runs BEFORE sweepMergeableLabels', async () => {
+    const order: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => items(1),
+      runFeature: async (it) => {
+        order.push(`dispatch:${it.slug}`);
+        return { slug: it.slug, status: 'done' };
+      },
+      reconcileHaltPrs: async () => {
+        order.push('reconcile');
+      },
+      sweepMergeableLabels: async () => {
+        order.push('sweep');
+      },
+    };
+    await runDaemon(deps, { concurrency: 1, once: true });
+
+    const reconcileIdx = order.indexOf('reconcile');
+    const sweepIdx = order.indexOf('sweep');
+    expect(reconcileIdx).toBeGreaterThanOrEqual(0);
+    expect(sweepIdx).toBeGreaterThanOrEqual(0);
+    expect(reconcileIdx).toBeLessThan(sweepIdx);
+  });
+
+  it('reconcileHaltPrs throw is swallowed and does not disrupt the daemon loop', async () => {
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => items(1),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      reconcileHaltPrs: async () => {
+        throw new Error('reconcile failed');
+      },
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    expect(res.processed).toHaveLength(1);
+    expect(res.processed[0].status).toBe('done');
+  });
+
+  it('reconcileHaltPrs is optional (no-op if absent)', async () => {
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => items(1),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      // no reconcileHaltPrs
+    };
+    const res = await runDaemon(deps, { concurrency: 1, once: true });
+    expect(res.processed).toHaveLength(1);
+    expect(res.processed[0].status).toBe('done');
+  });
+});

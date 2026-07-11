@@ -30,6 +30,25 @@ describe('Event types', () => {
     const options: RecoveryOption[] = ['retry', 'interactive', 'back', 'skip', 'quit'];
     expect(options).toHaveLength(5);
   });
+
+  it('ConductorEvent halt_cleared accepts cause "operator" with an optional step', () => {
+    const event: ConductorEvent = { type: 'halt_cleared', step: 'build', cause: 'operator' };
+    expect(event.type).toBe('halt_cleared');
+    expect(event.cause).toBe('operator');
+
+    const serialized = JSON.parse(JSON.stringify(event)) as ConductorEvent;
+    expect(serialized).toEqual(event);
+  });
+
+  it('ConductorEvent halt_cleared accepts cause "rekick" without a step', () => {
+    const event: ConductorEvent = { type: 'halt_cleared', cause: 'rekick' };
+    expect(event.type).toBe('halt_cleared');
+    expect(event.cause).toBe('rekick');
+    expect(event.step).toBeUndefined();
+
+    const serialized = JSON.parse(JSON.stringify(event)) as ConductorEvent;
+    expect(serialized).toEqual(event);
+  });
 });
 
 describe('Config types', () => {

@@ -4,7 +4,7 @@ description: "Use at the start of any new feature or change. Explores context, a
 enforcement: advisory
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -13,6 +13,11 @@ The divergent opening of DECIDE: understand intent, gather context, weigh approa
 **what kind of work this is** — a *product* feature (needs a PRD) or *technical-only* work
 (refactor/infra/deps — no PRD). Exploration is a thinking step; its durable outputs are the chosen
 approach (to `.memory/decisions/`) and the **track marker** — not a design doc.
+
+**Correctness gate:** approach recommendations and the track decision are load-bearing. Apply the
+`/verify-claims` protocol — attach a grounded confidence % to non-trivial claims about the code or
+domain, surface every assumption feeding an approach, and HARD-BLOCK (operator approval interactive,
+HALT if autonomous) on any unconfirmed assumption that changes which approach or track you pick.
 
 ## Boundaries
 
@@ -58,6 +63,16 @@ Present 2-3 approaches with clear trade-offs and a recommendation; the user deci
 **Idea:** [Brief description — behavior/strategy, not mechanism]
 **Pros:** … **Cons:** … **Best when:** …
 ```
+
+**Embedded Design Divergence Rule:** When the incoming idea carries an embedded solution design
+(identified as a filer hypothesis from the engineer step):
+
+- The hypothesis enters as **at most one candidate approach** (not privileged, but present)
+- At least **one genuine alternative NOT derived from the filer's sketch MUST be generated** and weighed
+- The hypothesis **may still be recommended when it wins on merits** — this rule prevents default adoption
+  (anchoring bias), not the idea itself
+
+When the idea has no embedded design, behavior is unchanged; no added ceremony.
 
 ### 4. Decide the Track (product vs technical)
 

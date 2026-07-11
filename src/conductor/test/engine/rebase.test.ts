@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 
 import {
   resolveBase,
@@ -17,8 +18,9 @@ import {
   type GitResult,
   type RebaseOutcome,
 } from '../../src/engine/rebase.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(
@@ -197,7 +199,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
   it('noop → rebase satisfied, no kickback', async () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'noop' }, true);
-    expect(r).toEqual({ satisfied: true, kickedBack: [] });
+    expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
   });
 
@@ -205,7 +207,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
@@ -214,12 +216,12 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
   it('changed but manual_test did not run → only build kicked back', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual(['build']);
+    expect(r.kickedBack).toEqual(['build', 'build_review']);
   });
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'changelog_resolved' }, true);
-    expect(r).toEqual({ satisfied: true, kickedBack: [] });
+    expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
   });
 
   it('conflict_halt → rebase NOT satisfied', async () => {
@@ -231,6 +233,199 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(false);
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
+  });
+
+  it('preVerify capability absent (undefined) → byte-identical behavior, reverified: []', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const r = await applyRebaseVerdicts(dir, outcome, true, undefined);
+    // Verify existing behavior is unchanged (byte-identical)
+    expect(r.satisfied).toBe(true);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    // Verify new field is present and empty when preVerify is absent
+    expect(r.reverified).toEqual([]);
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
+  });
+
+  it('changed + preVerify(build) returns done:true → build re-verified, build_review/manual_test kicked back', async () => {
+    // Pre-seed a stale build verdict so we can verify checkedAt is newer
+    const staleTime = Date.now() - 10000;
+    await writeVerdict(dir, 'build', {
+      satisfied: false,
+      reason: 'stale old verdict',
+      checkedAt: staleTime,
+    });
+
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: true };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is reverified, NOT in kickedBack
+    expect(r.kickedBack).toEqual(['build_review', 'manual_test']);
+    expect(r.reverified).toEqual(['build']);
+
+    // build verdict is fresh satisfied
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(true);
+    expect(build?.reason).toContain('re-verified mechanically');
+    expect(build?.checkedAt).toBeGreaterThan(staleTime);
+
+    // build_review and manual_test are kicked back unconditionally
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
+  });
+
+  it('changed + preVerify(build) returns done:false → build kicked back (byte-identical to today)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts', 'src/b.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: false, reason: 'task 3 has no evidence' };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is kicked back, NOT in reverified
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with kickback (byte-identical to today)
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+    expect(build?.kickback?.evidence).toContain('src/a.ts');
+    expect(build?.kickback?.evidence).toContain('src/b.ts');
+
+    // Verify the verdict shape is byte-identical to the capability-absent case
+    const withoutPreVerify: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts', 'src/b.ts'] };
+    await applyRebaseVerdicts(dir, withoutPreVerify, true, undefined);
+    const buildWithout = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(buildWithout?.satisfied);
+    expect(build?.reason).toBe(buildWithout?.reason);
+    expect(build?.kickback?.from).toBe(buildWithout?.kickback?.from);
+  });
+
+  it('changed + preVerify(build) THROWS → fail-closed invalidation with no error escape', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        throw new Error('git failed');
+      }
+      return { done: false };
+    };
+
+    // Should NOT throw; error is caught internally
+    const r = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is kicked back (fail-closed), NOT in reverified
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with fail-closed kickback
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+    expect(build?.kickback?.evidence).toContain('src/a.ts');
+
+    // build_review and manual_test also kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+    expect(manualTest?.kickback?.from).toBe('rebase');
+  });
+
+  it('Task 6.1: changed + ranManualTest: false + preVerify(build) done:true → build_review only kicked back (no manual_test)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: true };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, false, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build is reverified (not in kickedBack), build_review kicked back, manual_test NOT present
+    expect(r.kickedBack).toEqual(['build_review']);
+    expect(r.reverified).toEqual(['build']);
+
+    // build verdict is fresh satisfied
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(true);
+    expect(build?.reason).toContain('re-verified mechanically');
+
+    // build_review is kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    // manual_test verdict should NOT be written (ranManualTest: false)
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest).toBeNull();
+  });
+
+  it('Task 6.2: changed + ranManualTest: false + preVerify(build) done:false → build and build_review kicked back (no manual_test)', async () => {
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    const preVerify = async (step: string) => {
+      if (step === 'build') {
+        return { done: false, reason: 'no evidence' };
+      }
+      return { done: false };
+    };
+
+    const r = await applyRebaseVerdicts(dir, outcome, false, preVerify);
+
+    // Rebase gate satisfied
+    expect(r.satisfied).toBe(true);
+
+    // build and build_review kicked back, manual_test NOT present
+    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.reverified).toEqual([]);
+
+    // build verdict is unsatisfied with kickback
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.reason).toBe('invalidated by file-changing rebase');
+    expect(build?.kickback?.from).toBe('rebase');
+
+    // build_review is kicked back
+    const buildReview = await readVerdict(dir, 'build_review');
+    expect(buildReview?.satisfied).toBe(false);
+    expect(buildReview?.kickback?.from).toBe('rebase');
+
+    // manual_test verdict should NOT be written (ranManualTest: false)
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest).toBeNull();
   });
 });
 
@@ -261,5 +456,169 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       throw new Error('bus down');
     });
     await expect(emitRebaseEvent(events, { kind: 'noop' })).resolves.toBeUndefined();
+  });
+});
+
+describe('engine/rebase — rebase_gate_reverified event', () => {
+  it('accepts rebase_gate_reverified event with step, skippedDispatch, and optional reason', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: Array<{
+      type: string;
+      step?: string;
+      skippedDispatch?: boolean;
+      reason?: string;
+    }> = [];
+
+    events.on('rebase_gate_reverified', (e) => {
+      seen.push({
+        type: e.type,
+        step: e.step,
+        skippedDispatch: e.skippedDispatch,
+        reason: e.reason,
+      });
+    });
+
+    await events.emit({
+      type: 'rebase_gate_reverified',
+      step: 'build',
+      skippedDispatch: false,
+    });
+
+    await events.emit({
+      type: 'rebase_gate_reverified',
+      step: 'manual_test',
+      skippedDispatch: true,
+      reason: 'gate already satisfied',
+    });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual({
+      type: 'rebase_gate_reverified',
+      step: 'build',
+      skippedDispatch: false,
+      reason: undefined,
+    });
+    expect(seen[1]).toEqual({
+      type: 'rebase_gate_reverified',
+      step: 'manual_test',
+      skippedDispatch: true,
+      reason: 'gate already satisfied',
+    });
+  });
+});
+
+describe('Task 13: Evidence bar not lowered — corroboration + forged negatives', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'task13-'));
+    // Initialize a minimal git repo for evidence extraction
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('(a) Evidence trailer exists but commit touches NONE of the task plan paths → pre-verify fails', async () => {
+    // Create a plan with Task 1 that has specific file paths
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    const planPath = join(dir, '.docs/plans/plan.md');
+    await writeFile(
+      planPath,
+      `
+# Implementation Plan
+
+### Task 1: Add feature
+**Story:** Feature 1
+**Files:**
+- src/feature.ts
+- src/feature.test.ts
+
+Task 1 implementation required.
+`,
+    );
+
+    // Create a commit with Task: 1 trailer but touch an unrelated file (does NOT touch plan paths)
+    await writeFile(join(dir, 'unrelated.txt'), 'unrelated content');
+    await execa('git', ['add', 'unrelated.txt'], { cwd: dir });
+    await execa('git',
+      ['commit', '-q', '-m', 'Commit with Task trailer\n\nTask: 1'],
+      { cwd: dir });
+
+    // Create pipeline directory and task-status.json with Task 1 marked completed
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', name: 'Task 1', status: 'completed' }] }),
+    );
+
+    // Create empty task-evidence.json (no evidence stamps)
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    );
+
+    // Call pre-verify (checkStepCompletion) with seed + derive context
+    const ctx = { projectRoot: dir, planPath };
+    const result = await checkStepCompletion(dir, 'build', ctx);
+
+    // Pre-verify must fail: Task 1 has an evidence trailer but the commit touches
+    // NONE of the plan's declared paths (src/feature.ts, src/feature.test.ts).
+    // Path corroboration failed, so deriveCompletion must NOT resolve the task.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
+  });
+
+  it('(b) task-status.json forged with all completed but empty evidence sidecar → pre-verify fails', async () => {
+    // Create a plan with Task 1
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    const planPath = join(dir, '.docs/plans/plan.md');
+    await writeFile(
+      planPath,
+      `
+# Implementation Plan
+
+### Task 1: Add feature
+**Story:** Feature 1
+**Files:**
+- src/feature.ts
+
+Task 1 needs to be done.
+`,
+    );
+
+    // Create initial commit (establishes the anchor)
+    await writeFile(join(dir, 'README.md'), 'initial');
+    await execa('git', ['add', 'README.md'], { cwd: dir });
+    await execa('git', ['commit', '-q', '-m', 'Initial commit'], { cwd: dir });
+
+    // Create pipeline directory
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+    // Forge task-status.json with Task 1 marked completed (without evidence)
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', name: 'Task 1', status: 'completed' }] }),
+    );
+
+    // Create empty task-evidence.json (no evidenceStamps, no migrationGrandfather)
+    // This violates H6/H7: a "completed" row without sidecar evidence is demoted
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    );
+
+    // Call pre-verify with seed + derive context
+    const ctx = { projectRoot: dir, planPath };
+    const result = await checkStepCompletion(dir, 'build', ctx);
+
+    // Pre-verify must fail: Task 1 is marked completed on disk but has no evidence
+    // sidecar entry (evidenceStamps or migrationGrandfather). The gate never trusts
+    // forged rows; H6/H7 enforcement requires real git-derived evidence.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
   });
 });

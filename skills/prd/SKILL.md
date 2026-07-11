@@ -4,7 +4,7 @@ description: "Use on the PRODUCT track after /explore, when a feature has user-f
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -12,6 +12,11 @@ requires: []
 Author the **product requirements document** for a product-track feature: the *what* and *why*,
 enumerated as testable functional requirements that stories extract from directly. Runs only when
 `/explore` set `Track: product`; technical-track features skip this step entirely.
+
+**Correctness gate:** functional requirements are load-bearing — stories extract from them directly.
+Apply the `/verify-claims` protocol before locking FRs: any FR resting on an assumption about user
+need, scope, or existing behavior must be flagged with its confidence and HARD-BLOCKED for operator
+approval (or HALTed if autonomous) — never lock an FR on an unconfirmed assumption.
 
 ## Boundaries
 

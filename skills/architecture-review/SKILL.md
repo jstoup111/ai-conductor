@@ -4,7 +4,7 @@ description: "Use before implementation to review stories through a technical fe
 enforcement: gating
 phase: decide
 standalone: true
-requires: []
+requires: [verify-claims]
 ---
 
 ## Purpose
@@ -19,6 +19,13 @@ The review's input is the PRD's functional requirements (product) or the explore
 intent (technical) — stories and the plan do not exist yet at this point.
 
 Also invocable at pipeline batch boundaries to verify implementation stays architecturally sound.
+
+**Correctness gate:** an ADR is the most load-bearing artifact in the flow — everything downstream
+builds on it. Apply the `/verify-claims` protocol before writing any APPROVED ADR: state each
+technical claim with a grounded confidence % and its basis (verified vs inferred), surface every
+assumption the design rests on, and HARD-BLOCK (operator approval interactive, HALT if autonomous)
+on any unconfirmed assumption that would change the decision. Do not record a decision as APPROVED
+while it rests on an unconfirmed load-bearing assumption.
 
 ### Full vs amendment mode (convergence — adr-2026-06-29-architecture-before-stories-convergent-kickback)
 
@@ -310,8 +317,27 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
   are not gated against (per §7b).
 - Compare the as-shipped code to those approved decisions: were new patterns introduced without an
   ADR? Are domain boundaries respected in the actual code? Do diagrams still match reality?
+- **Production reachability sweep (green-but-unwired guard).** For each primitive this
+  feature's diff introduces or materially changes — exported functions/modules, hook scripts,
+  config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
+  production entry point (`conduct-ts` CLI dispatch, the daemon loop, hook/settings provisioning,
+  a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
+  primitive's own module do not count as callers.
+  - **No production caller exists** → this is a **BLOCKED** violation ("unreachable rung"), same
+    severity as an ADR violation: shipped-tested-green code nothing invokes is not shipped
+    behavior. Name the primitive and what was searched.
+  - **Statically reachable but not yet observed running** (e.g. a new log line no production log
+    shows yet) → record it under Drift Notes as `UNEXERCISED: <primitive> — signature: <the
+    greppable line/event that will prove it live>`. Not blocking; the signature tells a later
+    observer exactly what proves the behavior live in production.
+  - The failure shapes this exists to catch: an event callback shipped with no caller anywhere;
+    a capability wired into one of its several consumers while the rest silently kept the old
+    behavior; a primary code path whose fallback carries 100% of production traffic because the
+    primary's precondition is never produced. All are green under unit tests and invisible to a
+    conformance-only review.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
-  pass. This is a code-vs-approved-design pattern match, deliberately cheap.
+  pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
+  deliberately cheap.
 
 **Verdict:**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
@@ -345,8 +371,10 @@ review remain in `.docs/decisions/`):
 **APPROVED ADRs checked:** [list]
 **Verdict:** APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED
 
+## Production Reachability (every new/changed primitive → its production caller, file:line;
+## UNEXERCISED entries carry their observation signature)
 ## Drift Notes (if any)
-## Blocking Violations (if BLOCKED — which APPROVED ADR, where the code violates it, file:line)
+## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
 
@@ -384,6 +412,10 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
 - [ ] **As-built mode:** at SHIP, shipped code checked against APPROVED ADRs only (no new design)
+- [ ] **As-built mode:** every diff-introduced primitive cites a production caller (`file:line`)
+      from a real entry point; no caller ⇒ BLOCKED as an unreachable rung
+- [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
+      with its greppable observation signature
 - [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
 - [ ] **As-built mode:** BLOCKED on any APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)

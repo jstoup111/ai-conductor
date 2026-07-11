@@ -81,6 +81,17 @@ Check for structural coupling risks.
 - **Inappropriate intimacy** — two classes that share too many private details
 - Provide file:line evidence for each coupling finding.
 
+## Confidence Calibration (verify-claims)
+
+Every finding you report is a claim, and a confident-but-wrong one does real damage — it triggers
+wasted work or masks a real risk. Apply the `verify-claims` discipline to each finding:
+
+- Attach a **confidence %** and its **basis**: `verified` (you traced it in the code) or
+  `inferred` (derived from adjacent evidence, not directly observed).
+- **Never assert a finding you have not verified.** If you could not confirm it, say so.
+- A finding below high confidence is **tentative** — label it; do not state it as a confirmed issue.
+- Do not inflate severity or certainty beyond what the evidence supports.
+
 ## Output Format
 
 Write your output to `.pipeline/assessment/cto-architecture.md` using the following structure:

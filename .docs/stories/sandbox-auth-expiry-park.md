@@ -6,6 +6,18 @@
 adr-2026-07-04-auth-failure-park-and-poll + architecture-review-2026-07-04-sandbox-auth-expiry-park)
 **Source:** jstoup111/ai-conductor#210
 
+> **Superseded in part (2026-07-07, #351).** TR-2, TR-3, and TR-4 below describe the
+> retired shared-credential design (operator `.credentials.json` copied into the build
+> sandbox). They are superseded by
+> `.docs/stories/isolate-daemon-build-auth-from-operator-oauth.md` (TR-3, TR-2, TR-4
+> respectively) per adr-2026-07-07-daemon-owned-build-credential, which amends
+> adr-2026-07-04-auth-failure-park-and-poll: the build credential is daemon-owned; the
+> operator credentials file is never read; pre-flight fails CLOSED on a missing daemon
+> token; park-and-poll watches the daemon token source; `refreshSandboxCredentials` is
+> deleted. TR-1 (auth-failure signature classification) and TR-5
+> (`auth_park_timeout_minutes` knob) remain live requirements unchanged. Do NOT
+> re-implement the superseded scenarios.
+
 ---
 
 ## Story: Classify "Not logged in" as an auth failure, ordered before model handling

@@ -10,6 +10,16 @@ export interface InvokeResult {
   output: string;
   exitCode: number;
   rateLimited?: boolean;
+  waitSeconds?: number;
+  /**
+   * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
+   * When set, represents a timezone-aware reset time extracted from the message
+   * (e.g., "resets 3:20pm (America/New_York)"). Used by the episode coordinator
+   * for deadline-first scheduling: if deadline is present, it overrides waitSeconds
+   * for the episode timer. Undefined if timezone is unknown, unparseable, or not
+   * present in the message. Clamped to cap (≈3600s); past/negative → default (60s).
+   */
+  deadline?: number;
   sessionExpired?: boolean;
   tokenUsage?: TokenUsage;
   /**

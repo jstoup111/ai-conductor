@@ -145,19 +145,16 @@ describe('interrupted publish recovery', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // bin/setup compatibility (Task 9, acceptance criterion 2).
 //
-// `bin/setup` (repo root) is the harness's own worktree-prep script (ships
-// under a separate, not-yet-merged plan — harness-daemon-profile.md — as a
-// committed `bin/setup` that runs `npm install` + `npm run build` so a
+// `bin/setup` (repo root) is the harness's own worktree-prep script; it landed
+// in PR #269 and runs `npm install` + a versioned `npm run build` so a
 // worktree's own `src/conductor/dist/index.js` symlink resolves without ever
-// touching the primary checkout). It does not exist yet on this branch. This
-// smoke test is written now (per this task's acceptance criterion) and
-// self-skips with a clear message until `bin/setup` lands, so it starts
-// exercising the assertion the moment the two branches merge instead of
-// silently doing nothing forever.
+// touching the primary checkout's dist/. This smoke test exercises that
+// script end to end from a real `git worktree add` checkout, asserting that
+// the worktree gets its own dist symlink and that the primary checkout's
+// symlink is left untouched.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REPO_ROOT = resolve(join(process.cwd(), '..', '..'));
-const BIN_SETUP = join(REPO_ROOT, 'bin', 'setup');
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -217,5 +214,55 @@ describe('bin/setup worktree compatibility', () => {
       }
     },
     { timeout: 30000 },
+  // Runs the worktree's own `bin/setup` (not the primary checkout's) so `$0`
+  // resolves inside the worktree and every path it touches — npm install,
+  // the build, the dist symlink — stays scoped there (#334, Option C). That
+  // means a real `npm install` and versioned build run for real on every
+  // invocation of this test, which is why the timeout is a generous 600s
+  // instead of the default.
+  it(
+    'creates a worktree-local dist/ symlink without touching the primary checkout',
+    { timeout: 600_000 },
+    async (ctx) => {
+    const primaryDistLink = join(REPO_ROOT, 'src', 'conductor', 'dist');
+    const primaryStatBefore = await lstat(primaryDistLink).catch(() => undefined);
+
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'bin-setup-worktree-'));
+    const branchName = `bin-setup-smoke-${Date.now()}`;
+    try {
+      await execa('git', ['worktree', 'add', '-b', branchName, worktreeDir, 'HEAD'], {
+        cwd: REPO_ROOT,
+      });
+
+      if (!(await exists(join(worktreeDir, 'bin', 'setup')))) {
+        ctx.skip();
+        return;
+      }
+
+      await execa(join(worktreeDir, 'bin', 'setup'), [], {
+        cwd: worktreeDir,
+        env: { ...process.env, CI: 'true' },
+      });
+
+      const worktreeDistLink = join(worktreeDir, 'src', 'conductor', 'dist');
+      const worktreeStat = await lstat(worktreeDistLink);
+      expect(worktreeStat.isSymbolicLink()).toBe(true);
+      const worktreeIndexJs = join(worktreeDir, 'src', 'conductor', 'dist', 'index.js');
+      expect(await exists(worktreeIndexJs)).toBe(true);
+
+      // Primary checkout's own dist/ is byte-for-byte untouched.
+      const primaryStatAfter = await lstat(primaryDistLink).catch(() => undefined);
+      expect(primaryStatAfter?.isSymbolicLink()).toBe(primaryStatBefore?.isSymbolicLink());
+      if (primaryStatBefore) {
+        expect(primaryStatAfter?.mtimeMs).toBe(primaryStatBefore.mtimeMs);
+      }
+    } finally {
+      await execa('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: REPO_ROOT }).catch(
+        () => {},
+      );
+      await execa('git', ['branch', '-D', branchName], { cwd: REPO_ROOT }).catch(() => {});
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+    },
   );
 });

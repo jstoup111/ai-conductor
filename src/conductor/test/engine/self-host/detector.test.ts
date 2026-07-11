@@ -77,6 +77,18 @@ describe('self-host/detector — PathSelfHostDetector (TR-1)', () => {
     const det = new PathSelfHostDetector(async () => root);
     expect(await det.isSelfHost(join(root, 'does-not-exist'))).toBe(false);
   });
+
+  it('regression lock (#363 / TR-5): a worktree-run self-build still classifies as self-host', async () => {
+    // The installed-root split (resolveInstalledHarnessRoot) must NOT change
+    // detection: for an engine running from a worktree's dist, the probe
+    // resolves the WORKTREE, the build repo IS that worktree, and detection
+    // returned true during the incident — flipping this to false would
+    // silently disable the sandbox and every self-host gate.
+    const worktree = join(root, '.worktrees', 'some-feature');
+    await mkdir(worktree, { recursive: true });
+    const det = new PathSelfHostDetector(async () => worktree);
+    expect(await det.isSelfHost(worktree)).toBe(true);
+  });
 });
 
 describe('self-host/detector — classifySelfHost config override (TR-2)', () => {

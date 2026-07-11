@@ -1,4 +1,4 @@
-import { access, readdir, readFile, rm, stat } from 'fs/promises';
+import { access, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -6,6 +6,7 @@ import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
+import { seedTaskStatus } from './task-seed.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -68,6 +69,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.tsx',
   ],
   build: ['.pipeline/task-status.json'],
+  build_review: ['.pipeline/build-review.json'],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -155,6 +157,81 @@ export async function findArtifactFiles(
     files.push(...(await matchGlob(dir, pattern)));
   }
   return files;
+}
+
+/**
+ * Resolve the plan file for the CURRENT feature — never an unscoped
+ * `.docs/plans/*.md`[0] guess (#407: with several features in flight the
+ * shared plans directory holds many files, and the alphabetically-first one
+ * belonged to a different feature entirely, poisoning task-status.json and
+ * halting the build gate forever).
+ *
+ * Resolution order:
+ * 1. `.pipeline/engine-state.json` `activePlanPath` — authoritative when the
+ *    plan step recorded it (interactive runs, Task 14 of #302).
+ * 2. The plan whose stem equals `featureDesc` — the daemon convention
+ *    (engineer/land writes `.docs/plans/<slug>.md`, and daemon-cli seeds
+ *    `feature_desc` = slug).
+ * 3. A single plan file on disk — unambiguous regardless of name.
+ * 4. Otherwise `undefined` — multiple plans, none provably ours: never guess.
+ *    Callers fail closed (the build gate reports an actionable reason rather
+ *    than evaluating someone else's task list).
+ */
+export async function resolveFeaturePlanPath(
+  projectRoot: string,
+  featureDesc: string | undefined,
+): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8');
+    const engineState = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof engineState.activePlanPath === 'string' && engineState.activePlanPath.trim()) {
+      const recorded = engineState.activePlanPath;
+      return recorded.startsWith('/') ? recorded : join(projectRoot, recorded);
+    }
+  } catch {
+    // No engine state (daemon-preseeded runs never execute the plan step) —
+    // fall through to convention-based resolution.
+  }
+
+  const planFiles = await findArtifactFiles(projectRoot, 'plan');
+  if (planFiles.length === 0) return undefined;
+  if (planFiles.length === 1) return planFiles[0];
+
+  if (featureDesc) {
+    const bySlug = planFiles.find((p) => planStem(p) === featureDesc);
+    if (bySlug) return bySlug;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the active feature's stories doc, mirroring resolveFeaturePlanPath's
+ * ladder (#407 → #441): a singleton corpus is unambiguous; otherwise match the
+ * featureDesc stem, then the resolved plan's stem. Returns undefined when the
+ * doc cannot be determined — callers must fail explicitly and must NEVER fall
+ * back to validating the whole corpus (legacy landed stories predate the
+ * structural convention and would make the gate permanently unsatisfiable).
+ */
+export async function resolveFeatureStoriesPath(
+  projectRoot: string,
+  featureDesc: string | undefined,
+): Promise<string | undefined> {
+  const storyFiles = await findArtifactFiles(projectRoot, 'stories');
+  if (storyFiles.length === 0) return undefined;
+  if (storyFiles.length === 1) return storyFiles[0];
+
+  if (featureDesc) {
+    const byDesc = storyFiles.find((s) => planStem(s) === featureDesc);
+    if (byDesc) return byDesc;
+  }
+
+  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+  if (planPath) {
+    const stem = planStem(planPath);
+    const byPlanStem = storyFiles.find((s) => planStem(s) === stem);
+    if (byPlanStem) return byPlanStem;
+  }
+  return undefined;
 }
 
 /**
@@ -253,6 +330,82 @@ export interface CompletionContext {
    * project-declared (e.g. monorepo) spec locations. Absent → defaults only.
    */
   config?: HarnessConfig;
+  /**
+   * Injectable HEAD reader for the manual_test whitewash guard (#367): resolve
+   * the current commit sha of the project worktree, or null when there is no
+   * usable repo. Absent/null → the guard is skipped entirely (fail-open), so
+   * environments without git behave exactly as before the guard existed.
+   */
+  getHeadSha?: () => Promise<string | null>;
+  /** Whether the engine is running in daemon mode. Affects finish convergence (Story 2). */
+  daemon?: boolean;
+  /**
+   * Evidence reader for push verification. Returns true if HEAD is pushed, false if not,
+   * null if indeterminate. Injected by Conductor; returns undefined for non-git or legacy contexts.
+   */
+  isHeadPushed?: () => Promise<boolean | null>;
+  /**
+   * Project root directory. Used by the build predicate to seed task-status and derive completion.
+   */
+  projectRoot?: string;
+  /**
+   * Path to the plan file (absolute or relative to projectRoot). Used by the build
+   * predicate to seed task-status and validate plan presence/emptiness.
+   */
+  planPath?: string;
+}
+
+/**
+ * Run-evidence marker for the manual_test whitewash guard (#367). Written by
+ * the manual_test completion gate when it observes FAIL rows; a later FAIL-free
+ * results file is accepted only if HEAD moved past `headSha` (i.e. fix commits
+ * exist). Gitignored run evidence, not a committed design artifact.
+ */
+export const MANUAL_TEST_FAIL_EVIDENCE = '.pipeline/manual-test-fail-evidence.json';
+
+/**
+ * The region of a manual-test results file that carries the CURRENT verdict.
+ * Append-only per-attempt files (#367) record one `## Attempt N — <ts>` section
+ * per run; only the newest section's rows count, so a fixed old FAIL cannot
+ * block forever while history stays visible. Sectionless files (pre-#367
+ * format) are evaluated whole.
+ */
+export function latestAttemptRegion(content: string): string {
+  const matches = [...content.matchAll(/^##\s+Attempt\s+\d+\b.*$/gim)];
+  if (matches.length === 0) return content;
+  const last = matches[matches.length - 1];
+  return content.slice(last.index ?? 0);
+}
+
+/**
+ * The FAIL rows of the manual-test results file's current verdict region, or
+ * [] when the file is missing/unreadable or clean. Used by the daemon's
+ * manual_test→build kickback (#367) to decide whether there is concrete bug
+ * evidence to hand BUILD (no evidence → no kickback, the gate's own reason
+ * halts the run instead).
+ */
+export async function readManualTestFailRows(dir: string): Promise<string[]> {
+  let content: string;
+  try {
+    content = await readFile(join(dir, '.pipeline/manual-test-results.md'), 'utf-8');
+  } catch {
+    return [];
+  }
+  return latestAttemptRegion(content).split('\n').filter(isManualTestFailRow);
+}
+
+/**
+ * True when a markdown table row's Result cell is exactly "FAIL" (case-insensitive,
+ * whitespace-trimmed). Checks cell boundaries, not substring presence — a Story or
+ * Notes cell containing the word "FAIL" (e.g. "FAIL kicks back to build with
+ * evidence", "fail-closed verdict predicate") must never be mistaken for a failing
+ * result.
+ */
+function isManualTestFailRow(line: string): boolean {
+  return line
+    .split('|')
+    .map((cell) => cell.trim())
+    .some((cell) => /^FAIL$/i.test(cell));
 }
 
 /**
@@ -360,6 +513,90 @@ export function validateAcceptanceRedEvidence(
   return { ok: true };
 }
 
+/**
+ * Path to the build_review judgement gate's verdict artifact. Written by the
+ * grader dispatched between `build` and `manual_test`; read back by the
+ * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
+ * `build`). Gitignored run evidence, not a committed design artifact.
+ */
+export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
+
+/**
+ * Which rubric category the grader flagged, when the verdict is FAIL. All
+ * fields optional — a grader may flag one, several, or (rarely) none of the
+ * categories while still returning FAIL with free-form `reasons`.
+ */
+export interface BuildReviewRubric {
+  /** Test asserts against its own implementation rather than real behavior. */
+  tautology?: boolean;
+  /** Change reaches outside the task's declared scope. */
+  scope?: boolean;
+  /** Fix addresses a symptom rather than the underlying root cause. */
+  rootCause?: boolean;
+}
+
+export interface BuildReviewVerdict {
+  verdict: 'PASS' | 'FAIL';
+  /** Free-form explanations; required in practice for FAIL, but not enforced
+   * here — an empty/absent reasons array on FAIL still parses (fail-closed
+   * validation only guards the shape needed to route PASS vs FAIL safely). */
+  reasons?: string[];
+  rubric: BuildReviewRubric;
+}
+
+/**
+ * Validate a parsed build_review verdict object. Fail-closed: only the exact
+ * string 'PASS' is treated as passing. Anything else recognizable as FAIL
+ * (the exact string 'FAIL') is a valid parse whose reasons/rubric are
+ * preserved for the kickback message; anything unrecognized (malformed JSON,
+ * missing required fields, or a string other than 'PASS'/'FAIL' such as
+ * 'pass', 'APPROVED', or '') is invalid — the caller must treat an invalid
+ * parse as FAIL, never as PASS. Missing-file handling is the completion
+ * predicate's job (Task 8), not this validator's.
+ */
+export function validateBuildReviewVerdict(
+  ev: unknown,
+):
+  | { ok: true; verdict: 'PASS' | 'FAIL'; reasons?: string[]; rubric: BuildReviewRubric }
+  | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "verdict" must be exactly 'PASS' or 'FAIL' (got ${JSON.stringify(e.verdict)})`,
+    };
+  }
+  if (typeof e.rubric !== 'object' || e.rubric === null || Array.isArray(e.rubric)) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} must include a "rubric" object`,
+    };
+  }
+  const rubricSrc = e.rubric as Record<string, unknown>;
+  const rubric: BuildReviewRubric = {};
+  if (typeof rubricSrc.tautology === 'boolean') rubric.tautology = rubricSrc.tautology;
+  if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
+  if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
+
+  const result: {
+    ok: true;
+    verdict: 'PASS' | 'FAIL';
+    reasons?: string[];
+    rubric: BuildReviewRubric;
+  } = {
+    ok: true,
+    verdict: e.verdict,
+    rubric,
+  };
+  if (Array.isArray(e.reasons)) {
+    result.reasons = e.reasons as string[];
+  }
+  return result;
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -373,7 +610,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // §"User-requested exit during a run"); the conductor's stall handler
   // clears it before re-checking, so a marker that survives to gate-check
   // means a true halt that bypassed the stall handler.
-  build: async (dir: string): Promise<CompletionResult> => {
+  //
+  // Reworked to seed and derive fresh evidence on every evaluation:
+  // - Calls seedTaskStatus(projectRoot, planPath) if context provides both
+  // - Ensures file exists and is in consistent state (deleted/corrupt recovery)
+  // - Returns false if plan is empty/missing (no executable work)
+  // - Evaluates completion based on derived state (forged rows fail)
+  build: async (dir: string, ctx: CompletionContext): Promise<CompletionResult> => {
     try {
       await access(join(dir, HALT_MARKER));
       return {
@@ -384,6 +627,134 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // No marker — proceed.
     }
 
+    // If context provides projectRoot and planPath, seed the task status and validate the plan.
+    let planText: string | undefined;
+    if (ctx.projectRoot && ctx.planPath) {
+      // Task 14: Read engine-recorded plan path if available
+      let enginePlanPath: string | undefined;
+      try {
+        const engineStatePath = join(dir, '.pipeline/engine-state.json');
+        const engineStateContent = await readFile(engineStatePath, 'utf-8');
+        const engineState = JSON.parse(engineStateContent);
+        if (engineState.activePlanPath) {
+          enginePlanPath = engineState.activePlanPath;
+        }
+      } catch {
+        // Engine state doesn't exist yet — OK, seedTaskStatus will handle it
+      }
+
+      // Seed task-status.json from the plan, ensuring file exists and is consistent.
+      try {
+        await seedTaskStatus(ctx.projectRoot, ctx.planPath, enginePlanPath);
+      } catch (err) {
+        console.error(
+          `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return {
+          done: false,
+          reason: `failed to seed task-status from plan: ${err instanceof Error ? err.message : 'unknown error'}`,
+        };
+      }
+
+      // Validate that the plan is not empty (has tasks to execute).
+      try {
+        planText = await readFile(ctx.planPath, 'utf-8');
+      } catch {
+        return {
+          done: false,
+          reason: 'plan file not found or unreadable; cannot verify tasks exist',
+        };
+      }
+
+      // Quick check: plan must have at least one task block. The header match
+      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar) — the
+      // old `^### Task \d+` form rejected h2 headings and every remediation
+      // id (`rem-…`), reading real plans as "empty".
+      if (!planText.trim() || !/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+/im.test(planText)) {
+        return {
+          done: false,
+          reason: 'plan is empty or contains no tasks (### Task <id> headings required)',
+        };
+      }
+    }
+
+    // H6/H7/H8: the gate never trusts task-status.json rows. Every evaluation
+    // recomputes completion from git evidence (deriveCompletion) and writes
+    // it back (applyDerivedCompletion) so the on-disk file stays a fresh
+    // cache, but the pass/fail verdict itself is decided against the
+    // engine-only evidence sidecar (.pipeline/task-evidence.json): a task
+    // only counts as resolved when it has an evidenceStamps entry (real
+    // git-derived evidence, stamped by deriveCompletion). H8's first-seed
+    // migration-grandfather escape hatch has been retired (#463): the gate
+    // no longer accepts a bare migrationGrandfather entry as resolution, and
+    // task-seed.ts no longer stamps new grandfather entries. Any legacy
+    // migrationGrandfather ids left over from before the retirement are read
+    // by task-seed.ts only to avoid re-flagging already-migrated rows — they
+    // are never consulted by this gate. A forged 'completed' row with no
+    // evidenceStamps entry is never counted, even if task-status.json says
+    // otherwise — and a missing/corrupt/wiped task-status.json is never a
+    // terminal failure, since nothing here reads it as the source of truth.
+    if (ctx.projectRoot && ctx.planPath) {
+      let planTaskIds: string[];
+      try {
+        const { parsePlanTaskPaths } = await import('./autoheal.js');
+        planTaskIds = Array.from(parsePlanTaskPaths(planText!).keys());
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to parse plan tasks: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      if (planTaskIds.length === 0) {
+        return { done: false, reason: 'no tasks in plan' };
+      }
+
+      try {
+        const { deriveCompletion, applyDerivedCompletion } = await import('./autoheal.js');
+        const derived = await deriveCompletion(ctx.projectRoot, ctx.planPath);
+        await applyDerivedCompletion(ctx.projectRoot, derived);
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to derive completion from git evidence: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      // evidenceStamps is the ONLY completion currency the gate accepts (#463).
+      // A real evidenceStamps entry (from deriveCompletion's own git-trailer
+      // scan) always counts regardless of the row's on-disk status, since it
+      // is independently re-derived from git every time — this is what makes
+      // a wiped/corrupt task-status.json non-terminal. The retired H8
+      // migrationGrandfather escape hatch is never consulted here: a
+      // grandfathered id with no evidence stamp is always unresolved,
+      // regardless of what task-status.json's row says.
+      let unresolved: string[];
+      try {
+        const { createTaskEvidence } = await import('./task-evidence.js');
+        const evidence = await createTaskEvidence(ctx.projectRoot);
+        unresolved = planTaskIds.filter((id) => !evidence.evidenceStamps.has(id));
+      } catch (err) {
+        return {
+          done: false,
+          reason: `failed to read task-evidence sidecar: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+
+      if (unresolved.length > 0) {
+        const names = unresolved.slice(0, 3).join(', ');
+        const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        return {
+          done: false,
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
+        };
+      }
+      return { done: true };
+    }
+
+    // No projectRoot/planPath in context (e.g. legacy callers/tests that
+    // don't wire the seed+derive context): fall back to trusting the raw
+    // task-status.json rows, same as before this rework.
     const statusPath = join(dir, '.pipeline/task-status.json');
     let raw: string;
     try {
@@ -460,12 +831,17 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has
-  // no FAIL rows, and was written this session. Previously the step had no
-  // gate at all (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL
-  // exit marked it done with zero proof of work. The results file is run
-  // evidence (gitignored) — it is NOT a committed design artifact.
+  // no FAIL rows in its LATEST attempt section, was written this session, and —
+  // when a FAIL was previously recorded — HEAD has moved since (fix commits
+  // exist). Previously the step had no gate at all
+  // (STEP_ARTIFACT_GLOBS['manual_test'] = []) — any clean REPL exit marked it
+  // done with zero proof of work; and until #367 a retry could satisfy the gate
+  // by simply rewriting the file as PASS with no fix (incident PR #364). The
+  // results file and fail-evidence marker are run evidence (gitignored) — NOT
+  // committed design artifacts.
   manual_test: async (dir, ctx): Promise<CompletionResult> => {
     const file = join(dir, '.pipeline/manual-test-results.md');
+    const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
     let content: string;
     try {
       content = await readFile(file, 'utf-8');
@@ -475,10 +851,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
       };
     }
-    if (/\|\s*FAIL/i.test(content)) {
+    const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
+    const region = latestAttemptRegion(content);
+    const failRows = region.split('\n').filter(isManualTestFailRow);
+    if (failRows.length > 0) {
+      // Record the whitewash-guard evidence: the sha this FAIL was observed at.
+      // A later FAIL-free file is only accepted once HEAD moves past it.
+      if (headSha) {
+        await writeFile(
+          markerPath,
+          JSON.stringify(
+            { observedAt: Date.now(), headSha, failRows: failRows.slice(0, 20) },
+            null,
+            2,
+          ),
+          'utf-8',
+        ).catch(() => {
+          /* best-effort evidence — the FAIL verdict below stands regardless */
+        });
+      }
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md contains FAIL rows — fix the bugs and re-run manual-test',
+        reason: '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
       };
     }
     if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
@@ -486,6 +880,38 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
       };
+    }
+    // Whitewash guard (#367): a FAIL was recorded this session and the results
+    // now read clean — require the fix to exist as commits (HEAD moved).
+    // Fail-open when HEAD is unreadable (no seam / no repo): behaves pre-#367.
+    if (headSha) {
+      let marker: { observedAt?: unknown; headSha?: unknown } | null = null;
+      try {
+        marker = JSON.parse(await readFile(markerPath, 'utf-8')) as {
+          observedAt?: unknown;
+          headSha?: unknown;
+        };
+      } catch {
+        marker = null;
+      }
+      if (marker && typeof marker.headSha === 'string') {
+        const freshMarker =
+          ctx.sessionStartedAt === undefined ||
+          (typeof marker.observedAt === 'number' && marker.observedAt >= ctx.sessionStartedAt);
+        if (!freshMarker) {
+          await rm(markerPath, { force: true }).catch(() => {});
+        } else if (marker.headSha === headSha) {
+          return {
+            done: false,
+            reason:
+              `manual-test results flipped FAIL→PASS but HEAD (${headSha.slice(0, 12)}) has not ` +
+              'moved since the recorded FAIL — no new commits means no fix (whitewash guard). ' +
+              'Implement and commit the fix, then re-run manual-test',
+          };
+        } else {
+          await rm(markerPath, { force: true }).catch(() => {});
+        }
+      }
     }
     return { done: true };
   },
@@ -579,6 +1005,51 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
+  // build_review judgement gate: satisfied only by a fresh, valid PASS
+  // verdict at `.pipeline/build-review.json` (BUILD_REVIEW_VERDICT). Missing
+  // file, stale (prior-session) file, malformed JSON, or a FAIL verdict all
+  // keep the gate unsatisfied (fail-closed) — a FAIL surfaces the grader's
+  // reasons so the kickback message tells `build` what to fix.
+  build_review: async (dir, ctx): Promise<CompletionResult> => {
+    const path = join(dir, BUILD_REVIEW_VERDICT);
+    if (!(await fileIsFreshSinceSession(path, ctx.sessionStartedAt))) {
+      // fileIsFreshSinceSession returns false both for "missing" and "stale";
+      // distinguish them so the reason message is accurate.
+      const exists = await access(path)
+        .then(() => true)
+        .catch(() => false);
+      return {
+        done: false,
+        reason: exists
+          ? `${BUILD_REVIEW_VERDICT} is stale (mtime predates this session) — the build_review grader must re-run and rewrite it`
+          : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(path, 'utf-8'));
+    } catch {
+      return {
+        done: false,
+        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must rewrite it`,
+      };
+    }
+    const result = validateBuildReviewVerdict(parsed);
+    if (!result.ok) {
+      return { done: false, reason: result.reason };
+    }
+    if (result.verdict === 'FAIL') {
+      const reasons = result.reasons && result.reasons.length > 0
+        ? result.reasons.join('; ')
+        : 'no reasons recorded';
+      return {
+        done: false,
+        reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
+      };
+    }
+    return { done: true };
+  },
+
   // Retro passes when a fresh retro file exists for THIS feature. Filename
   // should contain the slug per skills/retro/SKILL.md ("Save to
   // .docs/retros/YYYY-MM-DD-<feature-name>.md"). Falls back to "any retro
@@ -654,6 +1125,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${FINISH_CHOICE_MARKER} is stale (mtime predates this session) — finish must re-run`,
       };
     }
+    // LEADING branch: Daemon mode non-convergence check.
+    // Daemon mode is deterministic; operator decisions cannot be made autonomously.
+    // Only 'pr' choice converges in daemon mode (autonomous ship to PR).
+    if (ctx.daemon === true && (choice === 'keep' || choice === 'merge-local' || choice === 'discard')) {
+      return {
+        done: false,
+        reason: `Daemon mode cannot converge on '${choice}': requires operator decision`,
+      };
+    }
     if (choice === 'pr') {
       let prUrl: string | undefined;
       try {
@@ -688,6 +1168,35 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         // fail-open — presentation is not worth blocking a ship on gh failure
       }
+
+      // adr-2026-07-06-daemon-false-ship-guard (Task 5+6): Evidence check for push
+      // verification. When isHeadPushed is available, verify HEAD was pushed to
+      // the tracking ref before allowing convergence to DONE. Fail-closed (never
+      // silently pass) on any error: false → not pushed, null → indeterminate,
+      // throw → corrupt repo. Fail-open if the injectable is absent (legacy/non-git).
+      if (ctx.isHeadPushed) {
+        try {
+          const pushed = await ctx.isHeadPushed();
+          if (pushed === false) {
+            return {
+              done: false,
+              reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+            };
+          }
+          if (pushed === null) {
+            return {
+              done: false,
+              reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
+            };
+          }
+          // pushed === true: continue to done: true
+        } catch (error) {
+          return {
+            done: false,
+            reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      }
     }
     return { done: true };
   },
@@ -706,11 +1215,22 @@ export const GATE_ONLY_PREDICATES: Partial<
   // section (each with ≥1 Given/When/Then bullet) and no DRAFT status.
   // Structural check against the repo convention (### Happy Path / ###
   // Negative Paths headings, **Status:** marker). See gate-audit-2026-06-23.md.
-  stories: async (dir): Promise<CompletionResult> => {
-    const files = await findArtifactFiles(dir, 'stories');
-    if (files.length === 0) {
+  // Scoped to the FEATURE's stories doc (#441): legacy landed stories predate
+  // the convention, so a corpus-wide scan is permanently unsatisfiable.
+  stories: async (dir, ctx): Promise<CompletionResult> => {
+    const corpus = await findArtifactFiles(dir, 'stories');
+    if (corpus.length === 0) {
       return { done: false, reason: 'no .docs/stories/**/*.md present' };
     }
+    const scoped = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+    if (!scoped) {
+      const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+      return {
+        done: false,
+        reason: `cannot resolve this feature's stories doc${desc} among ${corpus.length} stories files — expected .docs/stories/<plan-stem>.md; refusing to validate the whole stories corpus (#441)`,
+      };
+    }
+    const files = [scoped];
     for (const file of files) {
       const content = await readFile(file, 'utf-8');
       const rel = relative(dir, file);
@@ -745,15 +1265,36 @@ export const GATE_ONLY_PREDICATES: Partial<
   // ≥1 task. Coverage is read from task `**Story:** <id> (happy|negative path)`
   // lines and the `## Coverage Check` table. Falls back to story-level coverage
   // when a plan has no path-type markers for a story. See gate-audit-2026-06-23.md.
-  plan: async (dir): Promise<CompletionResult> => {
-    const planFiles = await findArtifactFiles(dir, 'plan');
-    if (planFiles.length === 0) {
+  // Scoped to the FEATURE's plan + stories docs (#441): a corpus-wide scan
+  // both false-fails (legacy stories' units this plan can't cover) and
+  // false-passes (per-file numeric story IDs collide across features, so any
+  // legacy plan's "Story 1" reference covers every file's Story 1).
+  plan: async (dir, ctx): Promise<CompletionResult> => {
+    const anyPlans = await findArtifactFiles(dir, 'plan');
+    if (anyPlans.length === 0) {
       return { done: false, reason: 'no .docs/plans/*.md present' };
     }
-    const storyFiles = await findArtifactFiles(dir, 'stories');
-    if (storyFiles.length === 0) {
+    const scopedPlan = await resolveFeaturePlanPath(dir, ctx.featureDesc);
+    if (!scopedPlan) {
+      const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+      return {
+        done: false,
+        reason: `cannot resolve this feature's plan${desc} among ${anyPlans.length} plans — refusing corpus-wide coverage check (#441)`,
+      };
+    }
+    const planFiles = [scopedPlan];
+    const anyStories = await findArtifactFiles(dir, 'stories');
+    if (anyStories.length === 0) {
       return { done: false, reason: 'no .docs/stories to check plan coverage against' };
     }
+    const scopedStories = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+    if (!scopedStories) {
+      return {
+        done: false,
+        reason: `cannot resolve this feature's stories doc among ${anyStories.length} stories files — refusing corpus-wide coverage check (#441)`,
+      };
+    }
+    const storyFiles = [scopedStories];
 
     // Required coverage units: (storyId, pathType) for each path a story declares.
     const required: { id: string; type: 'happy' | 'negative' }[] = [];

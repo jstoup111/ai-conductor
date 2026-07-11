@@ -2,18 +2,22 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { rehabilitateHaltPr } from './engine/halt-pr-rehabilitation.js';
+import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
+import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
+import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { ensureInstallFresh } from './engine/install-freshness.js';
+import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
 import { holdLock } from './engine/daemon-lock.js';
@@ -24,7 +28,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
-import { discoverBacklog, fastForwardRoot, gitTreeSource } from './engine/daemon-backlog.js';
+import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -35,7 +39,9 @@ import { clampDaemonConcurrency } from './engine/daemon-command.js';
 import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
+import { resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
+import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
@@ -50,17 +56,22 @@ import {
   markWarned,
   repairProcessed,
   makeFeatureRunnerDeps,
+  makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
 import { isOperatorParked } from './engine/park-marker.js';
-import { listOperatorParkedSlugs } from './engine/park-marker.js';
+import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
-import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
+import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import { prepareWorktree } from './engine/worktree-prepare.js';
+import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
-import { scanInheritedState, renderDashboard } from './engine/daemon-dashboard.js';
+import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
+import { writeGatedSnapshot } from './engine/gated-snapshot.js';
+import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
   rekickSweep,
   resumeRebaseFirst,
@@ -72,11 +83,39 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
+import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
+import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
+import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const execFile = promisify(execFileCb);
+
+/**
+ * Task 17: Create a transition-aware discovery logger that tracks fetch state
+ * and logs only on state transitions (idle→failed, failed→succeeded).
+ * Logs once on first failure (onset) and once on recovery, suppressing
+ * consecutive retries to avoid spam in the persistent daemon log.
+ */
+export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogger {
+  let lastState: 'idle' | 'failed' | 'succeeded' = 'idle';
+
+  return {
+    onFetchFailed(err: Error) {
+      if (lastState !== 'failed') {
+        log(`[fetch] FAILED: ${err.message}`);
+        lastState = 'failed';
+      }
+    },
+    onFetchSucceeded() {
+      if (lastState === 'failed') {
+        log(`[fetch] recovered`);
+        lastState = 'succeeded';
+      }
+    },
+  };
+}
 
 /**
  * Rebuild the engine from source into the versioned store (self-host only),
@@ -117,11 +156,12 @@ export function engineEntryPathForRepo(projectRoot: string): string {
  * Called when a stale engine is detected in the idle branch (Task 14+).
  * Implements: write marker → release lock → exit(0).
  * On error, the catch block ensures lock release + exit(1).
+ * Task 5: Returns { fired: boolean } to indicate if restart was fired (true) or aborted (false).
  */
 export type RestartRequester = (opts: {
   fromIdentity: string | null;
   targetIdentity: string | null;
-}) => Promise<void>;
+}) => Promise<{ fired: boolean }>;
 
 export interface DaemonModeOptions {
   projectRoot: string;
@@ -163,6 +203,19 @@ export interface DaemonModeOptions {
    * the next idle boundary. Absent → no self-restart (default, for tests).
    */
   triggerSelfRestart?: () => Promise<void>;
+  /**
+   * Task 14: Enable event-driven HALT marker watching (default: true).
+   * When true, the daemon watches for HALT marker removal and re-kicks halted
+   * features immediately without waiting for the next idle poll. When false,
+   * the daemon relies on polling alone.
+   */
+  watch?: boolean;
+  /**
+   * Task 14: Injectable exit seam for lock-loser explicit exit (default: process.exit).
+   * Called with exit code when another daemon holds the lock.
+   * Tests inject a fake to verify the exit call is made.
+   */
+  exitProcess?: (code: number) => void;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -190,17 +243,38 @@ export function stripAnsi(s: string): string {
 }
 
 /**
- * Task 14: Create a RestartRequester that implements the restart sequence:
- * 1. Write a restart marker with identity metadata
- * 2. Release the lock
- * 3. Exit with code 0
+ * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
+ * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
- * On error during marker write, a catch block ensures the lock is released and exit(1) is called.
+ * ADR-2026-07-07-single-generation-stale-respawn Decision item 1:
+ * Predecessor must terminate unconditionally on FIRED trigger.
+ *
+ * Create a RestartRequester that implements two flows:
+ *
+ * Session-hosted mode (triggerSelfRestart provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Call triggerSelfRestart
+ *   4. On success (fired): Release lock and exit(0) — predecessor terminates unconditionally
+ *   5. On error: Stay alive, don't release lock, don't exit (abort-alive)
+ *
+ * Headless mode (triggerSelfRestart not provided):
+ *   1. Call relink (if provided)
+ *   2. Write restart marker
+ *   3. Release lock
+ *   4. Exit with code 0
+ *
+ * Error handling:
+ * - If relink throws in session-hosted mode: log error, return alive (abort-alive)
+ * - If relink throws in headless mode: log error, release lock, exit(1)
+ * - If marker write throws in headless mode: release lock, exit(1)
+ * - If marker write throws in session-hosted mode: log error, return alive
  *
  * @param daemonDir - project root directory
  * @param log - logging function
  * @param lock - lock object with releaseSync method
  * @param process - Node process object (injected for testability)
+ * @param deps - optional dependencies: { relink, triggerSelfRestart }
  * @returns RestartRequester function
  */
 export function createRestartRequester(
@@ -208,10 +282,36 @@ export function createRestartRequester(
   log: (msg: string) => void,
   lock: { releaseSync(): void },
   process: NodeJS.Process,
+  deps?: {
+    relink?: () => Promise<void>;
+    triggerSelfRestart?: () => Promise<void>;
+  },
 ): RestartRequester {
   return async (opts: { fromIdentity: string | null; targetIdentity: string | null }) => {
+    const triggerSelfRestart = deps?.triggerSelfRestart;
+    const isSessionHosted = triggerSelfRestart !== undefined;
+
+    // Step 1: Call relink if provided (Task 5: separate error handling for relink)
+    if (deps?.relink) {
+      try {
+        await deps.relink();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`relink failed: ${detail}`);
+        // Task 5: abort-alive in session-hosted mode
+        if (isSessionHosted) {
+          // Don't release lock, don't exit, just return and stay alive
+          return { fired: false };
+        }
+        // In headless mode: release lock and exit(1)
+        lock.releaseSync();
+        process.exit(1);
+        return { fired: false }; // Never reached but clarifies intent
+      }
+    }
+
     try {
-      // Step 1: Write marker (can fail)
+      // Step 2: Write marker (can fail)
       await writeRestartMarker(
         {
           reason: 'stale-engine',
@@ -224,23 +324,48 @@ export function createRestartRequester(
       );
     } catch (err) {
       // Backstop: ensure lock is released even if marker write fails
-      lock.releaseSync();
-      process.exit(1);
-      return; // Never reached in production, but clarifies intent
+      // Only applies to headless mode (session-hosted should not reach here)
+      const detail = err instanceof Error ? err.message : String(err);
+      log(`marker write failed: ${detail}`);
+      if (!isSessionHosted) {
+        lock.releaseSync();
+        process.exit(1);
+      }
+      return { fired: false }; // Never reached in production, but clarifies intent
     }
 
-    // Step 2: Release lock (marker write succeeded)
-    lock.releaseSync();
-
-    // Step 3: Exit with 0 (marker and lock release succeeded)
-    process.exit(0);
+    // Step 3: Handle session-hosted vs headless paths
+    // (moved outside try-catch so exit(0) is not caught on failure in tests)
+    if (isSessionHosted && triggerSelfRestart) {
+      // Session-hosted: call triggerSelfRestart and release lock + exit on success
+      // Task 7: catch errors from trigger and stay alive (marker already written)
+      try {
+        await triggerSelfRestart();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        log(`triggerSelfRestart failed: ${detail}`);
+        // Stay alive: don't release lock, don't exit
+        // Marker is already written, so this can be retried at next idle boundary
+        return { fired: false };
+      }
+      // Trigger succeeded: release lock and exit (ADR Decision item 1)
+      lock.releaseSync();
+      process.exit(0);
+      return { fired: true };
+    } else {
+      // Headless: release lock and exit(0)
+      lock.releaseSync();
+      process.exit(0);
+      return { fired: true };
+    }
   };
 }
 
 /**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
- * (verifyArtifacts + freshContextPerStep), opening a PR on finish, and tearing
+ * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
+ * opening a PR on finish, and tearing
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
@@ -266,7 +391,51 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // run had color on. The sink is opened once we own the repo (below); until then
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
+
+  // Task 16: Transition-only per-slug status logging + resume line
+  // Track the last status for each slug so we only emit log lines when status changes
+  const lastStatus = new Map<string, string>();
+
   const log = (msg: string) => {
+    // Task 16: Parse per-feature log lines and suppress unchanged status
+    // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
+    const startMatch = msg.match(/▶.*start\s+(\S+)/);
+    if (startMatch) {
+      const slug = startMatch[1];
+      const status = 'start';
+      if (lastStatus.get(slug) === status) {
+        return; // Suppress unchanged status
+      }
+      lastStatus.set(slug, status);
+      // Fall through to log
+    }
+
+    // Pattern 2: "↻ resume <slug>" → { slug, status: 'resume' }
+    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
+    if (resumeMatch) {
+      const slug = resumeMatch[1];
+      const oldStatus = lastStatus.get(slug);
+      const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
+      lastStatus.set(slug, 'resume');
+      console.log(`${chalk.dim('[daemon]')} ${newMsg}`);
+      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(newMsg)}`));
+      return; // Resume lines always logged with (was: ...) appended
+    }
+
+    // Pattern 3: "■ done <slug>: <outcome_status>" → { slug, status: outcome_status }
+    // This captures the outcome status (done, halted, error)
+    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
+    if (doneMatch) {
+      const slug = doneMatch[1];
+      const outcomeStatus = doneMatch[2]; // e.g., "done", "halted", "error"
+      if (lastStatus.get(slug) === outcomeStatus) {
+        return; // Suppress unchanged status
+      }
+      lastStatus.set(slug, outcomeStatus);
+      // Fall through to log
+    }
+
+    // For all other lines (discovery, sweeps, etc.), always log
     console.log(`${chalk.dim('[daemon]')} ${msg}`);
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
     // back via `conduct daemon logs` can be correlated in time; the console stays
@@ -274,18 +443,48 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
   };
 
+  // Task 17: Create the transition-aware discovery logger
+  // Logs fetch failures/recovery only on state transitions
+  const discoveryLogger = createDiscoveryLogger(log);
+
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
   // refuses to start. A live owner → exit now; we release the lock on completion below.
-  const lock = await holdLock(projectRoot);
+  // ADR Decision item 3: enable bounded-wait polling for takeover scenario (10s/250ms)
+  const lock = await holdLock(projectRoot, { takeoverWaitMs: 10_000, pollMs: 250 });
   if (lock === null) {
     log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
+    const exitProcess = opts.exitProcess ?? process.exit;
+    exitProcess(0);
     return;
   }
   // We own the repo: open the activity log and start teeing. renderDaemonEvent and
   // every feature start/finish line already route through `log`, so this single tee
   // captures the full BUILD-phase narrative (per-step results, shipped/failed + PR).
   logSink = await openDaemonLog(projectRoot);
+  // #405: engine diagnostics (console.warn/console.error from autoheal, task-seed,
+  // etc.) were visible only in the live pane and absent from daemon.log
+  // (`grep 'Path corroboration' daemon.log` → 0 while the pane was full of them).
+  // Tee them into the activity log so post-hoc forensics see what the operator saw.
+  // Conductors run in-process, so this process-level tee covers all engine warnings.
+  const originalConsoleWarn = console.warn.bind(console);
+  const originalConsoleError = console.error.bind(console);
+  const teeConsoleLine = (level: string, args: unknown[]): void => {
+    try {
+      const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
+      logSink?.write(formatDaemonLogLine(`[${level}] ${stripAnsi(line)}`));
+    } catch {
+      // Best-effort: the tee must never disrupt the warning path itself.
+    }
+  };
+  console.warn = (...args: unknown[]) => {
+    originalConsoleWarn(...args);
+    teeConsoleLine('warn', args);
+  };
+  console.error = (...args: unknown[]) => {
+    originalConsoleError(...args);
+    teeConsoleLine('error', args);
+  };
   log(
     lock.owned
       ? `holding daemon lock (pid ${lock.pid}) for ${projectRoot}`
@@ -299,6 +498,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     lock.releaseSync();
   };
   process.once('exit', releaseBackstop);
+
+  // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
+  // rate-limit waits across N concurrent conductors so a single process-level
+  // handler can abort them all and coordinate state saves before exit.
+  // Conductors running in daemon mode (daemon:true) will register their
+  // AbortControllers here instead of installing per-conductor handlers.
+  const allWaitSignals = new Set<AbortController>();
+
+  // Task 22: Install ONE process-level SIGTERM handler (not N per-conductor).
+  // When SIGTERM fires, abort all in-flight waits and coordinate state saves.
+  const daemonSigtermHandler = async () => {
+    // Abort all in-flight rate-limit waits across all conductors
+    for (const controller of allWaitSignals) {
+      controller.abort();
+    }
+    // Note: State saves are handled by individual conductors' exit handlers.
+    // The daemon-cli process cleanup (releaseBackstop) will flush logs + release lock.
+    process.exit(1);
+  };
+  process.on('SIGTERM', daemonSigtermHandler);
 
   // FR-4/FR-7: honor a pause marker set BEFORE this daemon even booted (e.g. the
   // daemon was stopped, `conduct daemon pause` ran, then the daemon was started
@@ -341,50 +560,33 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
 
-  // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
+  // Tasks 8-10: Boot sequence wired through initStaleEngineState primitive
+  // - Capture engine identity at startup
+  // - Log ARMED/DISARMED status (gated by config + self-host mode)
+  // - Startup handshake (read, log, clear RESTART_PENDING marker if present)
+  // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
-  const engineIdentity = await captureEngineIdentity(engineEntryPath);
-  if (engineIdentity) {
-    log(`daemon identity: ${engineIdentity}`);
-  }
+  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  const engineIdentity = await initStaleEngineState({
+    repoPath: projectRoot,
+    entryPath: engineEntryPath,
+    flag: isArmed,
+    log,
+  });
+
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
   // capture failure ⇒ permanently disabled checker (always 'current', warns once).
   const staleEngineChecker =
     engineIdentity !== null
       ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
       : createStaleEngineChecker(null, log);
-  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
-  log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
-
-  // Task 9: Startup handshake — check for restart marker and log if present
-  // If engineIdentity is null, the check was disabled (capture failed), so skip handshake.
-  if (engineIdentity !== null) {
-    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
-
-    if (markerStatus.kind === 'present') {
-      const marker = markerStatus.marker!;
-      log(
-        `restarted for engine refresh — from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`,
-      );
-
-      // Task 10: Suppression — record when fresh identity differs from target
-      // (non-convergence at boot). This prevents restart loops when the engine
-      // identity hasn't reached the target yet.
-      if (engineIdentity !== marker.targetIdentity) {
-        log(
-          `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
-        );
-        await recordSuppression(engineIdentity, projectRoot, log);
-      }
-
-      await clearRestartMarker(projectRoot);
-    }
-    // If absent or absent-corrupt: no handshake log.
-    // Task 6 (readRestartMarkerWithStatus) already logs + removes corrupt markers.
-  }
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
+  const rateLimitEpisode = createRateLimitEpisode();
+  // Task 20: track which parks were episode-caused so the episode-end sweep
+  // (runDaemon's active→inactive transition hook) can recover exactly those.
+  const episodeHaltTracker = createEpisodeHaltTracker();
   const registry = new PluginRegistry();
   // Surface per-step loop progress on the console. Without this the daemon was
   // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
@@ -421,7 +623,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // its FIRST step would `--resume` a brand-new session id that was never
     // created → "No conversation found" → "session unavailable (expired or in
     // use)" → the feature errors out. The conductor also resets per step
-    // (freshContextPerStep), but sweeping here guarantees a clean start.
+    // before every step, but sweeping here guarantees a clean start.
     await rm(join(pipelineDir, 'session-created'), { force: true });
     await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
 
@@ -464,6 +666,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       mode: 'auto',
     });
 
+    // Wire AuditTrailWriter: appends friction/positive-evidence records to
+    // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
+    // path (never process.cwd() or the daemon's projectRoot) so retro can
+    // reconstruct this feature's run history from inside its own worktree.
+    // Daemon runs the engine in-process, so one writer per run covers all
+    // steps for this worktree.
+    const auditWriter = new AuditTrailWriter(wt.path);
+    auditWriter.subscribe(events);
+
     const conductor = new Conductor({
       stateFilePath,
       stepRunner,
@@ -477,7 +688,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       selfHost: isSelfHost,
       baseBranch,
       verifyArtifacts: true,
-      freshContextPerStep: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
       // point. With the DECIDE steps stamped done (PRESEEDED_DONE above), a
       // FRESH feature resumes at `acceptance_specs` — the first pending step —
@@ -490,6 +700,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
+      rateLimitEpisode,
+      // Task 22: Register in-flight wait AbortControllers with daemon-level handler
+      // so process-level SIGTERM can abort all waits across N concurrent conductors.
+      registerAbortController: (controller) => allWaitSignals.add(controller),
     });
 
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
@@ -514,9 +728,38 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       localBase: baseBranch,
       events,
       ranManualTest,
+      // #300: give the play-forward conflict the SAME gated /rebase attempts the
+      // finish-time step gets, before parking for a human.
+      resolveAttempts: resolveRebaseResolutionAttempts(config),
+      resolveConflict: stepRunner.resolveRebaseConflict
+        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
+        : undefined,
+      // ADR-2026-07-09-mid-run-merged-pr-guard: pass the gh runner and recorded PR URL
+      // so the guard can check if the feature was merged out-of-band before rebasing.
+      runGh: ownerGh,
+      prUrl: baseState.pr_url,
       log,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
+    if (resume === 'already_shipped') {
+      // ADR-2026-07-09: the recorded PR is merged out-of-band. Write the synthetic
+      // verified-ship markers and return without invoking conductor.run().
+      const headSha = await (async () => {
+        try {
+          const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt.path });
+          return stdout.trim();
+        } catch {
+          return 'unknown';
+        }
+      })();
+      await mkdir(join(wt.path, '.pipeline'), { recursive: true });
+      const finishChoicePath = join(wt.path, '.pipeline', 'finish-choice');
+      const donePath = join(wt.path, '.pipeline', 'DONE');
+      await writeFile(finishChoicePath, 'pr', 'utf-8');
+      await writeFile(donePath, '', 'utf-8');
+      log(`already shipped out-of-band; local branch retained at ${headSha}`);
+      return;
+    }
 
     await conductor.run();
 
@@ -558,6 +801,79 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
   };
 
+  // Task 15: Production wiring of setup-failure triage in daemon-cli.
+  // Construct runSetupTriage with real deps: git runner for worktree,
+  // prepareWorktree for retry, and fix-session dispatcher that constructs
+  // fresh DefaultStepRunner per dispatch (uuid session).
+  const runSetupTriage = async (
+    error: any, // SetupFailureError
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => {
+    // Kill-switch for testing: prevent actual LLM dispatch
+    if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
+      return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
+    }
+
+    // Create a git runner rooted at the worktree path
+    const git: GitRunner = makeGitRunner(worktree.path);
+
+    // Inject prepareWorktree for retry after quarantine
+    const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath, log);
+
+    // Triage stage 1: run-triage (TS-2/TS-3)
+    // Classify tree state and route: clean → pass, dirty → quarantine+retry
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+
+    // A park with no quarantineRef is a genuine PRESERVATION failure (the
+    // quarantine commit/branch itself could not be created) — stop immediately,
+    // never risk a fix-session on top of an unsafe tree. A park WITH a
+    // quarantineRef means quarantine succeeded but the post-quarantine retry
+    // still failed (committed breakage at a now-clean HEAD) — per the ADR this
+    // must still proceed to the bounded fix-session (Stage 2), not stop here.
+    if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+      return triageOutcome;
+    }
+
+    // A quarantined-pass outcome means stage-1 retry succeeded and setup is now
+    // passing at a clean HEAD. Per adr-2026-07-09-setup-failure-triage sub-decision 4,
+    // stage 2 (fix-session) should only run 'if setup still fails at a clean HEAD',
+    // so quarantined-pass skips directly to normal build dispatch.
+    if (triageOutcome.kind === 'quarantined-pass') {
+      return triageOutcome;
+    }
+
+    // Triage stage 2: fix-session (Task 10)
+    // For non-park outcomes, dispatch LLM fix session and mechanically verify
+    const dispatchFixSession = async () => {
+      // Construct a fresh DefaultStepRunner for this fix session
+      const sessionId = uuidv4();
+      const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
+        featureDesc: `setup-fix-${item.slug}`,
+        config,
+        mode: 'auto',
+      });
+      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      await stepRunner.resolveSetupFailure({
+        worktreePath: worktree.path,
+        outputTail: error.outputTail ?? '',
+        slug: item.slug,
+      });
+    };
+
+    // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
+    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare);
+
+    // A stage-1 quarantine ref must never be lost from the final outcome —
+    // fixSession() doesn't know about it, so carry it forward if the fix
+    // itself also failed (park) and didn't already attach its own ref.
+    if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+      return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+    }
+
+    return fixOutcome;
+  };
+
   const deps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
@@ -566,6 +882,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     provider,
     memoryProvider,
     log,
+    runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
 
@@ -627,6 +944,41 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
   const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
 
+  // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
+  // directory backing `.daemon/gated.json` — every discovery pass rewrites
+  // it via `onGatedDiscovered` below, the SAME `gated` list `discoverBacklog`
+  // just computed (populated, empty, or the identity-unresolved
+  // early-return's repo-warning-only list alike).
+  const daemonDir = join(projectRoot, '.daemon');
+
+  // Task 21 (adr-2026-07-03-gate-writeback-daemon-tick, Tasks 17-20): announce
+  // each owner-gated spec on its implementation PR (if one was already opened
+  // by an earlier build attempt, e.g. a halted worktree whose ownership later
+  // changed) and on its originating Source-Ref issue (intake specs only).
+  // Both `announceGatedPr`/`announceGatedIssue` are fire-and-forget/
+  // never-throw (see gate-writeback.ts), so a `gh` failure here never blocks
+  // or aborts the discovery pass that produced the gated list. Runs AFTER the
+  // snapshot write (Task 12) so `.daemon/gated.json` is never delayed behind
+  // network calls to GitHub.
+  const gatedWritebackDeps = { cwd: projectRoot, log, warnedSkips: new Set<string>() };
+  const announceGated = async (gated: Awaited<ReturnType<typeof discoverBacklog>>['gated']) => {
+    for (const entry of gated) {
+      if (entry.kind !== 'spec') continue;
+      // The spec's implementation PR, if a prior build attempt already opened
+      // one (e.g. halted mid-build before ownership changed underneath it).
+      // Gated specs are discovered pre-dispatch, so per-slug worktree state
+      // is normally absent — fall back to resolving the merged spec PR from
+      // origin by its spec/<slug> branch (lookup-only, never creates a PR).
+      const perSlugStateFile = join(worktreeBase, entry.slug, '.pipeline', 'conduct-state.json');
+      const slugState = await readState(perSlugStateFile);
+      const prUrl =
+        (slugState.ok ? slugState.value.pr_url : undefined) ??
+        (await resolveSpecPrUrl(ownerGh, projectRoot, `spec/${entry.slug}`, log));
+      await announceGatedPr(entry, prUrl as string, gatedWritebackDeps);
+      await announceGatedIssue(entry, entry.sourceRef, gatedWritebackDeps);
+    }
+  };
+
   const workSource =
     opts.workSource ??
     localWorkSource({
@@ -657,6 +1009,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (no disk persistence). Passed to discover() for ordering and available to
       // the dashboard for fallback-mode display.
       priorityResolver,
+      // Task 12: single call site for the owner-gate snapshot write — fires
+      // on EVERY discover() pass this WorkSource drives. `writeGatedSnapshot`
+      // is itself advisory (never throws, see gated-snapshot.ts), so a write
+      // failure never blocks or aborts the discovery pass that produced it.
+      onGatedDiscovered: async (gated) => {
+        await writeGatedSnapshot(daemonDir, { gated });
+        await announceGated(gated);
+      },
     });
   const discoverTick = (o: { refresh: boolean }) => workSource.discover(o);
 
@@ -695,17 +1055,34 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       ),
   };
 
-  // Task 14: Create the real restart requester with injected lock + process
-  const requestRestart = createRestartRequester(projectRoot, log, lock, process);
+  // Task 4: Create the real restart requester with injected lock + process
+  // Task 9: Wire real deps (relink, triggerSelfRestart) at construction site
+  // relink rebuilds the harness skill symlinks before self-host dispatches
+  // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
+  const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
+    relink: () => relinkSkillsForSelfBuild({ log }),
+    triggerSelfRestart: opts.triggerSelfRestart,
+  });
 
   // Task 11: Create the suppression check wrapper that binds projectRoot
   const suppressionChecker = (currentIdentity: string | null) =>
     isSuppressed(currentIdentity, projectRoot, log);
 
+  const watch = opts.watch ?? true;
+  const watchHaltCleared = watch !== false
+    ? (slug: string, onCleared: () => void) =>
+        makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
+    : undefined;
+
   const result = await runDaemon(
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      // Task 14: wire the filesystem watcher for HALT marker removal.
+      // When watch is false, the watcher is undefined and the daemon falls
+      // back to polling alone. Otherwise, the daemon uses event-driven re-kick
+      // when a halted feature's HALT marker is cleared.
+      watchHaltCleared,
       // Task 7 (operator-park): consulted alongside `isHalted` — a
       // `.daemon/parked/<slug>` marker is durable across restarts and is
       // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
@@ -714,6 +1091,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
       isPaused: () => isPaused(projectRoot),
+      rateLimitEpisode,
+      // Task 20: record episode causality when the daemon parks a halted/error
+      // outcome, and recover exactly those parks when the episode ends. The
+      // sweep clears each stamped worktree's HALT non-destructively via the
+      // existing rekick primitive (reason → HALT.cleared + REKICK sentinel),
+      // which also fires the watchHaltCleared wake for immediate re-dispatch.
+      // NOTE: this binding must stay wired — removing it silently no-ops
+      // episode-caused HALT recovery (daemon.ts guards with ?.()).
+      onHaltWritten: async (slug, episodeCaused) =>
+        episodeHaltTracker.onHaltWritten(slug, episodeCaused),
+      sweepEpisodeHalts: async (isParkedDep) => {
+        const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
+          isHalted(worktreeBase, slug),
+        );
+        for (const slug of stamped) {
+          // Operator intent outranks automatic recovery (same rule as rekickSweep).
+          if (isParkedDep && (await isParkedDep(slug))) {
+            log(`episode-end sweep: ${slug} operator-parked — left for a human`);
+            continue;
+          }
+          await clearMarker(join(worktreeBase, slug));
+          log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+        }
+      },
       runFeature,
       log,
       staleEngineChecker,
@@ -759,12 +1160,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         for (const slug of await listOperatorParkedSlugs(projectRoot)) {
           candidateSlugs.add(slug);
         }
-        const parked: string[] = [];
+        const parked: ParkedEntry[] = [];
         for (const slug of candidateSlugs) {
           if (await isOperatorParked(projectRoot, slug, (err) =>
             log(`anomaly checking if ${slug} is parked: ${err.message}`),
           )) {
-            parked.push(slug);
+            // Fetch provenance (auto vs operator) and reason if available
+            const provenance = await getProvenanceType(projectRoot, slug);
+            let reason: string | undefined;
+
+            // For auto-parks, try to extract reason from marker body
+            if (provenance === 'auto') {
+              try {
+                const markerPath = join(projectRoot, '.daemon', 'parked', slug);
+                const content = await readFile(markerPath, 'utf-8');
+                const lines = content.split('\n');
+                if (lines[0]?.startsWith('auto-parked:')) {
+                  reason = lines[0].substring('auto-parked:'.length).trim();
+                }
+              } catch {
+                // Ignore read errors — marker exists but reason extraction failed
+              }
+            }
+
+            parked.push({ slug, provenance: provenance || undefined, reason });
           }
         }
         log(`\n${renderDashboard({ ...state, parked })}`);
@@ -773,7 +1192,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // the backlog reads. On idle refresh we fast-forward it first so the SHA
       // reflects origin's latest (driving ADR-013 re-kick when main advances).
       resolveBaseSha: async ({ refresh }) => {
-        if (refresh) await fastForwardRoot(projectRoot, log);
+        if (refresh) await fastForwardRoot(projectRoot, log, undefined, discoveryLogger);
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
@@ -790,11 +1209,191 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           sha,
         );
       },
+      // ai-conductor#274: wire the startup + per-idle-poll-tick halt-PR
+      // reconciliation sweep. NOTE: this binding must stay wired — removing it
+      // silently no-ops the "ultimate safety net" for halt-PR presentation
+      // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
+      reconcileHaltPrs: async () => {
+        await reconcileHaltPrs({ projectRoot, log });
+      },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async () => {
-        await sweepMergeableLabels({ projectRoot, log });
+        await sweepMergeableLabels({
+          projectRoot,
+          log,
+          // Task 17: dispatch autoresolve for the first eligible CONFLICTING
+          // PR after the label pass, gated on `mergeable_autoresolve.enabled`
+          // so a disabled/absent config leaves the sweep unchanged (AC4).
+          autoresolve: {
+            enabled: config?.mergeable_autoresolve?.enabled ?? false,
+            isEligible: (entry, state) =>
+              isEligibleForResolve(
+                entry,
+                state,
+                config,
+                new Date(),
+                { worktreeExists: async (p) => existsSync(join(projectRoot, p)) },
+                log,
+              ),
+            dispatch: async (entry) => {
+              log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
+
+              try {
+                // Fetch the branch name from the PR
+                const prViewResult = await execFile('sh', [
+                  '-c',
+                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
+                ], { cwd: entry.repoCwd });
+
+                const branch = (prViewResult.stdout || '').toString().trim();
+                if (!branch) {
+                  log(`[autoresolve] empty branch name for ${entry.prUrl}`);
+                  return { kind: 'escalated' };
+                }
+
+                // Create a gh runner (wrapper around gh commands)
+                const ghRunner = async (args: string[]) => {
+                  const result = await execFile('gh', args, {
+                    cwd: entry.repoCwd,
+                    encoding: 'utf-8',
+                  });
+                  return { stdout: result.stdout || '' };
+                };
+
+                // Create a suite runner (executes the suite command in the worktree)
+                const runSuite = async (projectRoot: string) => {
+                  const cmd = config?.mergeable_autoresolve?.suiteCommand;
+                  if (!cmd) {
+                    return { exitCode: 0, durationMs: 0, configured: false };
+                  }
+
+                  const startMs = Date.now();
+                  try {
+                    await execFile('sh', ['-c', cmd], {
+                      cwd: projectRoot,
+                      encoding: 'utf-8',
+                    });
+                    return {
+                      exitCode: 0,
+                      durationMs: Date.now() - startMs,
+                      configured: true,
+                    };
+                  } catch (err: any) {
+                    return {
+                      exitCode: err.code === 'ERR_CHILD_PROCESS_EXIT' ? (err.status || 1) : 1,
+                      durationMs: Date.now() - startMs,
+                      configured: true,
+                    };
+                  }
+                };
+
+                // Create a real Tier-2 resolver that dispatches to the /rebase skill
+                // FR-7: wire stepRunner and events for rebase resolution dispatch
+                let attempt = 0;
+                const attemptCap = resolveRebaseResolutionAttempts(config);
+                const resolver: RebaseResolver = async (ctx) => {
+                  attempt += 1;
+                  try {
+                    await events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
+                  } catch {
+                    /* best-effort: event emission must not block resolution */
+                  }
+                  try {
+                    // Create a fresh step runner for this rebase resolution attempt
+                    const sessionId = uuidv4();
+                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.projectRoot, {
+                      featureDesc: `rebase-resolution-${entry.slug}`,
+                      config,
+                      mode: 'auto',
+                    });
+                    return await stepRunner.resolveRebaseConflict(ctx);
+                  } catch (err) {
+                    return {
+                      resolved: false,
+                      reason: err instanceof Error ? err.message : String(err),
+                    };
+                  }
+                };
+
+                // Run the full resolution pipeline
+                const outcome = await resolveConflictingPr(
+                  entry,
+                  branch,
+                  {
+                    enabled: config?.mergeable_autoresolve?.enabled ?? false,
+                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
+                    cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
+                    attemptCap,
+                  },
+                  { runGh: ghRunner, runSuite, resolver, log },
+                );
+
+                log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                return { kind: outcome.kind };
+              } catch (err: any) {
+                log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                return { kind: 'escalated' };
+              }
+            },
+          },
+          // Task 23: dispatch ci-fix for the first eligible failed-CI PR after
+          // the label pass, gated on `ci_watch.enabled` (default true — fail-safe
+          // per CiWatchConfig) so a disabled config leaves the sweep unchanged
+          // (AC3), and mirrors the `autoresolve` binding above (AC4).
+          ciFix: {
+            enabled: config?.ci_watch?.enabled ?? true,
+            isEligible: (entry, state) =>
+              isEligibleForCiFix(entry, state, config, new Date(), log),
+            dispatch: async (entry) => {
+              log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
+
+              try {
+                const prViewResult = await execFile('sh', [
+                  '-c',
+                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
+                ], { cwd: entry.repoCwd });
+
+                const branch = (prViewResult.stdout || '').toString().trim();
+                if (!branch) {
+                  log(`[ci-fix] empty branch name for ${entry.prUrl}`);
+                  return;
+                }
+
+                const ghRunner = async (args: string[]) => {
+                  const result = await execFile('gh', args, {
+                    cwd: entry.repoCwd,
+                    encoding: 'utf-8',
+                  });
+                  return { stdout: result.stdout || '' };
+                };
+
+                const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
+
+                const outcome = await runCiFix(
+                  entry,
+                  branch,
+                  hint,
+                  {
+                    fixRunner: productionCiFixRunner,
+                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
+                  },
+                  log,
+                );
+
+                log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                if (outcome.kind === 'changed') {
+                  return { kind: 'green-verified' };
+                }
+                return;
+              } catch (err: any) {
+                log(`[ci-fix] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                return;
+              }
+            },
+          },
+        });
       },
       // Task T28: check for pending restart marker at idle boundary.
       hasRestartPending: async () => {
@@ -834,9 +1433,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     );
   }
 
-  // Normal completion: drop the crash backstop, flush+close the log, and release
-  // the lock asynchronously.
+  // Normal completion: drop the crash backstop, restore the console tee,
+  // flush+close the log, and release the lock asynchronously.
   process.off('exit', releaseBackstop);
+  console.warn = originalConsoleWarn;
+  console.error = originalConsoleError;
   await logSink.close();
   await lock.release();
 }
@@ -850,6 +1451,19 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
   // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
   // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
+  //
+  // Task 11: a throwing renderer must never crash the daemon run — the whole
+  // switch is wrapped defensively so a malformed/unexpected event payload
+  // (e.g. from a future event kind whose formatter assumes a field that
+  // isn't there) degrades to a dropped line, not a process crash.
+  try {
+    renderDaemonEventUnsafe(event, log);
+  } catch {
+    // Best-effort: rendering a daemon.log line must never disrupt the run.
+  }
+}
+
+function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
     case 'step_started':
@@ -887,11 +1501,43 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
+    case 'ci_failed':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
+      );
+      break;
     case 'rate_limit':
       log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`rate limited: waiting ${event.waitSeconds}s`)}`);
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
+      break;
+    case 'build_progress': {
+      // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
+      // step, N/total, current task, feature slug. No warning coloring —
+      // this is routine progress, kept visually distinct from no_progress/stall.
+      const task = event.currentTaskName
+        ? ` — ${event.currentTaskName}`
+        : event.currentTaskId
+          ? ` — task ${event.currentTaskId}`
+          : '';
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${event.resolved}/${event.total}${task}${slug}`);
+      break;
+    }
+    case 'build_no_progress': {
+      // Warning line: distinct glyph + yellow coloring so it stands out from
+      // the plain build_progress heartbeat above during a quiet episode.
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`)}${slug}`,
+      );
+      break;
+    }
+    case 'build_stall':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
+      );
       break;
     default:
       break;

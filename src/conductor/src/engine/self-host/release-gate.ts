@@ -171,6 +171,18 @@ export interface BreakingSurfaces {
 }
 
 /**
+ * Canonical breaking-surface names. Shared by the classifier and the waiver
+ * parser (adr-2026-07-06-migration-gate-waiver, rule 3) so the two never drift:
+ * a waiver can only cite one of these exact strings.
+ */
+export const CANONICAL_BREAKING_SURFACES = [
+  'bin/conduct CLI',
+  'skill symlink targets',
+  'hook wiring',
+  'settings.json schema',
+] as const;
+
+/**
  * Classify which breaking surfaces a change set touches (per CLAUDE.md: settings
  * schema / hook wiring / skill symlink targets / bin/conduct CLI). A null change
  * set is UNCERTAIN — the caller must then require a migration block (fail-closed).
@@ -185,14 +197,130 @@ export function classifyBreakingSurfaces(changed: ChangedFile[] | null): Breakin
     // Inspect BOTH the destination and (for a rename/copy) the source path, so a
     // move into OR out of a breaking surface is caught on either side.
     for (const p of origPath ? [path, origPath] : [path]) {
-      if (p === 'bin/conduct') surfaces.add('bin/conduct CLI');
-      if (p === 'bin/install') surfaces.add('skill symlink targets');
-      if (p.startsWith('hooks/') || p.includes('/hooks/')) surfaces.add('hook wiring');
-      if (/(^|\/)settings(\.local)?\.json$/.test(p)) surfaces.add('settings.json schema');
-      if (p.startsWith('skills/') && removedOrRenamed) surfaces.add('skill symlink targets');
+      if (p === 'bin/conduct') surfaces.add(CANONICAL_BREAKING_SURFACES[0]);
+      if (p === 'bin/install') surfaces.add(CANONICAL_BREAKING_SURFACES[1]);
+      if (p.startsWith('hooks/') || p.includes('/hooks/')) surfaces.add(CANONICAL_BREAKING_SURFACES[2]);
+      if (/(^|\/)settings(\.local)?\.json$/.test(p)) surfaces.add(CANONICAL_BREAKING_SURFACES[3]);
+      if (p.startsWith('skills/') && removedOrRenamed) surfaces.add(CANONICAL_BREAKING_SURFACES[1]);
     }
   }
   return { breaking: surfaces.size > 0, uncertain: false, surfaces: [...surfaces] };
+}
+
+// ── TR-10 waiver (adr-2026-07-06-migration-gate-waiver) ─────────────────────
+
+export const RELEASE_WAIVER_DIR = '.docs/release-waivers/';
+
+/**
+ * WaiverCheck has no plan-stem input (the composed gate isn't told which
+ * feature is building) and there is no directory-listing seam, so a stale
+ * on-disk waiver from a prior feature can only be probed at this repo's own
+ * conventional example path — the same one cited in the "no waiver" HALT
+ * reason below. A waiver committed under a different name is still honored
+ * via diff-scanning in `findWaiverInDiff`.
+ */
+export const CONVENTIONAL_WAIVER_PATH =
+  '.docs/release-waivers/self-host-release-gate-bin-conduct-breaking-surfac.md';
+
+export interface ParsedWaiver {
+  surfaces: string[];
+  rationale: string;
+}
+
+const WAIVES_LINE_RE = /^Waives:\s*(.+)$/m;
+const RATIONALE_RE = /^Rationale:\s*([\s\S]+)$/m;
+
+/**
+ * Parse a waiver's `Waives: <surfaces>` / `Rationale: <prose>` shape. Parse,
+ * don't validate: a missing `Waives:` line, an empty rationale, or a surface
+ * name outside `CANONICAL_BREAKING_SURFACES` is malformed — no catch-all.
+ */
+export function parseWaiver(text: string): ParsedWaiver | null {
+  const waivesMatch = text.match(WAIVES_LINE_RE);
+  if (!waivesMatch) return null;
+  const rationaleMatch = text.match(RATIONALE_RE);
+  const rationale = rationaleMatch ? rationaleMatch[1].trim() : '';
+  if (!rationale) return null;
+  const surfaces = waivesMatch[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (surfaces.length === 0) return null;
+  const canonical: readonly string[] = CANONICAL_BREAKING_SURFACES;
+  if (!surfaces.every((s) => canonical.includes(s))) return null;
+  return { surfaces, rationale };
+}
+
+function findWaiverInDiff(changed: ChangedFile[]): ChangedFile | null {
+  return (
+    changed.find(
+      (f) =>
+        f.path.startsWith(RELEASE_WAIVER_DIR) &&
+        f.path.endsWith('.md') &&
+        (f.status.startsWith('A') || f.status.startsWith('M'))
+    ) ?? null
+  );
+}
+
+export interface WaiverVerdict {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Rules 1–3 of adr-2026-07-06-migration-gate-waiver (rule 4, uncertain change
+ * sets, is enforced by the caller before this runs — an uncertain diff never
+ * reaches waiver evaluation). Returns ok only when a waiver is both fresh
+ * (committed in this diff) and covers every classified surface.
+ */
+export async function evaluateWaiver(input: {
+  harnessRoot: string;
+  surfaces: string[];
+  changedFiles: ChangedFile[];
+  readText: (path: string) => Promise<string | null>;
+}): Promise<WaiverVerdict> {
+  const diffEntry = findWaiverInDiff(input.changedFiles);
+  const candidatePath = diffEntry?.path ?? CONVENTIONAL_WAIVER_PATH;
+  const text = await input.readText(join(input.harnessRoot, candidatePath));
+
+  if (text == null) {
+    return {
+      ok: false,
+      reason:
+        'Alternatively, commit a waiver at `.docs/release-waivers/<plan-stem>.md` ' +
+        `(e.g. \`${CONVENTIONAL_WAIVER_PATH}\`) with a \`Waives:\` list of the exact breaking ` +
+        'surface(s) and a rationale explaining why this is internal-only / no consumer-visible ' +
+        'change.',
+    };
+  }
+  if (!diffEntry) {
+    return {
+      ok: false,
+      reason:
+        `Waiver found at \`${candidatePath}\` but it is not committed with this change set ` +
+        '(self-host release gate) — a waiver merged by a prior feature can never satisfy a new ' +
+        'breaking change set; commit the waiver in this diff.',
+    };
+  }
+  const parsed = parseWaiver(text);
+  if (!parsed) {
+    return {
+      ok: false,
+      reason:
+        `Waiver at \`${candidatePath}\` is malformed (self-host release gate) — expected a ` +
+        '`Waives:` line listing canonical surface names and a non-empty `Rationale:`.',
+    };
+  }
+  const uncovered = input.surfaces.filter((s) => !parsed.surfaces.includes(s));
+  if (uncovered.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `Waiver at \`${candidatePath}\` does not cover: ${uncovered.join(', ')} ` +
+        '(self-host release gate) — the waiver must list every touched breaking surface.',
+    };
+  }
+  return { ok: true };
 }
 
 const MIGRATION_SECTION_RE = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
@@ -277,14 +405,31 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     return changelogVerdict;
   }
 
-  const surfaces = classifyBreakingSurfaces(await opts.changedFiles());
+  const changedFiles = await opts.changedFiles();
+  const surfaces = classifyBreakingSurfaces(changedFiles);
   const migration = evaluateMigration({
     surfaces,
     hasBlock: hasRunnableMigrationBlock(unreleasedBody),
   });
   if (!migration.ok) {
-    await writeHalt(opts.projectRoot, migration.reason);
-    return migration;
+    // Rule 4: an uncertain (null) change set can never prove freshness (rule 1),
+    // so it stays fail-closed and unwaivable — never even mention the waiver path.
+    if (surfaces.uncertain) {
+      await writeHalt(opts.projectRoot, migration.reason);
+      return migration;
+    }
+    const waiver = await evaluateWaiver({
+      harnessRoot: opts.harnessRoot,
+      surfaces: surfaces.surfaces,
+      changedFiles: changedFiles ?? [],
+      readText: opts.readText,
+    });
+    if (!waiver.ok) {
+      const reason = `${migration.reason} ${waiver.reason}`;
+      await writeHalt(opts.projectRoot, reason);
+      return { ok: false, reason };
+    }
+    return { ok: true };
   }
 
   return { ok: true };

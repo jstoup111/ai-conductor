@@ -14,7 +14,9 @@ import {
   clearStaleLockForRestart,
   ensureRunning,
   readPidRecord,
+  writePidRecord,
   isLive,
+  type PidRecord,
 } from '../../src/engine/daemon-lock.js';
 import { dispatchDaemonSupervisor } from '../../src/engine/daemon-supervisor-cli.js';
 import type { Supervisor } from '../../src/engine/daemon-tmux.js';
@@ -187,6 +189,89 @@ describe('clearStaleLockForRestart (FR-8, daemon-lock.ts)', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// #374 — transient handoff records must never read as a live daemon.
+//
+// The zero-launch race: clearStaleLockForRestart (or ensureRunning's own
+// acquire-then-unlink step) briefly owns the lock with a record carrying its
+// own LIVE pid. A concurrent ensureRunning that loses the arbitration reads
+// that transient record, concludes "live daemon, no-op", and returns — then
+// the transient holder unlinks and returns too. Net: zero daemons, exactly
+// what CI reproduced twice on PR #373 and what a `daemon restart` racing an
+// engineer-claim nudge produces in production.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#374: transient records are handoff state, not a running daemon', () => {
+  const transientRecord = (): PidRecord =>
+    ({
+      pid: process.pid, // live for the duration of the test — the racing CLI process
+      uuid: 'transient-holder',
+      startedAt: new Date().toISOString(),
+      transient: true,
+    }) as PidRecord;
+
+  it('ensureRunning racing a LIVE transient record → spawns anyway (deterministic occupied-branch case)', async () => {
+    await writePidRecord(repoPath, transientRecord());
+
+    let launches = 0;
+    await ensureRunning(repoPath, {
+      launch: async () => {
+        launches += 1;
+      },
+    });
+
+    // A transient record is a microseconds-wide handoff window, not a daemon.
+    // The spawn is safe: the spawned daemon's own boot-time acquire (and the
+    // idempotent tmux session) arbitrate any duplicate.
+    expect(launches).toBe(1);
+  });
+
+  it('ensureRunning with a LIVE non-transient owner still strictly no-ops (FR-21 negative preserved)', async () => {
+    await writePidRecord(repoPath, {
+      pid: process.pid,
+      uuid: 'real-daemon',
+      startedAt: new Date().toISOString(),
+    });
+
+    let launches = 0;
+    await ensureRunning(repoPath, {
+      launch: async () => {
+        launches += 1;
+      },
+    });
+
+    expect(launches).toBe(0);
+  });
+
+  it('AC3b stress: 25 sequential restart-handoff races each launch exactly one daemon', async () => {
+    // Pre-fix this hits the zero-launch window probabilistically (reliably on
+    // 2-core CI runners). Post-fix it is deterministic: every record the racer
+    // can observe is either hard-dead or transient, so the losing side always
+    // proceeds to spawn.
+    const deadPid = await spawnAndReapDeadPid();
+
+    for (let round = 0; round < 25; round++) {
+      await mkdir(join(repoPath, '.daemon'), { recursive: true });
+      await writeFile(
+        join(repoPath, '.daemon', 'daemon.pid'),
+        JSON.stringify({ pid: deadPid, uuid: `old-${round}`, startedAt: new Date().toISOString() }),
+        'utf8',
+      );
+
+      let launches = 0;
+      await Promise.all([
+        clearStaleLockForRestart(repoPath),
+        ensureRunning(repoPath, {
+          launch: async () => {
+            launches += 1;
+          },
+        }),
+      ]);
+
+      expect(launches, `round ${round}`).toBe(1);
+    }
+  });
+});
+
 describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLockForRestart', () => {
   it('clears a hard-dead stale lock before delegating to supervisor.restart', async () => {
     const deadPid = await spawnAndReapDeadPid();
@@ -209,7 +294,7 @@ describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLock
 
     const code = await dispatchDaemonSupervisor(
       { verb: 'restart' } as any,
-      { supervisor, cwd: repoPath, out: () => {} },
+      { supervisor, cwd: repoPath, out: () => {}, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);
@@ -234,7 +319,7 @@ describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLock
 
     const code = await dispatchDaemonSupervisor(
       { verb: 'restart' } as any,
-      { supervisor, cwd: repoPath, out: () => {} },
+      { supervisor, cwd: repoPath, out: () => {}, relinkSkills: async () => {} },
     );
 
     expect(code).toBe(0);

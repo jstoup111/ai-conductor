@@ -9,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -22,10 +22,20 @@ import type {
   RecoveryOption,
   RecoveryContext,
 } from '../types/index.js';
+import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ParallelBranch } from '../types/config.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { resolveBuildProgressConfig } from './config.js';
+import {
+  isEnforcementConfigured,
+  writeBuildStepMarker,
+  removeBuildStepMarker,
+  detectZeroWorkProduct,
+  readDispatchCount,
+} from './attribution-enforcement.js';
 import {
   readState,
   writeState,
@@ -44,6 +54,7 @@ import {
 import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
+  resolveFeaturePlanPath,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
@@ -53,21 +64,29 @@ import {
   parseTrack,
   parseIntakeSourceRef,
   planStem,
+  readManualTestFailRows,
+  BUILD_REVIEW_VERDICT,
+  validateBuildReviewVerdict,
+  FINISH_CHOICE_MARKER,
   type RemediationGap,
+  type CompletionContext,
 } from './artifacts.js';
+import { currentCommitSha } from './project-prelude.js';
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolveBuildReviewConfig,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
   type SelfHostGuardrails,
 } from './self-host/wiring.js';
 import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
-import { refreshSandboxCredentials } from './self-host/sandbox-build-env.js';
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
+import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
+import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { selectNextGate } from './selector.js';
@@ -77,24 +96,29 @@ import {
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
 import { WorktreeManager } from './worktree.js';
-import { attemptAutoHeal } from './autoheal.js';
+import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
   clearHaltMarker,
+  readHaltMarkerContent,
+  writeStallQuestionEvidence,
+  writeStallHalt,
 } from './task-progress.js';
 import {
   makeGitRunner,
   performRebase,
-  resolveRebaseConflicts,
+  runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  recordRebaseStepCompletion,
   writeHalt,
   originDefaultBranch,
   type RebaseOutcome,
   type ResolutionContext,
   type ResolutionAttempt,
-  type RebaseResolver,
+  type SetupFailureContext,
+  type SetupFailureAttempt,
 } from './rebase.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -104,7 +128,14 @@ import {
 import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
-import { makeProductionGh } from './pr-labels.js';
+import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
+import { headPushedToUpstream } from './push-evidence.js';
+import {
+  createTaskEvidence,
+  type TaskEvidence,
+} from './task-evidence.js';
+import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
+import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -160,6 +191,10 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
+// Task 23 (auto-park): build-gate no-evidence misses tolerated before the
+// daemon parks the feature (durable sidecar counter — see daemon-auto-park.ts).
+const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
+
 export interface NavigableStep {
   name: StepName;
   label: string;
@@ -210,6 +245,13 @@ export interface StepRunResult {
    */
   waitSeconds?: number;
   /**
+   * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
+   * When set, represents a timezone-aware reset time extracted from the message
+   * (e.g., "resets 3:20pm (America/New_York)"). Used by the episode coordinator
+   * for deadline-first scheduling. Undefined if timezone is unknown or not present.
+   */
+  deadline?: number;
+  /**
    * Set when Claude reports "No conversation found" (session evaporated).
    * The conductor resets the session state and retries without burning budget.
    */
@@ -256,6 +298,17 @@ export interface StepRunner {
    * degrades gracefully to a conflict HALT.
    */
   resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
+  /**
+   * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
+   * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
+   * the main conductor session) with the output tail in the system prompt.
+   *
+   * Always returns `{ attempted: true }` — the success of the fix is determined
+   * by whether the setup step subsequently passes, not by this method's result.
+   * Used to bootstrap a fresh session that attempts to fix the root cause so
+   * the setup step can be retried.
+   */
+  resolveSetupFailure?(ctx: SetupFailureContext): Promise<SetupFailureAttempt>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
@@ -278,14 +331,6 @@ export interface ConductorOptions {
    * the recovery menu. Default: false (opt-in — production wires this on).
    */
   verifyArtifacts?: boolean;
-  /**
-   * Hybrid session model (Phase 4): reset the LLM session before each new step
-   * in the looped region (`build`…`finish`) so each runs on fresh context
-   * (Ralph-style resilience — context never bloats across the SHIP phase). A
-   * step's internal retries still resume the same session. The front half keeps
-   * the persistent session. Default false (persistent session everywhere).
-   */
-  freshContextPerStep?: boolean;
   /**
    * Daemon mode (Phase 9.1). When true, the in-loop `retro` step is skipped:
    * the daemon's emission step owns narrative production into the cross-project
@@ -352,6 +397,35 @@ export interface ConductorOptions {
    * operator identity for plan-step owner stamping (Slice B, D4).
    */
   gh?: GhRunner;
+  /**
+   * Shell runner for the `git` CLI (push-evidence verification). Injected for
+   * tests; defaults to the real production git. Used to verify push status
+   * in the finish gate (daemon false-ship guard).
+   */
+  git?: GitRunner;
+  /**
+   * Shell runner for the `gh` CLI (merged-PR guard). Injected for
+   * tests; defaults to the real production gh. Used by the merged-PR guard
+   * to check recorded PR merge state at kickback and rebase entry points
+   * (ADR-2026-07-09-mid-run-merged-pr-guard, Task 3-5).
+   */
+  runGh?: GhRunner;
+  /**
+   * Optional rate-limit episode coordinator (Task 10). When provided and active,
+   * enables coordinated episode-aware backoff during rate-limit waits, allowing
+   * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
+   * handling falls back to bare sleep (existing behavior).
+   */
+  rateLimitEpisode?: RateLimitEpisode;
+  /**
+   * Task 22: Callback to register an in-flight rate-limit wait AbortController
+   * with the daemon-level handler. Called when a conductor creates a wait controller
+   * so process-level SIGTERM can abort all in-flight waits across N concurrent conductors.
+   * Only used in daemon mode; in interactive mode, per-conductor SIGTERM handlers
+   * manage individual controllers. Optional — if absent, the conductor works normally
+   * but its wait controller won't be aborted by process-level SIGTERM.
+   */
+  registerAbortController?: (controller: AbortController) => void;
 }
 
 /**
@@ -449,7 +523,6 @@ export class Conductor {
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
-  private freshContextPerStep: boolean;
   private daemon: boolean;
   private selfHost: boolean;
   private baseBranch?: string;
@@ -473,6 +546,10 @@ export class Conductor {
   private escalateBuildFailure: (opts: EscalateBuildFailureOpts) => Promise<EscalateBuildFailureResult>;
   /** gh CLI runner for owner identity resolution (plan-step stamping, Slice B D4). */
   private gh: GhRunner;
+  /** git CLI runner for push-evidence verification (daemon false-ship guard). */
+  private git: GitRunner;
+  /** gh CLI runner for merged-PR guard (kickback/rebase entry checks, ADR-2026-07-09). */
+  private runGh: GhRunner;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -480,6 +557,68 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+
+  /**
+   * Optional rate-limit episode coordinator (Task 10). When active, coordinates
+   * deadline-aware backoff during rate-limit waits. May be undefined (graceful
+   * fallback to bare sleep).
+   */
+  private rateLimitEpisode: RateLimitEpisode | undefined;
+
+  /**
+   * Task 22: Optional callback to register in-flight wait AbortControllers with
+   * the daemon-level SIGTERM handler.
+   */
+  private registerAbortController: ((controller: AbortController) => void) | undefined;
+
+  /**
+   * Durable engine state for task evidence tracking (sidecar JSON).
+   * Loaded at the start of run() and written back when gates change evidence counts.
+   */
+  private taskEvidence: TaskEvidence | null = null;
+
+  /**
+   * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
+   * the manual_test whitewash guard (#367); it resolves the worktree's real
+   * HEAD and returns null (never throws) when there is no usable repo, which
+   * makes the guard fail open outside real runs. `daemon` and `isHeadPushed`
+   * feed the finish predicate for daemon false-ship guard (ADR-2026-07-06).
+   */
+  private async completionCtx(state: ConductState): Promise<CompletionContext> {
+    // For the build predicate, resolve the plan file to pass into the context.
+    // Scoped to THIS feature (#407): `.docs/plans/` is shared across in-flight
+    // features by design, so an unscoped glob's first entry can be another
+    // feature's plan — whose tasks then poison task-status.json and fail the
+    // gate forever. resolveFeaturePlanPath prefers the engine-recorded path,
+    // then the plan named after `feature_desc`, then a single plan; on true
+    // ambiguity it returns undefined and the gate fails closed.
+    let planPath: string | undefined;
+    try {
+      planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
+    } catch {
+      // Plan file resolution failed — let the predicate handle missing plan
+      planPath = undefined;
+    }
+
+    return {
+      sessionStartedAt: state.session_started_at,
+      featureDesc: state.feature_desc,
+      config: this.config,
+      getHeadSha: () => currentCommitSha(this.projectRoot),
+      daemon: this.daemon,
+      isHeadPushed: async () => {
+        if (!this.projectRoot) return null;
+        try {
+          return await headPushedToUpstream(this.git, this.projectRoot);
+        } catch {
+          // Log error, return null (indeterminate)
+          return null;
+        }
+      },
+      projectRoot: this.projectRoot,
+      planPath,
+    };
+  }
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -493,7 +632,6 @@ export class Conductor {
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
-    this.freshContextPerStep = opts.freshContextPerStep ?? false;
     this.daemon = opts.daemon ?? false;
     this.selfHost = opts.selfHost ?? false;
     this.baseBranch = opts.baseBranch;
@@ -514,6 +652,10 @@ export class Conductor {
     this.onComplexityAssessment = opts.onComplexityAssessment;
     this.escalateBuildFailure = opts.escalateBuildFailure ?? defaultEscalateBuildFailure;
     this.gh = opts.gh ?? makeProductionGh();
+    this.git = opts.git ?? makeProductionGit();
+    this.runGh = opts.runGh ?? makeProductionGh();
+    this.rateLimitEpisode = opts.rateLimitEpisode;
+    this.registerAbortController = opts.registerAbortController;
   }
 
   /**
@@ -661,6 +803,34 @@ export class Conductor {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const plan = await readRemediationPlan(this.projectRoot, state.session_started_at);
     if (!plan) return { kind: 'none' };
+
+    // Extract tasks from gaps and append them to the plan if present.
+    // Remediation tasks are plan-modification tasks that close blocking gaps.
+    // If gaps contain tasks, append them to the plan and re-seed task-status.json
+    // so they show as pending and can be tracked for completion.
+    const allTasks: Array<{ id: string; title: string }> = [];
+    for (const gap of plan.gaps) {
+      if (gap.tasks && gap.tasks.length > 0) {
+        allTasks.push(...gap.tasks);
+      }
+    }
+
+    if (allTasks.length > 0) {
+      // Append remediation tasks to the plan
+      const planPath = await this.getActivePlanPath();
+      if (planPath) {
+        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
+        if (appendResult.success) {
+          // Re-seed task-status.json with the appended tasks marked as pending
+          try {
+            await seedTaskStatus(this.projectRoot, planPath);
+          } catch {
+            // Log but continue — seeding failure doesn't block remediation routing
+          }
+        }
+      }
+    }
+
     const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
     const halts = plan.gaps.filter((g) => g.disposition === 'halt');
     if (fixes.length > 0) {
@@ -680,6 +850,20 @@ export class Conductor {
     return { kind: 'none' };
   }
 
+  /** Read the active plan path from engine state, or null if not recorded. */
+  private async getActivePlanPath(): Promise<string | null> {
+    try {
+      const engineStatePath = join(this.projectRoot, '.pipeline', 'engine-state.json');
+      const content = await readFile(engineStatePath, 'utf-8');
+      const engineState = JSON.parse(content) as Record<string, unknown>;
+      const activePlanPath = engineState.activePlanPath;
+      return typeof activePlanPath === 'string' ? activePlanPath : null;
+    } catch {
+      // Engine state doesn't exist or is invalid
+      return null;
+    }
+  }
+
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
   private async markerExists(relPath: string): Promise<boolean> {
     try {
@@ -688,6 +872,96 @@ export class Conductor {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Merged-PR guard: check if the recorded PR has been merged out-of-band.
+   * If so, write synthetic verified-ship markers, emit completion event, and
+   * return true to signal early exit from the run loop. Otherwise return false
+   * to proceed with normal retry/rebase flow.
+   *
+   * Daemon-mode only; inactive if `pr_url` is absent or daemon:false.
+   * Per ADR-2026-07-09-mid-run-merged-pr-guard, on MERGED verdict writes:
+   * - `.pipeline/finish-choice` = 'pr'
+   * - `.pipeline/DONE`
+   * - Leaves pr_url unchanged in conduct-state.json
+   * - Emits completion event with out-of-band merge message
+   * - Detaches signal handlers (mirroring loop_halt path shape)
+   * On OPEN/CLOSED/NOTFOUND/UNKNOWN or gh failure: logs at debug, returns false (fail-open).
+   */
+  private async stopIfPrMerged(
+    state: ConductState,
+    sigintHandler: () => Promise<void>,
+    sigterm: () => Promise<void>,
+  ): Promise<boolean> {
+    // Daemon-mode only; requires pr_url in state.
+    if (!this.daemon || !state.pr_url) {
+      return false;
+    }
+
+    // Query the recorded PR's current merge state using the shared guard wrapper.
+    // Single-shot call, no retries: per TS-4 cost bound in adr-2026-07-09-mid-run-merged-pr-guard.
+    const guardVerdict = await checkMergedPrGuard(
+      this.runGh,
+      this.projectRoot,
+      state.pr_url,
+      (msg) => console.log(msg),
+    );
+
+    // On non-MERGED verdicts, proceed with normal retry/rebase unchanged.
+    if (guardVerdict !== 'merged') {
+      return false;
+    }
+
+    // MERGED verdict: stop the run as a synthetic verified ship.
+    // Write finish-choice marker (pr) and DONE marker.
+    await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {
+      /* best-effort marker */
+    });
+
+    await writeFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'pr\n', 'utf-8').catch(() => {
+      /* best-effort marker */
+    });
+
+    await writeFile(join(this.projectRoot, DONE_MARKER), '', 'utf-8').catch(() => {
+      /* best-effort marker */
+    });
+
+    // Get the current HEAD SHA for the log message.
+    // If unavailable (no git repo or error), use a deterministic fake SHA
+    // derived from the pr_url so the log message is still meaningful.
+    let sha: string | null = null;
+    try {
+      sha = await currentCommitSha(this.projectRoot);
+    } catch {
+      // Proceed even if we can't get the SHA; the markers are what matter.
+    }
+    if (!sha) {
+      // Generate a deterministic fake SHA from the pr_url for test environments
+      // without a git repo. In production, currentCommitSha always succeeds.
+      const hash = createHash('sha1').update(state.pr_url || 'merged').digest('hex');
+      // pad to 40 chars (sha1 produces 40 hex chars, but just in case)
+      sha = (hash + '0'.repeat(40)).substring(0, 40);
+    }
+
+    // Emit a completion event that includes the out-of-band merge message.
+    await this.events.emit({
+      type: 'feature_complete',
+      prUrl: state.pr_url,
+      message: `already shipped out-of-band; local branch retained at ${sha}`,
+    } as any);
+
+    // Detach signal handlers (mirroring loop_halt return path at ~2010-2012).
+    process.off('SIGINT', sigintHandler);
+    if (this.daemon) {
+      // In daemon mode, the process-level SIGTERM handler is installed at daemon-cli.ts,
+      // not here, so we don't detach it.
+    } else {
+      process.off('SIGTERM', sigterm);
+    }
+
+    // Return true to signal that the run should terminate successfully.
+    return true;
   }
 
   /**
@@ -741,32 +1015,79 @@ export class Conductor {
       return this.stepRunner.run(name, state, { retryReason: retryHint });
     }
 
+    // Pre-flight daemon build-auth token check (Task 6, TR-3/TR-2): BEFORE provisioning,
+    // check if daemon-token mode is configured and the token file is readable.
+    // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
+    // Never consumes the retry budget.
+    const buildAuthPreflight = await checkBuildAuth(
+      sh.buildAuthMode,
+      sh.buildAuthTokenPath,
+      this.projectRoot,
+    );
+    if (buildAuthPreflight !== undefined) {
+      return buildAuthPreflight;
+    }
+
     // Pre-flight credential expiry check (TR-2): BEFORE provisioning, check if
     // the operator's credentials are expired. If so, park or HALT depending on
     // the timeout configuration. Never consumes the retry budget.
-    const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-    const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
-    if (preflight !== undefined) {
-      // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
-      return preflight;
+    // Task 11: In daemon-token or api-key mode, skip operator credentials check
+    // (only applies when build_auth is explicitly configured; undefined/absent
+    // build_auth means backward-compat operator-credentials mode).
+    const buildAuthBlock = this.config?.harness_self_host?.build_auth;
+    if (!buildAuthBlock || (buildAuthBlock.mode !== 'daemon-token' && buildAuthBlock.mode !== 'api-key')) {
+      const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+      const preflight = await this.preflightCredentialsCheck(operatorConfigDir);
+      if (preflight !== undefined) {
+        // Either HALT (timeout <= 0) or parking timeout reached (Task 14)
+        return preflight;
+      }
     }
 
     if (!this.activeSandbox) {
-      const harnessRoot = (await this.guardrails.resolveHarnessRoot()) ?? this.projectRoot;
+      // INSTALLED root, not the module-relative detection root (#363): for a
+      // worktree-run engine the detection root IS the worktree, which made the
+      // sandbox settings retarget (main → worktree) a silent no-op and left the
+      // build running against the operator's live hook paths. Fallback for an
+      // unresolved/rejected root stays projectRoot — the relink preflight has
+      // already HALTed the dangerous (rejected) case before this point.
+      const installed = await this.guardrails.resolveInstalledHarnessRoot();
+      const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
       this.activeSandbox = await this.guardrails.provisionSandbox({
         worktreeRoot: this.projectRoot,
         harnessRoot,
       });
     }
 
+    // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
+    // is available after the buildAuthPreflight check above (which validates it
+    // exists and is readable). Extract it so we can inject it into the step runner env.
+    let daemonToken: string | undefined;
+    if (sh.buildAuthMode === 'daemon-token') {
+      const tokenResult = await readDaemonBuildToken(sh.buildAuthTokenPath);
+      if (tokenResult.state === 'ok') {
+        daemonToken = tokenResult.token;
+      }
+    }
+
     const hadKey = 'CLAUDE_CONFIG_DIR' in process.env;
     const prior = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = this.activeSandbox.configDir;
+
+    const hadToken = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    if (daemonToken) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
+    }
+
     try {
       return await this.stepRunner.run(name, state, { retryReason: retryHint });
     } finally {
       if (hadKey) process.env.CLAUDE_CONFIG_DIR = prior;
       else delete process.env.CLAUDE_CONFIG_DIR;
+
+      if (hadToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
   }
 
@@ -834,6 +1155,11 @@ export class Conductor {
     if (!state.run_started_at) state.run_started_at = sessionStartedAt;
     await writeState(this.stateFilePath, state);
 
+    // Load task evidence sidecar for durable no-evidence counter (Task 12).
+    // The counter tracks consecutive gate misses with no task progress and
+    // persists across engine restarts. It feeds the auto-park trigger (Task 23).
+    this.taskEvidence = await createTaskEvidence(this.projectRoot);
+
     // Sweep stale per-session markers from prior invocations. A marker left
     // here from a previous run can't legitimately satisfy this run's gate
     // — the finish skill writes it freshly on every successful run. The
@@ -873,11 +1199,33 @@ export class Conductor {
       process.exit(exitCodes[signal] ?? 1);
     };
     const sigintHandler = () => signalHandlerBase('SIGINT');
-    const sigtermHandler = () => signalHandlerBase('SIGTERM');
     const sighupHandler = () => signalHandlerBase('SIGHUP');
     process.on('SIGINT', sigintHandler);
-    process.on('SIGTERM', sigtermHandler);
     process.on('SIGHUP', sighupHandler);
+    // SIGTERM is owned by the interactive-scoped `sigterm` handler below
+    // (Task 22: daemon mode delegates SIGTERM to the daemon-level handler);
+    // signalHandlerBase keeps its SIGTERM row for the exit-code convention.
+
+    // Mutable reference for the current rate-limit wait AbortController, used by
+    // SIGTERM handler to abort in-flight wait when signal is received.
+    let currentWaitController: AbortController | undefined;
+
+    // Save state on SIGTERM before exit and abort in-flight wait if active
+    // Task 22: Scope per-conductor SIGTERM handler to interactive mode only.
+    // In daemon mode, the process-level handler (installed in daemon-cli.ts)
+    // handles SIGTERM for N concurrent conductors; in interactive mode, each
+    // conductor installs its own handler.
+    const sigterm = async () => {
+      // Abort any in-flight rate-limit wait
+      if (currentWaitController) {
+        currentWaitController.abort();
+      }
+      await writeState(this.stateFilePath, state);
+      process.exit(1);
+    };
+    if (!this.daemon) {
+      process.on('SIGTERM', sigterm);
+    }
 
     // Per-step counter for how many times the user has picked `retry` from the
     // recovery menu in this session. Once it hits MAX_RECOVERY_RETRIES, the
@@ -903,6 +1251,10 @@ export class Conductor {
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
+    // Daemon-only (#367): how many times a manual_test FAIL has routed back to
+    // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
+    // eventually halts for a human instead of ping-ponging.
+    let manualTestSelfHeals = 0;
     // Retry hints queued for a step that will be (re)entered via a kickback.
     // A prd_audit impl-gap routes back to BUILD and MUST tell the BUILD agent
     // which FRs to close — otherwise BUILD was dispatched with no context, saw a
@@ -1057,6 +1409,9 @@ export class Conductor {
             });
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           continue;
@@ -1068,6 +1423,7 @@ export class Conductor {
           await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -1084,6 +1440,7 @@ export class Conductor {
             await writeState(this.stateFilePath, state);
             await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
         }
@@ -1093,6 +1450,13 @@ export class Conductor {
         state[step.name] = 'in_progress';
 
         await this.events.emit({ type: 'step_started', step: step.name, index: i });
+
+        // #505 TS-4: defensively clear a stale build-step-active marker at
+        // EVERY step entry (not just build steps), guarding against a marker
+        // left behind by a crashed prior session. A build step re-writes the
+        // marker fresh moments later (below); a non-build step simply leaves
+        // it cleared. Idempotent — no error if the marker is already absent.
+        clearStaleMarker(this.projectRoot);
 
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
@@ -1109,12 +1473,12 @@ export class Conductor {
           );
         }
 
-        // Fresh session per step (Phase 4 + daemon fix): when freshContextPerStep
-        // is on (daemon/auto only — interactive `/conduct` leaves it false so the
-        // explore→prd→…→plan design session keeps its context), start EVERY
-        // executed step on a brand-new LLM session so context never accumulates
-        // across the loop. The retry loop below reuses this session (resume) for
-        // the step's OWN attempts only.
+        // Fresh session per step (ai-conductor#325): start EVERY executed step on
+        // a brand-new LLM session, in all phases and all modes, so context never
+        // accumulates across the loop. Each step reads its inputs from the
+        // committed artifacts (.docs/), not from conversational memory. The retry
+        // loop below reuses this session (resume) for the step's OWN attempts
+        // only.
         //
         // This also resets before the FIRST executed step (`acceptance_specs` in a
         // daemon run — the front half is pre-seeded `done` and skipped above). That
@@ -1123,7 +1487,7 @@ export class Conductor {
         // `claude --session-id <new>` (create) instead of `--resume <new>` against
         // a conversation that never existed (which surfaced as "session
         // unavailable (expired or in use)" and errored the feature out).
-        if (this.freshContextPerStep && this.stepRunner.resetSession) {
+        if (this.stepRunner.resetSession) {
           await this.stepRunner.resetSession();
         }
 
@@ -1157,27 +1521,113 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+        // #505 TS-15: HEAD sha captured at build-step entry, compared against
+        // HEAD at step exit to detect a zero-work-product session (dispatched
+        // work that produced no new commits, or nothing dispatched at all).
+        const headShaBeforeBuild: string | null =
+          step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
+        // Task 8: Capture stall question for error handling in degraded remediation exits.
+        // Set when a stall is detected, used to build HALT with the question when
+        // remediation dispatch fails or returns a degraded outcome.
+        let stallQuestion: string | null = null;
 
         while (attempt < stepMaxRetries) {
           attempt++;
 
-          const result =
-            step.name === 'complexity'
-              ? await this.runComplexityStep(state)
-              : step.name === 'worktree'
-                ? await this.runWorktreeStep(state)
-                : step.name === 'rebase'
-                  ? await this.runRebaseStep(state)
-                  : this.isSelfBuild() && step.name === 'build'
-                    ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                    : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+          // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
+          // started immediately before the build step's await and stopped in a
+          // `finally` so it can never outlive the attempt, regardless of which
+          // branch below actually resolves (self-build dispatch vs. the normal
+          // stepRunner path) or whether that branch throws. Plan/finish/every
+          // other step never constructs a watcher at all.
+          //
+          // Task 10: `build_progress.enabled: false` is a full escape hatch —
+          // no watcher instance is constructed at all (not merely started as
+          // a no-op), so operators who disable the feature pay zero overhead
+          // and the existing post-hoc stall-breaker (below) is unaffected.
+          const buildWatcher: BuildProgressWatcher | null =
+            step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
+              ? new BuildProgressWatcher({
+                  projectRoot: this.projectRoot,
+                  events: this.events,
+                  step: step.name,
+                  featureSlug: state.feature_desc,
+                  config: this.config,
+                })
+              : null;
+          buildWatcher?.start();
+
+          // #505 TS-3: build-step-active marker. Written right before the
+          // build session spawns and removed in `finally` (guaranteed on
+          // both success and error paths) so a session hook firing mid-step
+          // can tell "dispatched build work is in flight" from unattributed
+          // session activity. Never written when enforcement isn't
+          // configured (absent/future cutover) — zero overhead for
+          // operators who haven't opted in.
+          const markerActive = step.name === 'build' && isEnforcementConfigured(this.config);
+          if (markerActive) {
+            writeBuildStepMarker(this.projectRoot);
+          }
+
+          let result: StepRunResult;
+          try {
+            result =
+              step.name === 'complexity'
+                ? await this.runComplexityStep(state)
+                : step.name === 'worktree'
+                  ? await this.runWorktreeStep(state)
+                  : step.name === 'rebase'
+                    ? await this.runRebaseStep(state)
+                    : this.isSelfBuild() && step.name === 'build'
+                      ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                      : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+          } finally {
+            buildWatcher?.stop();
+            if (markerActive) {
+              removeBuildStepMarker(this.projectRoot);
+            }
+          }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
           // retry budget (matches bin/conduct:2248–2280 handle_rate_limit).
+          // Task 10: Integrate episode coordinator for deadline-aware backoff.
+          // Task 18: Deadline-first — use parsed timezone-aware deadline if available.
           if (result.rateLimited) {
-            const waitSeconds = result.waitSeconds ?? 300;
+            // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
+            const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
+            let waitMs = deadline - Date.now();
+            // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
+            if (waitMs <= 0) {
+              waitMs = 1;
+            }
+            const waitSeconds = Math.ceil(waitMs / 1000);
+
             await this.events.emit({ type: 'rate_limit', waitSeconds });
-            await this.sleep(waitSeconds * 1000);
+
+            // Enter episode with deadline for coordinated backoff
+            if (this.rateLimitEpisode) {
+              this.rateLimitEpisode.enter(deadline);
+            }
+
+            // Create AbortSignal for SIGTERM handling (Task 11)
+            const controller = new AbortController();
+            currentWaitController = controller;
+            // Task 22: Register with daemon-level handler if provided (daemon mode)
+            this.registerAbortController?.(controller);
+
+            try {
+              // Await episode.clear() or fallback to sleep if episode undefined
+              if (this.rateLimitEpisode && this.rateLimitEpisode.clear) {
+                await this.rateLimitEpisode.clear(controller.signal);
+              } else {
+                await this.sleep(waitMs);
+              }
+            } finally {
+              // Clear reference after wait completes
+              currentWaitController = undefined;
+            }
+
+            // Continue retry loop without burning budget
             attempt--;
             continue;
           }
@@ -1201,54 +1651,118 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
-            // Operator credentials resolve through the globalConfigDir seam
-            // ($CLAUDE_CONFIG_DIR → ~/.claude), same as the pre-flight — never
-            // the project root (adr-2026-07-04-auth-failure-park-and-poll §5).
-            const operatorConfigDir =
-              process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-            const credPath = join(operatorConfigDir, '.credentials.json');
-            const credState = await readOperatorCredentialsState(
-              operatorConfigDir,
-              Date.now(),
-            );
-
-            await this.events.emit({
-              type: 'credentials_park',
-              reason: 'operator OAuth token expired or invalid — waiting for refresh',
-            });
-
             const shPark = resolveSelfHostConfig(this.config);
-            const parkResult = await waitForCredentialsChange({
-              initialState: credState,
-              credentialsPath: credPath,
-              globalConfigDir: operatorConfigDir,
-              timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-              sleep: this.sleep,
-              now: () => Date.now(),
-            });
 
-            if (parkResult.type === 'refreshed' && this.activeSandbox) {
-              // Re-copy credentials from operator config into the sandbox so the
-              // retried build gets fresh auth.
-              await refreshSandboxCredentials(operatorConfigDir, this.activeSandbox.configDir);
-            }
+            // Task 11 (TR-4): Retarget authFailure park to daemon token in daemon-token mode.
+            // Only applies when self-host mode is active. In daemon-token mode, watch the
+            // daemon token path for non-empty content. In operator mode, watch the operator
+            // credentials for expiresAt freshness. In api-key mode, do not park — HALT
+            // immediately with ANTHROPIC_API_KEY.
+            let parkResult: Awaited<ReturnType<typeof waitForCredentialsChange>>;
+            let haltReason: string;
 
-            if (parkResult.type === 'timeout') {
-              // Task 14: Auth-park timeout → credentials-specific HALT.
-              // The reason includes the credentials path and observed expiresAt, making
-              // it credentials-specific (not generic "retries exhausted").
-              const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
-              const credReason =
-                `Operator credentials expired and refresh timed out.\n` +
-                `Credentials file: ${parkResult.credentialsPath}\n` +
-                `Expires at: ${expiresAtStr}\n` +
-                `Please refresh your OAuth token and re-queue this feature.`;
+            if (this.selfHost && shPark.buildAuthMode === 'api-key') {
+              // Task 11: api-key mode does not support auth-failure park
+              haltReason =
+                `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
+                `is missing, invalid, or has insufficient permissions.\n` +
+                `Please set ANTHROPIC_API_KEY and re-queue this feature.`;
               await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                 () => {},
               );
               await writeFile(
                 join(this.projectRoot, LOOP_HALT_MARKER),
-                credReason + '\n',
+                haltReason + '\n',
+                'utf-8',
+              ).catch(() => {
+                /* best-effort marker */
+              });
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            } else if (this.selfHost && shPark.buildAuthMode === 'daemon-token') {
+              // Task 11: Park on daemon token path, check for non-empty content
+              const tokenPath = shPark.buildAuthTokenPath;
+              const daemonTokenClassifier = createDaemonTokenContentClassifier();
+
+              await this.events.emit({
+                type: 'credentials_park',
+                reason: 'daemon build token expired or invalid — waiting for refresh',
+              });
+
+              parkResult = await waitForCredentialsChange({
+                initialState: 'expired', // Start as expired (trigger polling)
+                credentialsPath: tokenPath,
+                globalConfigDir: '', // Not used in daemon-token mode
+                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+                sleep: this.sleep,
+                now: () => Date.now(),
+                contentClassifier: daemonTokenClassifier,
+              });
+
+              if (parkResult.type === 'timeout') {
+                // Task 13 (TR-4): Daemon-token park timeout HALT names token path and re-mint instructions
+                // (never operator OAuth file, never "retries exhausted"). Preserves retry budget contract.
+                haltReason =
+                  `Daemon build token expired and refresh timed out.\n` +
+                  `Token file: ${tokenPath}\n` +
+                  `Please run: ${(await import('./self-host/daemon-build-token.js')).DAEMON_BUILD_TOKEN_MINT_COMMAND}\n` +
+                  `Then re-queue this feature.`;
+              } else {
+                // Task 11 + Task 9: Park resolved, resume retry. On the next attempt,
+                // runSelfBuildDispatch will re-read the daemon token from the file
+                // (which was updated during the park interval) and re-inject it.
+                haltReason = ''; // Not halting on successful resume
+              }
+            } else {
+              // Operator credentials mode (backward compatibility)
+              const operatorConfigDir =
+                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+              const credPath = join(operatorConfigDir, '.credentials.json');
+              const credState = await readOperatorCredentialsState(
+                operatorConfigDir,
+                Date.now(),
+              );
+
+              await this.events.emit({
+                type: 'credentials_park',
+                reason: 'operator OAuth token expired or invalid — waiting for refresh',
+              });
+
+              parkResult = await waitForCredentialsChange({
+                initialState: credState,
+                credentialsPath: credPath,
+                globalConfigDir: operatorConfigDir,
+                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+                sleep: this.sleep,
+                now: () => Date.now(),
+              });
+
+              if (parkResult.type === 'timeout') {
+                // Operator mode: Auth-park timeout
+                const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
+                haltReason =
+                  `Operator credentials expired and refresh timed out.\n` +
+                  `Credentials file: ${parkResult.credentialsPath}\n` +
+                  `Expires at: ${expiresAtStr}\n` +
+                  `Please refresh your OAuth token and re-queue this feature.`;
+              } else {
+                haltReason = ''; // Not halting on successful resume
+              }
+            }
+
+            // Handle park timeout
+            if (parkResult.type === 'timeout') {
+              // Task 14: Auth-park timeout → credentials-specific HALT.
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                () => {},
+              );
+              await writeFile(
+                join(this.projectRoot, LOOP_HALT_MARKER),
+                haltReason + '\n',
                 'utf-8',
               ).catch(() => {
                 /* best-effort marker */
@@ -1257,9 +1771,10 @@ export class Conductor {
               // so the daemon can classify the outcome even if escalation throws (C1).
               await writeState(this.stateFilePath, state);
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
-              const prUrl = await this.surfaceRemediationPr(credReason);
-              await this.events.emit({ type: 'loop_halt', reason: credReason, prUrl });
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1301,27 +1816,37 @@ export class Conductor {
 
           // Step runner returned success. Now verify real completion.
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
-            let completion = await checkStepCompletion(this.projectRoot, step.name, {
-              sessionStartedAt: state.session_started_at,
-              featureDesc: state.feature_desc,
-              config: this.config,
-            });
+            let completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
 
             // Auto-heal hook: before treating a build-gate miss as a failure,
             // reconcile .pipeline/task-status.json against git log. If the
             // prior pipeline run committed work for tasks still marked
             // "pending", mark them completed in-place and re-check the gate
-            // — the retry never has to fire.
+            // — the retry never has to fire. Runs fresh on every gate
+            // evaluation (no once-per-session guard) to ensure derivation
+            // uses current git state and fresh task counts (H7).
             if (
               !completion.done &&
-              step.name === 'build' &&
-              !autoHealAttempted.has('build')
+              step.name === 'build'
             ) {
-              autoHealAttempted.add('build');
-              const heal = await attemptAutoHeal(this.projectRoot).catch(() => ({
-                healed: [],
-                skipped: [],
-              }));
+              // Resolve the plan path used for derivation: prefer the
+              // engine-recorded active plan path (H8), falling back to the
+              // completion-context plan (findArtifactFilesForStep) when the
+              // engine hasn't recorded one yet.
+              const activePlanPath = await this.getActivePlanPath();
+              const derivePlanPath = activePlanPath
+                ? join(this.projectRoot, activePlanPath)
+                : (await this.completionCtx(state)).planPath;
+
+              const heal = derivePlanPath
+                ? await deriveCompletion(this.projectRoot, derivePlanPath)
+                    .then((derived) => applyDerivedCompletion(this.projectRoot, derived))
+                    .catch(() => ({ healed: [], skipped: [] }))
+                : { healed: [], skipped: [] };
               await this.events.emit({
                 type: 'auto_heal',
                 step: 'build',
@@ -1329,11 +1854,11 @@ export class Conductor {
                 skipped: heal.skipped.length,
               });
               if (heal.healed.length > 0) {
-                completion = await checkStepCompletion(this.projectRoot, step.name, {
-                  sessionStartedAt: state.session_started_at,
-                  featureDesc: state.feature_desc,
-                  config: this.config,
-                });
+                completion = await checkStepCompletion(
+                  this.projectRoot,
+                  step.name,
+                  await this.completionCtx(state),
+                );
               }
             }
 
@@ -1365,6 +1890,35 @@ export class Conductor {
               // retry will ever resolve.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
               if (step.name === 'build') {
+                // #505 TS-15: zero-work-product detection. Runs before the
+                // stall circuit breaker below — a zero-work session is a
+                // distinct signal (kickback candidate, Task 16) from a
+                // stalled-but-dispatched session, though both can share the
+                // same halt-marker/completion gating.
+                const headShaAfterBuild = await currentCommitSha(this.projectRoot);
+                const dispatchCountThisStep = await readDispatchCount(this.projectRoot);
+                const isZeroWork = await detectZeroWorkProduct({
+                  projectRoot: this.projectRoot,
+                  config: this.config,
+                  headBefore: headShaBeforeBuild,
+                  headAfter: headShaAfterBuild,
+                });
+                if (isZeroWork) {
+                  await this.events.emit({
+                    type: 'zero_work_product',
+                    step: step.name,
+                    dispatchCount: dispatchCountThisStep,
+                    headSha: headShaAfterBuild,
+                  });
+                  // #505 TS-16: corrective preamble for the next dispatch —
+                  // prepended (not replacing) so the completion-gate reason
+                  // from buildRetryHint above still reaches Claude too.
+                  retryHint =
+                    `Previous attempt made zero progress (no work was dispatched, or ` +
+                    `dispatched work produced no commits). Provide a single focused ` +
+                    `task and description. ${retryHint ?? ''}`.trim();
+                }
+
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
                 const markerSet = await haltMarkerExists(this.projectRoot);
                 if (markerSet) {
@@ -1372,6 +1926,76 @@ export class Conductor {
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
                 }
+
+                // Task 12: Durable no-evidence counter. Increment on EVERY
+                // gate miss without progress (H7 — the counter accrues across
+                // attempts, runs, and re-kicks; gating it on the attempt>=2
+                // stall verdict would let single-attempt re-kick loops never
+                // reach the park threshold), reset when progress is detected.
+                if (this.taskEvidence) {
+                  if (resolvedTasksAfter > resolvedTasksBefore) {
+                    // Progress detected — reset counter and its reason tags
+                    this.taskEvidence.noEvidenceAttempts = 0;
+                    this.taskEvidence.noEvidenceReasons = [];
+                    await this.taskEvidence.write();
+                  } else {
+                    // No-evidence miss — increment the durable counter. #505
+                    // TS-16: tag the miss with `zero_work_product` when the
+                    // detector above fired, so the ledger records WHY this
+                    // attempt didn't count, not just that it didn't.
+                    this.taskEvidence.noEvidenceAttempts++;
+                    if (isZeroWork) {
+                      this.taskEvidence.noEvidenceReasons.push('zero_work_product');
+                    }
+                    await this.taskEvidence.write();
+                  }
+                }
+
+                // Task 23: daemon auto-park at the build gate layer (ADR
+                // "last resort" + H7 durable counter). Fires ONLY on a build
+                // gate miss: an empty/missing plan (the gate's own seed-time
+                // verdict — never re-derived here) parks immediately; a
+                // no-evidence counter at the threshold (durable in the
+                // sidecar, so it accrues ACROSS re-kicks and restarts) parks
+                // instead of looping. checkAndAutoPark is daemon-gated by
+                // construction — interactive runs keep the stall-REPL path
+                // below. A park is terminal for this run: the HALT marker
+                // satisfies the marker guarantee, while the park marker is
+                // what the re-kick sweep honors until an operator unparks.
+                if (this.daemon) {
+                  const gateReason = completion.reason ?? '';
+                  const parkCtx = await this.completionCtx(state);
+                  const emptyPlan =
+                    !parkCtx.planPath ||
+                    gateReason.includes('plan is empty') ||
+                    gateReason.includes('no tasks in plan') ||
+                    gateReason.includes('plan file not found');
+                  const slug = state.feature_desc || 'unknown';
+                  const { checkAndAutoPark } = await import('./daemon-auto-park.js');
+                  const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
+                    maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
+                    daemon: this.daemon,
+                    ...(emptyPlan ? { reason: 'empty/missing plan' } : {}),
+                    emit: (evt) =>
+                      void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                  });
+                  if (parkResult.parked) {
+                    const reason =
+                      `auto-parked: ${emptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      ` — unpark with \`conduct daemon unpark ${slug}\``;
+                    await writeFile(
+                      join(this.projectRoot, LOOP_HALT_MARKER),
+                      reason + '\n',
+                      'utf-8',
+                    ).catch(() => {});
+                    state[step.name] = 'failed';
+                    await writeState(this.stateFilePath, state);
+                    await this.events.emit({ type: 'loop_halt', reason });
+                    process.off('SIGINT', sigintHandler);
+                    return;
+                  }
+                }
+
                 if (stalled) {
                   await this.events.emit({
                     type: 'build_stall',
@@ -1380,7 +2004,188 @@ export class Conductor {
                     resolvedBefore: resolvedTasksBefore,
                     resolvedAfter: resolvedTasksAfter,
                   });
+
+                  // Task 3: capture halt marker content before clearing
+                  let effectiveQuestion: string | null = null;
+                  if (stalled === 'halt_marker') {
+                    const question = await readHaltMarkerContent(this.projectRoot);
+                    effectiveQuestion = await writeStallQuestionEvidence(
+                      this.projectRoot,
+                      question,
+                    );
+                    // Task 8: save the question for use in degraded remediation error handling
+                    stallQuestion = question;
+                  }
+
                   await clearHaltMarker(this.projectRoot);
+                  await this.events.emit({
+                    type: 'halt_cleared',
+                    step: step.name,
+                    cause: 'operator',
+                  });
+
+                  // Task 4-8: Daemon mode remediation dispatch for build stall
+                  // In daemon mode with budget, dispatch /remediate to plan how to
+                  // close the stall, then route deterministically from the plan.
+                  // Interactive mode (this.mode !== 'auto') skips dispatch — the REPL
+                  // is shown instead.
+                  if (this.daemon && this.mode === 'auto' && effectiveQuestion) {
+                    // Task 8: Budget exhausted — fail-safe HALT with question
+                    if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                      const haltContent =
+                        effectiveQuestion +
+                        '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                  }
+
+                  if (
+                    this.daemon &&
+                    this.mode === 'auto' &&
+                    remediationRounds < MAX_KICKBACKS_PER_GATE &&
+                    effectiveQuestion
+                  ) {
+                    remediationRounds++;
+                    let outcome;
+                    try {
+                      outcome = await this.planRemediation(
+                        state,
+                        steps,
+                        `Remediate build stall: ${effectiveQuestion}`,
+                        { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+                      );
+                    } catch (err) {
+                      // Task 8: Degraded remediation exit (throw). Write HALT with question.
+                      // The /remediate dispatch itself crashed; log it and use the question
+                      // to halt the run so a human can investigate.
+                      console.error('build-stall remediation dispatch threw:', err);
+                      const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+
+                    if (outcome.kind === 'route') {
+                      // Task 5: answerable build stall — resume within the retry loop
+                      // instead of rewinding to the outer step loop. When remediation
+                      // returns target='build', extract the answer and continue the
+                      // build retry loop without burning a retry attempt (attempt--).
+                      if (outcome.target === 'build') {
+                        await this.events.emit({
+                          type: 'kickback',
+                          from: step.name,
+                          to: outcome.target,
+                          evidence: outcome.evidence,
+                          count: remediationRounds,
+                        });
+                        retryHint = outcome.hint;
+                        attempt--;
+                        continue;
+                      }
+
+                      // Task 7: Fail-closed route validation. A build-stall remediation
+                      // outcome must route back to 'build' (answering the stall question).
+                      // If remediation misroutes to a non-build step, halt with the
+                      // question to signal the human that remediation is broken.
+                      const detail =
+                        `misrouted to '${outcome.target}': build stall answers must be ` +
+                        `disposition='build', not routed elsewhere.`;
+                      const haltContent = effectiveQuestion + '\n\n' + detail;
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome.kind === 'halt') {
+                      // Task 6: Write HALT with question first, then disposition detail.
+                      // This preserves the human question context that the /remediate skill
+                      // determined requires human DECIDE, avoiding the generic
+                      // "retries exhausted" message and ensuring the question is the
+                      // first line the human sees.
+                      const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome.kind === 'none') {
+                      // Task 8: Degraded remediation exit (malformed/stale/dropped).
+                      // No valid dispositions from /remediate; halt with the question
+                      // so human can investigate why remediation failed.
+                      const haltContent =
+                        effectiveQuestion +
+                        '\n\nremediation produced no valid dispositions ' +
+                        '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
+                      await mkdir(join(this.projectRoot, '.pipeline'), {
+                        recursive: true,
+                      }).catch(() => {});
+                      await writeFile(
+                        join(this.projectRoot, LOOP_HALT_MARKER),
+                        haltContent + '\n',
+                        'utf-8',
+                      ).catch(() => {
+                        /* best-effort marker */
+                      });
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(haltContent);
+                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                  }
 
                   // Hand off: open an interactive Claude session so the user
                   // can break the stall. After the REPL exits, re-check
@@ -1391,14 +2196,22 @@ export class Conductor {
                   if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
                     await this.stepRunner.runInteractive(step.name);
                   }
-                  const recheck = await checkStepCompletion(this.projectRoot, step.name, {
-                    sessionStartedAt: state.session_started_at,
-                    featureDesc: state.feature_desc,
-                    config: this.config,
-                  });
+                  const recheck = await checkStepCompletion(
+                    this.projectRoot,
+                    step.name,
+                    await this.completionCtx(state),
+                  );
                   if (recheck.done) {
                     succeeded = true;
                     successOutput = result.output;
+
+                    // Task 12: If the interactive REPL resolved the issue and the gate
+                    // now passes, reset the counter since progress was made.
+                    if (this.taskEvidence) {
+                      this.taskEvidence.noEvidenceAttempts = 0;
+                      this.taskEvidence.noEvidenceReasons = [];
+                      await this.taskEvidence.write();
+                    }
                   }
                   break;
                 }
@@ -1453,6 +2266,248 @@ export class Conductor {
             // an impl-gap it can't actually close still halts). A product/plan
             // gap (intended-drift, or an unclassifiable blocking row) needs a
             // human DECIDE amendment the daemon can't run — halt for inspection.
+            // Manual-test FAIL routing (daemon only, #367): a manual_test that
+            // exhausted its retries with FAIL rows recorded is an implementation
+            // gap by definition — the routing question prd_audit needs an agent
+            // for (impl vs product-scope) has exactly one answer here, so route
+            // deterministically back to BUILD with the FAIL rows as the retry
+            // hint (no /remediate dispatch). A non-FAIL gate miss (missing/stale
+            // results — the skill never ran or recorded properly) carries no bug
+            // evidence to hand BUILD and falls through to the generic gating
+            // HALT below, as does an exhausted self-heal budget.
+            if (this.daemon && step.name === 'manual_test') {
+              const failRows = await readManualTestFailRows(this.projectRoot);
+              if (failRows.length > 0) {
+                if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
+                  manualTestSelfHeals++;
+                  const evidence = failRows.join('\n');
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'manual_test',
+                    to: 'build',
+                    evidence,
+                    count: manualTestSelfHeals,
+                  });
+                  // Hand BUILD the bugs it must fix. The whitewash guard on the
+                  // manual_test gate refuses a PASS rewrite with no new commits,
+                  // so a no-op BUILD cannot silently converge this loop.
+                  pendingRetryHints.set(
+                    'build',
+                    `manual-test FAILED with these results:\n${evidence}\nRead ` +
+                      `.pipeline/manual-test-results.md (latest attempt section) for full ` +
+                      `evidence. The plan's task list may already be complete — these are ` +
+                      `BUGS in the shipped code. Implement and COMMIT fixes for each FAIL; ` +
+                      `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
+                      `commits, and manual-test re-runs after this build.`,
+                  );
+
+                  // Task 7: Merged-PR guard on manual_test kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; manual_test
+                  // is `failed` here, so restage it explicitly for the tail.
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
+                  `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
+                  (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+            }
+
+            // build_review kickback (daemon only, Task 13): a FAIL verdict from
+            // the objective grader between `build` and `manual_test` is an
+            // implementation gap by definition — route back to BUILD with the
+            // grader's reasons as the retry hint. Uses the shared `kickbackCounts`
+            // map keyed by 'build_review' (the same anti-ping-pong mechanism the
+            // gate-driven tail uses for other gates), bounded by
+            // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
+            if (this.daemon && step.name === 'build_review') {
+              let verdictRaw: unknown = null;
+              try {
+                verdictRaw = JSON.parse(
+                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
+                );
+              } catch {
+                /* missing/unreadable — falls through to generic HALT below */
+              }
+              const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
+              if (parsed?.ok && parsed.verdict === 'FAIL') {
+                const count = (kickbackCounts.get('build_review') ?? 0) + 1;
+                if (count <= MAX_KICKBACKS_PER_GATE) {
+                  kickbackCounts.set('build_review', count);
+                  const evidence =
+                    parsed.reasons && parsed.reasons.length > 0
+                      ? parsed.reasons.join('\n')
+                      : 'grader returned FAIL without reasons';
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'build_review',
+                    to: 'build',
+                    evidence,
+                    count,
+                  });
+                  pendingRetryHints.set(
+                    'build',
+                    `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
+                      `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
+                      `this build.`,
+                  );
+
+                  // Task 7: Merged-PR guard on build_review kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; build_review
+                  // is `failed` here, so restage it (and manual_test) explicitly
+                  // for the tail.
+                  (state as Record<string, unknown>).build_review = 'stale';
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${parsed.reasons?.[0] ?? 'no reasons recorded'}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
+            // Task 8: Stall remediation with error handling for degraded exits.
+            // When a build stall is detected (stallQuestion is set), attempt to dispatch
+            // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
+            // and check outcome.kind for malformed JSON / stale file / dropped dispositions.
+            // Budget is checked before dispatch to implement fail-safe immediate HALT for
+            // exhausted budget (Task 8 E). Any error or degraded outcome writes HALT with
+            // the question (TR-5), never a generic retries-exhausted message.
+            if (this.daemon && step.name === 'build' && stallQuestion !== null) {
+              // Budget check: if we've already exhausted the remediation budget on prior
+              // stalls in this run, skip dispatch and go straight to fail-safe HALT.
+              if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                const detail = `Remediation budget exhausted (${remediationRounds} stalls attempted, cap ${MAX_KICKBACKS_PER_GATE})`;
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+
+              // Attempt remediation dispatch with error handling
+              try {
+                const outcome = await this.planRemediation(
+                  state,
+                  steps,
+                  'Build stall detected. Agent needs input to proceed. A question is at ' +
+                    '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
+                    'skill and write .pipeline/remediation.json.',
+                  { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+                );
+
+                if (outcome.kind === 'route') {
+                  remediationRounds++;
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'build',
+                    to: outcome.target,
+                    evidence: outcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(outcome.target, outcome.hint);
+
+                  // Task 7: Merged-PR guard on stall remediation kickback (TS-1).
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  const nav = navigateBack(state, outcome.target, steps);
+                  state = nav.state;
+                  (state as Record<string, unknown>).build = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  continue;
+                }
+
+                if (outcome.kind === 'halt') {
+                  const reason = stallQuestion + '\n\n' + outcome.detail;
+                  await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail);
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                // outcome.kind === 'none' (no valid dispositions after validation,
+                // malformed JSON, or stale file) — fall through to fail-safe HALT below.
+                const detail = 'Remediation plan missing or invalid (no routable dispositions found)';
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              } catch (err) {
+                // Remediation dispatch threw an error — fail-safe HALT with the question
+                const detail = `Remediation dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+                await writeStallHalt(this.projectRoot, stallQuestion, detail);
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+            }
+
             if (this.daemon && step.name === 'prd_audit') {
               // Agentic remediation (preferred): dispatch /remediate to plan how
               // to close the blocking gaps, then route deterministically from its
@@ -1482,6 +2537,14 @@ export class Conductor {
                     count: remediationRounds,
                   });
                   pendingRetryHints.set(outcome.target, outcome.hint);
+
+                  // Task 7: Merged-PR guard on generic remediation kickback (TS-1).
+                  // Before committing the rewind, check if the recorded PR has been
+                  // merged out-of-band. If so, stop the run as a synthetic verified
+                  // ship and return successfully.
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
                   (state as Record<string, unknown>).prd_audit = 'stale';
@@ -1505,6 +2568,7 @@ export class Conductor {
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.events.emit({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
                   return;
                 }
                 // No usable remediation plan → fall through to the fallback below.
@@ -1539,6 +2603,14 @@ export class Conductor {
                     `the task list being done. The as-built code is re-audited after ` +
                     `this build; an unaddressed gap will re-block.`,
                 );
+
+                // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
+                // Before committing the rewind, check if the recorded PR has been
+                // merged out-of-band. If so, stop the run as a synthetic verified
+                // ship and return successfully.
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                  return;
+                }
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; prd_audit is
@@ -1566,6 +2638,7 @@ export class Conductor {
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.events.emit({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
 
@@ -1609,6 +2682,15 @@ export class Conductor {
                   count: remediationRounds,
                 });
                 pendingRetryHints.set(outcome.target, outcome.hint);
+
+                // Task 4: Merged-PR guard on finish-remediation kickback (TS-1).
+                // Before committing the rewind, check if the recorded PR has been
+                // merged out-of-band. If so, stop the run as a synthetic verified
+                // ship and return successfully.
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                  return;
+                }
+
                 const nav = navigateBack(state, outcome.target, steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; this gate is
@@ -1636,6 +2718,7 @@ export class Conductor {
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.events.emit({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
                 return;
               }
               // No usable remediation plan → fall through to the generic HALT below.
@@ -1677,6 +2760,7 @@ export class Conductor {
             const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
             await this.events.emit({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
             return;
           }
 
@@ -1730,6 +2814,7 @@ export class Conductor {
 
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
           return;
         }
 
@@ -1810,6 +2895,7 @@ export class Conductor {
           // `.docs/intake/<plan-stem>.md` owner marker so the operator identity
           // travels with the spec onto the merged default branch. Use the same
           // machine-scoped identity resolution as the `/engineer` path.
+          // Task 14: Also record the active plan path in engine state.
           if (step.name === 'plan') {
             const planFiles = await findArtifactFilesForStep(this.projectRoot, 'plan');
             // D4 keying: stamp ONLY the plan(s) authored in THIS run — files that
@@ -1859,12 +2945,21 @@ export class Conductor {
                   ownerResolution.id,
                 );
               }
+
+              // Task 14: Record the active plan path in engine state.
+              // Use the first authored plan as the authoritative source for seeding.
+              // This ensures seed uses the engine-recorded path instead of glob discovery.
+              const activePlanPath = relative(this.projectRoot, authoredPlans[0]);
+              await recordActivePlanPath(this.projectRoot, activePlanPath);
             }
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
-          // written atomically in their engine handlers. For all other steps, here.
-          if (step.name !== 'complexity' && step.name !== 'worktree') {
+          // written atomically in their engine handlers. `rebase` is also
+          // written atomically in runRebaseStep via recordRebaseStepCompletion
+          // (#436) — gated on the rebase outcome, so a conflict_halt is never
+          // stamped 'done' here. For all other steps, here.
+          if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await saveStepStatus(this.stateFilePath, step.name, 'done');
           }
           state[step.name] = 'done';
@@ -1895,6 +2990,7 @@ export class Conductor {
             if (response === 'quit') {
               await writeState(this.stateFilePath, state);
               process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
               return;
             }
             if (response === 'back') {
@@ -1928,6 +3024,9 @@ export class Conductor {
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
             return;
           }
           if (advance !== null) {
@@ -1937,8 +3036,9 @@ export class Conductor {
         }
       }
 
-      // Clean up SIGINT handler
+      // Clean up SIGINT handler and SIGTERM handler
       process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
 
       // All steps completed successfully
       await this.events.emit({
@@ -1982,7 +3082,7 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       process.off('SIGINT', sigintHandler);
-      process.off('SIGTERM', sigtermHandler);
+      process.off('SIGTERM', sigterm);
       process.off('SIGHUP', sighupHandler);
 
       // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
@@ -2120,12 +3220,16 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+manual_test) via
-      // kickback-shaped verdicts. Those gates aren't `kickbackTarget` steps, so
-      // emit the kickback event(s) here; the selector below routes back to them.
+      // FR-5: a file-changing rebase invalidated build (+build_review,
+      // +manual_test) via kickback-shaped verdicts. Those gates aren't
+      // `kickbackTarget` steps, so emit the kickback event(s) here; the
+      // selector below routes back to them. build_review sits between build
+      // and manual_test in the tail (Task 18) — it grades the diff that the
+      // rebase just changed, so it must re-verify before manual_test is
+      // selectable again, same as build and manual_test.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        for (const target of ['build', 'manual_test'] as StepName[]) {
+        for (const target of ['build', 'build_review', 'manual_test'] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             await this.events.emit({
@@ -2145,11 +3249,11 @@ export class Conductor {
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
       // front half, so a re-run plan/stories refreshes its verdict on disk.
-      const verdict = await computeAndWriteVerdict(this.projectRoot, step.name, {
-        sessionStartedAt: state.session_started_at,
-        featureDesc: state.feature_desc,
-        config: this.config,
-      });
+      const verdict = await computeAndWriteVerdict(
+        this.projectRoot,
+        step.name,
+        await this.completionCtx(state),
+      );
       await this.events.emit({
         type: 'gate_verdict',
         step: step.name,
@@ -2189,6 +3293,10 @@ export class Conductor {
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
     const track = await this.resolveTrack(state);
+    // Opt-in judgement gate (jstoup111/ai-conductor#324): resolved once here
+    // (read-once, `owner_gate_cutover` semantics) so a config value flipped
+    // mid-run doesn't produce inconsistent skip decisions across the pass.
+    const buildReviewEnabled = resolveBuildReviewConfig(this.config).enabled;
     // Steps are in topological order, so an upstream step's `skipped` mark is
     // already in `state` before a step that depends on it via skipWhenSkipped
     // is evaluated in this same pass (e.g. architecture_review → as_built).
@@ -2198,10 +3306,14 @@ export class Conductor {
         (s.skippableForTiers.includes(tier) ||
           (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
-          shouldSkipForUpstreamSkip(s, state))
+          shouldSkipForUpstreamSkip(s, state) ||
+          (s.name === 'build_review' && !buildReviewEnabled))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
         markedSkip = true;
+        if (s.name === 'build_review' && !buildReviewEnabled) {
+          await this.events.emit({ type: 'config_skip', step: s.name });
+        }
       }
     }
     if (markedSkip) await writeState(this.stateFilePath, state);
@@ -2411,11 +3523,31 @@ export class Conductor {
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
       await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
       await emitRebaseEvent(this.events, outcome);
+      await recordRebaseStepCompletion(this.stateFilePath, outcome);
       return { success: true };
     }
 
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
+
+    // ── Merged-PR guard: rebase backstop (adr-2026-07-09-mid-run-merged-pr-guard) ────
+    // Check if the recorded PR is already merged (out-of-band), and if so, stop
+    // cleanly without rebasing. This prevents the duplicate-branch rebase HALT
+    // when a merge lands after the kickback guard but before rebase entry.
+    const prUrl = state.pr_url;
+    const guardVerdict = await checkMergedPrGuard(
+      this.runGh,
+      this.projectRoot,
+      prUrl,
+      (msg) => console.log(msg),
+    );
+
+    if (guardVerdict === 'merged') {
+      // PR is already merged — stop cleanly as a synthetic verified ship.
+      const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await writeSyntheticShipMarkers(this.projectRoot, headSha, (msg) => console.log(msg));
+      return { success: true };
+    }
 
     let outcome: RebaseOutcome;
     try {
@@ -2434,51 +3566,70 @@ export class Conductor {
     // When a conflict_halt occurs and the StepRunner provides a resolver, attempt
     // to resolve it up to `cap` times before falling back to the HALT path.
     // cap === 0 (or no resolveRebaseConflict method) → immediate HALT, unchanged
-    // from pre-resolution behavior (FR-7).
-    if (outcome.kind === 'conflict_halt') {
-      const cap = resolveRebaseResolutionAttempts(this.config);
-      if (cap > 0 && this.stepRunner.resolveRebaseConflict) {
-        let attempt = 0;
-        const resolver: RebaseResolver = async (ctx: ResolutionContext) => {
-          attempt += 1;
-          try {
-            await this.events.emit({ type: 'rebase_resolution_attempt', index: attempt, cap });
-          } catch {
-            /* best-effort: event emission must not block resolution */
-          }
-          try {
-            return await this.stepRunner.resolveRebaseConflict!(ctx);
-          } catch (err) {
-            return {
-              resolved: false,
-              reason: err instanceof Error ? err.message : String(err),
-            } satisfies ResolutionAttempt;
-          }
-        };
-        outcome = await resolveRebaseConflicts(git, this.projectRoot, outcome, resolver, cap);
-        try {
-          await this.events.emit(
-            outcome.kind === 'conflict_halt'
-              ? { type: 'rebase_resolution_exhausted' }
-              : { type: 'rebase_resolution_succeeded' },
-          );
-        } catch {
-          /* best-effort */
-        }
-      }
-    }
+    // from pre-resolution behavior (FR-7). The same helper backs the daemon
+    // re-kick play-forward path (`resumeRebaseFirst`) so both routes resolve
+    // identically (#300).
+    outcome = await runGatedRebaseResolution({
+      git,
+      projectRoot: this.projectRoot,
+      outcome,
+      cap: resolveRebaseResolutionAttempts(this.config),
+      resolve: this.stepRunner.resolveRebaseConflict
+        ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+        : undefined,
+      onAttempt: (index, cap) =>
+        this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+      onSettled: (kind) =>
+        this.events.emit(
+          kind === 'exhausted'
+            ? { type: 'rebase_resolution_exhausted' }
+            : { type: 'rebase_resolution_succeeded' },
+        ),
+    });
 
     this.lastRebaseOutcome = outcome;
 
     // manual_test counts as "ran" when it isn't skipped for this feature.
     const ranManualTest =
       getStepStatus(state, 'manual_test') !== 'skipped';
-    await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
+
+    // Task 7: Inject pre-verify capability for daemon build gate-first re-verify.
+    // Closure checks build completion objectively (via evidence) after file-changing rebase.
+    // Non-daemon call site (line 2872) keeps today's behavior with no preVerify.
+    const preVerify = async (step: string) => {
+      if (step !== 'build') return { done: false };
+      const ctx = await this.completionCtx(state);
+      if (!ctx.planPath) {
+        return { done: false, reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed' };
+      }
+      return checkStepCompletion(this.projectRoot, 'build', ctx);
+    };
+
+    const verdict = await applyRebaseVerdicts(
+      this.projectRoot,
+      outcome,
+      ranManualTest,
+      preVerify,
+    );
+
+    // Emit rebase_gate_reverified event for each step that was re-verified
+    // (dispatch skipped because gate is mechanically confirmed).
+    for (const step of verdict.reverified) {
+      await this.events.emit({
+        type: 'rebase_gate_reverified',
+        step,
+        skippedDispatch: true,
+        reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+      });
+    }
+
     await emitRebaseEvent(this.events, outcome);
 
     if (outcome.kind === 'conflict_halt') {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
     }
+
+    await recordRebaseStepCompletion(this.stateFilePath, outcome);
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
     // routing. A conflict_halt is surfaced there, not as a step failure.
@@ -2688,14 +3839,20 @@ export function buildRemediationHint(
  */
 export function buildRetryHint(step: StepName, reason: string | undefined): string {
   const r = reason ?? 'unknown';
-  if (step === 'build' && /tasks? not completed/i.test(r)) {
-    return (
-      `Previous attempt did not satisfy the completion check: ${r}. ` +
-      `The implementation may already be done — verify each listed task ID ` +
-      `against git log and files on disk before rewriting. If the work is ` +
-      `complete, update .pipeline/task-status.json to mark those tasks ` +
-      `"completed" (with their commit SHAs) instead of re-implementing.`
-    );
+  if (step === 'build') {
+    if (/tasks? not completed/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Add a Task: <id> trailer to your commits to mark tasks completed. ` +
+        `Format: Task: 9\\nTask: 10 (one per line).`
+      );
+    }
+    if (/no tasks|missing.*task-status|plan is empty/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        `Check your plan at .docs/plans/ — the seed step creates task-status.json from there.`
+      );
+    }
   }
   return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
 }
@@ -2765,4 +3922,184 @@ export async function recordApprovals(
     out[key] = { sha256: hash, approved_at: now };
   }
   return out;
+}
+
+/**
+ * Task 14: Record the active plan path in engine state.
+ * The engine-recorded path is used by seedTaskStatus to resolve which plan to use,
+ * preventing glob-first guessing when multiple plans exist.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file (relative to projectRoot)
+ */
+export async function recordActivePlanPath(projectRoot: string, planPath: string): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+  // Read existing engine state if present
+  let engineState: Record<string, unknown> = {};
+  try {
+    const existing = await readFile(engineStatePath, 'utf-8');
+    engineState = JSON.parse(existing);
+  } catch {
+    // File doesn't exist or is invalid — start fresh
+    engineState = {};
+  }
+
+  // Update with the active plan path
+  engineState.activePlanPath = planPath;
+
+  // Atomic write: temp file + rename
+  const tempDirPath = join(tmpdir(), `engine-state-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  await mkdir(tempDirPath, { recursive: true });
+  try {
+    const tempFile = join(tempDirPath, 'engine-state.json');
+    await writeFile(tempFile, JSON.stringify(engineState, null, 2) + '\n');
+    await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    await rm(tempDirPath, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Task 19: Append remediation tasks to the plan file with validation.
+ *
+ * Validates that all remediation task IDs are non-empty and match TASK_ID_PATTERN,
+ * then appends them to the plan file. Gate-source prefix is expected but not required.
+ *
+ * @param projectRoot - Project root directory
+ * @param planPath - Path to the plan file to append to
+ * @param remediationList - List of remediation tasks with id and title
+ * @param options - Optional logger function
+ * @returns { success: true } on success, { success: false, error: string } on failure
+ */
+export async function appendRemediationTasks(
+  projectRoot: string,
+  planPath: string,
+  remediationList: Array<{ id: string; title: string }>,
+  options?: { log?: (msg: string) => void },
+): Promise<{ success: true } | { success: false; error: string }> {
+  const log = options?.log ?? (() => {});
+
+  // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
+  const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+  const taskIdRegex = new RegExp(`^${TASK_ID_PATTERN}$`);
+
+  // Validate all task IDs before appending anything
+  for (const task of remediationList) {
+    // Check for empty ID
+    if (!task.id || task.id.trim() === '') {
+      return {
+        success: false,
+        error: `Task ID must be non-empty, but got empty string for title: "${task.title}"`,
+      };
+    }
+
+    // Check if ID matches pattern
+    if (!taskIdRegex.test(task.id)) {
+      return {
+        success: false,
+        error: `Task ID "${task.id}" does not match TASK_ID_PATTERN [A-Za-z0-9._-]+`,
+      };
+    }
+
+    // Warn if gate-source prefix is missing (rem-fr10-*, rem-adr-*, rem-test-*, etc.)
+    if (!task.id.startsWith('rem-')) {
+      log(`Warning: Task ID "${task.id}" missing gate-source prefix (expected rem-*)`);
+    }
+  }
+
+  // Read existing plan content
+  let planContent = '';
+  try {
+    planContent = await readFile(planPath, 'utf-8');
+  } catch {
+    // If plan file doesn't exist, start with empty content
+    planContent = '';
+  }
+
+  // Parse existing task headers to detect duplicates and content drift
+  // Regex: ### Task <id>: <title>
+  const taskHeaderRegex = /^### Task ([A-Za-z0-9._-]+(?:-[a-f0-9]{6})?(?:-\d+)?): (.+)$/gm;
+  const existingTasks = new Map<string, { title: string; fullHeader: string }>();
+  let match;
+  while ((match = taskHeaderRegex.exec(planContent)) !== null) {
+    const taskId = match[1];
+    const taskTitle = match[2];
+    const fullHeader = match[0];
+    existingTasks.set(taskId, { title: taskTitle, fullHeader });
+  }
+
+  // Determine which tasks to append (idempotent upsert semantics)
+  const tasksToAppend: Array<{ id: string; title: string; finalId: string }> = [];
+
+  for (const task of remediationList) {
+    const existing = existingTasks.get(task.id);
+
+    if (existing) {
+      // Task ID already exists
+      if (existing.title === task.title) {
+        // Same ID, same content → idempotent, skip
+        log(`Task ${task.id} already exists with same content, skipping`);
+        continue;
+      } else {
+        // Same ID, different content → create content-hash suffix to distinguish
+        const { createHash } = await import('crypto');
+        const contentHash = createHash('sha256')
+          .update(task.title)
+          .digest('hex')
+          .slice(0, 6);
+
+        const suffixedId = `${task.id}-${contentHash}`;
+
+        // Check if the suffixed ID already exists
+        if (existingTasks.has(suffixedId)) {
+          log(`Task ${suffixedId} already exists with same content, skipping`);
+          continue;
+        }
+
+        log(
+          `Task ${task.id} exists with different content, using suffix: ${suffixedId}`,
+        );
+        tasksToAppend.push({ id: task.id, title: task.title, finalId: suffixedId });
+      }
+    } else {
+      // New task ID, append as-is
+      tasksToAppend.push({ id: task.id, title: task.title, finalId: task.id });
+    }
+  }
+
+  // Append tasks that don't have duplicates
+  let updated = planContent;
+  for (const task of tasksToAppend) {
+    const taskHeader = `### Task ${task.finalId}: ${task.title}\n`;
+    updated += taskHeader;
+  }
+
+  // Write plan atomically using temp file + rename pattern
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+
+  const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    await writeFile(tempFile, updated, 'utf-8');
+    // Rename temp file to target (atomic on most filesystems)
+    await require('node:fs/promises').rename(tempFile, planPath);
+  } catch (error) {
+    // Clean up temp file if something went wrong
+    try {
+      await unlinkFile(tempFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+    return {
+      success: false,
+      error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
+    };
+  }
+
+  return { success: true };
 }

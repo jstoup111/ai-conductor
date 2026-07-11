@@ -98,7 +98,7 @@ const failingGh: GhRunner = async () => {
 
 beforeEach(async () => {
   repoPath = await mkdtemp(join(tmpdir(), 'land-spec-'));
-  await git(['init', '-q']);
+  await git(['init', '-b', 'main', '-q']);
   await git(['config', 'user.email', 'test@test.com']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repoPath, 'README.md'), '# repo\n');
@@ -206,6 +206,44 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
       { cwd: worktree },
     );
     expect(marker).toContain('Owner: bob');
+  });
+
+  it('#505 Task 8: landSpec commits CONDUCT_ENGINE_COMMIT=1 — lands trailer-less under an active commit-msg gate', async () => {
+    // Wire the real commit-msg hook + a build-step-active marker WITHOUT
+    // using prepareWorktree (it writes .env/.claude/.pipeline files that
+    // landSpec's own dirty-guard rejects as untracked). Instead, write the
+    // hook scripts to a location OUTSIDE the worktree and point
+    // core.hooksPath at it directly — the worktree tree itself stays clean.
+    // If landSpec's `git commit` did NOT set CONDUCT_ENGINE_COMMIT=1, this
+    // commit would fail closed; the fact it lands proves the marker is set.
+    const { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } = await import('../../../src/engine/git-hook-assets.js');
+    const worktree = await seedValidWorktree();
+
+    // Commit the marker BEFORE the hook is wired (so it's tracked-and-clean,
+    // and this seed commit itself predates enforcement — untracked files
+    // outside .docs/ would otherwise trip landSpec's own dirty-tree guard).
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'build-step-active'), 'active\n');
+    await git(['add', '.pipeline/build-step-active'], worktree);
+    await git(['commit', '-m', 'test: seed build-step-active marker'], worktree);
+
+    const hooksDir = await mkdtemp(join(tmpdir(), 'land-spec-task8-hooks-'));
+    const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');
+    const commitMsgPath = join(hooksDir, 'commit-msg');
+    await writeFile(prepareCommitMsgPath, PREPARE_COMMIT_MSG_HOOK, 'utf-8');
+    await writeFile(commitMsgPath, COMMIT_MSG_HOOK, 'utf-8');
+    await execFile('chmod', ['+x', prepareCommitMsgPath, commitMsgPath]);
+    await git(['config', 'extensions.worktreeConfig', 'true'], worktree);
+    await git(['config', '--worktree', 'core.hooksPath', hooksDir], worktree);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const result = await landSpec(target(), 'dep bump', worktree, undefined, { ownerConfig: {}, gh });
+
+    const subject = await git(['log', '-1', '--format=%s'], worktree);
+    expect(subject).toContain('spec: land authored artifacts for "dep bump"');
+    expect(result.branch).toBeTruthy();
+
+    await rm(hooksDir, { recursive: true, force: true });
   });
 
   it('Task 4: no-source-ref variant still owner-stamps the marker under the plan stem (not the idea slug)', async () => {

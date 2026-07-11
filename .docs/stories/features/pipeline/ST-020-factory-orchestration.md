@@ -4,6 +4,31 @@
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** pipeline/SKILL.md
 
+> **Amended 2026-07-05 by `adr-2026-07-05-engine-owned-task-status.md` (APPROVED) and
+> `.docs/stories/prd-audit-kickback-preserves-task-status.md`:** the pipeline agent no longer
+> records `completed`/`skipped` in `.pipeline/task-status.json` — completion authority moved to
+> the engine, derived from `Task: <id>` commit trailers (ADR H4/H5/H6). The agent records
+> completion by *committing with the trailer* (or a no-op `Evidence:` commit for
+> pre-completed/skipped tasks); it retains only advisory `pending`/`in_progress` scheduling
+> writes. Criteria below referencing agent-written `completed` status describe the superseded
+> pre-2026-07-05 contract.
+
+> **Amended 2026-07-09 by `adr-2026-07-09-deterministic-evidence-attribution-enforcement.md`
+> (APPROVED, #433) and `.docs/stories/deterministic-evidence-attribution.md`:** the advisory
+> `pending`/`in_progress` scheduling writes are no longer hand-edits of
+> `.pipeline/task-status.json` — the orchestrator performs them via
+> `conduct-ts task start <id>` / `conduct-ts task done <id>`, which validate the id against the
+> seeded set, write atomically, and stamp/clear `.pipeline/current-task` for the commit hooks.
+> The scheduling semantics are unchanged; only the mechanism is engine-owned.
+
+> **Amended 2026-07-10 by `adr-2026-07-10-session-hook-task-stamping` (APPROVED, #477):** the
+> orchestrator no longer invokes `conduct-ts task start/done` itself — engine-installed session
+> hooks (PreToolUse/PostToolUse on the subagent-dispatch tool) perform the `in_progress` flip and
+> `.pipeline/current-task` stamp/clear mechanically when the dispatch happens. Each dispatch
+> prompt carries `Task: <id>` or `Task: none` as its first line; an unmarked or unknown-id
+> dispatch is blocked at dispatch time. The CLI remains for operator/recovery use. Scheduling
+> semantics again unchanged; the trigger moved from prompt discipline to machinery.
+
 As a developer building a Medium or Large feature, I want the pipeline skill to orchestrate
 task execution with quality gates, batch evaluation, and rework budgets so that the build
 phase is systematic and quality-controlled.

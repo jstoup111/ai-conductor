@@ -1,4 +1,4 @@
-import { writeFile, access } from 'node:fs/promises';
+import { writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -16,7 +16,11 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
-import type { ResolutionContext, ResolutionAttempt } from './rebase.js';
+import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import { makeGitRunner, type GitRunner } from './rebase.js';
+import { findArtifactFiles } from './artifacts.js';
+import { assembleBuildReviewInputs } from './build-review-inputs.js';
+import { buildGraderPrompt } from './build-review-prompt.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -33,6 +37,10 @@ const STEP_PROMPTS: Record<StepName, string> = {
   worktree: '/conduct worktree',
   acceptance_specs: '/writing-system-tests',
   build: '/pipeline',
+  // Display sentinel for the model table; the grader dispatch is driven by
+  // the fresh-session assembly logic (see resolveRebaseConflict pattern),
+  // not by invoking a literal `/build-review` skill.
+  build_review: '/build-review',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',
   // Runs the architecture-review skill in its as-built compliance-gate mode.
@@ -258,6 +266,14 @@ export interface StepRunnerOptions {
    * Claude REPL so the user can iterate with the skill. Default: `'default'`.
    */
   mode?: RunMode;
+  /**
+   * Test-only injection points for the `build_review` one-shot grader
+   * dispatch. Production always uses `makeGitRunner(projectDir)` and the
+   * most recently modified `.docs/plans/*.md`; tests inject a scripted
+   * GitRunner and a fixture plan path to avoid touching real git state.
+   */
+  gitRunner?: GitRunner;
+  planPath?: string;
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -273,6 +289,8 @@ export class DefaultStepRunner implements StepRunner {
   private effortOverride?: EffortLevel;
   private mode: RunMode;
   private modelAvailability: ModelAvailability;
+  private gitRunner: GitRunner;
+  private planPathOverride?: string;
   callCount = 0;
 
   constructor(
@@ -293,6 +311,8 @@ export class DefaultStepRunner implements StepRunner {
     this.modelAvailability = new ModelAvailability(this.config?.model_fallback_ladder, (line) =>
       console.warn(line),
     );
+    this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
+    this.planPathOverride = options?.planPath;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -319,6 +339,13 @@ export class DefaultStepRunner implements StepRunner {
       );
     }
 
+    // build_review is a one-shot grader dispatch — never resumes the main
+    // conductor session (see runBuildReview() for the resolveRebaseConflict
+    // fresh-uuid/resume:false pattern).
+    if (step === 'build_review') {
+      return this.runBuildReview();
+    }
+
     // Lazy-init: check marker file on first run
     if (!this.sessionStartedInitialized && this.pipelineDir) {
       this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
@@ -336,7 +363,7 @@ export class DefaultStepRunner implements StepRunner {
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const resolved = this.resolvedConfigFor(step, state.complexity_tier);
 
-    const systemPrompt = this.buildSystemPrompt(step, autonomous, opts?.retryReason);
+    const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
     // limits and stale sessions. Collaborative steps use invokeInteractive()
@@ -347,8 +374,20 @@ export class DefaultStepRunner implements StepRunner {
 
     // Open a REPL when the step is designed for user conversation AND we're
     // not in auto mode (auto = unattended, must still one-shot so the flow
-    // advances). Otherwise dispatch print mode — Claude answers once and exits.
-    const interactive = this.mode !== 'auto' && INTERACTIVE_STEPS.has(step);
+    // advances). In interactive mode, open REPL for all conversational steps
+    // except one-shot analysis steps. Otherwise dispatch print mode.
+    let interactive: boolean;
+    if (this.mode === 'interactive') {
+      // In interactive mode, open REPL for all conversational steps except
+      // one-shot steps that generate artifacts without user input
+      const oneShotSteps = new Set(['complexity', 'conflict_check', 'architecture_diagram', 'retro', 'rebase']);
+      interactive = !oneShotSteps.has(step);
+    } else if (this.mode === 'auto') {
+      interactive = false;
+    } else {
+      // default mode: REPL only for explicitly conversational steps
+      interactive = INTERACTIVE_STEPS.has(step);
+    }
 
     // Consult the availability cache before dispatch so a model already
     // known-dead (e.g. downgraded during an earlier autonomous step) isn't
@@ -432,15 +471,16 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: result.output, authFailure: true };
     }
 
-    // Rate limit: surface wait seconds (from marker file if present, else
-    // default 300s — matches bin/conduct handle_rate_limit).
+    // Rate limit: surface wait seconds (from provider result, else fallback 300s).
+    // Task 18: Also surface deadline-first deadline if parsed from message.
     if (result.rateLimited) {
-      const waitSeconds = await this.readRateLimitWait();
+      const waitSeconds = result.waitSeconds ?? 300;
       return {
         success: false,
         output: result.output,
         rateLimited: true,
         waitSeconds,
+        deadline: result.deadline,
       };
     }
 
@@ -470,25 +510,6 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return { success: false, output: result.output };
-  }
-
-  /**
-   * Read a pending rate-limit wait-seconds value. Mirrors bin/conduct:2252–2258:
-   * `${PIPELINE_DIR}/rate-limit-hit` has the wait seconds on line 2. Returns
-   * 300 (the bash default) when the marker is absent or unparseable.
-   */
-  private async readRateLimitWait(): Promise<number> {
-    const DEFAULT = 300;
-    if (!this.pipelineDir) return DEFAULT;
-    try {
-      const { readFile } = await import('node:fs/promises');
-      const raw = await readFile(join(this.pipelineDir, 'rate-limit-hit'), 'utf-8');
-      const line2 = raw.split('\n')[1]?.trim();
-      const n = Number.parseInt(line2 ?? '', 10);
-      return Number.isFinite(n) && n > 0 ? n : DEFAULT;
-    } catch {
-      return DEFAULT;
-    }
   }
 
   async resetSession(): Promise<void> {
@@ -620,6 +641,157 @@ export class DefaultStepRunner implements StepRunner {
     return parseRebaseResolutionOutput(result.output);
   }
 
+  /**
+   * Dispatch a fix-session to attempt to resolve a setup failure. Part of the
+   * two-stage setup-failure triage (TS-3). Uses a fresh one-shot session
+   * (never resumes the main conductor session) with the output tail in the
+   * prompt so Claude can diagnose and fix the root cause.
+   *
+   * Always returns `{ attempted: true }` — the method's role is to bootstrap
+   * the fix session. Whether the fix succeeds is determined by whether the
+   * setup step subsequently passes, not by this method's return value.
+   *
+   * Runs with cwd set to the worktreePath so any cleanup/fix commands operate
+   * in the right worktree context.
+   */
+  async resolveSetupFailure(ctx: SetupFailureContext): Promise<SetupFailureAttempt> {
+    const resolved = this.resolvedConfigFor('worktree');
+
+    const systemPrompt =
+      'You are attempting to fix a setup failure in a feature worktree.\n' +
+      `Worktree path: ${ctx.worktreePath}\n` +
+      `Feature slug: ${ctx.slug}\n\n` +
+      'Diagnose the failure and attempt to fix the root cause (e.g., missing dependencies, ' +
+      'version conflicts, environment issues). Use the current directory (the worktree) ' +
+      'for any diagnostic or remediation commands.\n' +
+      'After making fixes, the setup step will be retried automatically.';
+
+    const prompt =
+      'The last output from the failed setup step was:\n' +
+      '```\n' +
+      `${ctx.outputTail}\n` +
+      '```\n\n' +
+      'Diagnose and fix the setup failure. Explain your diagnosis and the fixes you applied.';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Walk the fallback ladder so the setup-failure resolver is not blocked by
+    // one model's unavailability.
+    await this.modelAvailability.invokeWithLadder(this.provider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: ctx.worktreePath,
+    });
+
+    // Always report attempted: true — the success of the fix is determined by
+    // whether the setup step subsequently passes.
+    return { attempted: true };
+  }
+
+  /**
+   * Dispatch the build_review grader: a fresh, isolated one-shot session
+   * (never resumes the main conductor session), fed strictly the diff since
+   * the default branch plus the plan body (assembleBuildReviewInputs /
+   * buildGraderPrompt — no task-status, transcript, or maker-summary access).
+   *
+   * Follows the same one-shot pattern as resolveRebaseConflict: fresh uuid,
+   * `resume: false`, walked through the model fallback ladder. On full-ladder
+   * exhaustion (every attempted model unavailable) this returns
+   * `{success: false}` — the step is reported failed and the build_review
+   * completion gate (artifacts.ts) stays unsatisfied; it is never reported
+   * as a PASS.
+   */
+  private async runBuildReview(): Promise<StepRunResult> {
+    const resolved = this.resolvedConfigFor('build_review');
+
+    let planPath = this.planPathOverride;
+    if (!planPath) {
+      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
+      planPath = planFiles.sort().at(-1);
+    }
+    if (!planPath) {
+      return {
+        success: false,
+        output: 'no .docs/plans/*.md present — build_review has no plan to grade the diff against',
+      };
+    }
+
+    let inputs;
+    try {
+      inputs = await assembleBuildReviewInputs(this.gitRunner, planPath);
+    } catch (err) {
+      return {
+        success: false,
+        output: `build_review input assembly failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const prompt = buildGraderPrompt(inputs);
+
+    // Fresh one-shot session — never contaminate the main conductor session,
+    // and never resume a prior grader session either.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Track every model attempted during the ladder walk so a full-ladder
+    // exhaustion failure names every model tried.
+    const attemptedModels: string[] = [];
+    const trackingProvider: LLMProvider = {
+      invoke: (invokeOpts) => {
+        attemptedModels.push(invokeOpts.model ?? '');
+        return this.provider.invoke(invokeOpts);
+      },
+      invokeInteractive: (invokeOpts) => this.provider.invokeInteractive(invokeOpts),
+    };
+
+    const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: this.projectDir,
+    });
+    this.callCount++;
+
+    if (result.authFailure) {
+      return { success: false, output: result.output, authFailure: true };
+    }
+    if (result.rateLimited) {
+      return {
+        success: false,
+        output: result.output,
+        rateLimited: true,
+        waitSeconds: result.waitSeconds ?? 300,
+      };
+    }
+    if (result.sessionExpired) {
+      return { success: false, output: result.output, sessionExpired: true };
+    }
+    if (result.success) {
+      return { success: true, output: result.output };
+    }
+
+    // Full-ladder exhaustion: every attempted model reported unavailable.
+    // Name them all so the eventual HALT is diagnosable from daemon.log alone.
+    if (result.modelUnavailable && attemptedModels.length > 1) {
+      return {
+        success: false,
+        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+      };
+    }
+
+    return { success: false, output: result.output };
+  }
+
   private async fileExists(path: string): Promise<boolean> {
     try {
       await access(path);
@@ -629,7 +801,7 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
-  private buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): string {
+  private async buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): Promise<string> {
     const stepDef = getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
     // sequence, so present them by label instead of an "N/total" index rather
@@ -650,6 +822,15 @@ export class DefaultStepRunner implements StepRunner {
     // Effort is now controlled via CLAUDE_CODE_EFFORT_LEVEL env var (Claude's
     // native reasoning knob) — no prose hint needed in the system prompt.
 
+    // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.
+    // This surfaces the quarantine ref and preserved paths to the resuming build dispatch.
+    if (step === 'build' && this.pipelineDir) {
+      const quarantineContent = await this.readQuarantineSentinel();
+      if (quarantineContent) {
+        prompt += `\n\n--- SETUP QUARANTINE CONTEXT ---\n${quarantineContent}\n--- END QUARANTINE CONTEXT ---`;
+      }
+    }
+
     // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
     // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
     // print-mode Claude would emit prose and exit without writing
@@ -657,34 +838,33 @@ export class DefaultStepRunner implements StepRunner {
     // the loop stuck (the validation failure this addresses). Tell it to decide
     // deterministically and ACT, ending by writing the marker file.
     if (step === 'finish' && this.mode === 'auto') {
-      // Use ABSOLUTE worktree paths for the completion markers. In daemon mode
-      // the finish skill performs branch/PR/worktree cleanup that `cd`s into the
-      // main repo (see agents/worktree-manager.md), so relative `.pipeline/...`
-      // writes would land in the WRONG repo while the completion gate reads the
-      // worktree's `.pipeline` — leaving it unsatisfied and HALTing a feature
-      // whose PR was genuinely created. `this.pipelineDir` is the worktree's
-      // `.pipeline` (daemon-cli passes it); fall back to relative when unset.
-      const choicePath = this.pipelineDir
-        ? join(this.pipelineDir, 'finish-choice')
-        : '.pipeline/finish-choice';
-      const statePath = this.pipelineDir
-        ? join(this.pipelineDir, 'conduct-state.json')
-        : '.pipeline/conduct-state.json';
+      // Use the ABSOLUTE worktree pipeline dir for the `finish-record` command.
+      // In daemon mode the finish skill performs branch/PR/worktree cleanup
+      // that `cd`s into the main repo (see agents/worktree-manager.md), so a
+      // relative `.pipeline` dir would resolve against the WRONG repo after
+      // cleanup while the completion gate reads the worktree's `.pipeline` —
+      // leaving it unsatisfied and HALTing a feature whose PR was genuinely
+      // created. `this.pipelineDir` is the worktree's `.pipeline` (daemon-cli
+      // passes it); fall back to the relative `.pipeline` when unset.
+      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
         '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
         'Decide deterministically and ACT (do not merely describe):\n' +
         '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
         'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
-        'of failing (`gh pr view --json url -q .url`). Record the PR URL as the `pr_url` field in ' +
-        `\`${statePath}\`, then write the single word \`pr\` to \`${choicePath}\`.\n` +
+        'of failing (`gh pr view --json url -q .url`). Before recording, verify the STOP gate in §5 ' +
+        'Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), and (2) the ' +
+        'branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). If EITHER ' +
+        'check fails, do NOT run the command below — HALT for human review. If BOTH pass, run:\n' +
+        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
         '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
-        `branch and write the single word \`keep\` to \`${choicePath}\`.\n` +
-        `IMPORTANT: write these two files at the EXACT absolute paths shown above (\`${choicePath}\` and ` +
-        `\`${statePath}\`). Do NOT use relative paths and do NOT \`cd\` elsewhere first — branch/PR/` +
-        'worktree cleanup may change the working directory, and the completion gate only reads these ' +
-        'absolute worktree paths. Write the marker(s) BEFORE any merge/cleanup step. The step is NOT ' +
-        `complete until \`${choicePath}\` exists with one of those exact values (and, for \`pr\`, ` +
-        `\`pr_url\` is set in \`${statePath}\`).`;
+        'branch and run:\n' +
+        `  conduct-ts finish-record --choice keep --pipeline-dir ${pipelineDirArg}\n` +
+        'IMPORTANT: `finish-record` performs its own verification (PR existence, push evidence) and is ' +
+        'the ONLY way to record the finish choice — do not write the marker or state files by hand. Do ' +
+        'NOT `cd` elsewhere before running it; the command above must use this exact `--pipeline-dir` ' +
+        'value regardless of the current working directory, since branch/PR/worktree cleanup may change ' +
+        'it. The step is NOT complete until `finish-record` exits 0.';
     }
 
     if (retryReason) {
@@ -692,5 +872,41 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return prompt;
+  }
+
+  /**
+   * Read the `.pipeline/QUARANTINE` sentinel if it exists.
+   * Returns the content of the sentinel, or null if it doesn't exist or can't be read.
+   * If the sentinel exists but the ref has been deleted, includes a notice about the missing ref.
+   */
+  private async readQuarantineSentinel(): Promise<string | null> {
+    if (!this.pipelineDir) return null;
+
+    try {
+      const sentinelPath = join(this.pipelineDir, 'QUARANTINE');
+      const content = await readFile(sentinelPath, 'utf-8');
+
+      // Check if the quarantine ref mentioned in the sentinel still exists.
+      // If not, add a notice that it's missing.
+      const refMatch = content.match(/Quarantine ref: ([\w\/\-]+)/);
+      if (refMatch) {
+        const ref = refMatch[1];
+        try {
+          const git = makeGitRunner(this.projectDir);
+          const result = await git(['rev-parse', '--verify', ref]);
+          if (result.exitCode !== 0) {
+            // Ref was deleted externally
+            return `${content}\n\nNOTE: Quarantine ref ${ref} is no longer present in the repository (may have been deleted externally). Dispatch proceeds; the preserved paths may still be reviewed via reflog.`;
+          }
+        } catch {
+          // Git check failed, but return content anyway (best-effort)
+        }
+      }
+
+      return content;
+    } catch {
+      // Sentinel doesn't exist or can't be read — return null (not an error)
+      return null;
+    }
   }
 }

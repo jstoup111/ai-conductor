@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import cp from 'node:child_process';
 import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-lock.js';
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
@@ -374,7 +375,9 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      expect(out.length).toBe(3);
+      // One status line per repo, plus a GATED section line for each repo whose
+      // path exists (path-missing repos skip the snapshot read entirely).
+      expect(out.length).toBe(5);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -384,6 +387,135 @@ describe('engine/daemon-observe-cli', () => {
       expect(code).toBe(0);
       expect(rows).toEqual([]);
       expect(out.join('\n')).toMatch(/No projects registered/);
+    });
+
+    describe('GATED section (Task 15, S5 HP-1/HP-2/NP-4/NP-5)', () => {
+      async function writeGatedSnapshot(repo: string, body: unknown): Promise<void> {
+        const daemonDir = join(repo, '.daemon');
+        await mkdir(daemonDir, { recursive: true });
+        await writeFile(
+          join(daemonDir, 'gated.json'),
+          typeof body === 'string' ? body : JSON.stringify(body),
+          'utf8',
+        );
+      }
+
+      it('renders slugs/reasons/remedies and an "as of Nm ago" freshness label using the injected clock', async () => {
+        const repo = join(root, 'repo-ok');
+        await mkdir(repo, { recursive: true });
+        const writtenAt = new Date('2026-06-27T00:00:00.000Z').toISOString();
+        const now = new Date('2026-06-27T00:05:00.000Z'); // 5 minutes later
+        await writeGatedSnapshot(repo, {
+          schemaVersion: 1,
+          writtenAt,
+          repoWarnings: [{ kind: 'repo', warning: 'no-cutover', remedy: 'run cutover' }],
+          gated: [
+            { kind: 'spec', slug: 'my-slug', reason: 'other-owner', otherOwner: 'bob', remedy: 'declare ownership' },
+          ],
+        });
+        const registryPath = await registry([record('repo-ok', repo)]);
+
+        const out: string[] = [];
+        const { code } = await runDaemonStatus({
+          registryPath,
+          out: (l) => out.push(l),
+          clock: () => now,
+        });
+
+        expect(code).toBe(0);
+        const output = out.join('\n');
+        expect(output).toContain('my-slug');
+        expect(output).toContain('other-owner');
+        expect(output).toContain('bob');
+        expect(output).toContain('declare ownership');
+        expect(output).toContain('no-cutover');
+        expect(output).toContain('run cutover');
+        expect(output.toLowerCase()).toMatch(/as of 5m ago/);
+      });
+
+      it('renders an explicit "no specs are gated" line for an empty snapshot', async () => {
+        const repo = join(root, 'repo-empty');
+        await mkdir(repo, { recursive: true });
+        await writeGatedSnapshot(repo, {
+          schemaVersion: 1,
+          writtenAt: new Date().toISOString(),
+          repoWarnings: [],
+          gated: [],
+        });
+        const registryPath = await registry([record('repo-empty', repo)]);
+
+        const out: string[] = [];
+        await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(out.join('\n').toLowerCase()).toContain('no specs are gated');
+      });
+
+      it('renders "gated state unknown" verbatim wording for missing/unreadable/version-mismatch snapshots', async () => {
+        const repoMissing = join(root, 'repo-missing-snapshot');
+        const repoUnreadable = join(root, 'repo-unreadable-snapshot');
+        const repoVersion = join(root, 'repo-version-mismatch');
+        await mkdir(repoMissing, { recursive: true });
+        await mkdir(repoUnreadable, { recursive: true });
+        await mkdir(repoVersion, { recursive: true });
+        await writeGatedSnapshot(repoUnreadable, '{"schemaVersion": 1, "writ');
+        await writeGatedSnapshot(repoVersion, {
+          schemaVersion: 999,
+          writtenAt: new Date().toISOString(),
+          repoWarnings: [],
+          gated: [{ kind: 'spec', slug: 'future-shape', reason: 'other-owner', otherOwner: 'x', remedy: 'r' }],
+        });
+        const registryPath = await registry([
+          record('repo-missing-snapshot', repoMissing),
+          record('repo-unreadable-snapshot', repoUnreadable),
+          record('repo-version-mismatch', repoVersion),
+        ]);
+
+        const out: string[] = [];
+        const { code } = await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(code).toBe(0);
+        const output = out.join('\n').toLowerCase();
+        expect(output).toContain('gated state unknown');
+        expect(output).not.toContain('future-shape');
+      });
+
+      it('skips the snapshot read entirely for a repo whose registered path is missing', async () => {
+        const repoMissing = join(root, 'repo-path-missing-does-not-exist');
+        const registryPath = await registry([record('repo-path-missing', repoMissing)]);
+
+        const out: string[] = [];
+        const { code, rows } = await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(code).toBe(0);
+        expect(rows[0].liveness).toBe('path-missing');
+        const output = out.join('\n').toLowerCase();
+        expect(output).not.toContain('gated state unknown');
+        expect(output).not.toContain('no specs are gated');
+      });
+
+      it('never spawns a git or gh child process while rendering the GATED section', async () => {
+        const repo = join(root, 'repo-no-spawn');
+        await mkdir(repo, { recursive: true });
+        await writeGatedSnapshot(repo, {
+          schemaVersion: 1,
+          writtenAt: new Date().toISOString(),
+          repoWarnings: [],
+          gated: [{ kind: 'spec', slug: 'a-slug', reason: 'other-owner', otherOwner: 'z', remedy: 'r' }],
+        });
+        const registryPath = await registry([record('repo-no-spawn', repo)]);
+
+        const execFileSpy = vi.spyOn(cp, 'execFile');
+        const execSpy = vi.spyOn(cp, 'exec');
+
+        const out: string[] = [];
+        await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(execFileSpy).not.toHaveBeenCalled();
+        expect(execSpy).not.toHaveBeenCalled();
+
+        execFileSpy.mockRestore();
+        execSpy.mockRestore();
+      });
     });
   });
 

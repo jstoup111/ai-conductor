@@ -31,6 +31,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   worktree: 'Git operations — mechanical branch/worktree management.',
   acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
   build: 'Dispatcher; intelligence is in per-task sub-sessions, so the dispatcher itself runs mechanically on the cheapest model.',
+  build_review:
+    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   manual_test: 'Structured validation against stories — pattern-following.',
   prd_audit: 'Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR.',
   architecture_review_as_built:
@@ -106,6 +108,12 @@ export interface ExtraModelTableRow {
 
 export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
   {
+    name: 'verify-claims',
+    model: 'inherits caller',
+    rationale:
+      'Cross-cutting correctness protocol applied within the invoking skill\'s context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller\'s model.',
+  },
+  {
     name: 'domain-reviewer',
     model: 'sonnet (<50-line diff), opus (≥50-line diff)',
     rationale:
@@ -137,6 +145,12 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
     model: 'fable',
     rationale:
       'Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration.',
+  },
+  {
+    name: 'intake',
+    model: 'inherits caller',
+    rationale:
+      'Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch.',
   },
   {
     name: 'conduct',

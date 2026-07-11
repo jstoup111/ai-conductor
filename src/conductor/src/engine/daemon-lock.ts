@@ -64,6 +64,16 @@ export interface PidRecord {
    * existed — readers must tolerate `undefined` (never throw).
    */
   engineDir?: string;
+  /**
+   * Additive (#374): marks a HANDOFF record — a lock briefly held by a CLI
+   * process (restart handoff, ensureRunning's acquire-then-unlink step) purely
+   * to win the O_EXCL arbitration, never by a running daemon. Such a record's
+   * pid is live (it is the CLI process itself), but it must NOT be read as "a
+   * daemon is running": pre-#374, a racer observing one no-op'd while the
+   * transient holder unlinked and returned — leaving ZERO daemons. Absent on
+   * real daemon records — readers must tolerate `undefined`.
+   */
+  transient?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,7 +155,7 @@ const defaultKill: KillProbe = (pid, signal) => {
 // under ts-node/tsx). Computed once; never derived from caller input.
 const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
 
-async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
+async function writePidfileExcl(repoPath: string, transient?: boolean): Promise<PidRecord> {
   await mkdir(daemonDir(repoPath), { recursive: true });
 
   const record: PidRecord = {
@@ -153,6 +163,7 @@ async function writePidfileExcl(repoPath: string): Promise<PidRecord> {
     uuid: randomUUID(),
     startedAt: new Date().toISOString(),
     engineDir: OWN_ENGINE_DIR,
+    ...(transient ? { transient: true } : {}),
   };
 
   // O_EXCL: fails with EEXIST if the file already exists — the kernel-level mutex.
@@ -251,13 +262,16 @@ export function isLive(pid: number, kill: KillProbe = defaultKill): boolean {
  *
  * @param repoPath - Absolute path to the repository root.
  * @param kill     - Injectable kill probe (default: process.kill).
+ * @param opts     - `transient: true` marks the created record as a handoff
+ *                   record (#374) — set by callers that immediately unlink it.
  */
 export async function acquire(
   repoPath: string,
   kill: KillProbe = defaultKill,
+  opts: { transient?: boolean } = {},
 ): Promise<AcquireResult> {
   try {
-    const record = await writePidfileExcl(repoPath);
+    const record = await writePidfileExcl(repoPath, opts.transient);
     return { acquired: true, ...record };
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -298,10 +312,13 @@ export async function acquire(
  *
  * @param repoPath - Absolute path to the repository root.
  * @param kill     - Injectable kill probe (default: process.kill).
+ * @param opts     - `transient: true` marks the re-created record as a handoff
+ *                   record (#374) — set by callers that immediately unlink it.
  */
 export async function reclaim(
   repoPath: string,
   kill: KillProbe = defaultKill,
+  opts: { transient?: boolean } = {},
 ): Promise<ReclaimResult> {
   try {
     // Read the existing pidfile to determine if reclaim is warranted.
@@ -321,7 +338,7 @@ export async function reclaim(
 
     // Re-create via O_EXCL — exactly one concurrent reclaimer wins.
     try {
-      const record = await writePidfileExcl(repoPath);
+      const record = await writePidfileExcl(repoPath, opts.transient);
       return { reclaimed: true, acquired: true, ...record };
     } catch (innerErr: unknown) {
       const code = (innerErr as NodeJS.ErrnoException).code;
@@ -346,6 +363,10 @@ export async function reclaim(
 // holdLock — the running daemon's OWN lifetime lock (ADR-010 liveness).
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Module-confined production defaults for holdLock bounded-wait polling.
+const DEFAULT_TAKEOVER_WAIT_MS = 10_000;
+const DEFAULT_POLL_MS = 250;
+
 /** Handle returned to a daemon that successfully claimed (or proceeded past) the lock. */
 export interface DaemonLockHandle {
   /** The pid recorded in the pidfile (this process), or process.pid if unwritten. */
@@ -356,6 +377,20 @@ export interface DaemonLockHandle {
   release: () => Promise<void>;
   /** Sync release — unlink our pidfile (best-effort). Backstop for `process.exit`. */
   releaseSync: () => void;
+}
+
+/** Optional parameters for holdLock bounded-wait behavior. */
+export interface HoldLockOptions {
+  /**
+   * Maximum time in milliseconds to wait for a live owner to release the lock.
+   * Only used when encountering a live owner; defaults to 10 seconds.
+   */
+  takeoverWaitMs?: number;
+  /**
+   * Poll interval in milliseconds when waiting for lock availability.
+   * Only used when encountering a live owner; defaults to 250ms.
+   */
+  pollMs?: number;
 }
 
 function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLockHandle {
@@ -391,13 +426,25 @@ function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLo
  * pid — the wiring that was missing, leaving liveness unobservable.
  *
  *   - acquired (no prior pidfile)        → own the lock, return a handle.
- *   - occupied by a LIVE pid             → return null (caller must exit; 1-per-repo).
- *   - occupied by a DEAD/phantom pid     → reclaim it, return a handle.
+ *   - occupied by a LIVE pid             → poll (if options.takeoverWaitMs set) or
+ *                                           return null immediately (1-per-repo).
+ *   - occupied by a DEAD/phantom pid     → reclaim it, return a handle (immediate,
+ *                                           no wait).
  *   - reclaim lost to a concurrent daemon → return null.
  *   - acquire/reclaim ERROR (e.g. EACCES) → return an unowned handle so the daemon
  *     still builds; liveness just isn't observable (self-heals on the next claim).
+ *
+ * @param repoPath - Absolute path to the repository root.
+ * @param options  - Optional: { takeoverWaitMs?: number, pollMs?: number }.
+ *                   When set, on live-owner occupancy, poll acquire() every pollMs
+ *                   until takeoverWaitMs elapses. Returns a handle if acquired
+ *                   during the wait, null if the wait expires with owner still live.
+ *                   Dead-pid reclaim is unaffected (immediate, no wait).
  */
-export async function holdLock(repoPath: string): Promise<DaemonLockHandle | null> {
+export async function holdLock(
+  repoPath: string,
+  options?: HoldLockOptions,
+): Promise<DaemonLockHandle | null> {
   const result = await acquire(repoPath);
   if (result.acquired) {
     return makeLockHandle(repoPath, result.pid, true);
@@ -405,9 +452,37 @@ export async function holdLock(repoPath: string): Promise<DaemonLockHandle | nul
   if (result.reason === 'occupied') {
     const owner = result.owner;
     if (owner.pid > 0 && isLive(owner.pid)) {
-      return null; // a live daemon already owns the lock — 1-per-repo
+      // A live daemon owns the lock.
+      // If options.takeoverWaitMs is set, poll for the lock to become available.
+      if (options?.takeoverWaitMs !== undefined) {
+        const takeoverWaitMs = options.takeoverWaitMs ?? DEFAULT_TAKEOVER_WAIT_MS;
+        const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+
+        const startTime = Date.now();
+        while (Date.now() - startTime < takeoverWaitMs) {
+          // Wait for the next poll interval.
+          await new Promise((resolve) => setTimeout(resolve, pollMs));
+
+          // Try to acquire the lock.
+          const pollResult = await acquire(repoPath);
+          if (pollResult.acquired) {
+            return makeLockHandle(repoPath, pollResult.pid, true);
+          }
+          // If the result is occupied but by a dead pid, the loop will
+          // continue polling until the timeout, then fall through to the
+          // normal dead-pid reclaim path below.
+          if (pollResult.reason === 'occupied' && pollResult.owner.pid > 0) {
+            if (!isLive(pollResult.owner.pid)) {
+              // Owner is now dead — exit polling and let the normal stale path handle it.
+              break;
+            }
+          }
+        }
+      }
+      // Bounded-wait expired or no wait requested — return null (1-per-repo).
+      return null;
     }
-    // Stale (dead or phantom) → reclaim.
+    // Stale (dead or phantom) → reclaim (immediate, no wait).
     const r = await reclaim(repoPath, defaultKill);
     if (r.reclaimed) {
       return makeLockHandle(repoPath, r.pid, true);
@@ -454,7 +529,10 @@ export async function clearStaleLockForRestart(
   if (!owner) {
     // No prior lock on disk — still race-arbitrate via O_EXCL in case a
     // concurrent caller (e.g. ensureRunning) is claiming the same repo now.
-    const result = await acquire(repoPath, kill);
+    // transient (#374): this ownership lasts microseconds (create → unlink);
+    // the marker keeps a racing ensureRunning from reading it as a live daemon
+    // and no-op'ing — which would end the race with ZERO daemons.
+    const result = await acquire(repoPath, kill, { transient: true });
     if (result.acquired) {
       try {
         await unlink(pidfilePath(repoPath));
@@ -470,7 +548,8 @@ export async function clearStaleLockForRestart(
   }
 
   // Dead/phantom stale record — reclaim via the existing primitive.
-  const result = await reclaim(repoPath, kill);
+  // transient (#374): same handoff marking as the acquire branch above.
+  const result = await reclaim(repoPath, kill, { transient: true });
   if (result.reclaimed) {
     try {
       await unlink(pidfilePath(repoPath));
@@ -582,7 +661,10 @@ export async function ensureRunning(
 
   // Step 1: try to acquire the lock (O_EXCL atomic create).
   // acquire() does not invoke kill — it reads the pidfile only.
-  const acquireResult = await acquire(repoPath);
+  // transient (#374): the record we create here is unlinked moments later so
+  // the real daemon can spawn fresh — mark it so a concurrent racer (another
+  // ensureRunning, or a restart handoff) never mistakes it for a live daemon.
+  const acquireResult = await acquire(repoPath, defaultKill, { transient: true });
 
   if (acquireResult.acquired) {
     // WE just created the pidfile — no prior daemon was running.
@@ -598,30 +680,54 @@ export async function ensureRunning(
     // This is the authoritative liveness check; the injected kill probe is not used
     // here because it is a management-signal spy only.
     const owner = acquireResult.owner;
-    if (owner.pid > 0 && isLive(owner.pid, defaultKill)) {
+    if (owner.pid > 0 && owner.transient !== true && isLive(owner.pid, defaultKill)) {
       // Live daemon found — strictly NO spawn, NO signal. (FR-21 negative, ADR-005)
       // ADR-005: ensureRunning is LAUNCH-not-MANAGE. It never sends SIGTERM, SIGHUP,
       // SIGKILL, or any other control signal. It has no lifecycle ownership over
       // the running daemon — the daemon self-limits and self-terminates.
+      // transient exception (#374): a live TRANSIENT owner is a CLI handoff
+      // window (restart / another ensureRunning), not a daemon — treating it
+      // as one ended the race with zero daemons. Fall through and spawn: the
+      // spawned daemon's own boot-time acquire (and the idempotent tmux
+      // session) arbitrate any duplicate, so at-least-one is restored without
+      // ever risking two.
       return;
     }
-    // Owner pid is dead — reclaim the stale lock (uses defaultKill internally).
-    const reclaimResult = await reclaim(repoPath, defaultKill);
-    if (reclaimResult.reclaimed) {
-      opts.onReclaim?.();
-      // Unlink the reclaimed pidfile so the daemon spawns fresh.
-      try {
-        await unlink(pidfilePath(repoPath));
-      } catch {
-        // Already gone — fine.
-      }
+    if (owner.pid > 0 && owner.transient === true) {
+      // Transient handoff record — the holder unlinks it momentarily and never
+      // becomes a daemon itself. Spawn directly; do NOT reclaim (never unlink
+      // a live holder's record out from under it).
       needsSpawn = true;
-    } else if (reclaimResult.reason === 'alive') {
-      // A concurrent reclaimer beat us AND the new owner is alive — no-op.
-      return;
     } else {
-      // Reclaim errored — best-effort spawn attempt.
-      needsSpawn = true;
+      // Owner pid is dead — reclaim the stale lock (uses defaultKill internally).
+      // transient (#374): our own reclaimed record is unlinked below, so mark it.
+      const reclaimResult = await reclaim(repoPath, defaultKill, { transient: true });
+      if (reclaimResult.reclaimed) {
+        opts.onReclaim?.();
+        // Unlink the reclaimed pidfile so the daemon spawns fresh.
+        try {
+          await unlink(pidfilePath(repoPath));
+        } catch {
+          // Already gone — fine.
+        }
+        needsSpawn = true;
+      } else if (
+        reclaimResult.reason === 'alive' &&
+        reclaimResult.owner.pid > 0 &&
+        reclaimResult.owner.transient !== true
+      ) {
+        // A concurrent reclaimer beat us AND the new owner is a real live
+        // daemon — no-op.
+        return;
+      } else {
+        // Reclaim errored — best-effort spawn attempt. Or (#374) the reclaim
+        // winner is a live TRANSIENT handoff holder (never becomes a daemon),
+        // or a PHANTOM owner (pid === -1: the winner's record vanished before
+        // we could read it — per the AcquireOccupied contract, pid -1 must be
+        // treated as reclaimable, never as a live owner). No-op'ing on either
+        // is the zero-daemon race — spawn instead.
+        needsSpawn = true;
+      }
     }
   } else {
     // acquire returned 'error' — best-effort spawn attempt.

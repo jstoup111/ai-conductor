@@ -4,7 +4,7 @@ description: "Use after stories are written and conflict-check has passed clean.
 enforcement: gating
 phase: decide
 standalone: false
-requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts"]
+requires: [".docs/stories/ with both paths", ".docs/conflicts/ clean pass or no blocking conflicts", verify-claims]
 ---
 
 ## Purpose
@@ -19,6 +19,12 @@ architecture/approach, file-level changes, task ordering, and dependencies. Trac
 PRD `FR-N` → story → task. Every acceptance criterion maps to at least one task; negative-path
 stories become explicit test tasks — not afterthoughts.
 
+**Correctness gate:** a plan encodes technical assumptions (which files change, how a subsystem
+behaves, what an API accepts). Apply the `/verify-claims` protocol before finalizing tasks —
+prefer one cheap `Read`/`grep` over a guess, attach a grounded confidence % to claims you cannot
+cheaply verify, and HARD-BLOCK (operator approval interactive, HALT if autonomous) on any
+unconfirmed assumption that changes the technical approach or task breakdown.
+
 Open with a short **Technical Approach** (a paragraph or few bullets: the design decisions,
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
@@ -30,6 +36,9 @@ before the steps.
 **GATE: Refuse to produce a plan without these artifacts:**
 
 - [ ] Stories exist in `.docs/stories/` for the feature being planned
+- [ ] Every task carries a `**Dependencies:**` line (use `none` when independent) or the plan
+      includes a `## Task Dependency Graph` section — daemon discovery refuses merged specs
+      whose plans lack a dependency tree
 - [ ] Every story has both happy and negative paths
 - [ ] Conflict-check has passed (check `.docs/conflicts/` for recent clean pass, or no blocking conflicts)
 
@@ -65,8 +74,21 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 **Files likely touched:**
 - [file path] — [what changes]
 
+Write file paths **repo-relative** (e.g. `src/conductor/src/engine/foo.ts`, not
+`foo.ts`): the build evidence gate corroborates each task's commits against these
+paths. Basename/suffix forms are tolerated (matched at `/` boundaries, #425), but
+repo-relative paths corroborate precisely and never collide.
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
+
+The `**Files:**` line is authoritative for the build evidence gate: each task's
+commits are corroborated against exactly these paths (#424). Paths may be
+plain text or backticked, `;`/`,` separated, on the line or as bullets under
+it. `same` inherits the previous task's set, `same as Task N` inherits task
+N's, and `none` means the task's commit trailer alone corroborates. Backticked
+file names elsewhere in the task (Steps prose) are only used when no Files
+line exists.
 
 ### 4. Task Ordering Rules
 
@@ -117,6 +139,31 @@ the shape of the work before reading individual tasks.]
 - [ ] No task exceeds 5 minutes of work
 - [ ] Dependencies are explicit and acyclic
 ```
+
+### 5b. Task Header Format and ID Grammar
+
+**Task ID Grammar:** Task ids can be:
+- **Numeric:** `1`, `18`, `100` (legacy, still supported)
+- **Dotted:** `1.2`, `2.1.3` (for subtask notation)
+- **Alphanumeric with separators:** `task_1`, `rem-adr-001`, `task-name-02`
+- **Characters allowed:** `[A-Za-z0-9._-]` (letters, digits, dots, underscores, hyphens)
+
+Examples:
+```markdown
+### Task 1: Basic feature
+### Task 1.2: Subtask of task 1
+### Task rem-adr-001: Remediation for ADR-001
+### Task task_setup_1: Project setup
+```
+
+**Trailer matching:** Commit trailers use the same id grammar for consistency:
+```
+Task: 1.2
+Task: rem-adr-001
+```
+
+The parser and trailer matcher use identical grammar to ensure deterministic round-trip:
+parse plan → extract ids → emit trailers → re-parse → identical ids.
 
 ### 6. Scope Sanity Check
 

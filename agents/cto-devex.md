@@ -87,6 +87,17 @@ describe the problem, and assign severity.
 - [ ] Background jobs can be run locally and inspected (not only testable via the full queue)
 - [ ] Error pages in development show stack traces (not production-style error screens)
 
+## Confidence Calibration (verify-claims)
+
+Every finding you report is a claim, and a confident-but-wrong one does real damage — it triggers
+wasted work or masks a real risk. Apply the `verify-claims` discipline to each finding:
+
+- Attach a **confidence %** and its **basis**: `verified` (you traced it in the code) or
+  `inferred` (derived from adjacent evidence, not directly observed).
+- **Never assert a finding you have not verified.** If you could not confirm it, say so.
+- A finding below high confidence is **tentative** — label it; do not state it as a confirmed issue.
+- Do not inflate severity or certainty beyond what the evidence supports.
+
 ## Output Format
 
 Write your findings to `.pipeline/assessment/cto-devex.md` using this structure:

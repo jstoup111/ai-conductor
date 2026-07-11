@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
@@ -14,10 +14,13 @@ import {
   prMergeState,
   removeLabel,
   setReady,
+  cleanupHaltPresentation,
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
 import type { FinishChoice } from './artifacts.js';
+import type { TriageOutcome } from './setup-triage.js';
+import { SetupFailureError } from './worktree-prepare.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -36,6 +39,13 @@ export interface WorktreeOutcome {
    * skips the shipped-record commit for those choices (#204, #205).
    */
   finishChoice?: FinishChoice;
+  /**
+   * Setup-failure triage evidence: outcome of the triage engine when a
+   * SetupFailureError is caught in daemon mode. Contains classification
+   * and diagnostics (tree state, quarantine info, output tail) for routing
+   * and human inspection.
+   */
+  triageEvidence?: TriageOutcome;
 }
 
 export interface FeatureWorktree {
@@ -118,6 +128,70 @@ export interface FeatureRunnerDeps {
    * and verify throw-isolation (feature result unaffected by sweep errors).
    */
   sweepMergeableLabels?: (opts: SweepOpts) => Promise<void>;
+  /**
+   * Escalate a false-ship outcome by pushing the worktree branch and opening a
+   * draft `needs-remediation` PR, preserving the work on origin. Called when an
+   * outcome converges `DONE` but fails the ship-eligibility guard (finishChoice
+   * is not 'pr', prUrl is null, etc.). The worktree path is the cwd so the
+   * operation has full git context. Returns the escalation result (prUrl on
+   * success, {} on push failure — a best-effort best documented contract for
+   * FR-7 degradation). Optional; if absent, the failed-ship branch skips
+   * escalation and merely halts.
+   */
+  escalateBuildFailure?: (opts: {
+    projectRoot: string;
+    failureReason: string;
+  }) => Promise<{ prUrl?: string }>;
+  /**
+   * Task 13: Setup-failure triage handler (daemon mode only). When a
+   * SetupFailureError is caught during prepareWorktree and daemon mode is
+   * enabled, route it here for classification. Returns 'park' to error the
+   * feature, or 'quarantined-pass' to continue to runConductor.
+   */
+  runSetupTriage?: (error: SetupFailureError, worktree: FeatureWorktree, item: BacklogItem) => Promise<TriageOutcome>;
+  /**
+   * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
+   * Called once triage settles on a non-park outcome, BEFORE the worktree is
+   * handed to `runConductor`. Writes `.pipeline/QUARANTINE` in the worktree
+   * when a quarantine ref is live (this rotation or a prior one) so the
+   * dispatched agent can see the ref, preserved paths, and recovery guidance.
+   * Optional; absent → no sentinel is written (backward-compatible). Fail-open
+   * by contract of the real implementation — daemon-runner also guards the
+   * call so a thrown error never blocks dispatch.
+   */
+  surfaceQuarantineRef?: (
+    worktree: FeatureWorktree,
+    slug: string,
+    outcome: TriageOutcome,
+  ) => Promise<void>;
+}
+
+/**
+ * Verify that an outcome is a legitimate ship: `done=true` AND `finishChoice='pr'`
+ * AND `prUrl` is non-null. This is the only outcome eligible for the ship side
+ * effects (markProcessed, cleanup, enroll). Any other done-outcome is a false
+ * ship that requires halting and remediation escalation (#337).
+ */
+function isVerifiedShip(outcome: WorktreeOutcome): boolean {
+  return outcome.done === true && outcome.finishChoice === 'pr' && outcome.prUrl != null;
+}
+
+/**
+ * Generate a reason string explaining why an outcome is a false ship, naming the
+ * specific contradiction (missing finishChoice, finishChoice != 'pr', prUrl null).
+ * Used in the HALT marker and escalation reason.
+ */
+function failureReasonForFalseShip(outcome: WorktreeOutcome): string {
+  if (!outcome.finishChoice) {
+    return 'done without a finish-choice marker (expected finishChoice: "pr")';
+  }
+  if (outcome.finishChoice !== 'pr') {
+    return `done without a verified PR ship — finish choice is "${outcome.finishChoice}" not "pr"`;
+  }
+  if (!outcome.prUrl) {
+    return 'done without a verified PR ship — prUrl is null or missing (expected after successful push)';
+  }
+  return 'done outcome failed ship eligibility guard (unknown reason)';
 }
 
 /**
@@ -156,7 +230,55 @@ export function makeRunFeature(
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any
       // other primitive throw (worktree kept, feature errored).
-      if (deps.prepareWorktree) await deps.prepareWorktree(worktree);
+      if (deps.prepareWorktree) {
+        try {
+          await deps.prepareWorktree(worktree);
+        } catch (prepareErr) {
+          // Check if error is a SetupFailureError (by name and presence of outputTail)
+          const isSetupFailure = prepareErr instanceof Error &&
+            (prepareErr.name === 'SetupFailureError' || (prepareErr.constructor?.name === 'SetupFailureError')) &&
+            typeof (prepareErr as any).outputTail === 'string';
+          if (
+            isSetupFailure &&
+            deps.daemon &&
+            deps.runSetupTriage
+          ) {
+            // Daemon mode with triage handler: classify and route the failure
+            const triageOutcome = await deps.runSetupTriage(prepareErr as SetupFailureError, worktree, item);
+            if (triageOutcome.kind === 'park') {
+              // Triage returned park: error outcome, worktree kept
+              log(
+                `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
+              );
+              await writeErrorHalt(worktree, triageOutcome.outputTail, log, triageOutcome);
+              await deps.teardownWorktree(worktree, true);
+              return {
+                slug: item.slug,
+                status: 'error',
+                reason: triageOutcome.outputTail || 'setup failed and parked after triage',
+              };
+            }
+            // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
+            log(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
+
+            // Task 14 (TS-5): surface quarantine evidence to the resuming build
+            // agent before dispatch. Fail-open — a surfacing failure must never
+            // block the build; it is diagnostic only.
+            if (deps.surfaceQuarantineRef) {
+              try {
+                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome);
+              } catch (err) {
+                log(
+                  `[daemon-runner] quarantine surfacing error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+          } else {
+            // Not a SetupFailureError, or daemon=false, or no triage handler: today's path
+            throw prepareErr;
+          }
+        }
+      }
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 
@@ -171,55 +293,99 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        // FR-16: clear-on-success — remove `needs-remediation` + mark ready when
-        // the label is present. Best-effort: a failure is logged and swallowed so
-        // enroll + teardown still run regardless.
-        if (outcome.prUrl && deps.projectRoot) {
-          try {
-            const state = await prMergeState(gh, deps.projectRoot, outcome.prUrl, log);
-            if (state.labels.includes('needs-remediation')) {
-              await removeLabel(gh, deps.projectRoot, outcome.prUrl, 'needs-remediation', log);
-              await setReady(gh, deps.projectRoot, outcome.prUrl, log);
+        if (isVerifiedShip(outcome)) {
+          // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
+          // Run the existing ship side effects.
+
+          // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
+          // markers (label, draft status, body marker). Returns 'confirmed' on success,
+          // 'partial' on any residual markers. Best-effort: logged and swallowed so
+          // enroll + teardown still run regardless.
+          if (outcome.prUrl && deps.projectRoot) {
+            try {
+              const cleanupResult = await cleanupHaltPresentation(gh, deps.projectRoot, outcome.prUrl, log);
+              log(`[daemon-runner] cleanup result: ${cleanupResult}`);
+            } catch (err) {
+              log(
+                `[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`,
+              );
             }
-          } catch (err) {
-            log(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
           }
+
+          // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
+          // teardown (worktree path still valid for context). Best-effort: enroll
+          // internally swallows; the outer wrap logs any re-throw so teardown still
+          // runs.
+          if (outcome.prUrl && deps.projectRoot) {
+            try {
+              await enroll(deps.projectRoot, {
+                prUrl: outcome.prUrl,
+                slug: item.slug,
+                repoCwd: deps.projectRoot,
+              });
+            } catch (err) {
+              log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          await deps.markProcessed(item.slug, outcome.prUrl);
+
+          // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
+          // written here — `/finish` commits it on the IMPLEMENTATION branch
+          // (via `conduct shipped-record`) before the branch's final push, so
+          // the human merge lands code + shipped-fact atomically (ADR
+          // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
+          // If the finish flow failed to write it, dedup degrades to the
+          // `.daemon/processed/` ledger marker written above.
+
+          await deps.teardownWorktree(worktree, false);
+          log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
+          // FR-14: sweep mergeable labels after feature completes.
+          await maybeSweep();
+          return {
+            slug: item.slug,
+            status: 'done',
+            prUrl: outcome.prUrl,
+            costTokens: outcome.costTokens,
+          };
         }
 
-        // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
-        // teardown (worktree path still valid for context). Best-effort: enroll
-        // internally swallows; the outer wrap logs any re-throw so teardown still
-        // runs.
-        if (outcome.prUrl && deps.projectRoot) {
+        // False-ship case: outcome converged DONE but failed the ship-eligibility guard.
+        // #337: halting ineligible outcomes prevents silent locked-up features.
+        // Remove the DONE marker (the gate loop wrote it prematurely), write HALT with a
+        // reason naming the contradiction, call escalateBuildFailure (best-effort — push
+        // failure logs and does not disrupt), keep the worktree, teardown with keep=true,
+        // and report halted.
+        const reason = failureReasonForFalseShip(outcome);
+        const doneMarker = join(worktree.path, '.pipeline', 'DONE');
+        await rm(doneMarker, { force: true }).catch(() => {});
+        await writeErrorHalt(worktree, reason, log);
+
+        // Escalate the false ship: push the branch and open a draft needs-remediation PR
+        // (so even the failure path preserves the work on origin). Best-effort: logs any
+        // error internally. Optional: if no escalateBuildFailure is present, the HALT
+        // marker and kept worktree still protect the work.
+        if (deps.escalateBuildFailure) {
           try {
-            await enroll(deps.projectRoot, {
-              prUrl: outcome.prUrl,
-              slug: item.slug,
-              repoCwd: deps.projectRoot,
+            await deps.escalateBuildFailure({
+              projectRoot: worktree.path,
+              failureReason: reason,
             });
           } catch (err) {
-            log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+            log(
+              `[daemon-runner] escalateBuildFailure error: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         }
 
-        await deps.markProcessed(item.slug, outcome.prUrl);
-
-        // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
-        // written here — `/finish` commits it on the IMPLEMENTATION branch
-        // (via `conduct shipped-record`) before the branch's final push, so
-        // the human merge lands code + shipped-fact atomically (ADR
-        // adr-2026-07-03-committed-shipped-record-dispatch-dedup, Decision 1).
-        // If the finish flow failed to write it, dedup degrades to the
-        // `.daemon/processed/` ledger marker written above.
-
-        await deps.teardownWorktree(worktree, false);
-        log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
-        // FR-14: sweep mergeable labels after feature completes.
+        await deps.teardownWorktree(worktree, true);
+        log(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
+        // FR-14: sweep mergeable labels after feature completes (failed-ship).
         await maybeSweep();
         return {
           slug: item.slug,
-          status: 'done',
-          prUrl: outcome.prUrl,
+          status: 'halted',
+          reason,
           costTokens: outcome.costTokens,
         };
       }
@@ -239,7 +405,12 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      await writeErrorHalt(worktree, noMarkerReason);
+      // If triage evidence is present (and it's a park outcome), pass it to writeErrorHalt
+      const triageEvidenceForHalt =
+        outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
+          ? outcome.triageEvidence
+          : undefined;
+      await writeErrorHalt(worktree, noMarkerReason, log, triageEvidenceForHalt);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -256,7 +427,7 @@ export function makeRunFeature(
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
       if (worktree) {
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -274,15 +445,48 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktree: FeatureWorktree, reason: string): Promise<void> {
-  const note =
-    `feature errored — parked for human inspection\n${reason}\n\n` +
-    `Resume procedure:\n` +
+async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
+  let note = `feature errored — parked for human inspection\n${reason}\n`;
+
+  // If triage evidence is present and it's a park outcome, render extended diagnostics
+  const triage = triageEvidence as any;
+  if (triage && typeof triage === 'object' && triage.kind === 'park') {
+    note += `\n──── Triage Evidence ────\n`;
+
+    // Output tail
+    if (triage.outputTail) {
+      note += `\nOutput tail:\n${triage.outputTail}\n`;
+    }
+
+    // Quarantine ref or explicit no-quarantine statement
+    if (triage.quarantineRef) {
+      note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
+    } else {
+      note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
+    }
+
+    // Contract outcome
+    if (triage.contractOutcome) {
+      note += `\nContract outcome: ${triage.contractOutcome}\n`;
+    }
+
+    // Dirty paths left behind by an unverifiable half-fix
+    if (Array.isArray(triage.preservedPaths) && triage.preservedPaths.length > 0) {
+      note += `\nDirty paths after fix-session:\n${triage.preservedPaths.map((p: string) => `  - ${p}`).join('\n')}\n`;
+    }
+  }
+
+  note +=
+    `\nResume procedure:\n` +
     `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
     `  2. rm .pipeline/HALT\n` +
     `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch(() => {});
-  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch(() => {});
+  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch((err) => {
+    if (log) log(`[daemon-runner] HALT mkdir error: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch((err) => {
+    if (log) log(`[daemon-runner] HALT write error: ${err instanceof Error ? err.message : String(err)}`);
+  });
 }
 
 /**

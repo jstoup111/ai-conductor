@@ -9,6 +9,7 @@ import {
   customStepEntries,
   mergeConfigs,
   resolveMemoryProvider,
+  isAttributionEnforcementActive,
 } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -657,6 +658,147 @@ complexity:
     });
   });
 
+  // Task 1 (#505): attribution_enforcement_cutover — mirrors owner_gate_cutover's
+  // validation pattern but with its own activation predicate.
+  describe('attribution_enforcement_cutover config field', () => {
+    it('parses and exposes attribution_enforcement_cutover', () => {
+      const result = validateConfig({
+        attribution_enforcement_cutover: '2026-06-30T00:00:00Z',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.attribution_enforcement_cutover).toBe('2026-06-30T00:00:00Z');
+    });
+
+    it('is optional — absent key parses fine', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.attribution_enforcement_cutover).toBeUndefined();
+    });
+
+    it('REJECTS a malformed (unparseable) attribution_enforcement_cutover with a clear error', () => {
+      const result = validateConfig({ attribution_enforcement_cutover: 'not-a-date' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toMatch(/attribution_enforcement_cutover.*not.*parseable/i);
+      expect(result.error.message).toMatch(/not-a-date/);
+    });
+
+    it('rejects a non-string attribution_enforcement_cutover', () => {
+      const result = validateConfig({ attribution_enforcement_cutover: 1234 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(
+        /attribution_enforcement_cutover must be an ISO-8601 date string/,
+      );
+    });
+  });
+
+  describe('isAttributionEnforcementActive', () => {
+    it('is disabled when the cutover key is absent', () => {
+      expect(isAttributionEnforcementActive(undefined)).toBe(false);
+    });
+
+    it('is enabled when the cutover instant is in the past', () => {
+      const now = new Date('2026-07-10T00:00:00Z');
+      expect(isAttributionEnforcementActive('2026-01-01T00:00:00Z', now)).toBe(true);
+    });
+
+    it('is disabled when the cutover instant is in the future', () => {
+      const now = new Date('2026-07-10T00:00:00Z');
+      expect(isAttributionEnforcementActive('2027-01-01T00:00:00Z', now)).toBe(false);
+    });
+  });
+
+  // Task 3 (negative paths: TR-1): build_auth.mode validation — fail-closed for unknown/empty/non-string modes
+  describe('harness_self_host.build_auth.mode validation (Task 3: TR-1 negative paths)', () => {
+    it('accepts valid mode: daemon-token', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'daemon-token',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.harness_self_host?.build_auth?.mode).toBe('daemon-token');
+    });
+
+    it('accepts valid mode: api-key', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'api-key',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.harness_self_host?.build_auth?.mode).toBe('api-key');
+    });
+
+    it('accepts undefined mode (optional field)', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            token_path: '/path/to/token',
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('REJECTS unknown mode: operator-oauth', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 'operator-oauth',
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should name the invalid value
+      expect(result.error.message).toContain('operator-oauth');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+
+    it('REJECTS empty string mode', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: '',
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+
+    it('REJECTS non-string mode (number)', () => {
+      const result = validateConfig({
+        harness_self_host: {
+          build_auth: {
+            mode: 42,
+          },
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      // Message should list valid options
+      expect(result.error.message).toMatch(/daemon-token.*api-key|api-key.*daemon-token/);
+    });
+  });
+
   // Task A10 (adr-2026-06-29-per-project-memory-provider-selection FR-1 negative): provider selection is per-project; no leakage.
   describe('A10: resolveMemoryProvider — per-project isolation, no leakage', () => {
     function registryWithLocal(provider: object): PluginRegistry {
@@ -875,6 +1017,287 @@ complexity:
       expect(result.config.auto_restart_on_stale_engine).toBe(true);
       expect(result.config.harness_version).toBe('>=1.0.0');
       expect(result.config.defaults?.model).toBe('sonnet');
+    });
+  });
+
+  describe('build_review config field', () => {
+    it('resolves absent key to disabled, no warning', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:false to disabled, identical to absent', () => {
+      const result = validateConfig({ build_review: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:true to enabled', () => {
+      const result = validateConfig({ build_review: { enabled: true } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves null to disabled silently', () => {
+      const result = validateConfig({ build_review: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves a non-object build_review value to disabled + one warning', () => {
+      const result = validateConfig({ build_review: 'yes' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
+    });
+
+    it('resolves a non-boolean enabled value to disabled + one warning', () => {
+      const result = validateConfig({ build_review: { enabled: 'banana' } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
+    });
+
+    it('never throws — always returns ok: true', () => {
+      const testCases = [
+        { build_review: { enabled: true } },
+        { build_review: { enabled: false } },
+        { build_review: 'yes' },
+        { build_review: 1 },
+        { build_review: [] },
+        { build_review: {} },
+        { build_review: null },
+        {},
+      ];
+      for (const testCase of testCases) {
+        const result = validateConfig(testCase);
+        expect(result.ok).toBe(true);
+      }
+    });
+
+    it('rejects steps.build_review.disable: true — gating steps cannot be disabled', () => {
+      const result = validateConfig({ steps: { build_review: { disable: true } } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/build_review/);
+      expect(result.error.message).toMatch(/gating/i);
+    });
+  });
+
+  describe('mergeable_autoresolve config block (Task 2)', () => {
+    it('absent block → {enabled:false, cooldownMinutes:60, suiteCommand:undefined}', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toBeUndefined();
+    });
+
+    it('full block parses correctly with all fields', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 30,
+          suiteCommand: 'npm run test',
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: true,
+        cooldownMinutes: 30,
+        suiteCommand: 'npm run test',
+      });
+    });
+
+    it('partial block with only enabled gets appropriate defaults', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: true,
+        cooldownMinutes: 60,
+        suiteCommand: undefined,
+      });
+    });
+
+    it('partial block with enabled and cooldownMinutes gets appropriate defaults', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: false,
+          cooldownMinutes: 120,
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve).toEqual({
+        enabled: false,
+        cooldownMinutes: 120,
+        suiteCommand: undefined,
+      });
+    });
+
+    it('rejects non-boolean enabled value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: 'yes',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*enabled.*boolean/i);
+    });
+
+    it('rejects non-number cooldownMinutes value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 'thirty',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*cooldownMinutes.*number/i);
+    });
+
+    it('rejects negative cooldownMinutes value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: -5,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*cooldownMinutes/i);
+    });
+
+    it('rejects non-string suiteCommand value', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          suiteCommand: 123,
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/mergeable_autoresolve.*suiteCommand.*string/i);
+    });
+
+    it('rejects unknown keys under mergeable_autoresolve', () => {
+      const result = validateConfig({
+        mergeable_autoresolve: {
+          enabled: true,
+          unknownKey: 'value',
+        },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/unknownKey/);
+    });
+
+    it('accepts mergeable_autoresolve alongside other config fields', () => {
+      const result = validateConfig({
+        harness_version: '>=1.0.0',
+        defaults: { model: 'sonnet' },
+        mergeable_autoresolve: {
+          enabled: true,
+          cooldownMinutes: 45,
+          suiteCommand: 'npm test',
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.mergeable_autoresolve?.enabled).toBe(true);
+      expect(result.config.mergeable_autoresolve?.cooldownMinutes).toBe(45);
+    });
+  });
+
+  describe('ci_watch config field (Task 4)', () => {
+    it('resolves absent key to enabled, no warning', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:false to disabled, no warning', () => {
+      const result = validateConfig({ ci_watch: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(false);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves enabled:true to enabled, no warning', () => {
+      const result = validateConfig({ ci_watch: { enabled: true } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves null to enabled silently', () => {
+      const result = validateConfig({ ci_watch: null });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it('resolves a string value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: 'yes' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('resolves a number value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: 42 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('resolves a non-boolean enabled value to enabled without throwing', () => {
+      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.enabled).toBe(true);
+    });
+
+    it('never throws — always returns ok: true', () => {
+      const testCases = [
+        { ci_watch: { enabled: true } },
+        { ci_watch: { enabled: false } },
+        { ci_watch: 'yes' },
+        { ci_watch: 1 },
+        { ci_watch: [] },
+        { ci_watch: {} },
+        { ci_watch: null },
+        {},
+      ];
+      for (const testCase of testCases) {
+        const result = validateConfig(testCase);
+        expect(result.ok).toBe(true);
+      }
     });
   });
 });

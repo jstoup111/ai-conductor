@@ -18,6 +18,9 @@ const ENFORCEMENT_LOCKED_STEPS: ReadonlySet<string> = new Set([
   'stories',
   'plan',
   'build',
+  // manual_test (#367): a project-local override downgrading it to advisory
+  // would re-open the silent-skip false-ship path the gating flip closed.
+  'manual_test',
   'finish',
 ]);
 

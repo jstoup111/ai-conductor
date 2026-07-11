@@ -43,12 +43,15 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
+import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
 import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
 import { detectEngineerCommand, dispatchEngineer } from './engine/engineer-cli.js';
+import { detectIntakeLoopCommand, dispatchIntakeLoop } from './intake-loop-cli.js';
+import { detectBrainCommand, dispatchBrain } from './engine/brain-supervisor-cli.js';
 import { detectMemoryCommand, dispatchMemorySetup } from './engine/memory-cli.js';
 import {
   detectDaemonCommand,
@@ -62,6 +65,15 @@ import {
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
 import {
+  detectFinishRecordCommand,
+  dispatchFinishRecord,
+  makeProductionFinishRecordRunners,
+} from './engine/finish-record-cli.js';
+import {
+  detectDeriveFeedbackCommand,
+  dispatchDeriveFeedback,
+} from './engine/derive-feedback-cli.js';
+import {
   detectDaemonObserveCommand,
   dispatchDaemonObserve,
 } from './engine/daemon-observe-cli.js';
@@ -69,6 +81,7 @@ import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
 } from './engine/daemon-park-cli.js';
+import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -280,6 +293,27 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Intake-loop subcommand (Task 17) runs NON-INTERACTIVELY and exits — it
+  // drives the background auto-intake poll loop (poll → enqueue → notify),
+  // never spawning claude and never opening a PR. Dispatched before parseArgs,
+  // mirroring the engineer/registry subcommand pattern.
+  const intakeLoopCmd = detectIntakeLoopCommand(process.argv);
+  if (intakeLoopCmd) {
+    const code = await dispatchIntakeLoop(intakeLoopCmd);
+    process.exit(code);
+  }
+
+  // Brain subcommand (`conduct-ts brain start|stop|status`, Task 18) runs
+  // NON-INTERACTIVELY and exits — it hosts the intake-loop (Task 17) under a
+  // dedicated `cc-brain-*` tmux session (no cron, no external scheduler).
+  // Dispatched before parseArgs, mirroring the daemon/intake-loop subcommand
+  // pattern.
+  const brainCmd = detectBrainCommand(process.argv);
+  if (brainCmd) {
+    const code = await dispatchBrain(brainCmd);
+    process.exit(code);
+  }
+
   // Render subcommand (`render-diagrams <file>...`) runs NON-INTERACTIVELY and
   // exits — it renders the Mermaid blocks in the given Markdown via the
   // configured mermaid_renderer preset. Best-effort; mirrors the dispatch pattern.
@@ -297,6 +331,39 @@ async function main(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Finish-record subcommand (`finish-record --choice <pr|keep> [--pr-url
+  // <url>] --pipeline-dir <dir>`) runs NON-INTERACTIVELY and exits — records
+  // the operator's /finish choice (pr_url into conduct-state.json + the
+  // finish-choice marker) so the daemon's finish step stops failing try 1 on
+  // every ship. Detected before the pipeline fallthrough, mirroring the
+  // shipped-record dispatch pattern.
+  const finishRecordCmd = detectFinishRecordCommand(process.argv);
+  if (finishRecordCmd) {
+    const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
+    process.exit(code);
+  }
+
+  // Derive-feedback subcommand (`derive-feedback --sha <sha> [--plan <path>]`)
+  // runs NON-INTERACTIVELY and exits — read-only, advisory single-commit
+  // evidence check used by hooks/claude/post-commit-derive-feedback.sh so
+  // fast feedback comes from the SAME engine-owned evidence grammar as the
+  // build gate, instead of a bare bash regex. Mirrors the shipped-record
+  // dispatch pattern.
+  const deriveFeedbackCmd = detectDeriveFeedbackCommand(process.argv);
+  if (deriveFeedbackCmd) {
+    const code = await dispatchDeriveFeedback(deriveFeedbackCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Task subcommand (`task start|done <id>`, Task 7) runs NON-INTERACTIVELY and exits —
+  // routes to task start/done operations. Dispatched before the inline pipeline fallback,
+  // mirroring the derive-feedback-cli dispatch pattern.
+  const taskCmd = detectTaskCommand(process.argv);
+  if (taskCmd) {
+    const code = await dispatchTaskCommand(taskCmd, process.cwd());
     process.exit(code);
   }
 
@@ -727,6 +794,12 @@ async function main(): Promise<void> {
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
   const persister = new EventPersister(eventsLogPath, events);
   persister.start();
+
+  // Wire AuditTrailWriter: appends friction/positive-evidence records to
+  // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
+  // (never process.cwd()) so retro can reconstruct this run's history.
+  const auditWriter = new AuditTrailWriter(projectRoot);
+  auditWriter.subscribe(events);
 
   // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
   const visualizerList: VisualizerPlugin[] = [];

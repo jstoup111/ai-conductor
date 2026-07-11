@@ -123,7 +123,35 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
 6. Commit with descriptive message referencing the behavior added
-7. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
+7. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
+   cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
+   to their implementation task and enables task-status tracking.
+
+   **Grammar Rule:** The trailer ID MUST match the plan header ID exactly. For example:
+   - Plan header: `### Task 7:` → Trailer must be: `Task: 7` (NOT `Task: task-7`)
+   - Forbidden: `Task: task-7`, `Task: task-N`, `task-7` (incorrect spellings)
+   - Required: `Task: 7`, `Task: 42` (bare numeric ID only)
+
+   **Subject ⇒ Trailer Discipline:** If the commit subject line references a task ID
+   (e.g., `fix: resolve Task 7 token rejection`), the commit MUST include the matching
+   `Task: <id>` trailer. A commit whose subject names a task but lacks the corresponding
+   trailer FAILS this gate — amend the commit before proceeding. This ensures
+   bidirectional traceability: commits identify their task, and tasks can find their commits.
+
+   Example (good):
+   ```
+   feat(auth): reject expired tokens at request boundary
+
+   Validates token expiry before processing request body. Stores expiry
+   time in secure cookie (not in header). Rejects with 401 if expired.
+
+   Task: 42
+   ```
+
+   Refactor commits within the same task also carry the same Task: <id> so the task
+   is atomically marked complete when the final commit lands.
+
+8. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
@@ -131,6 +159,42 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
+
+### Commit-less Completions: Evidence Trailers
+
+Not all tasks require code commits. Some tasks verify that existing behavior meets acceptance
+criteria, and some have no implementation work (documentation, architectural decisions, etc.).
+When a task completes without code changes, emit an empty commit with Evidence trailers.
+
+The engine reads commits only — it does not inspect task reports or summary lines. Evidence
+forms MUST be emitted as `git commit --allow-empty` with the Evidence trailer in the commit
+body. This ensures the conductor can track task completion by reading the commit log, achieving
+bidirectional traceability: tasks identify their commits via trailers, and commits carry proof
+of completion.
+
+**Form 1: `Evidence: satisfied-by <sha>`**
+Use when a task's acceptance criteria are already met by existing code (discovered during
+pre-completion scan). Emit a no-op commit carrying the satisfying commit SHA:
+```
+git commit --allow-empty -m "chore(evidence): task criteria met" \
+  -m "Task: 7" \
+  -m "Evidence: satisfied-by abc123def456"
+```
+
+**Form 2: `Evidence: skipped <reason>`**
+Use when a task has no implementation work or is intentionally deferred. Emit a no-op commit
+with a concise reason:
+```
+git commit --allow-empty -m "chore(evidence): task deferred" \
+  -m "Task: 12" \
+  -m "Evidence: skipped awaiting_stakeholder_input"
+```
+
+Each empty commit carries `Task: <id>` (the task ID) plus `Evidence: satisfied-by <sha>` OR
+`Evidence: skipped <reason>` (the evidence form). The conductor recognizes these commits and
+marks the task `completed` without requiring ordinary code changes. This enables honest tracking:
+a task that "completes" via verification is marked differently from one that completes via code
+delivery, supporting retro analysis and pipeline audits.
 
 ### Memory Checkpoint (Per-Cycle, Conditional)
 
@@ -158,6 +222,24 @@ At batch boundaries, run `/simplify` and check for:
    authorize differently. Only extract shared *behavior*, not shared *shape*.
 
 Refactoring gets its own commit(s) — separate from feature commits. Tests must still pass after.
+
+### User-Requested Exit During TDD
+
+If the user explicitly requests to stop, pause, or exit to the harness at any point during
+a TDD cycle (RED, GREEN, DOMAIN, or COMMIT), the orchestrator MUST:
+
+1. **Do NOT commit incomplete work.** If the cycle is mid-flight (test written but no code,
+   or code written but domain review not passed), do not attempt to force a commit.
+
+2. **Reset the task to `pending`** in `.pipeline/task-status.json` if you marked it `in_progress`.
+   The next session will re-enter this task and resume the cycle.
+
+3. **Write a halt marker** (`.pipeline/halt-user-input-required`) with a one-line summary
+   of the in-flight cycle state (e.g., "user requested exit; RED phase complete, awaiting GREEN").
+
+This contract ensures that user interruption is non-destructive: the task cleanly resets,
+and the next session resumes from the known state without losing work or creating orphaned
+commits.
 
 ### Structural Enforcement
 
@@ -227,7 +309,10 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after RED (test reviewed for domain integrity)
 - [ ] Implementation is minimal (passes scope check)
 - [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Full test suite passes before commit
+- [ ] Scoped affected-test set passes before commit (the full suite runs at the feature's
+      final verification task, not per-task)
+- [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
+      `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
 - [ ] Linter passes before commit
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit

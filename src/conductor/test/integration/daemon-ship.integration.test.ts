@@ -187,6 +187,7 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
     const outcome: WorktreeOutcome = {
       done: true,
       halted: false,
+      finishChoice: 'pr',
       prUrl: 'https://github.com/acme/repo/pull/42',
     };
     const deps: FeatureRunnerDeps = {

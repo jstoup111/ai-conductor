@@ -1,0 +1,35 @@
+name: Intake idea
+description: state WHAT and desired outcomes; the engineer (DECIDE) owns HOW
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed
+      description: Evidence of the problem
+      placeholder: What did you observe?
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Who or what is hurting, and how often?
+      placeholder: (optional)
+    validations:
+      required: false
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: Observable behavior that must hold afterward
+      placeholder: What should happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: hypotheses
+    attributes:
+      label: Hypotheses
+      description: "Optional: These are your guesses about HOW to solve this. DECIDE weighs alternatives and may discard them."
+      placeholder: (optional)
+    validations:
+      required: false

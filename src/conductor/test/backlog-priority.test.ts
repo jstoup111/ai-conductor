@@ -4,10 +4,24 @@ import {
   createPriorityResolver,
   orderBacklog,
   ghIssueLabelReader,
+  PRIORITY_BAND_RANK,
   type PriorityResolution,
   type ExecRunner,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
+
+describe('PRIORITY_BAND_RANK — exported band ranking', () => {
+  it('exports a single ranking with no-issue < critical < high < medium < low < unlabeled', () => {
+    expect(PRIORITY_BAND_RANK).toEqual({
+      'no-issue': 0,
+      critical: 1,
+      high: 2,
+      medium: 3,
+      low: 4,
+      unlabeled: 5,
+    });
+  });
+});
 
 describe('parsePriorityLabels — extract priority from issue labels', () => {
   describe('positive cases', () => {
@@ -41,8 +55,8 @@ describe('parsePriorityLabels — extract priority from issue labels', () => {
       expect(parsePriorityLabels(['priority: urgent'])).toBeUndefined();
     });
 
-    it('unknown priority value "critical" returns undefined', () => {
-      expect(parsePriorityLabels(['priority: critical'])).toBeUndefined();
+    it('unknown priority value "blocker" returns undefined', () => {
+      expect(parsePriorityLabels(['priority: blocker'])).toBeUndefined();
     });
 
     it('unknown priority value "P0" returns undefined', () => {
@@ -114,6 +128,23 @@ describe('parsePriorityLabels — extract priority from issue labels', () => {
     it('handles repeated priority labels deterministically', () => {
       const labels = ['priority: low', 'priority: high', 'priority: low'];
       expect(parsePriorityLabels(labels)).toBe('high');
+    });
+  });
+
+  describe('critical band', () => {
+    it('parses priority: critical', () => {
+      expect(parsePriorityLabels(['priority: critical'])).toBe('critical');
+    });
+
+    it('critical outranks high when both present', () => {
+      expect(parsePriorityLabels(['priority: high', 'priority: critical'])).toBe('critical');
+      expect(parsePriorityLabels(['priority: critical', 'priority: high'])).toBe('critical');
+    });
+
+    it('rejects case/format variants of critical', () => {
+      expect(parsePriorityLabels(['Priority: Critical'])).toBeUndefined();
+      expect(parsePriorityLabels(['priority:critical'])).toBeUndefined();
+      expect(parsePriorityLabels(['priority:  critical'])).toBeUndefined();
     });
   });
 
@@ -745,6 +776,31 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
     expect(result[0].slug).toBe('item-b');
     expect(result[1].slug).toBe('item-a'); // medium
     expect(result[2].slug).toBe('item-c'); // low
+  });
+
+  it('critical beats high but not no-issue: full band ladder ordering', () => {
+    const items: BacklogItem[] = [
+      { slug: 'item-high', sourceRef: 'issue-h' },
+      { slug: 'item-critical', sourceRef: 'issue-c' },
+      { slug: 'item-unlinked' }, // no sourceRef → no-issue band
+      { slug: 'item-medium', sourceRef: 'issue-m' },
+    ];
+    const bands = new Map([
+      ['issue-h', 'high'],
+      ['issue-c', 'critical'],
+      ['issue-m', 'medium'],
+    ]);
+    const res: PriorityResolution = { mode: 'banded', bands };
+
+    const result = orderBacklog(items, res);
+
+    expect(result.map((r) => r.slug)).toEqual([
+      'item-unlinked',
+      'item-critical',
+      'item-high',
+      'item-medium',
+    ]);
+    expect(result[1].band).toBe('critical');
   });
 
   it('high → medium → low order: three items with explicit band assignments', () => {

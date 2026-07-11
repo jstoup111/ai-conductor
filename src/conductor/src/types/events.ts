@@ -53,6 +53,44 @@ export type ConductorEvent =
       resolvedAfter: number;
     }
   | {
+      /**
+       * Intra-step build heartbeat: emitted by BuildProgressWatcher when the
+       * resolved/total task count advances during a running `build` step
+       * (adr-2026-07-10-intra-step-build-progress-events).
+       */
+      type: 'build_progress';
+      step: StepName;
+      /** Count of resolved (completed) tasks at the time of this tick. */
+      resolved: number;
+      /** Total task count at the time of this tick. */
+      total: number;
+      currentTaskId?: string;
+      currentTaskName?: string;
+      /** Number of new commits observed since the last tick, if tracked. */
+      commitCount?: number;
+      /** Consecutive gate-verdict misses with no supporting evidence, if tracked. */
+      noEvidenceAttempts?: number;
+      featureSlug?: string;
+    }
+  | {
+      /**
+       * Intra-step build quiet-episode warning: emitted when the build step
+       * has gone `quietMinutes` without any task-status change
+       * (adr-2026-07-10-intra-step-build-progress-events). Distinct from
+       * `build_stall`, which signals a stronger/terminal no-progress halt.
+       */
+      type: 'build_no_progress';
+      step: StepName;
+      /** Minutes elapsed since the last observed task-status change. */
+      quietMinutes: number;
+      resolved: number;
+      total: number;
+      currentTaskId?: string;
+      /** Epoch ms of the last observed commit, if tracked. */
+      lastCommitAt?: number;
+      featureSlug?: string;
+    }
+  | {
       type: 'renderer_error';
       rendererName: string;
       error: string;
@@ -87,6 +125,8 @@ export type ConductorEvent =
       step: StepName;
       satisfied: boolean;
       reason?: string;
+      /** Timestamp (ms epoch) the gate's verdict was computed, for audit non-divergence checks. */
+      checkedAt?: number;
     }
   | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
@@ -124,6 +164,13 @@ export type ConductorEvent =
       changedPaths: string[];
     }
   | {
+      /** A gate was re-verified post-rebase in gate-first mode. */
+      type: 'rebase_gate_reverified';
+      step: StepName;
+      skippedDispatch: boolean;
+      reason?: string;
+    }
+  | {
       /** A CHANGELOG-only conflict was auto-resolved (FR-7). */
       type: 'rebase_changelog_resolved';
     }
@@ -151,4 +198,41 @@ export type ConductorEvent =
   | {
       /** All resolution attempts exhausted without success — feature is halted. */
       type: 'rebase_resolution_exhausted';
+    }
+  // ── Task 23: Daemon auto-park on no-evidence gate misses ──
+  | {
+      /** The daemon auto-parked due to N no-evidence gate misses or empty plan. */
+      type: 'auto_park';
+      slug: string;
+      reason: string;
+    }
+  // ── #505 TS-15: zero-work-product detection ──
+  | {
+      /**
+       * A build step completed with zero attributable work: either nothing
+       * was dispatched, or dispatched work produced no new commits. Emitted
+       * only when enforcement is active, no halt marker is present, and the
+       * task list is still incomplete — Task 16 owns the kickback response.
+       */
+      type: 'zero_work_product';
+      step: StepName;
+      dispatchCount: number;
+      headSha: string | null;
+    }
+  // ── Audit-trail write-completeness: halt lifecycle closure ──
+  | {
+      /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
+      type: 'halt_cleared';
+      step?: StepName;
+      cause: 'operator' | 'rekick';
+    }
+  // ── Ship→CI feedback loop (Task 5): CI failure events ──
+  | {
+      /** CI checks failed on a shipped PR (halt-monitor grade). */
+      type: 'ci_failed';
+      prUrl: string;
+      slug: string;
+      checks: string[];
+      attempts: number;
+      phase: 'detected' | 'dispatched' | 'exhausted';
     };

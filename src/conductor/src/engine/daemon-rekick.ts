@@ -5,11 +5,16 @@ import {
   makeGitRunner,
   rebaseStateActive,
   performRebase,
+  runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  recordRebaseStepCompletion,
   writeHalt,
   type RebaseOutcome,
+  type RebaseResolver,
 } from './rebase.js';
+import { checkMergedPrGuard } from './merged-pr-guard.js';
+import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 // ── Main-advance re-kick sweep (ADR-013 / FR-7, FR-9, FR-12) ──────────────────
@@ -278,7 +283,7 @@ export async function clearMarker(worktreePath: string): Promise<void> {
 
 // ── FR-12: resume rebase-first (play-forward) ────────────────────────────────
 
-export type RekickResumeResult = 'skipped' | 'rebased' | 'halted';
+export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shipped';
 
 /**
  * Honor the `.pipeline/REKICK` sentinel a sweep dropped. When present, run
@@ -287,6 +292,10 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted';
  * re-verifies against the new base instead of the stale one. One-shot: the
  * sentinel is consumed (deleted) whether or not the rebase conflicts.
  *
+ * If `prUrl` is provided, checks if the recorded PR is merged (via `checkMergedPrGuard`)
+ * BEFORE rebasing. On MERGED, returns `'already_shipped'` without rebasing — the
+ * feature has already landed out-of-band.
+ *
  *   'skipped'  — no sentinel; caller proceeds normally (no rebase forced).
  *   'rebased'  — rebase ran (noop/clean/changelog-resolved); caller resumes the
  *                gate loop. FR-5 kickbacks (build/manual_test) are written by
@@ -294,6 +303,9 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted';
  *   'halted'   — the rebase re-conflicted on the new base; 9.0's HALT was
  *                written and the rebase left paused. Caller MUST re-park (skip
  *                `conductor.run()`); FR-9 bounds re-kick at this SHA.
+ *   'already_shipped' — the recorded PR is merged out-of-band; no rebase ran, no
+ *                       further steps dispatched. Caller writes synthetic ship
+ *                       markers, marks processed, and returns (ADR-2026-07-09-mid-run-merged-pr-guard).
  *
  * Reuses the exact 9.0 rebase primitives (`performRebase`/`applyRebaseVerdicts`/
  * `emitRebaseEvent`/`writeHalt`) — it never reimplements the rebase logic.
@@ -305,6 +317,20 @@ export async function resumeRebaseFirst(opts: {
   events: ConductorEventEmitter;
   /** Whether manual_test ran for this feature (drives the FR-5 kickback set). */
   ranManualTest: boolean;
+  /**
+   * Bounded auto-resolution cap for a rebase conflict on the play-forward path
+   * (#300). Defaults to 0 (disabled) when unset, preserving the original
+   * bare-rebase-then-HALT behavior; the daemon wires the configured cap so a
+   * re-kicked feature gets the SAME gated `/rebase` attempts as the finish-time
+   * step before parking for a human.
+   */
+  resolveAttempts?: number;
+  /** Resolver dispatched per attempt — the daemon wires DefaultStepRunner's `/rebase`. */
+  resolveConflict?: RebaseResolver;
+  /** Optional: gh runner for merged-PR guard (ADR-2026-07-09). Absent → no guard. */
+  runGh?: GhRunner;
+  /** Optional: recorded PR URL for merged-PR guard. Absent → no guard. */
+  prUrl?: string;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -312,6 +338,22 @@ export async function resumeRebaseFirst(opts: {
 
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
+
+  // ADR-2026-07-09-mid-run-merged-pr-guard: check if the recorded PR is merged
+  // BEFORE rebasing. If merged, return 'already_shipped' — the feature landed
+  // out-of-band and needs no further work.
+  if (opts.runGh && opts.prUrl) {
+    const guardVerdict = await checkMergedPrGuard(
+      opts.runGh,
+      opts.worktreePath,
+      opts.prUrl,
+      opts.log,
+    );
+    if (guardVerdict === 'merged') {
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: recorded PR already merged out-of-band`);
+      return 'already_shipped';
+    }
+  }
 
   const git = makeGitRunner(opts.worktreePath);
   let outcome: RebaseOutcome;
@@ -325,7 +367,41 @@ export async function resumeRebaseFirst(opts: {
     };
   }
 
+  // #300: route a conflict through the SAME gated `/rebase` resolution loop the
+  // finish-time step (`conductor.ts:runRebaseStep`) uses, before parking for a
+  // human. With no cap/resolver wired this is a no-op and the original
+  // bare-rebase-then-HALT behavior is preserved exactly.
+  outcome = await runGatedRebaseResolution({
+    git,
+    projectRoot: opts.worktreePath,
+    outcome,
+    cap: opts.resolveAttempts ?? 0,
+    resolve: opts.resolveConflict,
+    onAttempt: (index, cap) =>
+      opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+    onSettled: (kind) =>
+      opts.events.emit(
+        kind === 'exhausted'
+          ? { type: 'rebase_resolution_exhausted' }
+          : { type: 'rebase_resolution_succeeded' },
+      ),
+  });
+
+  // FR-5: Deliberate fail-closed: the rekick path NEVER receives preVerify
+  // capability. When a play-forward rebase touches code paths, the full
+  // downstream set (build, build_review, manual_test) gets unconditional
+  // invalidation kickback verdicts. This preserves fail-closed semantics —
+  // the daemon must re-verify from scratch, not trust stale evidence. Omitting
+  // preVerify here is intentional, per ADR.
   await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest);
+  // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
+  // outcomes via the shared helper (no-ops on conflict_halt) — same call
+  // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves
+  // no silent unmarked rebase state. Derived from worktreePath (same
+  // location daemon-cli.ts uses) rather than a new opts field, so every
+  // existing call site keeps working unchanged.
+  const stateFilePath = join(opts.worktreePath, '.pipeline', 'conduct-state.json');
+  await recordRebaseStepCompletion(stateFilePath, outcome);
   await emitRebaseEvent(opts.events, outcome);
 
   if (outcome.kind === 'conflict_halt') {

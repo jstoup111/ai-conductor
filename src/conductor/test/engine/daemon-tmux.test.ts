@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED unit specs for the NOT-YET-BUILT module `src/engine/daemon-tmux.ts`
@@ -48,13 +48,13 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 type Call = { args: string[]; inherit: boolean };
 
 function spyRunner(
-  overrides: Record<string, { code: number; stdout?: string }> = {},
-): { run: (args: string[], opts: { inherit: boolean }) => { code: number; stdout: string }; calls: Call[] } {
+  overrides: Record<string, { code: number; stdout?: string; stderr?: string }> = {},
+): { run: (args: string[], opts: { inherit: boolean }) => { code: number; stdout: string; stderr: string }; calls: Call[] } {
   const calls: Call[] = [];
   const run = (args: string[], opts: { inherit: boolean }) => {
     calls.push({ args, inherit: opts.inherit });
-    const r = overrides[args[0]] ?? { code: 0, stdout: '' };
-    return { code: r.code, stdout: r.stdout ?? '' };
+    const r = overrides[args[0]] ?? { code: 0, stdout: '', stderr: '' };
+    return { code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   return { run, calls };
 }
@@ -265,18 +265,30 @@ describe('sendKeys: argv', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// setRemainOnExit — exact argv; session-scoped target
+// setRemainOnExit — exact argv; window-option with pane-qualified target; logging on failure
 // ─────────────────────────────────────────────────────────────────────────────
-describe('setRemainOnExit: argv', () => {
-  it('calls set-option with exact-match session target and remain-on-exit on', async () => {
+describe('setRemainOnExit: argv, pane target, and failure logging', () => {
+  it('calls set-option with -w flag, pane-qualified target (=name:), and remain-on-exit on', async () => {
     const setRemainOnExit = requireFn(await load(), 'setRemainOnExit');
     const { run, calls } = spyRunner();
     await setRemainOnExit('cc-daemon-myapp-abc123', run);
     expect(calls).toHaveLength(1);
+    // Must use -w (window-option) flag and pane-qualified target =<name>: for remain-on-exit to work
     expect(calls[0].args).toEqual([
-      'set-option', '-t', '=cc-daemon-myapp-abc123', 'remain-on-exit', 'on',
+      'set-option', '-w', '-t', '=cc-daemon-myapp-abc123:', 'remain-on-exit', 'on',
     ]);
     expect(calls[0].inherit).toBe(false);
+  });
+
+  it('logs a message containing stderr when runner returns non-zero', async () => {
+    const setRemainOnExit = requireFn(await load(), 'setRemainOnExit');
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { run } = spyRunner({ 'set-option': { code: 1, stderr: 'no such window' } });
+    await setRemainOnExit('cc-daemon-myapp-abc123', run);
+    expect(consoleWarnSpy).toHaveBeenCalled();
+    const warnCalls = consoleWarnSpy.mock.calls.map((c) => c.join(' '));
+    expect(warnCalls.some((msg) => msg.includes('no such window'))).toBe(true);
+    consoleWarnSpy.mockRestore();
   });
 });
 
@@ -430,6 +442,23 @@ describe('makeTmuxSupervisor().start: dead-pane revival', () => {
     const subs = calls.map((c) => c.args[0]);
     expect(subs).toContain('new-session');
     expect(subs).not.toContain('respawn-pane');
+  });
+
+  it('session absent → fresh creation arms remain-on-exit after newDetachedSession', async () => {
+    const makeTmuxSupervisor = requireFn(await load(), 'makeTmuxSupervisor');
+    const { run, calls } = spyRunner({
+      '-V': { code: 0 },
+      'has-session': { code: 1 },
+    });
+    await makeTmuxSupervisor(run).start('/home/alice/myapp');
+    const subs = calls.map((c) => c.args[0]);
+    expect(subs).toContain('new-session');
+    expect(subs).toContain('set-option');
+    const newSessionIdx = subs.indexOf('new-session');
+    const setOptionIdx = subs.indexOf('set-option');
+    expect(newSessionIdx).toBeGreaterThanOrEqual(0);
+    expect(setOptionIdx).toBeGreaterThanOrEqual(0);
+    expect(newSessionIdx).toBeLessThan(setOptionIdx);
   });
 });
 
@@ -664,6 +693,52 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-dae
       }
       // Clean up any accidentally created session.
       await killSessionFn(sessionName);
+    }
+  });
+
+  it('throws instead of respawning a pane in a real cc-daemon-* session when the kill-switch is set (#377)', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const sessionName = 'cc-daemon-guardtest-def456';
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      let thrown: unknown;
+      try {
+        runner(['respawn-pane', '-k', '-t', `=${sessionName}:`, 'sleep 1'], { inherit: false });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      expect((thrown as Error).message).toContain(sessionName);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('does NOT guard non-cc-daemon session names (test-fixture sessions stay usable) (#377)', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      // A respawn-pane against a non-prefixed (absent) session must reach real
+      // tmux and fail with a plain non-zero exit — NOT the kill-switch throw.
+      const result = runner(['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'], {
+        inherit: false,
+      });
+      expect(result.code).not.toBe(0);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
     }
   });
 });

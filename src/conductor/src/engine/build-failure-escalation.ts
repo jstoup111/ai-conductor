@@ -20,17 +20,14 @@ import {
   type GitRunner,
   makeProductionGh,
   makeProductionGit,
-  ensureLabel,
-  addLabel,
   findOrCreatePr,
   upsertComment,
+  ensureHaltPresentation,
   NEEDS_REMEDIATION_MARKER,
 } from './pr-labels.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const LABEL_NAME = 'needs-remediation';
-const LABEL_COLOR = 'B60205';
 const COMMENT_MAX_LEN = 4000;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -64,7 +61,7 @@ export interface EscalateBuildFailureResult {
  *  2. Count commits on mergeBase..HEAD — zero commits ⇒ early exit (FR-6).
  *  3. Push the branch. Failure ⇒ early exit (FR-7).
  *  4. Find or create a draft PR titled `needs-remediation: <branch> — manual remediation required`.
- *  5. Ensure the `needs-remediation` label exists and add it to the PR.
+ *  5. Ensure halt presentation: draft status, needs-remediation label, and body marker.
  *  6. Post a comment with the (trimmed) failure reason and a manual-remediation note.
  *
  * Returns `{ prUrl }` on success, `{}` on any early exit.
@@ -170,9 +167,8 @@ export async function escalateBuildFailure(
     return {};
   }
 
-  // ── Step 5: ensure label exists + add it (both best-effort, non-throwing) ─
-  await ensureLabel(runGh, cwd, LABEL_NAME, LABEL_COLOR, log);
-  await addLabel(runGh, cwd, prUrl, LABEL_NAME, log);
+  // ── Step 5: ensure halt presentation (draft + label + body marker) ────────
+  await ensureHaltPresentation(runGh, cwd, prUrl, log);
 
   // ── Step 6: comment with failure reason (priority artifact, non-throwing) ─
   // Attempt this independently of whether the label step succeeded.

@@ -129,9 +129,9 @@ by **gate verdicts** instead of a fixed order:
   step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
   with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
   exit markerless and the daemon never reads their markers.
-- **Fresh session per step** — with `freshContextPerStep` (daemon/auto only; interactive
-  `/conduct` leaves it off so the explore→prd→…→stories→plan design session keeps its
-  context), the LLM session is reset before **every** executed step in the loop
+- **Fresh session per step** — unconditionally, in all modes and all phases (interactive
+  `/conduct` included; each step reads its inputs from committed `.docs/` artifacts, not
+  conversational memory), the LLM session is reset before **every** executed step
   (Ralph-style; context never bloats across the loop), while a step's own retries resume
   the same session. The reset also fires before the **first** step, which discards any
   stale session inherited from a **reused worktree** — a kept worktree carries the prior
@@ -181,6 +181,51 @@ The finish/as-built hooks matter most on the **technical track**, which skips `p
 entirely — before them, those gates dead-ended in a `failed in auto mode` HALT even when the
 gap was routable.
 
+**Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
+`.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
+`Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
+and routes through `/remediate` before halting:
+
+- **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
+  reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
+  `writeStallQuestionEvidence(this.projectRoot, question)` persists it to
+  `.pipeline/build-stall-question.md` (substituting a placeholder line for empty/whitespace-only
+  questions) and returns the effective question used downstream. `clearHaltMarker` then removes
+  the marker so the retry loop doesn't re-trip on it.
+- **Dispatch `/remediate`** — the conductor calls `this.planRemediation(state, steps, prompt,
+  { source: 'build_stall' | 'build-stall', evidenceFile })` (two call sites: one immediately at
+  stall detection, one later in the retry loop keyed off the saved `stallQuestion`). The planner
+  reasons over the question plus committed artifacts (plan, stories, ADRs, task-status, prior
+  commits) to determine if it's answerable without more human input.
+- **Answerable → in-loop resume, no retry burned** — if `/remediate` returns a `route` outcome
+  targeting `build`, the conductor executes `retryHint = outcome.hint; attempt--; continue;` —
+  the answer becomes the retry hint, the attempt counter is decremented before the loop's
+  increment, and the loop `continue`s, so this round doesn't count against the step's retry
+  budget (same no-burn idiom as `sessionExpired` and auth-park failures). The build proceeds
+  with the answer as context.
+- **Unanswerable → HALT carrying question** — if `/remediate` returns a `halt` outcome
+  (category: `architectural-clarity`, `product-scope`, or `unanswerable`), the conductor writes
+  `.pipeline/HALT` with the original question preserved verbatim, either inline
+  (`effectiveQuestion + '\n\n' + outcome.detail`) at the first call site or via the
+  `writeStallHalt(this.projectRoot, stallQuestion, detail)` helper (`engine/task-progress.ts`) at
+  the second — both paths keep the question as the first line a human sees.
+- **Fail-safe (unconditional)** — if the remediation dispatch throws, returns `none`
+  (malformed/stale `.pipeline/remediation.json` or all dispositions dropped by validation), or a
+  misrouted `route` targets something other than `build`, or the `remediationRounds` budget is
+  already exhausted before dispatch, the conductor writes `.pipeline/HALT` **carrying the
+  question verbatim** via the same inline-or-`writeStallHalt` paths and halts. Under no path may
+  the question be lost.
+- **Budget** — stall remediations share the existing `remediationRounds` counter capped at
+  `MAX_KICKBACKS_PER_GATE` (`conductor.ts`, currently **2**) — the same counter also bounds
+  `/remediate` dispatches for blocking `prd_audit` gaps, so a run with both a build stall and a
+  prd-audit gap draws from one shared pool. Once exhausted, subsequent stalls degrade straight to
+  fail-safe HALT without a dispatch attempt.
+
+See `src/conductor/src/engine/task-progress.ts` (`readHaltMarkerContent`,
+`writeStallQuestionEvidence`, `writeStallHalt`, `clearHaltMarker`), `engine/artifacts.ts` (output
+contract for `build_stall` dispositions), and `src/conductor/README.md` → "Agentic remediation"
+above for the `/remediate` skill contract.
+
 **Daemon prd-audit fallback routing (gap-class aware).** In an interactive run a blocking
 `prd_audit` escalates to the recovery menu, where the human picks where to route. In a daemon
 run with no usable `/remediate` plan (or an exhausted remediation budget), the conductor
@@ -196,6 +241,24 @@ routes by the audit's `Gap-class` column (`classifyPrdAuditGaps`, `engine/artifa
 
 Re-auditing unchanged code yields the same verdict, so the daemon skips the default per-step
 retries for a blocking `prd_audit` and routes straight away.
+
+**Daemon manual-test routing + whitewash guard (#367).** `manual_test` is a **gating** step
+(locked — neither a project-local skill override nor a config `disabled` can soften it; both
+are rejected). Its completion gate (`engine/artifacts.ts`) requires
+`.pipeline/manual-test-results.md` to be fresh for the session and FAIL-free **in its latest
+`## Attempt N` section** (sectionless files are scanned whole, back-compat), and enforces
+fix evidence: when the gate observes FAIL rows it records the worktree's HEAD sha in
+`.pipeline/manual-test-fail-evidence.json` (via the injectable
+`CompletionContext.getHeadSha` seam; fail-open when there is no repo), and a later FAIL-free
+file is accepted only once HEAD has moved — a PASS rewrite with no new commits is refused
+(the "whitewash" that shipped incident PR #364). In a daemon run, a manual_test that
+exhausts its retries with recorded FAIL rows is routed deterministically back to `build`
+(kickback `manual_test → build`, FAIL rows as the retry hint) — no `/remediate` dispatch,
+because a manual FAIL is an implementation gap by definition — bounded by
+`manualTestSelfHeals` (cap `MAX_KICKBACKS_PER_GATE`), then HALTs
+(`manual-test FAIL unresolved after N build kickback(s)`). A non-FAIL gate miss (missing or
+stale results — the skill never recorded properly) carries no bug evidence and HALTs
+directly.
 
 ### Mermaid diagram rendering (approval gates)
 
@@ -244,10 +307,17 @@ stale base:
   no-op rebase is the satisfied state, so re-entry after a kickback finds the branch current
   and proceeds to `finish` without re-invalidating (no false `MAX_GATE_SELECTIONS` HALT). A
   genuinely stale branch is never satisfied.
-- **Invalidation (code/test only)** — a clean rebase that changed **code/test paths** writes
-  `{satisfied:false, kickback:{from:'rebase'}}` for `build` (+`manual_test` if it ran) via the
-  existing kickback machinery → the selector routes back to `build`. A **docs-only /
-  CHANGELOG-only** change does **not** invalidate.
+- **Gate-first mechanical re-verify (code/test only)** — a clean rebase that changed
+  **code/test paths** first pre-verifies the `build` gate's objective completion predicate
+  (git evidence trailers, `root-commit..HEAD`, re-derived fresh) against the rebased tree. If
+  pre-verify passes (evidence intact), build dispatch is skipped, `{satisfied:true}` is written
+  fresh, and a `rebase_gate_reverified` event is emitted (`skippedDispatch:true`). If pre-verify
+  fails or throws, identical to prior behavior: `{satisfied:false, kickback:{from:'rebase'}}` for
+  `build` (+`manual_test` if it ran) and the selector routes back to `build` (fail-closed).
+  Consequence: evidence-complete rebases drop from ~45–60 min build-agent dispatch to ~1–2 min
+  mechanical re-derivation; evidence-missing rebases re-dispatch normally. `build_review` and
+  `manual_test` remain unconditionally invalidated. A **docs-only / CHANGELOG-only** change does
+  **not** invalidate. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
 - **CHANGELOG auto-resolve** — when `CHANGELOG.md` is the **sole** conflict and it's inside
   `## [Unreleased]`, the resolver takes the base's merged entries and re-appends this
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
@@ -259,8 +329,11 @@ stale base:
   the rebase **paused** (no `--abort`, conflict markers intact), does **not** mark the feature
   processed, and opens **no PR**.
 - **Events** — each outcome emits a typed event: `rebase_noop`, `rebase_changed`,
-  `rebase_changelog_resolved`, `rebase_conflict_halt` (best-effort; emission failure never
-  affects the rebase result).
+  `rebase_changelog_resolved`, `rebase_conflict_halt`, `rebase_gate_reverified` (best-effort;
+  emission failure never affects the rebase result). `rebase_gate_reverified` records a
+  successful pre-verify with fields: `step` (the gate name, e.g., `'build'`), `skippedDispatch`
+  (boolean: true = dispatch was mechanically skipped, false = pre-verify failed, re-dispatch
+  fired), and optional `reason` (human-readable explanation).
 
 #### Gated conflict resolution
 
@@ -284,6 +357,12 @@ If all attempts are exhausted without an accepted resolution, the engine falls t
 existing HALT path: `.pipeline/HALT` is written, the rebase is left paused (conflict markers
 intact), and no PR is opened.
 
+The **same** gated loop backs the main-advance re-kick *play-forward* rebase
+(`resumeRebaseFirst`, FR-12): when a re-kicked feature re-conflicts while rebasing onto the
+advanced base, the daemon runs the bounded `/rebase` attempts before parking for a human —
+identical to the finish-time step. Previously this path took a single bare rebase attempt and
+hard-HALTed on the first conflict (#300).
+
 **Daemon-only.** The gated resolution loop runs only in daemon (`mode: 'auto'`, `daemon: true`)
 mode. Interactive `/conduct` runs are unchanged — humans resolve conflicts by hand. The `/rebase`
 skill is also manually invokable by an operator (`/rebase`) for conflict resolution outside the
@@ -300,6 +379,122 @@ rebase_resolution_attempts: 3   # default; 0 = disable (immediate HALT on any co
 no-op (branch now current), and converges to the PR. If you clear HALT without finishing the
 rebase, the daemon detects the still-stale/in-progress state and re-parks rather than shipping
 a half-rebased branch.
+
+### Rate-Limit Episode Coordinator
+
+The `RateLimitEpisode` coordinator (`engine/rate-limit-episode.ts`) manages coordinated backoff
+when the API provider signals rate-limiting. It runs as a **shared singleton** across all N
+concurrent feature workers in the daemon, ensuring they wake up together at the provider's
+deadline instead of retreating into independent, competing waits.
+
+#### Motivation
+
+When a provider enforces a rate limit:
+- **Uncoordinated behavior:** each of N workers waits independently (e.g. 300s fixed), then
+  all retry at once → thundering herd → cascading failures.
+- **Coordinated behavior:** all workers wait until a shared deadline (parsed from the provider
+  message, e.g., "reset at 3:20pm America/New_York"), then resume with staggered jitter so
+  they spread out instead of colliding.
+
+#### How it works
+
+**Episode detection and deadline capture** (`engine/recovery.ts`, `engine/conductor.ts`):
+
+- When a step's output signals rate-limiting (HTTP 429, `"rate limit"` / `"usage limit"` /
+  `"overloaded"` keywords, or session-limit classification), the provider marks the response
+  `rateLimited: true`.
+- The conductor extracts the deadline from the provider's message (e.g., Anthropic's
+  `retry-reset-at: 3:20pm America/New_York`). The parser is timezone-aware, computing an
+  absolute wall-clock deadline in milliseconds since epoch.
+- If a `RateLimitEpisode` coordinator is supplied, the deadline is registered: `episode.registerDeadline(deadline)`.
+
+**Dispatch gate** (`engine/daemon-backlog.ts`):
+
+- Before discovery and per-feature dispatch, the daemon checks `episode.isActive()`.
+- While active (`now() < deadline`), new dispatch is paused (in-flight work continues).
+- Dispatch resumes when `now() >= deadline`.
+
+**Conductor rate-limit wait** (`engine/conductor.ts`):
+
+- When a rate-limited step is detected, the conductor does not retry immediately. Instead,
+  if an episode is active, it calls `episode.waitUntilReady()` — an **abortable** async wait.
+- The wait computes `delayMs = episode.deadline - now()` and sleeps, but:
+  - Respects SIGTERM: the AbortController can be signaled, and the wait resolves with
+    `{aborted: true}` (conductor escalates to HALT).
+  - Coordinates with jitter: `episode.waitUntilReady()` internally staggers wake-up times so
+    all N workers don't resume at exactly the same instant.
+  - Deadline-first: if the deadline has already passed by the time the wait is called, it
+    returns immediately (no spurious delay).
+
+**Pre-step rate-limit handling** (`engine/conductor.ts`):
+
+- Task 15: When a step is about to run, the conductor checks if a rate-limit episode is
+  active AND the deadline has not yet passed.
+- If so, the step is skipped and escalated as `rateLimited: true` (prevents a redundant wait
+  inside the step).
+
+**HALT recovery from episodes** (`daemon-rekick.ts`):
+
+- When a base-SHA advance triggers a re-kick, the conductor checks whether the halted feature
+  was marked by an episode-caused HALT (via `.pipeline/conduct-state.json` or a sentinel).
+- If the episode has now cleared (deadline passed), the HALT is cleared and the feature is
+  re-kicked — allowing automatic recovery without manual intervention.
+
+**Autonomous restart preservation** (`daemon-cli.ts`):
+
+- The daemon creates `rateLimitEpisode` at startup and threads it through all workers.
+- On auto-restart (stale engine detected), the coordinator is re-created fresh, but any
+  in-flight `waitUntilReady()` calls in the old workers are already aborted (via
+  `onSignal` before the restart fires).
+
+#### Session-limit classification
+
+**Task 12 addition:** The conductor now detects session-limit and usage-limit messages
+(beyond the standard HTTP 429) as rate-limited, implementing the PRIMARY fix for the
+2026-07-03 incident:
+
+- `isRateLimitError(output)` in `engine/recovery.ts` matches `/(rate limit|429|overloaded|usage limit)/i`.
+- This catches subtle responses where the API does not set HTTP 429 but clearly signals
+  exhaustion in the message body (e.g., "session limit exceeded").
+
+#### Configuration & lifecycle
+
+- **Coordinator creation:** `create()` in `rate-limit-episode.ts` returns a new episode
+  manager (no config needed; deadline and state are runtime-populated).
+- **Sharing:** daemon-cli.ts creates one, passes it to all workers via `ConductorOptions.rateLimitEpisode`.
+- **Graceful degredation:** if `rateLimitEpisode` is undefined, the conductor behaves as if
+  no episode is active (pure fallback to independent waits).
+- **Thread-safety:** `registerDeadline`, `isActive`, and `waitUntilReady` are safe for
+  concurrent calls from N workers; they use atomic-friendly flag + deadline updates.
+
+#### SIGTERM responsiveness
+
+When the daemon receives SIGTERM:
+
+1. The signal handler calls `episode.abort()`, which signals all registered in-flight
+   `waitUntilReady()` AbortControllers (via `conductor.registerRateLimitWait()`).
+2. Each worker's wait immediately resolves with `{aborted: true}`.
+3. The conductor catches the abort, escalates the current step as a HALT.
+4. The daemon drains all in-flight workers, then exits cleanly.
+
+#### Jitter and staggering
+
+`waitUntilReady()` does **not** sleep for the full deadline duration at once. Instead:
+
+- It divides the wait into small windows (e.g., 100ms ticks).
+- Each worker adds a small random jitter to its wake-up time (e.g., ±50ms).
+- On each tick, it checks `now() >= (deadline + jitter)` and returns when true.
+- This ensures that when multiple workers wake up after the deadline, they do so at
+  slightly offset times, spreading out the retry load.
+
+#### Modules
+
+- **`engine/rate-limit-episode.ts`** — `RateLimitEpisode` interface + `create()` factory
+- **`engine/recovery.ts`** — `isRateLimitError()` classification + output parsing
+- **`engine/conductor.ts`** — episode registration, wait integration, pre-step check
+- **`daemon-cli.ts`** — episode creation and threading to workers
+- **`daemon-rekick.ts`** — episode-caused HALT recovery
+- **Test coverage** (`test/engine/rate-limit-episode.test.ts`, etc.)
 
 ### Daemon mode
 
@@ -395,6 +590,81 @@ lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
 > land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
 > this section documents the identity/config/daemon partition only.
 
+#### Gate write-back: owner-gated PR/issue announcement (Tasks 17-21)
+
+An owner-gate skip (D5 above) is loud in the daemon log and the GATED dashboard group, but
+neither surfaces on GitHub itself — an operator (or the reporter of an intake issue) who only
+watches the PR/issue never learns their spec is gated. `gate-writeback.ts` closes that gap:
+every `discover()` pass, for each `kind: 'spec'` `GatedItem`, the daemon (via the single
+`onGatedDiscovered` call site in `daemon-cli.ts`) attempts two independent, best-effort
+announcements:
+
+- **`announceGatedPr(spec, prUrl, deps)`** — when the spec already has an implementation PR
+  open (a prior build attempt that halted before ownership changed underneath it; a spec
+  never yet dispatched has no PR and this is a silent no-op), applies the `owner-gated` label
+  (creating it repo-wide on first use) and upserts a single marker comment carrying the
+  reason, remedy, and other-owner name (when known). The marker comment is located purely by
+  the stable `OWNER_GATED_MARKER` string (never by body content), so repeated passes PATCH the
+  same comment in place — including across reason transitions (e.g.
+  `unowned-indeterminate` → `other-owner`) — rather than ever posting a duplicate. A terminal
+  PR state (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
+- **`announceGatedIssue(spec, sourceRef, deps)`** — when the spec carries a
+  `Source-Ref: owner/repo#N` intake marker, applies the same `owner-gated` label + upserted
+  marker comment to the **originating issue**, independent of the PR path (a failure/success
+  on one has no bearing on the other). A missing or unparseable `sourceRef` (hand-authored
+  spec, or a malformed marker) is a silent no-op — no `gh` call is made.
+
+Both functions are dependency-injected (`runGh` defaults to the production `gh` wrapper) and
+never throw: every `gh` failure is caught, optionally logged via `deps.log`, and swallowed —
+a write-back failure never blocks or aborts the discovery pass that produced the gated list,
+mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
+`src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
+`test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
+
+#### Attribution enforcement: inline build-work commits (#505)
+
+A Claude session driving a build step can commit or mutate files directly, bypassing
+the per-task subagent dispatch the pipeline uses to stamp a `Task: <id>` commit
+trailer. Inline build-work attribution enforcement adds two engine-owned gate
+surfaces (documented for orchestrators in `skills/pipeline/SKILL.md`, not a new
+orchestrator instruction):
+
+- **Surface A — commit-msg gate** (`git-hook-assets.ts` → `COMMIT_MSG_HOOK`). Rejects
+  an unattributed build-step commit: no `Task:` trailer while
+  `.pipeline/build-step-active` is present.
+- **Surface B — session mutation gate** (`session-hook-assets.ts` →
+  `MUTATION_GATE_HOOK`). A `PreToolUse` hook wired to `Edit|Write|NotebookEdit|Bash`
+  that blocks a direct mutation (or a `git commit` invocation) issued in the
+  orchestrator session — outside a stamped subagent dispatch — while a build step is
+  active.
+
+Both surfaces gate on the same predicate: `attribution_enforcement_cutover` (project
+config), read via `isAttributionEnforcementActive` / `isEnforcementConfigured`
+(`src/engine/attribution-enforcement.ts`, `src/engine/config.ts`). Absent or a future
+instant → enforcement inactive, both hooks pass through unchanged (pre-feature
+behavior). A past ISO-8601 instant → enforcement active for build steps dispatched
+after that instant. The value is read once at daemon/conductor start — **changing it
+requires an engine restart** to take effect.
+
+**Exemption matrix (both surfaces short-circuit before rejecting):**
+
+1. **Merge commits** — `MERGE_HEAD` present; a merge commit legitimately lacks a
+   `Task:` trailer.
+2. **Amend of a pre-enforcement commit** — `COMMIT_SOURCE`/invoking-command detection
+   (`--amend`) abstains rather than restamping or rejecting an old commit.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
+   intentional evidence-only commit is accepted; an empty commit with neither a
+   `Task:` trailer nor a resolvable `Evidence:` trailer is rejected.
+
+Rebase replay and `CONDUCT_ENGINE_COMMIT=1` (engine bookkeeping commits) are
+additional commit-msg-gate-only abstentions. An unparseable hook payload fails open
+(exit 0) on both surfaces, matching the #494 degradation rule.
+
+See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
+`src/engine/session-hook-assets.ts`, `test/engine/attribution-enforcement.test.ts`,
+`adr-2026-07-10-session-hook-task-stamping.md`, and
+`adr-2026-07-10-inline-work-attribution-enforcement.md`.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked
@@ -438,7 +708,11 @@ things on top of that, without a parallel dispatch path:
   `prd_audit`) re-verifies against the **advanced base** rather than the stale one. If the
   rebase re-conflicts on the new base, the feature re-parks via 9.0's existing HALT path
   (bounded by the same last-rekick SHA); residual gaps route through the normal gate loop /
-  `/remediate`, not the re-kick code.
+  `/remediate`, not the re-kick code. **Shared-helper invariant (#436):** the pre-loop path
+  (`resumeRebaseFirst`) and the in-loop path (`runRebaseStep`) both call the same
+  `recordRebaseStepCompletion` helper on a satisfied rebase, so `state.rebase` is stamped
+  consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
+  the rebase step silently unmarked.
 
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
@@ -495,6 +769,23 @@ on every base-SHA advance).
   through the abort-rebase / clear-marker / re-dispatch cycle on every subsequent base-SHA
   advance, eliminating the spurious re-kicks #205 reported.
 
+#### Merged-PR guard: out-of-band merge detection (#358)
+
+When the daemon's kickback rewind discovers the feature's recorded PR has been merged out-of-band
+(operator manual merge during a retry cycle), the daemon stops the run at the earliest checkpoint
+and records a synthetic verified ship, avoiding a wasted rebuild/audit cycle and spurious rebase
+conflicts. The guard is active at three insertion points: (1) kickback re-entry when any gate
+failure calls `navigateBack` to rewind to build, (2) rebase entry at the top of `runRebaseStep`
+before any rebase attempt, and (3) rekick play-forward in the main-advance re-kick path before
+its direct `performRebase` call. Each guard call checks the recorded `pr_url` via `prMergeState`
+and, on a `MERGED` verdict, synthesizes a finish-choice marker (`.pipeline/finish-choice` = `pr`)
+and DONE marker (`.pipeline/DONE`), then halts the run loop so the daemon-runner's existing ship
+path records the feature as processed and retires it cleanly. On any other verdict (OPEN, CLOSED,
+NOTFOUND, or gh failure) the guard is advisory — it logs at debug level and the run proceeds
+unchanged. The feature branch is never deleted by the guard; it stays retained for forensics or
+operator recovery. This is **internal behavior** — no new CLI flags, config options, or skills
+are introduced.
+
 #### Worktree preparation (`WORKTREE_NAMESPACE` + `bin/setup`)
 
 The daemon is **stack-agnostic**: it knows nothing about Docker, Postgres, or Redis. But an
@@ -526,6 +817,106 @@ reported `error` — so the daemon never builds against a half-prepared environm
 that need no setup (a static site, a pure library) simply ship no `bin/setup` and are
 untouched. This is what lets one daemon serve **any** project setup, including consumer
 projects that use the harness.
+
+#### Daemon mode: false-ship guard (#337)
+
+When running in daemon mode, the engine enforces additional constraints at the finish and done-outcome boundaries to prevent recording false ships (issues #337):
+
+**1. Finish gate push-evidence check** — For PR-choice ships, the finish predicate verifies `HEAD` is an ancestor of `refs/remotes/origin/<branch>` before recording the PR URL. If push evidence is missing or indeterminate, convergence halts.
+
+**2. Daemon finish non-convergence** — Daemon mode rejects `keep`, `merge-local`, and `discard` finish choices (operator decisions) and only proceeds with autonomous `pr` choices.
+
+**3. Done-outcome verification** — A done-outcome is eligible for ship only if `finishChoice === 'pr'` AND `prUrl != null`. Ineligible outcomes (false ships) trigger:
+   - Delete any `.pipeline/DONE` marker (conflict resolution: DONE and HALT stay disjoint)
+   - Write `.pipeline/HALT` with the contradiction reason
+   - Keep the worktree for operator inspection and remediation
+   - Best-effort escalation: push the branch and create a draft "needs-remediation" PR
+
+**4. Escalation degradation (FR-7)** — If the escalation push fails (network, auth), the HALT is still written and the worktree still kept; surfacing degrades but protection does not.
+
+**Implementation:** `engine/done-outcome-validation.ts` (`validateDoneOutcome`), wired into the daemon runner (`daemon-runner.ts`) at the point where a feature reaches the `done` state, before any shipped-record write or worktree cleanup. The validation runs independently of the existing PR-labeling mechanism (`needs-remediation` is still written when applicable for debugging, but does not interfere with the core validation). See `.docs/decisions/adr-2026-07-06-daemon-false-ship-guard.md` for design details and requirements.
+
+#### `finish-record` subcommand — fail-closed finish-choice recording
+
+`conduct-ts finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir <abs-path>`
+is the only supported way to record a finish outcome (the `.pipeline/finish-choice`
+marker and, for `pr`, the `pr_url` field in `conduct-state.json`). It replaces
+hand-written marker files with a command that verifies its own preconditions and
+refuses (exit 1, **no writes**) rather than recording anything it cannot prove:
+
+- `--choice pr` (requires `--pr-url <url>`): verifies the PR named by `--pr-url`
+  actually exists (`gh pr view --json url -q .url`) and that `HEAD` has been pushed
+  to its upstream tracking branch (the shared push-evidence gate, local git only —
+  see the false-ship guard above). Only if **both** checks pass does it
+  read-modify-write `conduct-state.json` (adding `pr_url`, preserving unknown
+  fields) and then write the `finish-choice` marker — state write is always
+  ordered before the marker, which is the commit point.
+- `--choice keep` (must **not** be paired with `--pr-url`): writes the
+  `finish-choice` marker only; no state file touched, no `gh`/`git` calls.
+- `--pipeline-dir <abs-path>` is **required** and must be an absolute path to an
+  existing directory — a relative path, or a missing/non-directory path, is
+  refused before any `gh`/`git` spawn or filesystem write.
+- **Fail-closed refusal semantics:** any gate failure (bad flags, non-absolute or
+  missing `--pipeline-dir`, PR-existence check fails, push-evidence check returns
+  `false`/`null`/indeterminate, corrupt existing state JSON, or a failed state
+  write) exits 1 and performs **zero writes** — never a partial marker with no
+  matching state, and never a corrupted state file left half-written.
+
+**Who invokes it:**
+- **Daemon auto-mode finish step** — `engine/step-runners.ts` instructs the
+  unattended finish dispatch to run `finish-record` (with the worktree's absolute
+  `.pipeline` dir) instead of writing the marker by hand; this is the fix for the
+  bug where the finish step exited without ever writing
+  `.pipeline/finish-choice` in auto mode, permanently stalling the gate.
+- **Manual/interactive use** — an operator or the `/finish` skill can run
+  `conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir <abs-path>`
+  (or `--choice keep`) directly from the CLI in place of hand-editing the marker.
+
+Implementation: `engine/finish-record-cli.ts` (`detectFinishRecordCommand`,
+`dispatchFinishRecord`); wired into the `conduct-ts` entrypoint in `src/index.ts`.
+
+#### Judgement gate at the build → manual_test seam (`build_review`)
+
+`build_review` is an opt-in, objective non-human reviewer verdict that sits strictly between
+`build` and `manual_test` in the SHIP-phase gate loop (`build → build_review → manual_test →
+retro → rebase → finish`). It exists to catch build-quality issues (regressions, obviously
+wrong diffs, missed acceptance criteria) *before* they reach the more expensive manual-test
+step, cheaply short-circuiting a bad build rather than letting it burn a manual-test cycle.
+
+**Enabling.** Absent config (or `build_review.enabled: false`) preserves the legacy topology —
+`build` feeds `manual_test` directly, and the step does not run. Set `build_review.enabled:
+true` in `pipeline.yml` / `.ai-conductor/config.yml` to insert the gate:
+
+```yaml
+build_review:
+  enabled: true
+```
+
+Once opted in, `build_review` is a gating built-in (`ALL_STEPS`): `steps.build_review.disable:
+true` is rejected by `validateConfig()` — you cannot silently disable a gate you've already
+turned on.
+
+**What it grades.** The grader is a fresh, input-starved one-shot session: it sees only the
+diff since the merge-base and the plan being graded against (`build-review-inputs.ts`,
+`build-review-prompt.ts`) — no chat history, no prior reasoning to rubber-stamp. It records a
+PASS/FAIL verdict to `.pipeline/build-review.json` (`artifacts.ts` →
+`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale (mtime predates the session),
+malformed JSON, or a non-exact-shape verdict are all treated as "gate not satisfied, must
+re-run."
+
+**Cap / HALT behavior.** A FAIL verdict kicks back to `build` with the FAIL reasons as evidence
+(daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. Kickbacks are
+capped by the shared `MAX_KICKBACKS_PER_GATE` constant (`conductor.ts`, currently 2) — once
+exhausted, the loop HALTs with the unresolved FAIL reasons rather than looping forever or
+silently passing the build through. Separately, each `build_review` dispatch attempt itself
+gets up to `DEFAULT_STEP_RETRIES.build_review` (3) retries before being reported failed, same
+as any other step.
+
+**Cost note.** Because it must be an objective outside opinion rather than the same session
+grading its own work, `build_review` always dispatches on the Opus model tier (see the model
+selection table in `HARNESS.md`) in a fresh session — it is deliberately not cheap, and enabling
+it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
+cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
 
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
@@ -573,6 +964,223 @@ A PR carrying `needs-remediation` is **never** labeled `mergeable`. The sweep is
 and non-blocking: a label-read or apply/remove failure is logged and does not disrupt feature
 processing. Because CI typically finishes after the PR is opened, the sweep re-checks over
 time rather than making a one-shot determination at PR creation.
+
+#### Auto-resolve conflicts on open watched PRs (`mergeable_autoresolve`)
+
+The `mergeable` sweep (above) only ever *labels* a PR — it never touches its branch. Once a
+watched PR drifts from `mergeable` to `CONFLICTING` (the base advanced underneath it), a human
+still has to rebase it by hand. `mergeable_autoresolve` closes that gap: it extends the
+gated rebase-resolution machinery (`engine/rebase.ts`, used at finish-time — see
+"Rebase-on-latest" above) to run against already-shipped, still-open PRs during the same
+sweep tick, entirely opt-in and fail-closed at every stage.
+
+**Config** (`MergeableAutoresolveConfig`, `types/config.ts`, validated in `engine/config.ts` →
+`validateMergeableAutoresolveBlock`):
+
+```yaml
+# pipeline.yml / .ai-conductor/config.yml
+mergeable_autoresolve:
+  enabled: false          # default: false — opt-in, safe by default
+  cooldownMinutes: 60     # default: 60 — minimum gap between resolve attempts per PR
+  suiteCommand: ""        # default: unset — no command means the suite gate is a no-op pass
+```
+
+Every key is optional; an absent `mergeable_autoresolve` block leaves the feature fully
+disabled with zero behavior change to the existing `mergeable` sweep.
+
+**Pipeline** — `sweepMergeableLabels` (`engine/mergeable-sweep.ts`) already re-checks
+`mergeable` state (`prMergeState`, `engine/pr-labels.ts`, via `gh pr view --json
+state,mergeable,statusCheckRollup,labels`) on daemon startup, after every feature completes,
+and on each idle-poll tick. When `mergeable_autoresolve.enabled` is true and a watched PR is
+`CONFLICTING`, the sweep dispatches a resolution attempt (`autoresolve.ts`) instead of merely
+flipping the label, gated by `cooldownMinutes` so a PR is never re-attempted more often than
+configured:
+
+1. **Tier 1 — deterministic resolvers** (`engine/rebase.ts`): narrow, purpose-built resolvers
+   for conflict shapes that are safe to resolve mechanically — the CHANGELOG
+   `[Unreleased]`-section resolver and a `.docs` keep-both resolver (add/add and rename/rename
+   conflicts confined to `.docs/`). These run first because they need no LLM dispatch.
+2. **Tier 2 — gated `/rebase` dispatch**: unresolved conflicts fall through to the same
+   `/rebase` resolution skill the finish-time gate uses, capped by
+   `rebase_resolution_attempts` (default 3, shared with the finish-time gate — see
+   "Gated conflict resolution" above). This reuses one resolution engine and one attempt cap
+   for both entry points rather than maintaining a second implementation
+   (`.docs/decisions/adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep.md`).
+3. **Acceptance guards** — before any resolution is accepted, it must pass, in order: the
+   rebase state is inactive (no conflict markers / paused rebase left behind), the branch is
+   current with its base (zero commits in `HEAD..base`), and every pre-resolution feature
+   commit is still present (no dropped commits). Any guard failure escalates immediately —
+   no partial or unverified resolution is ever pushed.
+4. **Suite gate (fail-closed)** — if `suiteCommand` is configured, it runs via `sh -c` against
+   the resolved worktree; a nonzero exit, timeout, or spawn error fails the resolution
+   (fail-closed). An unset `suiteCommand` is a no-op pass — the gate never blocks a repo that
+   hasn't opted into a verification command.
+5. **Lease-protected push + finalization** — only after guards and the suite gate pass does
+   the sweep push, using a single `git push --force-with-lease` (no fallback to a plain
+   `--force`), so a resolution can never silently clobber someone else's concurrent push to
+   the same branch. On a successful push the resolve-attempt counter resets, the last-resolved
+   timestamp updates, and the watch registry is rewritten. A process-wide in-flight guard
+   serializes resolutions so two ticks can never race the same worktree.
+
+**Escalation.** If any stage fails — guards, the suite gate, or the lease push itself — the
+sweep escalates rather than retrying silently: it removes the `mergeable` label, applies a
+sticky `needs-remediation` label, and upserts a marker-tagged PR comment naming the stage and
+reason. `needs-remediation` blocks further autoresolve attempts on that PR until a human
+clears it, mirroring the existing HALT-escalation contract used elsewhere in the daemon (see
+"PR labeling" above).
+
+**Safety guarantees:** disabled by default; deterministic resolvers before any LLM dispatch;
+capped Tier-2 attempts; three independent acceptance guards; a fail-closed suite gate with no
+silent pass-through on error; a lease-protected push that cannot overwrite a concurrent
+change; and best-effort, non-blocking escalation on any failure so a bad resolution never
+reaches `main` unlabeled.
+
+#### CI feedback loop on shipped PRs (`ci_watch`)
+
+Once a feature ships, its PR's CI checks are still running — and until now nothing watched
+whether they went red. `ci_watch` closes that gap: it extends the same watch-registry sweep
+that drives the `mergeable` label (above) to also observe each watched PR's
+`statusCheckRollup`, and drives bounded auto-remediation of red ships, entirely fail-safe
+by default.
+
+**Config** (`CiWatchConfig`, `types/config.ts`, validated in `engine/config.ts`):
+
+```yaml
+# pipeline.yml / .ai-conductor/config.yml
+ci_watch:
+  enabled: true           # default: true — on by default (fail-safe)
+  cooldownMinutes: 60     # default: 60 — minimum gap between CI-fix attempts per PR
+```
+
+Both keys are optional; an absent `ci_watch` block leaves the feature **enabled** — unlike
+`mergeable_autoresolve`, this feature defaults ON. A malformed `enabled` value (non-boolean)
+also resolves to `true` without throwing, so a typo in project config can never silently
+disable observation of red CI.
+
+**Pipeline** — on every sweep tick (`sweepMergeableLabels`, `engine/mergeable-sweep.ts`), each
+watched PR's checks are classified via `classifyChecksOutcome` (`engine/pr-labels.ts`) into
+`failed` / `pending` / `green` / `none` (failed wins over pending; malformed rollup entries
+classify as pending, fail-safe):
+
+1. **`failed`** — the sweep idempotently ensures+adds a `ci-failed` label and, if `ci_watch` is
+   enabled, considers the PR a candidate for a bounded auto-remediation attempt. A `ci_failed`
+   event (`detected` phase) fires once, on the label-absent→present transition — repeat sweeps
+   of an already-labeled PR emit nothing further, so the daemon log and any halt-monitor never
+   spam the same PR every tick.
+2. **`green`** — the sweep removes `ci-failed` (idempotent) and resets the `ciFixAttempts`
+   counter to 0, so a PR that goes red, gets fixed, then goes red again later starts a fresh
+   attempt budget. This is also how a human-applied fix (pushed outside the daemon) clears the
+   state.
+3. **`pending`** / **`none`** — no-op; no label, event, or dispatch.
+
+**Eligibility** (`isEligibleForCiFix`, `engine/ci-fix.ts`) gates a dispatch, in order:
+
+1. `ci_watch.enabled` is true (config gate)
+2. Checks are `failed`
+3. `ciFixAttempts < 2` — the **bound**; a PR that has already burned both attempts is never
+   dispatched again automatically
+4. PR does not carry `needs-remediation` — sticky: once escalated (see below), auto-remediation
+   never re-engages until a human clears the label
+5. `mergeable !== 'CONFLICTING'` — conflict resolution (`mergeable_autoresolve`, above) takes
+   precedence over a CI fix on the same PR
+6. No resolution already in flight (shared serial guard with `mergeable_autoresolve` — the two
+   features never race the same worktree machinery concurrently)
+7. `cooldownMinutes` elapsed since the last CI-fix attempt on this PR
+
+Exactly one dispatch runs per sweep tick, and the attempt counter + `lastCiFixAt` timestamp are
+bumped on the watch registry **before** the dispatch runs (crash-safe: a daemon crash mid-fix
+still counts as a consumed attempt, never an unbounded retry loop).
+
+**Resolver** (`runCiFix`, `engine/ci-fix.ts`, reusing `autoresolve.ts` primitives): fetches the
+PR branch, creates an isolated worktree at the branch tip (never touches the primary checkout),
+builds a RETRY hint from the failing check names plus a bounded `gh run view --log-failed`
+excerpt (degrades gracefully to names+links if log fetch fails), and runs an injected fix-runner
+seam inside the worktree. If the fix-runner reports a change, the same acceptance guards and
+suite gate used by `mergeable_autoresolve` run before a lease-protected
+`git push --force-with-lease` — any guard or gate failure skips the push and logs an escalated
+outcome without throwing. The resolver never merges a PR and never touches the shipped-work
+ledger; it only ever pushes a refresh to the PR's existing branch.
+
+**Escalation (exhaustion).** Once `ciFixAttempts` reaches 2 and checks are still `failed`, the
+sweep escalates instead of dispatching a third attempt: it ensures+adds the sticky
+`needs-remediation` label, upserts a marker-tagged PR comment naming the failing checks and
+attempt history (reusing the build-failure-escalation comment path), and emits a HALT-grade
+`ci_failed` event (`exhausted` phase) that daemon-log rendering marks with the ✋ marker for
+halt-monitor tailing. Because `needs-remediation` is the same sticky suppressor eligibility gate
+4 checks, escalation fires exactly once per red streak — a PR that stays exhausted-red across
+many sweep ticks never re-escalates. A comment-post failure is tolerated (label is applied,
+error is logged, sweep continues); a PR found merged/closed between detection and escalation is
+pruned instead, with no comment or label mutation.
+
+**Labels used:** `ci-failed` (checks currently failing — non-sticky, cleared on green) and
+`needs-remediation` (attempt budget exhausted — sticky, shared with the HALT-escalation and
+`mergeable_autoresolve` contracts elsewhere in the daemon; see "PR labeling" above).
+
+**Safety guarantees:** on by default but strictly bounded (max 2 automatic attempts per red
+streak); sticky escalation prevents runaway retries; shares the serial in-flight guard and
+acceptance-guard/suite-gate chain with `mergeable_autoresolve` so both features are governed by
+the same fail-closed push discipline; never merges, never touches the ledger; best-effort,
+non-blocking label/event/comment side effects so a `gh` hiccup never stalls the sweep.
+
+#### Halt-PR presentation reliability (verify-after-write + reconciliation, ai-conductor#274)
+
+When a daemon feature HALTs irrecoverably, it escalates by opening a **draft PR labeled
+`needs-remediation`** so the operator can triage. A halt PR that loses its draft status or
+label becomes indistinguishable from a ready feature PR — the #268/#269 root cause.
+
+**Design** (`engine/pr-labels.ts`, `engine/halt-pr-reconciliation.ts`, `adr-2026-07-05-halt-pr-presentation-reliability`):
+
+The feature guarantees halt PRs reliably carry **three durable markers**:
+
+1. **Draft status** (`isDraft: true`) — unpublishable
+2. **`needs-remediation` label** — human-scannable signal
+3. **Body marker** (`<!-- conductor:needs-remediation -->`) — invisible durable enumeration
+   anchor for the reconciliation sweep when label/draft are lost
+
+**`ensureHaltPresentation(runGh, cwd, prUrl, log, sleep)`** (`pr-labels.ts`):
+
+- Single idempotent operation that asserts all three markers are present
+- Writes draft status, label, and body marker via existing `gh` primitives
+- **Verify-after-write:** re-reads to confirm all three after writing, retries bounded (3 attempts,
+  100ms backoff) on mismatch
+- On retry exhaustion, returns `'unconfirmed'` without throwing (best-effort contract maintained)
+- Label write uses REST endpoint (`gh api .../issues/N/labels`), never `gh pr edit --add-label`
+  (Projects-classic sunset, PR #172)
+- Idempotent body marker: no duplication on reuse or repeated calls
+- Converts already-ready PRs to draft via `gh pr ready --undo` when reused
+
+**`reconcileHaltPrs({projectRoot, log, runGh})`** (`engine/halt-pr-reconciliation.ts`):
+
+- Best-effort background sweep that enumerates **open** PRs and heals broken halt PRs
+- Filters to PRs carrying the body marker (`<!-- conductor:needs-remediation -->`)
+- For each marked PR missing draft or label, calls `ensureHaltPresentation` to repair it
+- Skips unmarked PRs (never converts ready feature PRs to draft or labels them)
+- Idempotent: skips conforming marked PRs (no writes), retries non-conforming PRs on next tick
+- Never throws; errors logged but never re-thrown
+- Wired into **daemon startup and each idle poll tick** (injected dep hook, ADR-013 pattern)
+
+**Finish cleanup** (`daemon-runner.ts`, `halt-pr-rehabilitation.ts`):
+
+- When a halt PR is successfully remediated and finished (reaches `done`), cleanup runs
+  verify-after-write removal of all three markers
+- `cleanupHaltPresentation()` removes `needs-remediation` label, converts to ready, strips
+  body marker, then re-reads to confirm all gone
+- Label removal and ready-conversion include bounded retry (3 attempts, 100ms backoff)
+- Returns `'confirmed'` if all three markers verified gone, `'partial'` if any residuals
+- Body marker removal is critical: once stripped, `reconcileHaltPrs` will no longer enumerate
+  the PR, so it cannot be re-halted by the sweep
+
+**Confluence:**
+
+- **Verify-after-write on escalation** catches most transient failures inline
+- **Reconciliation sweep** heals PRs broken before this code shipped (e.g. #268/#269 pre-existing
+  PRs) or drifted by concurrent checkouts
+- **Finish cleanup** removes all markers so finished PRs exit the halt state permanently
+- Together: a halt PR cannot present as mergeable; pre-existing broken PRs self-heal; the
+  two mechanisms cover each other's failure modes
+
+All operations are **best-effort, non-throwing**, and sit behind the injected `GhRunner` seam
+so they are fully unit-testable with the existing `makeFakeGh` pattern.
 
 ### Model availability fallback ladder (`engine/model-availability.ts`, #186)
 
@@ -667,32 +1275,89 @@ pidfile path and the O_EXCL create flag stay confined to `daemon-lock.ts`
 
 ### Daemon lifecycle controls: pause, resume, restart (adr-2026-07-04-durable-pause-marker / adr-2026-07-04-respawn-in-place-restart)
 
-**Pause/resume** (`engine/pause-marker.ts`, `engine/daemon.ts`) — operators can quiesce
-daemons before maintenance or upgrades without losing state. Pause writes a durable `.daemon/PAUSED`
-marker; the daemon's loop checks it before the dispatch boundary (`maybeDispatch`), so no new
-work starts while in-flight work finishes normally. Resume removes the marker. Both operations
-work per-repo or fleet-wide (`--all`) with per-repo outcome reporting. Pause is **reentrant**
-(pausing an already-paused repo is a no-op); resume does the same. Pause **persists across
-daemon restarts** — a stopped daemon starting up in a paused repo comes up paused. Automation
-(`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`) shows
-pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+#### Remain-on-exit semantics
 
-**Restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
+When a tmux session is created for the daemon, **remain-on-exit is armed** via `setRemainOnExit` on
+the pane. This ensures that when the daemon process exits naturally (or is killed), the tmux pane
+survives with the exit status and logs visible. An operator watching a connected daemon stays
+connected through restart and can observe the output. This is critical for observability — the
+pane becomes a durable record of the daemon's lifecycle and any exit reason.
+
+Remain-on-exit is **armed unconditionally at session creation** — it applies to every restart
+scenario: manual operator restart (`restart`), queued-restart-at-idle (`RESTART-PENDING` marker),
+and stale-engine auto-restart. The goal is to ensure that whether the daemon exits cleanly or
+crashes, an operator with an attached PTY sees it happen rather than being mysteriously
+disconnected.
+
+#### Respawn-in-place stale-engine flow
+
+When the daemon (or an external monitor) detects that `dist/index.js` has changed (stale engine),
+the daemon writes a `.daemon/RESTART_PENDING` marker (underscore, stale-engine marker — distinct
+from the CLI restart queue marker `.daemon/RESTART-PENDING` which uses hyphen) with engine
+identity metadata and exits cleanly at the next idle point (before dispatching a new feature).
+The marker carries two engine identities: the identity when the restart was requested, and the
+target identity (the engine being transitioned to). It also records `reason`, `fromIdentity`,
+`targetIdentity`, and `at` timestamp.
+
+On restart, the daemon's startup handshake (`initStaleEngineState`, `stale-engine-init.ts`):
+1. Captures the fresh engine identity (sha256 of `dist/index.js`)
+2. Logs `ARMED` (if auto-restart is enabled and self-host mode is active) or `DISARMED`
+3. If a `RESTART_PENDING` marker is present:
+   - Logs the transition: "restarted for engine refresh — from `<old>` to `<target>`, fresh `<current>`"
+   - Detects non-convergence when fresh identity differs from the target (e.g., a rebuild didn't
+     finish), records a suppression, and prevents restart loops
+4. Clears the marker before dispatch so the backlog scan observes clean state
+
+**Headless fallback**: When the daemon runs in headless mode (bare-run, no tmux), the stale-engine
+flow operates identically — the daemon exits with code 0 on the stale verdict, and an external
+respawn mechanism (supervisor, systemd, etc.) relaunches it with the fresh engine. The marker
+persists on disk, so the fresh restart consumes it and completes the handshake.
+
+#### Relink-before-handoff
+
+Every daemon restart entry point — manual `restart`, queued restart at idle, or stale-engine
+respawn — runs a skill-relink preflight (`relinkSkillsForSelfBuild`, `install-freshness.ts`) in
+self-host mode **before any dispatch** occurs. This ensures skills are fresh on every restart,
+catching any edits to the harness that landed on main while the daemon was running. The relink
+failure (e.g., installer missing) aborts the build with an `InstallStaleError` and HALTs rather
+than proceeding with stale skills.
+
+#### Pause/resume
+
+Operators can quiesce daemons before maintenance or upgrades without losing state. Pause writes a
+durable `.daemon/PAUSED` marker; the daemon's loop checks it before the dispatch boundary
+(`maybeDispatch`), so no new work starts while in-flight work finishes normally. Resume removes
+the marker. Both operations work per-repo or fleet-wide (`--all`) with per-repo outcome reporting.
+Pause is **reentrant** (pausing an already-paused repo is a no-op); resume does the same. Pause
+**persists across daemon restarts** — a stopped daemon starting up in a paused repo comes up
+paused. Automation (`ensureRunning`) never bypasses pause. The status surface (`daemon-observe-cli.ts`)
+shows pause state (running / paused / stopped / stale) and timestamp/operator who paused.
+
+#### Restart (manual and queued)
+
+**Manual restart** (`daemon-supervisor-cli.ts`, `engine/daemon-tmux.ts`) — safe in-place restart
 preserves the daemon's tmux **session**, **window layout**, and any **operator windows** the
-operator may have opened. Implementation: `setRemainOnExit` (so the pane survives when the
-daemon exits) + `respawn-pane -k` (kills the existing process, re-runs the daemon command in
-the same pane). Unlike the old kill-session + new-session, an operator watching a connected
-daemon stays connected through restart. Restart respects **pause state** — restarting a paused
-daemon queues the restart (writes a `.daemon/RESTART-PENDING` marker) and fires when the daemon
-next goes idle, keeping the daemon paused. Fleet restart (`--all`) reports per-repo outcome:
-restarted / queued / started / error.
+operator may have opened. Implementation: `setRemainOnExit` arms the pane (documented above);
+`respawn-pane -k` kills the existing process and re-runs the daemon command in the same pane.
+Unlike the old kill-session + new-session, an operator watching a connected daemon stays
+connected through restart. Restart respects **pause state** — restarting a paused daemon queues
+the restart instead of firing immediately.
+
+**CLI restart flow** — when a restart is requested against a busy daemon (in-flight features),
+the restart cannot interrupt, so it queues durably by writing a `.daemon/RESTART-PENDING`
+marker (hyphen, CLI queue marker — distinct from the stale-engine marker `.daemon/RESTART_PENDING`
+which uses underscore). The marker carries the restart reason and optional metadata (`requestedBy`,
+`blockingSlug`). The daemon polls the marker and fires the restart at the next idle point
+(after in-flight work drains). This **prevents restart storms** — multiple writes coalesce into
+one fire — and **survives daemon crashes** — a crash before firing leaves the marker on disk to
+be consumed at the next boot.
 
 **Consume-once restart queuing** (`engine/restart-marker.ts`) — when a daemon starts up with
-a pending-restart marker, it consumes the marker (won't fire again) and, if idle, self-respawns
-as its final act (bare-run path: log + clean exit; supervisor path: supervisor sees the restart
-and respawns via the management interface). This **prevents restart storms** (multiple writes
-coalesce into one fire) and **survives daemon crashes** (a crash before fire doesn't lose the
-intent).
+a pending-restart marker (`.daemon/RESTART-PENDING`, hyphen format), it consumes the marker
+(won't fire again) and clears it. If the daemon is idle at boot, the restart fires as its
+final act: in supervisor mode, the supervisor sees the restart signal and respawns via tmux;
+in bare-run mode, a clean exit (code 0) signals the external respawn mechanism. In both cases,
+the restart relinks skills preflight before the respawn, ensuring skills are fresh.
 
 **Engine version pinning and safe rebuilds** — each daemon pins its engine version at startup
 (stores the pinned `engineDir` in the pidfile). Rebuilding or upgrading the shared engine does
@@ -851,6 +1516,86 @@ subscriber serializes them generically.
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
 
+### Intra-step build progress & stall events (adr-2026-07-10-intra-step-build-progress-events)
+
+Between `step_started` and `step_completed` for the `build` step, `BuildProgressWatcher`
+(`engine/build-progress-watcher.ts`) polls a tolerant snapshot of build state and emits
+change-driven progress/stall events on the same `ConductorEventEmitter` bus every other
+event travels — no new transport, no new subscriber-registration mechanism.
+
+#### Events (`types/events.ts`)
+
+- **`build_progress`** — `{ step, resolved, total, currentTaskId?, currentTaskName?,
+  commitCount?, noEvidenceAttempts?, featureSlug? }`. Emitted only when something
+  changed: a resolved/total delta, a new current task, a new commit on `HEAD` with no
+  task delta, or a bare `noEvidenceAttempts` bump. An unchanged tick emits nothing.
+  `commitCount` is populated via `git rev-list --count <old>..<new>` when `HEAD` moved
+  (best-effort — omitted if that probe fails).
+- **`build_no_progress`** — `{ step, quietMinutes, resolved, total, currentTaskId?,
+  lastCommitAt?, featureSlug? }`. A quiet-episode warning once `quiet_minutes` elapse
+  with no observed task-status change. Distinct from `build_stall` (a stronger, terminal
+  signal).
+- **`build_stall`** — `{ step, reason: 'no_task_progress' | 'halt_marker',
+  resolvedBefore, resolvedAfter }`.
+
+#### `readSnapshot` / watcher tolerance
+
+`readSnapshot(projectRoot)` and the watcher's internal tick both read
+`.pipeline/task-status.json` (via `normalizeTasks`, tolerating both the `{tasks: [...]}`
+shape and the legacy id-keyed map), `.pipeline/task-evidence.json` (via
+`readNoEvidenceAttempts`), and `git rev-parse HEAD` in `projectRoot`. Every source is
+best-effort: a missing/corrupt task-status file yields the "no data" snapshot (or, on the
+watcher's polling hot path, skips the tick entirely) rather than throwing; a failed git
+probe simply omits `head`. Callers never see these reads throw.
+
+#### Watcher lifecycle
+
+Constructed once per build-step attempt with `{ projectRoot, events, step, featureSlug?,
+config? }`; `start()` begins polling on `poll_seconds` (timer `.unref()`'d so it never
+keeps the process alive on its own), `stop()` — idempotent, safe even if `start()` was
+never called — tears it down. The conductor wires `start()`/`stop()` around the build
+step's await in a `try/finally` so a watcher can never leak past step completion or
+failure.
+
+#### Config (`build_progress:` key, `types/config.ts` `BuildProgressConfig`)
+
+```yaml
+build_progress:
+  poll_seconds: 30       # default: 30
+  quiet_minutes: 15      # default: 15
+  heartbeat_minutes: 5   # default: 5
+  enabled: true          # default: true
+```
+
+Resolved via `resolveBuildProgressConfig()` (`engine/config.ts`) — every field is
+independently defaulted, so a partial block never silently zeroes out an unspecified
+knob. `enabled: false` is a full escape hatch: the watcher's `start()` becomes a no-op.
+Validation is fail-closed (malformed values are rejected at config load, not at watcher
+construction).
+
+#### Per-subscriber rendering
+
+- **daemon.log** (`daemon-cli.ts`) — `build_progress` renders as a cyan `▶` heartbeat
+  (`step resolved/total — task · slug`); `build_no_progress` as a yellow `⚠` quiet-episode
+  line; `build_stall` as a red `✋` stall line with the reason and before/after counts.
+- **TTY dashboard** (`ui/create-renderer.ts`) — analogous progress/no-progress/stall lines
+  rendered into the live region, distinct glyphs (`⠿`/`⚠`/`⛔`) and colors per kind.
+- **OTel exporter** (`engine/otel/span-manager.ts` — `onBuildProgress`,
+  `onBuildNoProgress`, `onBuildStall`) — each event is recorded as a span event
+  (`addEvent`) on the currently active step span, with the event's fields as span
+  attributes. A no-op (single warning, no throw) when no span is available for the step —
+  `otel-visualizer.ts` registers all three kinds alongside the existing gate-loop events.
+- **Event persister** (`engine/event-persister.ts`) — all three kinds are added to the
+  persisted-kind allowlist and written to `.pipeline/events.jsonl` like every other
+  conductor event, with a subscriber-list drift guard so a future new kind can't silently
+  bypass persistence.
+- **UI subscriber fan-out** (`ui/subscriber.ts`) — all three kinds are forwarded to every
+  registered `ui_renderer` plugin, not just the default terminal one.
+
+Tests: `test/build-progress-watcher.test.ts`, `test/build-progress-events.test.ts`,
+`test/build-progress-config.test.ts`, `test/conductor-build-progress.test.ts`,
+`test/acceptance/emit-intra-step-build-progress-and-stall-as-events.acceptance.test.ts`.
+
 ### OpenTelemetry exporter (ADR-014)
 
 The conductor ships an optional OTel observability layer. When the `otel:` block is present
@@ -940,6 +1685,386 @@ a completion-gate retry, the conductor runs auto-heal once per session:
 
 See `engine/autoheal.ts` for the heuristic and `test/engine/conductor.test.ts` for the
 six auto-heal test scenarios.
+
+### Main-checkout leak triage and auto-heal
+
+When the daemon's base-tracking fast-forward (`maybeFastForward` in `daemon-backlog.ts`)
+discovers a dirty working tree in the main checkout, before giving up it now runs **leak triage**
+to classify every dirty entry and attempt deterministic auto-heal. The triage phase:
+
+1. **Classify dirty state:** Parse `git status --porcelain` to extract modified tracked files,
+   staged changes, and untracked strays.
+2. **Enumerate candidate branches:** Prioritize candidate heads — local branches with daemon
+   worktrees (`.worktrees/<slug>`), then local `feat/*` heads — to explain the dirty state.
+3. **Byte-identity matching:** For each candidate, check whether the dirty entry's working-tree
+   content is byte-identical to the same path's blob in that candidate's tree (tracked files
+   via `git cat-file`, untracked strays via content hash).
+4. **All-or-nothing heal gate:** If a SINGLE candidate explains EVERY dirty entry AND the
+   index has no staged changes, auto-heal runs:
+   - Restore modified tracked files via `git restore`
+   - Delete untracked strays
+   - Log one loud WARN naming the culprit branch and each healed path
+   - Proceed with the same poll's fast-forward
+5. **Unexplained dirty state escalation:** If no candidate explains everything, escalate from
+   a one-line skip to a loud LEAK-SUSPECT WARN with per-file diff-stat, logged once per unique
+   fingerprint (prevent spam across polls). Never heal ambiguous state.
+
+**Safety model:** Byte-identity to a known branch proves the content already exists in git, so
+restore loses nothing. Operator work is protected: the all-or-nothing gate means any ambiguity
+keeps hands off the tree. The deterministic half (classification + identity check) is fully
+testable and safe to automate.
+
+**Modules:** `engine/leak-triage.ts` (classification + fingerprinting + heal planning),
+`engine/daemon-backlog.ts` (wiring in `maybeFastForward`), test coverage in
+`test/engine/leak-triage.test.ts`.
+
+### Setup-failure triage
+
+When `bin/setup` fails during daemon worktree prepare, the daemon runs a bounded
+two-stage deterministic recovery instead of leaving the wedge for an agent to
+untangle blind:
+
+1. **Stage 1 — quarantine + retry:** if the working tree has uncommitted changes,
+   they are preserved to a quarantine branch (`wip/setup-quarantine-<slug>`) via
+   `git add -A` + commit, the tree is reset hard to clean HEAD, and `bin/setup`
+   is re-run exactly once. Success proceeds to build; failure advances to stage 2.
+2. **Stage 2 — bounded fix-session:** exactly one fresh fix-session is dispatched
+   with the setup stderr tail and an explicit success contract (`bin/setup` exits 0
+   AND the tree is clean). The engine verifies the contract mechanically — never
+   trusts the agent's self-report. Success proceeds to build; failure produces a
+   diagnostic HALT naming the error tail, the quarantine ref, and the contract
+   outcome.
+
+The `.pipeline/QUARANTINE` sentinel surfaces the preserved ref + paths to the
+resuming build agent so WIP can be recovered deliberately via
+`git show wip/setup-quarantine-<slug>`. This is daemon-only (no change to
+interactive `/conduct`) and zero-cost on the happy path (setup exit 0 ⇒ no triage).
+
+**Modules:** `engine/setup-triage.ts` (triage core, dependency-injected),
+`worktree-prepare.ts` (`SetupFailureError` classification), `daemon-runner.ts`
+(wiring at the prepare seam), `step-runners.ts` (fix-session dispatch + contract
+verification). See `.docs/decisions/adr-2026-07-09-setup-failure-triage.md`.
+
+### Write-fence sandbox for self-host builds
+
+When a self-host daemon build runs against a throwaway sandbox `CLAUDE_CONFIG_DIR`
+(provisioned by `SandboxBuildEnv` in `engine/self-host/sandbox-build-env.ts`), the daemon
+provisions a PreToolUse hook that blocks writes to the harness main checkout outside the
+build worktree. The fence script (`engine/self-host/write-fence.ts`) is merged into the
+sandbox's copied `settings.json` and invoked on Edit, Write, MultiEdit, NotebookEdit, and
+Bash tools:
+
+**Allow logic (exit 0):**
+- Target path is under the build worktree root (`.worktrees/<slug>/...`)
+- Bash command is read-only (grep, cat, diff, ls, etc.)
+- Target is unrelated to the harness or lives in OS temp (`/tmp/`, etc.)
+- Malformed/empty JSON payload (safety default)
+
+**Block logic (exit 2):**
+- Target is under the harness root but outside the worktree (modification of live harness)
+- Bash command text references main-checkout paths outside worktree (heuristic screening)
+
+When blocked, the hook prints guidance: "Writes to the harness checkout are blocked in
+self-build sandbox. Use worktree paths instead" and exits 2.
+
+**Design rationale:** The fence is a cheap, best-effort second layer on the existing
+sandbox seam. It catches the observed leak vector (agent Bash write-then-rename). The
+deterministic layer (leak-triage/auto-heal) is the load-bearing backstop for anything
+the heuristic misses.
+
+**Scope:** Self-host builds only (enabled when `SelfHostDetector` classifies a self-build).
+Consumer-repo daemon builds keep the operator's global `block-default-branch-edits.sh`
+hook; extending the fence there is a follow-up.
+
+**Modules:** `engine/self-host/write-fence.ts` (script generation),
+`engine/self-host/sandbox-build-env.ts` (provisioning), test coverage in
+`test/engine/self-host/write-fence.test.ts` and real-binary acceptance test in
+`test/acceptance/write-fence-real-binary.acceptance.test.ts`.
+
+### Task Attribution Automation
+
+The conductor automates task progress tracking via `conduct-ts task` subcommands and deterministic git hooks.
+Task attribution is engine-owned, not prompt-discipline-dependent.
+
+#### `conduct-ts task start|done` CLI
+
+The pipeline orchestrator invokes these subcommands (during build step dispatch, not interactively):
+
+```bash
+conduct-ts task start <id>    # Flip task status to in_progress before dispatching subagent
+conduct-ts task done <id>     # Mark task completed after the subagent's commit lands
+```
+
+- `<id>` is the bare task ID from the plan (e.g., `7`, not `task-7`; alphanumeric ids like `rem-fr10-1` work).
+- `task start` updates `.pipeline/task-status.json` and writes `.pipeline/current-task` (the in-flight marker).
+- `task done` clears the in-flight marker and marks the task `completed` in the status file.
+- Both commands are **idempotent**: running them multiple times on the same task is safe (no corrupt state).
+- Failures are **non-fatal and logged**: if the status file is corrupt, the commands exit non-zero but do not halt the build (the engine's later evidence gate derives completion from git trailers).
+
+**Invocation by the conductor:** When the pipeline step dispatches a subagent (Task 0, DISPATCH phase),
+it first runs `conduct-ts task start <id>` to mark the task in-flight. When the subagent commits and
+the step's verification passes, it runs `conduct-ts task done <id>` to mark completion. The orchestrator
+MUST NOT hand-edit `.pipeline/task-status.json` — the CLI and the engine own it.
+
+#### Worktree-scoped git hooks (fail-open)
+
+When the daemon provisions a feature worktree (`prepareWorktree`), the conductor writes two deterministic
+**attribution hooks** and wires them via git config scoped to that worktree only. The host checkout and
+any other worktree are never affected.
+
+**Hook files:** `.pipeline/git-hooks/prepare-commit-msg` and `.pipeline/git-hooks/commit-msg`
+
+**Hook functions:**
+- **`prepare-commit-msg`** — Reads the task id from `.pipeline/current-task` and auto-injects a `Task: <id>`
+  trailer into every commit message. If a malformed trailer exists (empty id, wrong format), it's silently
+  amended to the correct format. The hook only runs in worktrees (via `core.hooksPath`); interactive developer
+  commits are unaffected.
+- **`commit-msg`** — Validates the `Task: <id>` trailer format. If it's missing or malformed and the
+  prepare-commit-msg hook didn't run (rare), the hook warns and allows the commit (fail-open).
+
+**Hook wiring:** `git config --worktree core.hooksPath <absolute-path>` points git to `.pipeline/git-hooks/`
+for this worktree only. The shared repository config remains unchanged. If git config fails (e.g., read-only
+worktree), provisioning continues without hooks and logs a skipped message; the build never fails because
+of hook provisioning failure.
+
+**Chaining:** If the repository already has its own hooks under `.git/hooks/`, the engine's hooks run first
+and exit codes propagate, so both the engine's and the repo's hooks are active. A failing chained hook will
+block the commit.
+
+**Engine-only:** Hooks run from the conductor's engine code (`worktree-prepare.ts`, `prepareWorktree()`) and
+are **never dispatched by prompt**. This makes them deterministic across sessions and immune to prompt-engineer
+drift.
+
+**Proof model:** The conductor's completion gate (`engine/artifacts.ts`) derives task completion from git commits
+carrying `Task: <id>` trailers. These trailers come from the engine's hooks in worktrees (auto-injected) or from
+the subagent's commits when hooks don't run (fallback). The engine never requires prompt discipline to inject
+trailers — the hooks do it automatically.
+
+**Asset provisioning:** Hook scripts are embedded as engine assets (`src/conductor/src/engine/git-hook-assets.ts`)
+and written fresh to each worktree during provisioning. This ensures they stay in sync with the engine version.
+Assets include shebang (`#!/bin/bash`), error handling, and a version header for debugging.
+
+**Modules:** `engine/worktree-prepare.ts` (provisioning), `engine/git-hook-assets.ts` (hook asset definitions),
+`engine/task-cli.ts` (task start/done logic), test coverage in `test/engine/git-hooks-attribution.test.ts`,
+`test/integration/git-hooks-attribution.test.ts`.
+
+### Session-hook task stamping at subagent dispatch (#477)
+
+Git-trailer attribution (above) proves a task's commits are load-bearing, but it only fires at
+commit time. This mechanism stamps task state a layer earlier — at the moment the daemon actually
+**dispatches** a subagent — so `in_progress`/in-flight state is engine-mechanical, not dependent on
+the dispatching agent remembering to invoke `conduct-ts task start|done` itself.
+
+#### Mechanism
+
+`prepareWorktree` (`worktree-prepare.ts`) provisions two additional steps beyond the git-hook wiring
+above, in this order: `writeGitHooksAndWire` → `writeSessionHooks` → `wireSessionHookSettings` →
+`runProjectSetup`.
+
+- **`writeSessionHooks`** writes two bash scripts, embedded as engine assets in
+  `engine/session-hook-assets.ts` (mirroring `git-hook-assets.ts`: bash + inline `node -e` only, zero
+  `dist/`/`conduct-ts` references — the #403 class of staleness bug), to
+  `.pipeline/session-hooks/pre-dispatch.sh` and `.pipeline/session-hooks/post-dispatch.sh` (mode
+  `0755`, overwritten on every provisioning pass so they stay in sync with the engine version).
+- **`wireSessionHookSettings`** merges hook wiring into the worktree's `.claude/settings.local.json`:
+  `hooks.PreToolUse` and `hooks.PostToolUse`, each with `matcher: "Task|Agent"` and a `command`
+  pointing at the absolute path of the corresponding script. The merge replaces only entries whose
+  command contains `session-hooks/` (so re-provisioning is idempotent and never duplicates entries)
+  and leaves every unrelated key untouched. A missing file is treated as `{}`; a file that exists but
+  fails to parse is renamed aside to `<path>.bak-<timestamp>` (never silently discarded) before a
+  fresh settings object is written. This step is fail-open end-to-end — any error is logged and
+  swallowed, never thrown, since hook-wiring failure must not block worktree provisioning.
+
+Both steps run unconditionally on every `prepareWorktree` call, alongside (not instead of) the
+existing git-hook wiring — the two mechanisms are complementary layers (dispatch-time stamp vs.
+commit-time trailer), not alternatives.
+
+#### Hook behavior
+
+**`pre-dispatch.sh` (`PreToolUse`, fires before a subagent runs):** reads the hook payload JSON from
+stdin (bounded read), parses **line 1 only** of `tool_input.prompt` against the exact grammar
+`Task: <id>` | `Task: none`.
+
+- `Task: none` → exit 0, pass-through, no state change.
+- `Task: <id>` where `<id>` matches a row in `.pipeline/task-status.json` → flips that row to
+  `in_progress` (temp-file + rename, atomic — replicates `runTaskStart`, `task-cli.ts`) and writes
+  `.pipeline/current-task`. If a *different* id was already stamped (overlap), that stamp is removed
+  as part of the same pass before the new one is written.
+- Unparseable payload (e.g. malformed JSON) → **fail-open**: exit 0, no state change. This mirrors
+  #452's abstain-on-unreadable-signal path.
+- Payload parses but line 1 is invalid — unknown id, no marker at all, wrong format (`Task:7`,
+  `task: 7`), or two ids on one line (`Task: 7 and Task: 8`) — → **fail-closed**: exit 2 (blocks the
+  dispatch), no state change, stderr names the problem (offending text plus, for unknown ids, the
+  valid id list). Only line 1 is ever inspected; a `Task:`-shaped token elsewhere in the prompt body
+  (e.g. commit-trailer authoring instructions) has no effect.
+
+**`post-dispatch.sh` (`PostToolUse`, fires after the subagent returns):** removes
+`.pipeline/current-task` iff its content still matches the id that was stamped for this dispatch.
+It never writes `completed` — task completion is derived solely from the evidence gate
+(`engine/artifacts.ts`, #456/#463), never from session-hook state.
+
+#### Contract with dispatch templates
+
+Every dispatch template's prompt (skills that use the `Agent`/`Task` tool to launch a subagent) MUST
+open with exactly one of `Task: <id>` or `Task: none` as its literal first line — this is what the
+hook parses. `skills/pipeline/SKILL.md`'s per-task DISPATCH step (implementation work) uses
+`Task: <id>`; non-implementation dispatch templates (evaluator/`code-review`, `/simplify`,
+micro-retro, memory-checkpoint) use `Task: none`. Getting this wrong is a fail-closed dispatch block,
+not a silent drift — the machinery, not prompt discipline, enforces the contract (see the harness's
+"Design Principles": deterministic enforcement over prompt discipline).
+
+#### `settings.local.json` ownership
+
+`.claude/settings.local.json` inside a feature worktree is **untracked and engine-managed**. The
+daemon writes/merges it on every `prepareWorktree` pass; it is never committed, never treated as
+project config, and a hand-edit made inside a build worktree will be overwritten (merged, not
+appended) by the next provisioning pass, since hook entries are matched and replaced by the
+`session-hooks/` path in their `command`.
+
+#### Fixtures and tests
+
+Hook behavior is exercised by invoking the emitted bash scripts directly with real captured
+headless dispatch payloads on stdin (`test/fixtures/session-hook-payloads/`, captured from a
+2026-07-10 spike — not synthetic shapes). Unit coverage lives in
+`test/engine/session-hook-assets.test.ts` and `test/engine/session-hook-behavior.test.ts`; chained
+integration coverage (provisioning → wiring → hook execution) follows the
+`git-hooks-attribution.test.ts` pattern in `test/integration/`.
+
+**Modules:** `engine/session-hook-assets.ts` (hook script bodies), `engine/worktree-prepare.ts`
+(`writeSessionHooks`, `wireSessionHookSettings`), test coverage as above.
+
+### Task Status (engine-owned)
+
+The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
+tracks per-task completion state across build retries. The engine owns reads and writes;
+no other component modifies it.
+
+**Ownership model:**
+- Engine seeds the task-status on merge/upsert from the plan (`.pipeline/plan.json`)
+- Completion state is derived from **git evidence**: each pending task maps to commits by
+  trailer match (`Task: <id>` in the commit message) or by content-hash matching (when
+  trailers are absent).
+- Evidence sidecar (`autoheal.ts`) reconciles stale in-flight state against the live
+  git log before re-invoking a build step, flipping `pending` tasks to `completed` when
+  their commits are unambiguously matched (word-boundary name match + file-path overlap
+  with the plan's per-task file list).
+
+**Trailer contract:** Every task commit must carry a `Task: <id>` line in its message
+(or the older `#<id>` form for backward compatibility). The conductor reads this to
+correlate commits with tasks and to verify no intermediate work was dropped during rebase
+or conflict resolution (FR-9).
+
+**Evidence range derivation ladder (`getEvidenceRange`, `engine/autoheal.ts`, #456):**
+Before scanning commits for trailer/content-hash evidence, the engine must pick a lower
+bound for the range. It never falls back to repo genesis (`root-commit..HEAD`) or a
+hardcoded branch name — that made evidence ranges balloon on long-lived repos and drift
+if the default branch was renamed. Instead it walks a 4-rung ladder, taking the first
+rung that resolves:
+1. A reachable explicit `anchor` (the plan's seed SHA) is used as the lower bound directly.
+2. Otherwise, `git merge-base --fork-point origin/<default> HEAD` — the branch point,
+   including reflog-expired commits where fork-point still has evidence.
+3. Otherwise, a plain `git merge-base origin/<default> HEAD`.
+4. Otherwise, fail closed: zero commits plus a logged anomaly, never a silent guess.
+
+`origin/<default>` is itself derived — never hardcoded `origin/main` — via
+`originDefaultBranch` (reading `refs/remotes/origin/HEAD`), falling back to probing
+`origin/main` then `origin/master` if origin/HEAD is unset. All ladder failures are
+logged as anomalies/warnings but never thrown; the gate always gets a `done: false`
+verdict with a reason instead of an unhandled exception.
+
+**Completion currency — evidence stamps only, no grandfather (#463):** The build gate
+(`engine/artifacts.ts`, the H6/H7/H8 block) accepts exactly one form of proof that a
+task is done: an `evidenceStamps` entry in `.pipeline/task-evidence.json`, written by
+`deriveCompletion`'s own git-trailer/content-hash scan and independently re-derived on
+every gate evaluation. `task-status.json` rows are never trusted as-is — they're
+overwritten from the derived evidence before the verdict is decided, so a wiped or
+hand-edited status file can't fake completion and can't block it either. Earlier
+revisions of this gate additionally accepted a `migrationGrandfather` entry — a one-time
+stamp `task-seed.ts` wrote for terminal rows that already existed before the evidence
+gate was introduced, so pre-cutover work wouldn't be forced to backfill evidence it
+never had. That escape hatch is retired: `task-seed.ts` no longer writes new
+`migrationGrandfather` entries, and the gate no longer consults the field at all — a
+grandfathered id with no real evidence stamp is unresolved, full stop. This closes the
+gap where a forged or stale grandfather entry could pass the gate with zero git evidence.
+
+**Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
+operator can see how completion state evolved across a multi-attempt build.
+
+Key modules: `engine/autoheal.ts` (reconciliation logic), `engine/conductor.ts` (ownership,
+seed/upsert), `engine/artifacts.ts` (gate predicates on task-status shape).
+
+### Auto-park on N-attempt trigger
+
+The daemon auto-parks a feature after N consecutive **no-evidence** gate misses (a gate
+whose completion check found no new evidence of task completion since the prior attempt)
+or when the plan artifact is empty/missing at seed time. This replaces the prior
+infinite re-kick loop with a survivable, machine-placed halt.
+
+**Trigger:** After a gate evaluation, if:
+1. The plan is absent or empty → park immediately with reason `'empty plan'`
+2. The gate shows no new evidence AND `noEvidenceAttempts >= AUTO_PARK_THRESHOLD` (default
+   N=1, meaning "2 consecutive no-evidence misses") → park with reason `'no evidence
+   after N attempts'`
+
+**Behavior:**
+- Writes `.daemon/parked/<slug>` with provenance `auto` and the reason in the marker body
+- Emits a `ConductorEvent` of type `auto_park` with the slug and reason
+- Halts the feature gracefully instead of re-kicking
+- The feature is visible in the daemon dashboard's PARKED group with provenance shown
+  (`— auto-parked`)
+
+**Unpark (Task 24 — `conduct daemon unpark <slug>`):** Removes the park marker and resets
+the `noEvidenceAttempts` counter, allowing the daemon to re-dispatch the feature.
+Operator unpark and manual re-kick both resume from where they left off.
+
+**Distinction from operator park:** A human-placed operator park (`conduct daemon park`)
+places a different provenance marker and serves a different purpose (manual hold). Both
+are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
+(machine-triggered after N attempts) while operator park is human-triggered.
+
+Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
+trigger check), `engine/daemon-park-cli.ts` (unpark subcommand), `daemon-dashboard.ts`
+(provenance display).
+
+### Remediation (agentic gap routing)
+
+When a SHIP-phase gate blocks the daemon (`prd_audit`, `finish` verification, or
+`architecture_review_as_built`), the conductor first dispatches the `/remediate` planner
+to reason over the gap and suggest routing. The planner writes `.pipeline/remediation.json`
+with per-gap dispositions.
+
+**Three remediation entry points:**
+
+1. **`prd_audit` blocking** — gap artifact is `.pipeline/prd-audit.md` (audit table with
+   FR-gap rows)
+2. **`finish` verification failure** — gap artifact is `.pipeline/test-failures.md` (written
+   by the finish skill after flake-checking a failing suite; distinguishes real bugs from
+   transient infra)
+3. **`architecture_review_as_built` BLOCKED** — gap artifact is
+   `.pipeline/architecture-review-as-built.md` (design conformance verdict)
+
+**Disposition model:** The planner categorizes each gap and proposes one of:
+- **`route_to: 'build'`** — a code gap the daemon owns; the conductor routes back to `build`
+  with a retry hint (the gap details) and re-verifies
+- **`route_to: 'stories'` or `route_to: 'plan'`** — a DECIDE-phase rework; routes back and
+  clears both artifacts
+- **`halt: 'architectural-clarity'` or `halt: 'product-scope'`** — genuinely human categories;
+  the conductor HALTs and opens a draft PR for triage
+
+**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (currently 2), so a
+cycle that's not converging HALTs eventually. Daemon prd_audit also has its own
+self-healing fallback: if every blocking row is `impl-gap` (code), the conductor auto-kicks
+back to `build` up to N times before giving up.
+
+**Deterministic plan routing:** When routing back to `plan` or `stories`, the conductor
+uses deterministic task-id assignment from `.pipeline/remediation.json` so re-opened stories
+inherit task ids, allowing `Task: <id>` trailers to bind any new work to the re-opened
+task. This keeps the task-status ledger coherent across DECIDE rework cycles.
+
+Key modules: `engine/conductor.ts` (dispatch, disposition routing), `engine/gate-verdicts.ts`
+(blocking gate detection), helpers in `engine/remediati
+
+on-append.ts` (deterministic routing).
 
 ### Pinned Node
 
@@ -1094,6 +2219,26 @@ through an injected `gh` runner — it never touches a registered repo's working
   on `land` (routed) and `handoff` (done); the shared `intake/writeback.ts` helper backs both the CLI
   primitives and the test-only loop. It is **non-fatal** (a `gh` outage never reverts a delivered spec
   PR) and **de-duplicated** per `(sourceRef, status)`.
+  - **`gh` cwd resolution never falls back to `process.cwd()`.** `report()`'s `gh` calls always pass
+    `-R <owner/repo>`, so any existing directory is a sufficient cwd — but a bare `process.cwd()`
+    fallback previously spawned `gh` from wherever the daemon happened to be running, which could hit
+    a deleted/missing directory and fail with `ENOENT`. `resolveReportCwd()` instead resolves, in
+    order: the poll-cache (`repoPaths`, populated by a prior `poll()`) → a registry lookup matched by
+    `ghRepo`/`name` → `os.homedir()` — each candidate `existsSync`-checked before use.
+  - **Failures return actionable remediation, not just a log line.** `report()` returns a
+    `ReportOutcome`: `{ ok: true }` on success, or `{ ok: false, remediation: string[] }` on failure,
+    where `remediation` is the fully-substituted `gh` command for the *specific* step that failed
+    (issue comment or label-add), ready to copy/paste-retry — e.g.
+    `gh issue comment 200 --repo o/e --body "..."`. `dispatchEngineer`'s `handoff`/`land` primitives
+    print that remediation to stderr; stdout (the `pr-opened`/`routed` envelope) and the exit code are
+    unaffected — a failed write-back never turns a successful handoff into a failure.
+  - **A failed `done` write-back sets `writebackPending: true` on the ledger entry** (`reportDone` in
+    `intake/writeback.ts`, threaded through `Ledger.transition`'s `meta`), so a stalled write-back is
+    visible in `ledger.json` for later reconciliation even though the spec PR itself was delivered. A
+    subsequent successful write-back (any later `report()` call for that `(source, sourceRef)` that
+    resolves `ok: true`) clears the flag; per TR-3 the flag is only ever cleared on an explicit
+    `ok: true` outcome — an absent port, or a port call that produced no outcome, leaves a
+    pre-existing flag untouched rather than silently dropping it.
 - **Issue ↔ PR linkage + auto-close (on implementation merge).** Commenting is not linking: GitHub's
   formal issue↔PR link and auto-close come from a closing keyword in a PR body. The issue reference
   travels WITH the spec via a committed **`.docs/intake/<plan-stem>.md`** marker (`Source-Ref: owner/repo#N`,
@@ -1114,13 +2259,138 @@ through an injected `gh` runner — it never touches a registered repo's working
 State lives under the engineer dir (`$AI_CONDUCTOR_ENGINEER_DIR`, default `~/.ai-conductor/engineer/`):
 `ledger.json` (dedup + lifecycle) and `inbox/` (the claimable queue).
 
+#### Intake Loop Automation
+
+The GitHub-issues poll above can run as a **standalone background loop** instead of (or in
+addition to) the launcher's pre-poll and an external cron job — a tmux-hosted, zero-token
+process managed via `conduct-ts brain start|stop|status` (see the root README's "Brain Loop
+Supervision" section for the operator-facing commands).
+
+- **CLI: `conduct-ts intake-loop`** (`intake-loop-cli.ts`, composition root, wraps
+  `engine/engineer/intake/intake-loop.ts`). Exactly one of two mode flags is required:
+  - **`--continuous`** — runs the poll→enqueue→notify tick forever, sleeping between ticks.
+    This is the mode `conduct-ts brain start` launches inside its tmux session.
+  - **`--once`** — runs a single tick and returns; useful for cron or manual invocation
+    without the tmux supervisor.
+  Supplying both or neither flag is rejected (prints usage guidance) rather than silently
+  falling back to a default mode.
+- **`--interval-ms <n>`** — sleep between ticks in continuous mode. CLI default is 5 minutes
+  (`DEFAULT_INTERVAL_MS`). The value must parse to a finite number `> 0`; a non-finite or
+  non-positive interval is rejected at the CLI layer, and the loop core additionally guards
+  against a bad interval reaching the sleep call by substituting its own 60-second fallback
+  (`INTAKE_INTERVAL_DEFAULT_MS`) — a defense-in-depth measure so a misconfigured interval
+  can never produce a zero/negative-delay busy-loop.
+- **Never spawns `claude`, never opens a PR.** The loop only calls `gh` (via the same
+  injected runner as the launcher's pre-poll) to list/enqueue issues and to push
+  best-effort notifications — it is a pure polling/bookkeeping process, so leaving it
+  running continuously costs no model tokens.
+- **Status surface (`<engineer-dir>/intake-status.json`).** Written on every tick that finds
+  new issues (skipped when there's nothing new to report). Shape:
+  ```json
+  {
+    "count": 3,
+    "sourceRefs": ["owner/repo#7", "owner/repo#9", "owner/repo#12"],
+    "timestamp": "2026-06-30T12:00:00.000Z",
+    "message": "3 new idea(s) captured from owner/repo#7, owner/repo#9, owner/repo#12"
+  }
+  ```
+  `conduct-ts brain status` reads this file for its `queued: <n>` line; a missing or
+  malformed file is treated as `count: 0` rather than an error.
+- **Durable de-dup across restarts.** The notifier tracks which `sourceRef`s it has already
+  notified so a loop restart doesn't re-announce issues already surfaced in a prior run;
+  when a tick finds nothing new, both the status write and the (optional) push are skipped
+  entirely.
+- **`intake_notifier` config (optional, best-effort push).** Mirrors the existing
+  `mermaid_renderer` config pattern (see `config.ts`) — an optional block that, when present,
+  lets the loop push a notification (e.g. to a webhook or external channel) alongside writing
+  the status file. Like `mermaid_renderer`, it is fully optional: omitting it leaves the loop
+  writing only the local status surface. A push failure is caught and logged — it never
+  blocks the tick, corrupts the status file, or crashes the loop.
+- **Single-writer deferral.** `engine/engineer/brain-liveness.ts`'s `brainLoopAlive()` checks
+  for a live tmux session (`cc-brain-*`) or pidfile. When the brain loop is alive, the
+  interactive `conduct-ts engineer` launcher's `prePoll` step (see "GitHub-issues intake"
+  above) is set to a no-op rather than running its own poll, so the background loop and the
+  interactive launcher never race the same ledger/inbox.
+
+#### Push Notifications
+
+When the intake loop (`--continuous` or `--once`) discovers new issues, it sends a desktop
+push notification via the **existing `sendNotification` transport**:
+
+- **Transport mechanism:**
+  - **macOS**: `osascript` via native notification API
+  - **Linux**: `notify-send` (freedesktop.org Desktop Notifications)
+  - **Fallback**: terminal bell (BEL character, audible on most terminals)
+
+- **Behavior:**
+  - Notifications fire only on **non-empty ticks** (when new issues are discovered)
+  - Transport failures are caught, logged, and **non-blocking** — they never interrupt the
+    intake tick or prevent the status file from being written
+  - The notification is **best-effort**: if the transport is unavailable (e.g., `notify-send`
+    not installed), the system falls back gracefully to the next transport in the chain
+  - The status file (`.../intake-status.json`) is always written, regardless of push success —
+    the two surfaces (durable file + best-effort notification) work together to surface new
+    captured ideas
+
+- **Configuration:** No explicit config needed beyond `intake_notifier` (see "Intake Loop
+  Automation" above). The transport is selected automatically by the platform at runtime.
+
+- **Applies to:** Both `brain start` (tmux-hosted continuous mode) and direct CLI invocation
+  (`--continuous` or `--once` flags)
+
+#### Delivery guard (engineer claim) and recovery (engineer resolve)
+
+The intake system auto-heals duplicate captures and recovers from write-back failures:
+
+**Claim-time delivery guard (`engine/engineer/intake/delivery-guard.ts`).**
+When `engineer claim` is invoked, the guard checks the ledger against the inbox, looking for entries that are already claimed with a prUrl (PR delivered). On finding a duplicate envelope for such an entry:
+- **If the PR is OPEN or MERGED** (PR state known): the entry is marked `done` and the duplicate envelope is dropped from the inbox **without serving it to the session** (re-served with the cached prUrl, status unchanged, ledger writes preserved). Reduces friction from duplicate captures — no session spin, no duplicate work, no loss of delivery proof.
+- **If the PR state is unknown** (API failure, closed-without-merging, or other): the envelope is held **without ledger mutation**. On the next claim, if the PR state resolves, the guard heals and drops it. Unknown-state envelopes are never re-served, preventing stalled-write issues from blocking the queue indefinitely.
+- **Healthy entries pass through unchanged** (no ledger entry, or ledger entry with no prUrl): the guard does no checking and does not interfere with the normal claim path.
+
+Integration modules: `engine/engineer/intake/delivery-guard.ts` (guard logic), wired into `engineer-cli.ts` (the claim path instantiates it and wraps the queue).
+
+**`engineer resolve` recovery subcommand (`engine/engineer/resolve.ts`).**
+Recovers from write-back failures (e.g., a local-commit completed but the spec PR delivery never happened, or a network timeout during handoff) by marking a claimed entry as delivered. 
+
+**Signature:**
+```
+conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <branch>]
+```
+
+**Fields:**
+- `<sourceRef>` — the issue identifier (e.g., `o/a#123`) — parsed from the command line
+- `--pr-url <url>` — the delivered PR URL (https:// or http://) — required, validated before mutation
+- `--branch <branch>` — optional branch name override; if omitted, the ledger's existing branch is preserved
+
+**Behavior:**
+- **Found case (entry exists in ledger)** — transitions the entry from `claimed` (or any status) to `done`, recording the prUrl. If `--branch` is supplied, it overwrites the ledger's existing branch; otherwise, the existing branch is preserved. Returns JSON: `{ kind: 'resolve', sourceRef, priorStatus, prUrl, branch }`, exit 0.
+- **Not-found case (no entry in ledger)** — returns JSON: `{ kind: 'resolve', found: false }`, exit 0 (soft failure, never creates a ledger entry).
+- **Invalid prUrl (not http(s)://)** — returns error on stderr and exits 1.
+- **Idempotent** — running `resolve` multiple times on the same entry with the same prUrl is safe and produces no additional mutations (re-run returns the current status unchanged).
+
+Example:
+```bash
+# Recover from a write-back failure; mark the entry delivered
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456
+
+# Optionally correct the branch if it diverged:
+conduct-ts engineer resolve o/a#123 --pr-url https://github.com/o/a/pull/456 --branch spec/revised
+```
+
+**Integration with claim-time guard (compose pattern, plan Task 13):**
+After `engineer resolve` marks an entry delivered, a subsequent `engineer claim` invokes the delivery guard, which detects the duplicate envelope and heals/drops it — completing the recovery cycle: stranded entry → resolve → entry marked done → next claim drops duplicate via guard.
+
+**Modules:** `engine/engineer/resolve.ts` (resolve command dispatch), `intake/ledger.ts` (ledger transitions).
+
 ### Priority scheduling for daemon backlog ordering
 
 The daemon can reorder eligible features by GitHub issue priority labels, honoring
 human-driven prioritization without changing the eligibility/deduplication logic.
 
 **Priority bands and label vocabulary:**
-- `priority: high` — highest-priority band (no-issue status escalated)
+- `priority: critical` — complete breakage / very severe degradation; dispatched first among issue-linked work
+- `priority: high` — highest routine band
 - `priority: medium` — standard priority band
 - `priority: low` — lower-priority band
 - Unlabeled — chronological fallback order
@@ -1194,6 +2464,27 @@ work it depends on.
   attempt increment) — and the walk continues to the next-oldest entry. The first `unblocked`
   entry found is claimed (oldest-unblocked-wins), even if older blocked entries were skipped
   over.
+- **Priority-banded claim ordering (`resolveClaimBands`, `PRIORITY_BAND_RANK` in
+  `backlog-priority.ts`).** When a band resolver is wired in, `claimUnblocked` first drains
+  **every** pending entry off the queue (via its own atomic `claim()`), then sorts the held
+  entries by priority band **before** evaluating any dependency verdict: `no-issue` (no
+  `sourceRef`) → `critical` → `high` → `medium` → `low` → `unlabeled`. The sort key is band
+  rank only; entries tied on band fall back to `originalIndex` — the drain order the queue
+  produced from its own `receivedAt__id` filename sort — so same-band entries stay strictly
+  oldest-first relative to each other (`Array.prototype.sort`'s ES2019+ stability guarantee
+  makes this deterministic across runs). Labels are read from GitHub **at claim time**, one
+  batched call per claim (never cached across claims), so a relabel between claims is honored
+  on the very next claim. Dependency verdicts are then evaluated in the resulting band order —
+  the walk still short-circuits on the first `unblocked` entry, defers the rest, and reports
+  `all-blocked` if none is unblocked — and every held entry not claimed is released back to the
+  queue in the `finally` block regardless of outcome. **Fail-open to FIFO on GitHub outage:** if
+  the band resolver throws (`gh` API error, auth failure, etc.), the sort step is skipped
+  entirely — `claimUnblocked` logs exactly one warning (`priority label resolution failed;
+  falling back to drain order`) and proceeds with the entries in plain oldest-first drain order.
+  A resolver failure never fails the claim itself. When no band resolver is injected at all, the
+  original oldest-first claim-then-evaluate-inline loop runs unchanged (byte-for-byte FIFO,
+  today's pre-banding behavior). The claimed envelope's JSON shape is unchanged:
+  `{kind, text, source, sourceRef}`.
 - **All-blocked outcome, distinct from empty.** If the walk exhausts the queue without finding
   an unblocked entry, the outcome is `{ kind: 'all-blocked', entries }` — listing every deferred
   entry and its verdict — rather than `{ kind: 'empty' }`. This lets an operator tell "nothing to
@@ -1235,6 +2526,72 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Daemon build-auth: isolating daemon builds from operator OAuth (Tasks 5-17, TR-1..TR-4)
+
+Self-host daemon builds authenticate to Claude independently of the operator's own
+`.credentials.json` OAuth session, so a daemon build can never read, wait on, or exhaust the
+operator's interactive login. Configured under `harness_self_host.build_auth` in
+`.ai-conductor/config.yml` (`types/config.ts`, validated in `engine/config.ts`, resolved by
+`resolveSelfHostConfig` in `engine/resolved-config.ts`):
+
+```yaml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; ~ expands to $HOME
+```
+
+**Modes:**
+
+- **`daemon-token` (default).** The daemon reads a token file at `token_path` (default
+  `~/.ai-conductor/build-auth`, resolved by `getDefaultBuildAuthTokenPath()` in
+  `resolved-config.ts`) that is entirely separate from the operator's `.credentials.json`. Mint
+  it once with:
+
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+
+  (`DAEMON_BUILD_TOKEN_MINT_COMMAND` in `self-host/daemon-build-token.ts` is the single source of
+  truth for this command string, reused by both the HALT message and the CHANGELOG migration
+  block.) On each sandboxed build dispatch the conductor reads the token
+  (`readDaemonBuildToken`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` into the sandboxed step's
+  environment only — the operator's own `CLAUDE_CODE_OAUTH_TOKEN` (if any) is restored in a
+  `finally` block afterward (`conductor.ts`, around the sandboxed `stepRunner.run` call).
+- **`api-key`.** The build authenticates via a pre-existing `ANTHROPIC_API_KEY` in the daemon
+  process's environment. The daemon-token preflight and the operator-credentials preflight are
+  both skipped in this mode — no token file is required.
+
+**Fail-closed pre-flight (`self-host/build-auth-preflight.ts`, Task 6).** Before a self-host build
+provisions its sandbox, `preflightBuildAuthCheck` runs in `daemon-token` mode only:
+
+- Token file present and non-empty → proceeds normally.
+- Token file missing, empty/whitespace-only, or unreadable (e.g. `chmod 000`) → writes
+  `.pipeline/HALT` (only if one doesn't already exist, so retries don't clobber an existing
+  reason) with the mint command, the resolved token path, and the `harness_self_host.build_auth`
+  config keys to set. The check runs **before** any sandbox is provisioned and never consumes the
+  step's retry budget.
+
+**Backward compatibility.** An absent `harness_self_host.build_auth` block (or one that isn't
+explicitly `daemon-token`/`api-key`) leaves the pre-#5-17 behavior unchanged: the conductor falls
+back to the operator-credentials preflight (`preflightCredentialsCheck`, which watches
+`~/.claude/.credentials.json` expiry) — see the park-and-poll section below. Once `build_auth.mode`
+is explicitly set to `daemon-token` or `api-key`, the operator-credentials preflight is skipped
+entirely (Task 11) — the two auth paths are mutually exclusive per build.
+
+**Auth-failure park in daemon-token mode (Task 11, TR-4).** If a step reports an auth failure
+mid-build, the daemon-token mode parks and polls the token file's mtime/content for a refresh
+(`createDaemonTokenContentClassifier` + `waitForCredentialsChange`), the same park-and-poll
+mechanism the operator-credentials path uses (see below), bounded by
+`auth_park_timeout_minutes`. In `api-key` mode there is no token file to watch, so an auth
+failure HALTs immediately with a reason naming `ANTHROPIC_API_KEY` and instructions to re-queue
+the feature after fixing it — parking never happens in `api-key` mode.
+
+**Migration.** See the `CHANGELOG.md` `[Unreleased]` migration block for the exact commands to
+mint a token and wire it into an existing project's config without clobbering a token that's
+already present.
+
 ### Sandbox auth-expiry park-and-poll (self-host daemon builds)
 
 Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
@@ -1275,11 +2632,9 @@ When credentials are detected as expired or auth failure occurs, the conductor i
   `claude login`).
 - **Checks freshness** — when mtime changes, re-reads the credentials and checks `expiresAt`:
   - Still expired → keeps polling
-  - Fresh (unexpired) → proceeds to **refresh sandbox**
-- **Refreshes sandbox** — calls `refreshSandboxCredentials()` (`src/conductor/src/engine/self-host/sandbox-build-env.ts`),
-  which **copies** the operator's newly-refreshed `.credentials.json` into the sandbox `CLAUDE_CONFIG_DIR`
-  (never symlinks, maintaining isolation; see TR-6). The next attempt re-invokes the step with the
-  new credentials.
+  - Fresh (unexpired) → proceeds to **resume the build**
+- **Resume build with fresh auth** (Task 11) — the sandboxed build re-reads the daemon's live `CLAUDE_CODE_OAUTH_TOKEN`
+  env var, obtaining fresh credentials without needing to copy them into the sandbox.
 - **Timeout** — configurable via `auth_park_timeout_minutes` (default **60 minutes**; `0` or negative =
   opt-out, HALT immediately). When timeout elapses without a successful refresh, the conductor
   `writeHaltMarker()` with a reason naming the credentials path + observed `expiresAt` (or "unparseable").
@@ -1313,8 +2668,7 @@ Park-and-poll HALTs follow the standard HALT remediation (no new process — see
 | `engine/self-host/operator-credentials.ts` | Reader (`readOperatorCredentialsState`, fail-open classification), wait primitive (`waitForCredentialsChange` with injected clock/sleep for testability) |
 | `execution/claude-provider.ts` | Classifier (`AUTH_FAILURE_RE`, `authFailure` flag on invoke result) |
 | `engine/step-runners.ts` | Thread `authFailure` through `StepRunResult` |
-| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), resume credentials re-copy, timeout branch → HALT with credentials reason |
-| `engine/self-host/sandbox-build-env.ts` | `refreshSandboxCredentials` export (copy-based, not symlink) |
+| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), timeout branch → HALT with credentials reason |
 | `engine/resolved-config.ts` | `auth_park_timeout_minutes` config field + validation (0/negative = opt-out) |
 
 See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.
@@ -1364,6 +2718,21 @@ dispatch (and at idle), rebuilds from source and re-hashes. A mismatch means the
 longer matches the freshly-built source. On non-convergence at boot (fresh identity ≠ the restart's
 target) restart is suppressed to avoid thrashing.
 
+#### Respawn in-place (single-generation) — Fix for #400
+
+On stale-engine detection at idle boundary:
+
+1. **Fired trigger**: Requester exits unconditionally (`lock.releaseSync()` then `process.exit(0)`)
+   - Predecessor daemon ends cleanly
+   - Tmux session survives for successor to reattach
+2. **Bounded takeover**: Lock holder polls for up to 10s waiting for predecessor to release
+   - If acquired: successor daemon takes over
+   - If timeout: abandoned lock, fallback reclaim logic
+3. **Lock-loser exit**: Non-owner daemon detects lock held, exits cleanly (code 0)
+   - No resident process, no cleanup needed
+
+This ensures single-generation handoff: exactly one daemon owns the session at any time, and predecessor always exits before successor takes control.
+
 See `.docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md` for the full design.
 
 ### Harness self-host guardrails (`engine/self-host/`)
@@ -1378,13 +2747,14 @@ byte-for-byte unchanged (`FR/TR-13`). Configured by the `harness_self_host` bloc
 | Module | Responsibility |
 |--------|----------------|
 | `self-host/detector.ts` | `SelfHostDetector` interface + `PathSelfHostDetector` (realpath equality vs `resolveHarnessRoot()`); `classifySelfHost` layers the `activation` override. Identity by path, not name; positive-only activation. |
-| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. |
+| `install-freshness.ts` → `relinkSkillsForSelfBuild` | Relink harness skills (`bin/install --update`) before a self-build; non-zero exit / missing installer → `InstallStaleError`, no dispatch. Root discovery goes through `resolveInstalledHarnessRoot` (below): a rejected root also throws `InstallStaleError` naming it — the installer is never run against a worktree (#363). |
+| `install-freshness.ts` → `resolveInstalledHarnessRoot` | Installed-root resolution ladder for **operator-global writes only** (adr-2026-07-06): module probe → worktree detection (`.worktrees/` path or `git rev-parse --git-common-dir` outside the probed root) → main-checkout derivation from the common dir → `bin/install` assertion → hard-reject of any `.worktrees/` root → advisory (warn-only) registry cross-check. Returns `ok`/`rejected`/`unresolved`, never throws. `resolveHarnessRoot` (the detector's identity seam) is deliberately untouched. |
 | `self-host/sandbox-build-env.ts` | Throwaway `CLAUDE_CONFIG_DIR`: `skills/`+`hooks/` symlinked to the worktree, with `.credentials.json` + a hook-retargeted `settings.json` **copied** in (auth + own-hooks; copies keep the no-global-symlink invariant). Fails closed on a missing worktree link target; `withSandboxBuildEnv` guarantees teardown on pass/fail/crash; `childEnv()` never mutates the parent env. |
 | `halt-marker.ts` | Canonical `.pipeline/HALT` marker path + best-effort `writeHaltMarker`; the rebase HALT and the self-host gate HALTs both write through it. |
 | `self-host/version-gate.ts` | `VersionApprovalGate` — HALT unless `.pipeline/version-approval` matches VERSION. A declared `version_freeze` matching VERSION self-satisfies the gate (records the marker, no HALT); any other VERSION still halts — a freeze never approves a bump (#261). |
 | `self-host/release-gate.ts` | `ReleaseArtifactGate` — integrity suite (bounded timeout) + CHANGELOG `[Unreleased]` + migration block; all fail-closed, distinct HALT reasons. |
 | `self-host/gate-halt.ts` | `writeSelfHostHalt` — `.pipeline/HALT` with a gate-specific reason + the ADR-005 resume procedure (re-install → `/verify` → operator merges). |
-| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
+| `self-host/wiring.ts` | `SelfHostGuardrails` — the injectable bundle (`relink`/`provisionSandbox`/`versionGate`/`releaseGate` + `resolveHarnessRoot`/`resolveInstalledHarnessRoot`) the conductor calls the primitives through; `defaultSelfHostGuardrails` forwards to the real ones. One seam so the whole bundle activates (or is spied) as a unit. |
 
 **Non-autonomy (ADR-005/ADR-010):** no self-host module references a merge entry point
 (`test/engine/self-host/non-autonomy.test.ts` asserts this structurally). Every self-build ends at a
@@ -1394,8 +2764,11 @@ HALT for the operator to merge.
 the main repo root (not a worktree — a worktree path never equals the harness root) and threads a
 `selfHost` flag to each `Conductor`. `conductor.run()` then, for a self-build only (`daemon &&
 selfHost`):
-- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build), then
-  provisions the sandbox once (`SandboxProvisionError` → HALT, no build);
+- **before the first `build`** — relinks skills once (`InstallStaleError` → HALT, no build; a
+  worktree-resolved installed root is one of the rejection causes, #363), then provisions the
+  sandbox once (`SandboxProvisionError` → HALT, no build), passing the **installed** main-checkout
+  root (`resolveInstalledHarnessRoot`) as `harnessRoot` so the settings retarget (main → worktree)
+  actually fires for a worktree-run engine — fallback stays `projectRoot` when unresolved;
 - **around the `build` dispatch** — sets `process.env.CLAUDE_CONFIG_DIR` to the sandbox and restores it
   in a `finally` (pass **and** throw), so no config-dir bleeds into `finish`; the sandbox is torn down
   in `run()`'s `finally` on every exit path;

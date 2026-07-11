@@ -170,6 +170,55 @@ export class SpanManager {
     targetSpan.addEvent('kickback', attrs);
   }
 
+  onBuildProgress(event: Extract<ConductorEvent, { type: 'build_progress' }>): void {
+    this.ensureRunSpan();
+    const state = this.openSteps.get(event.step);
+    const targetSpan = state?.span ?? this.runSpan;
+    if (!targetSpan) {
+      this.warn(`build_progress for '${event.step}' received but no span available — dropping`);
+      return;
+    }
+    const attrs: Record<string, string | number> = {
+      resolved: event.resolved,
+      total: event.total,
+    };
+    if (event.currentTaskId !== undefined) attrs.currentTaskId = event.currentTaskId;
+    targetSpan.addEvent('build_progress', attrs);
+  }
+
+  onBuildNoProgress(event: Extract<ConductorEvent, { type: 'build_no_progress' }>): void {
+    this.ensureRunSpan();
+    const state = this.openSteps.get(event.step);
+    const targetSpan = state?.span ?? this.runSpan;
+    if (!targetSpan) {
+      this.warn(`build_no_progress for '${event.step}' received but no span available — dropping`);
+      return;
+    }
+    const attrs: Record<string, string | number> = {
+      resolved: event.resolved,
+      total: event.total,
+      quietMinutes: event.quietMinutes,
+    };
+    if (event.currentTaskId !== undefined) attrs.currentTaskId = event.currentTaskId;
+    targetSpan.addEvent('build_no_progress', attrs);
+  }
+
+  onBuildStall(event: Extract<ConductorEvent, { type: 'build_stall' }>): void {
+    this.ensureRunSpan();
+    const state = this.openSteps.get(event.step);
+    const targetSpan = state?.span ?? this.runSpan;
+    if (!targetSpan) {
+      this.warn(`build_stall for '${event.step}' received but no span available — dropping`);
+      return;
+    }
+    const attrs: Record<string, string | number> = {
+      reason: event.reason,
+      resolvedBefore: event.resolvedBefore,
+      resolvedAfter: event.resolvedAfter,
+    };
+    targetSpan.addEvent('build_stall', attrs);
+  }
+
   // ── Run completion ─────────────────────────────────────────────────────────
 
   onFeatureComplete(_event: Extract<ConductorEvent, { type: 'feature_complete' }>): void {

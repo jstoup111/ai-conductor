@@ -18,7 +18,16 @@ skill improvements, evaluator calibration, and new stories.
 ### Data Collection
 
 Before analysis, gather:
-- **Harness:** `.pipeline/audit-trail/` (gate history, rework cycles), `.pipeline/task-status.json`, git log (reverts, amends), `.memory/gotchas/`, `.docs/conflicts/`
+- **Harness:** `.pipeline/audit-trail/events.jsonl` is the primary source for gate history and
+  rework cycles (gate verdicts, retries, kickbacks, HALT lifecycle) — read it, not
+  `.pipeline/gates/` files. Also gather `.pipeline/task-status.json`, git log (reverts, amends),
+  `.memory/gotchas/`, `.docs/conflicts/`.
+  - If `.pipeline/audit-trail/events.jsonl` is missing or empty despite steps having executed
+    this run, do NOT read that as "no friction occurred" — report INCOMPLETE for the
+    gate/rework-history portion of the retro (the audit trail failed to capture it) instead of
+    silently proceeding as if the run was clean.
+  - Raw `.pipeline/events.jsonl` (not the audit-trail subdirectory) remains the source for
+    retry-escalation history used in Part C (Context Efficiency Retro).
 - **Application:** full feature diff (branch point to HEAD), test suite output, `.docs/stories/` acceptance criteria, tech-context if loaded
 
 ---

@@ -28,11 +28,11 @@ export const DAEMON_FOREGROUND_COMMAND = 'conduct-ts daemon --continuous';
 // TmuxRunner — injectable execution boundary (allows deterministic unit tests).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Callable that executes tmux with the given argv and returns exit code + stdout. */
+/** Callable that executes tmux with the given argv and returns exit code + stdout + stderr. */
 export type TmuxRunner = (
   args: string[],
   opts: { inherit: boolean },
-) => { code: number; stdout: string };
+) => { code: number; stdout: string; stderr: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TmuxNotInstalledError — exported so callers can instanceof-check without
@@ -51,12 +51,30 @@ export class TmuxNotInstalledError extends Error {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
-  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC === '1' && args[0] === 'new-session') {
-    const sIndex = args.indexOf('-s');
-    const sessionName = sIndex >= 0 ? args[sIndex + 1] : undefined;
+  // Kill-switch (#377): under AI_CONDUCTOR_NO_REAL_EXEC=1, refuse any tmux
+  // verb that would put a live process into a real `cc-daemon-*` session —
+  // both fresh creation (new-session) and re-launching a command in an
+  // existing pane (respawn-pane). This guard is deliberately runner-level,
+  // not operation-level: the injectable-runner seam is HOW the unit tests
+  // drive newDetachedSession/respawnPane with cc-daemon names and fake
+  // runners under the suite-wide kill-switch, so only the runner that
+  // actually reaches real tmux may refuse. In-process guards cannot catch a
+  // child process spawned without the env — the suite-level teardown
+  // assertion in test/global-setup.ts is the net for that class. The
+  // intentional real-binary smokes opt out by unsetting the env var around
+  // their real tmux usage.
+  if (
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC === '1' &&
+    (args[0] === 'new-session' || args[0] === 'respawn-pane')
+  ) {
+    const targetFlag = args[0] === 'new-session' ? '-s' : '-t';
+    const tIndex = args.indexOf(targetFlag);
+    const rawTarget = tIndex >= 0 ? args[tIndex + 1] : undefined;
+    // respawn-pane targets look like `=<session>:`; normalize to the session name.
+    const sessionName = rawTarget?.replace(/^=/, '').replace(/:.*$/, '');
     if (sessionName && sessionName.startsWith(SESSION_PREFIX)) {
       throw new Error(
-        `Refusing to create real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
+        `Refusing to ${args[0]} real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
       );
     }
   }
@@ -71,10 +89,14 @@ export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
     }
     throw result.error;
   }
-  // When stdio is 'inherit', stdout is not captured (null) — that is expected for
+  // When stdio is 'inherit', stdout/stderr are not captured (null) — that is expected for
   // attach-session where the terminal takes over. Callers that pass inherit:true
-  // never inspect stdout.
-  return { code: result.status ?? 1, stdout: (result.stdout as string | null) ?? '' };
+  // never inspect stdout/stderr.
+  return {
+    code: result.status ?? 1,
+    stdout: (result.stdout as string | null) ?? '',
+    stderr: (result.stderr as string | null) ?? '',
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,15 +243,20 @@ export async function isPaneDead(
 /**
  * Sets the `remain-on-exit` window option so the daemon pane survives after its
  * foreground process exits, instead of the window/session closing out from
- * under us. Session-scoped target (`=<name>`) — never touches other sessions.
+ * under us. Pane-scoped target (`=<name>:`) with `-w` flag for window option —
+ * never touches other sessions.
  */
 export async function setRemainOnExit(
   name: string,
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<void> {
-  run(['set-option', '-t', `=${name}`, 'remain-on-exit', 'on'], { inherit: false });
-  // Non-zero exit is not fatal here — remain-on-exit is best-effort hardening;
-  // the respawn-pane call below is the operation that must succeed or throw.
+  const result = run(['set-option', '-w', '-t', `=${name}:`, 'remain-on-exit', 'on'], { inherit: false });
+  if (result.code !== 0) {
+    // Log the failure but don't throw — remain-on-exit is best-effort hardening;
+    // the respawn-pane call is the operation that must succeed or throw.
+    const stderr = result.stderr.trim() || '(no error message)';
+    console.warn(`setRemainOnExit failed for session "${name}": tmux exited with code ${result.code}: ${stderr}`);
+  }
 }
 
 /**
@@ -454,6 +481,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
         return; // already running (or just revived) — idempotent
       }
       await newDetachedSession(name, DAEMON_FOREGROUND_COMMAND, repo, run);
+      await setRemainOnExit(name, run);
     },
 
     async stop(repo: string): Promise<void> {

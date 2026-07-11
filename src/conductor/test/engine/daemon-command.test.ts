@@ -19,14 +19,15 @@ describe('detectDaemonCommand', () => {
     expect(detectDaemonCommand(argv('daemon', 'logs', '--follow'))).toBeNull();
   });
 
-  it('detects a bare `daemon` with defaults (concurrency 1, idle-poll 5, drain once)', () => {
+  it('detects a bare `daemon` with defaults (concurrency 1, watch true, idle-poll 60, drain once)', () => {
     expect(detectDaemonCommand(argv('daemon'))).toEqual({
       concurrency: 1,
+      watch: true,
       maxItems: undefined,
       continuous: false,
       maxCostTokens: undefined,
       maxRuntimeSeconds: undefined,
-      idlePollSeconds: 5,
+      idlePollSeconds: 60,
       maxIdlePolls: undefined,
     });
   });
@@ -60,5 +61,23 @@ describe('detectDaemonCommand', () => {
     expect(detectDaemonCommand(argv('daemon', '--concurrency', 'abc'))).toMatchObject({
       concurrency: 1,
     });
+    // `--idle-poll` with a non-numeric value → falls back to default 60.
+    expect(detectDaemonCommand(argv('daemon', '--idle-poll', 'invalid'))).toMatchObject({
+      idlePollSeconds: 60,
+    });
+    expect(detectDaemonCommand(argv('daemon', '--idle-poll'))).toMatchObject({
+      idlePollSeconds: 60,
+    });
+  });
+
+  it('parses --no-watch flag to disable watching', () => {
+    expect(detectDaemonCommand(argv('daemon', '--no-watch'))).toMatchObject({
+      watch: false,
+    });
+  });
+
+  it('watch defaults to true when --no-watch is not present', () => {
+    expect(detectDaemonCommand(argv('daemon'))).toMatchObject({ watch: true });
+    expect(detectDaemonCommand(argv('daemon', '--continuous'))).toMatchObject({ watch: true });
   });
 });

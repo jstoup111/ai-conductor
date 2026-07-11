@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
@@ -219,5 +219,77 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no parseable .*Verdict|not a clean APPROVED/i);
+  });
+});
+
+describe('engine/artifacts — build_review predicate (fail-closed)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-pred-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function verdict(obj: unknown) {
+    const full = join(dir, '.pipeline/build-review.json');
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, JSON.stringify(obj));
+    return full;
+  }
+
+  it('fails when no verdict file is present', async () => {
+    const r = await checkGateCompletion(dir, 'build_review');
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no build-review verdict/i);
+  });
+
+  it('passes on a fresh valid PASS verdict', async () => {
+    await verdict({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false } });
+    const sessionStartedAt = Date.now() - 1000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
+    expect(r.done).toBe(true);
+  });
+
+  it('fails when the verdict file predates the session (stale)', async () => {
+    const full = await verdict({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false },
+    });
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    await utimes(full, old, old);
+    const sessionStartedAt = Date.now();
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/stale/i);
+  });
+
+  it('fails on a FAIL verdict and surfaces the reasons', async () => {
+    await verdict({
+      verdict: 'FAIL',
+      reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
+      rubric: { tautology: true, scope: true, rootCause: false },
+    });
+    const sessionStartedAt = Date.now() - 1000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/tautological assertion in test/);
+    expect(r.reason).toMatch(/scope creep beyond acceptance criteria/);
+  });
+
+  it('fails on malformed JSON', async () => {
+    const full = join(dir, '.pipeline/build-review.json');
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, 'not json');
+    const sessionStartedAt = Date.now() - 1000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
+    expect(r.done).toBe(false);
+  });
+
+  it('fails on a verdict that fails validation (e.g. missing rubric)', async () => {
+    await verdict({ verdict: 'PASS' });
+    const sessionStartedAt = Date.now() - 1000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
+    expect(r.done).toBe(false);
   });
 });

@@ -87,6 +87,17 @@ Be opinionated:
 - Don't repeat specialist reports verbatim — synthesize and add judgment
 - Do explain WHY each roadmap item is prioritized where it is
 
+## Confidence Calibration (verify-claims)
+
+You synthesize 9 specialists' findings — do not launder their uncertainty into false certainty.
+Apply the `verify-claims` discipline when prioritizing:
+
+- Carry each finding's **confidence and basis** (verified vs inferred) through to the summary; do
+  not raise a finding's confidence beyond what its source specialist's evidence supports.
+- A cross-report pattern asserted from thin evidence is **tentative**, not a confirmed systemic
+  finding — label it.
+- Never present an inferred conclusion as a verified fact in the executive summary.
+
 ## Output Format
 
 Use the template from `templates/technical-assessment.md.template`. All sections are mandatory.

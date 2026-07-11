@@ -294,6 +294,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       'gate_verdict',
       'kickback',
       'feature_complete',
+      'build_progress',
+      'build_no_progress',
+      'build_stall',
     ];
     for (const type of eventTypes) {
       emitter.on(type, (event) => {
@@ -407,6 +410,15 @@ export class OtelVisualizer implements VisualizerPlugin {
         break;
       case 'feature_complete':
         this.spanManager.onFeatureComplete(event);
+        break;
+      case 'build_progress':
+        this.spanManager.onBuildProgress(event);
+        break;
+      case 'build_no_progress':
+        this.spanManager.onBuildNoProgress(event);
+        break;
+      case 'build_stall':
+        this.spanManager.onBuildStall(event);
         break;
     }
   }

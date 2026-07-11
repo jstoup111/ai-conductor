@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes } from 'fs/promises';
-import { join } from 'path';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
+import { execa } from 'execa';
 import {
   STEP_ARTIFACT_GLOBS,
   findArtifactFiles,
@@ -15,6 +16,7 @@ import {
   HALT_MARKER,
   planStem,
   planHasDependencyTree,
+  validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
@@ -333,6 +335,159 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
     });
+
+    it('rejects finish-choice="keep" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/keep/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="merge-local" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/merge-local/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('rejects finish-choice="discard" when running in daemon mode', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'discard');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/discard/);
+      expect(result.reason).toMatch(/daemon/i);
+    });
+
+    it('allows finish-choice="keep" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: false,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="keep" when daemon property is absent (legacy interactive mode)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // daemon not set
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('allows finish-choice="pr" in daemon mode (pr is safe to ship autonomously)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        daemon: true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when finish-choice="pr" and isHeadPushed returns true (happy path: evidence pass)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns false (evidence check)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => null,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/indeterminate|cannot verify/i);
+    });
+
+    it('passes when finish-choice="pr" and isHeadPushed injectable is absent (fail-open legacy)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        // isHeadPushed is undefined/absent
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('ignores isHeadPushed for non-PR choices (e.g., keep)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'keep');
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false, // Would fail for PR, but ignored for keep
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when finish-choice="pr" and isHeadPushed throws an error (corrupt repo)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => {
+          throw new Error('corrupt repo: .git/refs corrupted');
+        },
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/push evidence check failed/i);
+      expect(result.reason).toMatch(/corrupt repo/i);
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {
@@ -360,6 +515,257 @@ describe('engine/artifacts', () => {
       await writeAllCompleteTaskStatus();
       const result = await checkStepCompletion(dir, 'build');
       expect(result).toEqual({ done: true });
+    });
+
+    // NEW TESTS: build predicate recomputes from seeded state + evidence
+    describe('reworked build predicate: seed + derive', () => {
+      async function writePlan(content: string) {
+        await createFile('.docs/plans/phase-1.md', content);
+      }
+
+      async function writeTasks(tasks: Array<{ id: string; name?: string; status: string }>) {
+        await createFile(
+          '.pipeline/task-status.json',
+          JSON.stringify({ tasks }),
+        );
+      }
+
+      it('fails when plan is missing (context.planPath not found)', async () => {
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/missing.md') };
+        // Plan doesn't exist; task-status.json doesn't exist either
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/plan|missing|unreadable/i);
+      });
+
+      it('fails when plan is empty (no tasks to seed)', async () => {
+        await writePlan('# Empty Plan\n\nNo tasks defined.\n');
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/empty|no tasks/i);
+      });
+
+      it('re-seeds .pipeline/task-status.json when deleted mid-run', async () => {
+        // Use correct task header format: ### Task N: Title
+        await writePlan('### Task 1: First task\n**Story:** 1\n\n### Task 2: Second task\n**Story:** 2\n');
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // First check creates the seeded file
+        const result1 = await checkStepCompletion(dir, 'build', ctx);
+        expect(result1.done).toBe(false); // pending tasks exist
+
+        // Verify file was created
+        const statusPath = join(dir, '.pipeline/task-status.json');
+        const first = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(first.tasks).toBeDefined();
+        expect(first.tasks.length).toBeGreaterThan(0);
+
+        // Delete the file to simulate mid-run deletion
+        await rm(statusPath);
+
+        // Re-check should re-seed the file
+        const result2 = await checkStepCompletion(dir, 'build', ctx);
+        expect(result2.done).toBe(false); // still has pending
+
+        // File should be recreated
+        const second = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(second.tasks).toBeDefined();
+        expect(second.tasks.length).toBe(first.tasks.length);
+      });
+
+      it('rebuilds corrupt JSON in task-status.json', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n');
+        const statusPath = join(dir, '.pipeline/task-status.json');
+
+        // Write corrupt JSON
+        await mkdir(dirname(statusPath), { recursive: true });
+        await writeFile(statusPath, 'not valid json {');
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // Predicate should handle corrupt JSON gracefully and rebuild
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result.done).toBe(false); // has pending tasks
+
+        // File should be rebuilt (valid JSON)
+        const rebuilt = JSON.parse(await readFile(statusPath, 'utf-8'));
+        expect(rebuilt.tasks).toBeDefined();
+        expect(Array.isArray(rebuilt.tasks)).toBe(true);
+      });
+
+      it('fails with pending tasks (seeded state has pending)', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // After seeding, both tasks are pending (no evidence/commits)
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('marks tasks as pending after seeding (without evidence commits)', async () => {
+        await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
+        // Pre-write some completed tasks (forged state, no commit evidence).
+        // A PRESENT sidecar makes this a post-cutover state: without it, the
+        // first-seed H8 migration grandfather would (by design) preserve
+        // pre-cutover terminal rows — forgery detection is a post-cutover
+        // contract.
+        await writeTasks([
+          { id: '1', name: 'Task 1', status: 'completed' },
+          { id: '2', name: 'Task 2', status: 'completed' },
+        ]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // seedTaskStatus resets tasks without evidence to pending
+        // So gate should fail with pending tasks
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('detects all-completed forged rows as incomplete (no evidence)', async () => {
+        // This tests the acceptance criterion: forged all-completed rows + zero commits → gate fails
+        await writePlan('### Task 1: Task one\n**Story:** 1\n');
+        // Post-cutover state (sidecar present) — see the sibling test's note.
+        // Write task-status showing completed but no evidence commits
+        await writeTasks([{ id: '1', name: 'Task 1', status: 'completed' }]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        // seedTaskStatus resets to pending → gate fails
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('rejects tasks resolved only via legacy migrationGrandfather, even with completed rows (#463)', async () => {
+        // Legacy sidecar: no evidenceStamps at all, but tasks 2 and 4 were
+        // grandfathered during the H8 migration. Their task-status.json rows
+        // are (forged/stale) 'completed'. Evidence stamps are the ONLY
+        // completion currency now — the grandfather escape hatch must be
+        // inert for gate resolution, regardless of row status.
+        await writePlan('### Task 2: Task two\n**Story:** 2\n\n### Task 4: Task four\n**Story:** 4\n');
+        await writeTasks([
+          { id: '2', name: 'Task two', status: 'completed' },
+          { id: '4', name: 'Task four', status: 'completed' },
+        ]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: {},
+            noEvidenceAttempts: 0,
+            migrationGrandfather: ['2', '4'],
+          }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/2/);
+        expect(result.reason).toMatch(/4/);
+      });
+
+      it('loads a legacy sidecar with migrationGrandfather without error (backward-compat load)', async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: {},
+            noEvidenceAttempts: 0,
+            migrationGrandfather: ['2', '4'],
+          }),
+        );
+
+        const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+        const evidence = await createTaskEvidence(dir);
+
+        expect(evidence.migrationGrandfather.has('2')).toBe(true);
+        expect(evidence.migrationGrandfather.has('4')).toBe(true);
+      });
+
+      it('accepts a task with a real evidence stamp regardless of row status', async () => {
+        await writePlan('### Task 2: Task two\n**Story:** 2\n');
+        await writeTasks([{ id: '2', name: 'Task two', status: 'pending' }]);
+        await writeFile(
+          join(dir, '.pipeline/task-evidence.json'),
+          JSON.stringify({
+            evidenceStamps: { '2': { sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', form: 'trailer' } },
+            noEvidenceAttempts: 0,
+            migrationGrandfather: [],
+          }),
+        );
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
+
+      // Regression (Task 10): a task legitimately completed via a real commit
+      // (Task: N trailer + path-corroborating changes) must keep passing the
+      // gate even if the mutable `.pipeline/task-evidence.json` sidecar is
+      // deleted out from under it. deriveCompletion re-derives evidence from
+      // git (the immutable source of truth) on every gate evaluation and
+      // re-writes the sidecar — the sidecar is a cache, never the source.
+      it('re-stamps and still passes the gate after the evidence sidecar is deleted (real commit)', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        // getEvidenceRange requires a resolvable origin default branch to
+        // bound the commit range — set up a bare "origin" the way a real
+        // clone would have one, pushed at the initial commit so the plan +
+        // work commits below are ahead of it.
+        const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-origin-'));
+        await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+        await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+        await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+        await writePlan('### Task 1: Real task\n**Story:** 1\nContent with `src/real.ts`\n');
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // A real commit with a corroborating path change and the Task: N trailer.
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/real.ts'), 'export const real = true;\n');
+        await execa('git', ['add', 'src/real.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement real task\n\nTask: 1\n'], { cwd: dir });
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+        // First pass: seed + derive should stamp the task from the commit and pass.
+        const first = await checkStepCompletion(dir, 'build', ctx);
+        expect(first).toEqual({ done: true });
+
+        const sidecarPath = join(dir, '.pipeline/task-evidence.json');
+        const beforeDelete = JSON.parse(await readFile(sidecarPath, 'utf-8'));
+        expect(beforeDelete.evidenceStamps['1']).toBeDefined();
+
+        // Delete the mutable sidecar entirely.
+        await rm(sidecarPath, { force: true });
+
+        // Re-run seed + derive + gate: the task must be re-stamped from git
+        // and still count as completed, even though the sidecar was wiped.
+        const second = await checkStepCompletion(dir, 'build', ctx);
+        expect(second).toEqual({ done: true });
+
+        const restamped = JSON.parse(await readFile(sidecarPath, 'utf-8'));
+        expect(restamped.evidenceStamps['1']).toBeDefined();
+
+        await rm(bareDir, { recursive: true, force: true });
+      });
     });
   });
 
@@ -401,6 +807,120 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
+    });
+  });
+
+  describe('checkStepCompletion: manual_test whitewash guard + attempt sections (#367)', () => {
+    const RESULTS = '.pipeline/manual-test-results.md';
+    const MARKER = '.pipeline/manual-test-fail-evidence.json';
+    const FAIL_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n';
+    const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | PASS |\n';
+    const sha = (s: string) => async () => s;
+
+    it('observing FAIL rows records fail evidence (HEAD sha + excerpt) and still fails', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.headSha).toBe('aaa111');
+      expect(marker.failRows.join('\n')).toMatch(/Bar.*FAIL/);
+      expect(typeof marker.observedAt).toBe('number');
+    });
+
+    it('refuses a FAIL→PASS flip when HEAD has not moved since the recorded FAIL', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0, getHeadSha: sha('aaa111') });
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no new commits|whitewash/i);
+    });
+
+    it('accepts a FAIL→PASS flip once HEAD moved, and clears the marker', async () => {
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0, getHeadSha: sha('aaa111') });
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('bbb222'),
+      });
+      expect(result).toEqual({ done: true });
+      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+    });
+
+    it('ignores (and cleans up) a fail-evidence marker from a previous session', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now() - 120_000, headSha: 'aaa111', failRows: ['| Bar | FAIL |'] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: Date.now() - 1_000,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result).toEqual({ done: true });
+      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+    });
+
+    it('fails open when no getHeadSha seam is provided (pre-change behavior preserved)', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails open when getHeadSha returns null (no repo)', async () => {
+      await createFile(
+        MARKER,
+        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
+      );
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: async () => null,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('evaluates only the LATEST attempt section: old FAIL + new clean attempt passes', async () => {
+      await createFile(
+        RESULTS,
+        '# Manual Test Results\n\n## Attempt 1 — 2026-07-06T10:00:00Z\n\n| Story | Result |\n|---|---|\n| Bar | FAIL |\n\n## Attempt 2 — 2026-07-06T10:30:00Z\n\n| Story | Result |\n|---|---|\n| Bar | PASS |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when the LATEST attempt section contains FAIL rows even if an earlier one was clean', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-06T10:00:00Z\n\n| Bar | PASS |\n\n## Attempt 2 — 2026-07-06T10:30:00Z\n\n| Bar | FAIL |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
+
+    it('passes when only the Story/Notes text contains the substring "FAIL" but the Result cell is SKIP (no false-positive whitewash)', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-06T10:00:00Z\n\n' +
+          '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
+          '| FAIL kicks back to build with evidence | N/A | SKIP | engine-internal |\n' +
+          '| fail-closed verdict predicate | N/A | SKIP | engine-internal |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
     });
   });
 
@@ -753,6 +1273,77 @@ Task 1 → Task 2
 
     it('handles undefined content gracefully, returning false without throwing', () => {
       expect(planHasDependencyTree(undefined as any)).toBe(false);
+  describe('validateBuildReviewVerdict', () => {
+    it('accepts a valid PASS verdict', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+      });
+    });
+
+    it('rejects malformed JSON (non-object) as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict('not an object');
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects null as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict(null);
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects a verdict missing the "verdict" field as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        rubric: { tautology: false },
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects a verdict missing the "rubric" field as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({ verdict: 'PASS' });
+      expect(result.ok).toBe(false);
+    });
+
+    it('accepts a FAIL verdict with reasons and preserves them', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
+        rubric: { tautology: true, scope: true, rootCause: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
+        rubric: { tautology: true, scope: true, rootCause: false },
+      });
+    });
+
+    it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'pass',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'APPROVED',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it('rejects an empty string verdict as invalid-or-FAIL', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: '',
+        rubric: {},
+      });
+      expect(result.ok).toBe(false);
     });
   });
 });

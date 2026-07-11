@@ -1,6 +1,8 @@
 import { execa } from 'execa';
 import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import * as chokidar from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
@@ -13,6 +15,11 @@ import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
+import { escalateBuildFailure } from './build-failure-escalation.js';
+import { makeGitRunner } from './rebase.js';
+import { surfaceQuarantine } from './setup-triage.js';
+import type { SetupFailureError } from './worktree-prepare.js';
+import type { TriageOutcome } from './setup-triage.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -32,6 +39,12 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
+  runSetupTriage?: (
+    error: SetupFailureError,
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => Promise<TriageOutcome>;
 }
 
 const PROCESSED_SUBDIR = '.daemon/processed';
@@ -113,6 +126,29 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // daemon-side write here would land on the main checkout's base branch —
     // never pushed, and it permanently breaks fastForwardRoot's --ff-only
     // advance once local main is ahead of origin.
+
+    // Escalate a false-ship outcome by pushing the worktree branch and opening a
+    // draft needs-remediation PR. Called when an outcome converges DONE but fails
+    // the ship-eligibility guard. Best-effort: push failure resolves to {} (FR-7
+    // degradation), never throws (non-throwing contract).
+    escalateBuildFailure: async (opts) => {
+      return escalateBuildFailure({
+        projectRoot: opts.projectRoot,
+        failureReason: opts.failureReason,
+        log: cfg.log,
+      });
+    },
+
+    // Task 15: Thread the setup-triage handler when present (daemon mode only).
+    // The handler uses git runner for worktree, prepareWorktree for retry,
+    // and fix-session dispatcher constructing fresh DefaultStepRunner per dispatch.
+    runSetupTriage: cfg.runSetupTriage,
+
+    // Task 14 (TS-5): surface quarantine evidence to the resuming build agent.
+    // Rooted at the feature's own worktree (not the main checkout) so
+    // `rev-parse --verify wip/setup-quarantine-<slug>` sees that worktree's refs.
+    surfaceQuarantineRef: (wt, slug, outcome) =>
+      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: cfg.log ?? (() => {}) }),
   };
 }
 
@@ -254,4 +290,120 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Task 15: append a `halt_cleared` audit-trail record to the halted feature's
+ * OWN worktree ledger (`<worktreePath>/.pipeline/audit-trail/events.jsonl`),
+ * synchronously and best-effort. The worktree can legitimately be removed
+ * between the fs-watcher's unlink event and this call (e.g. a fast
+ * teardown race) — that must never crash the daemon process, so failures are
+ * caught, logged loudly to stderr, and swallowed (never rethrown).
+ */
+function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): void {
+  try {
+    const auditDir = join(worktreePath, '.pipeline', 'audit-trail');
+    mkdirSync(auditDir, { recursive: true });
+    const record = { event: 'halt_cleared', cause, at: Date.now() };
+    appendFileSync(join(auditDir, 'events.jsonl'), `${JSON.stringify(record)}\n`, { flag: 'a' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(
+      `[daemon] WRITE-FAILED: failed to append halt_cleared audit record ` +
+        `(worktree=${worktreePath}, cause=${cause}): ${message}\n`,
+    );
+  }
+}
+
+/**
+ * Watch a halted feature's worktree for HALT marker removal, calling `onCleared`
+ * when the `.pipeline/HALT` file is deleted or renamed away.
+ *
+ * Uses chokidar to watch for filesystem events. On detecting an unlink event
+ * (both delete and rename), re-verifies the file is truly gone before calling
+ * the callback. Returns a dispose function that closes the watcher (idempotent).
+ *
+ * Errors and missing directories are handled gracefully:
+ * - If the worktree directory doesn't exist, returns a no-op dispose function
+ * - Watcher errors are swallowed (best-effort monitoring)
+ * - Calling dispose multiple times is safe
+ *
+ * Internal implementation. Use `makeWatchHaltClearedSeam` to create the
+ * DaemonDeps-compatible seam.
+ *
+ * @param worktreeBase Directory under which per-feature worktrees live
+ * @param slug Feature slug (worktree is at `<worktreeBase>/<slug>`)
+ * @param onCleared Callback fired exactly once when HALT marker is confirmed gone
+ * @returns Dispose function that closes the watcher
+ */
+export function watchHaltCleared(
+  worktreeBase: string,
+  slug: string,
+  onCleared: () => void,
+): () => void {
+  const worktreePath = join(worktreeBase, slug);
+  const haltPath = join(worktreePath, HALT_MARKER);
+  const clearedPath = join(worktreePath, '.pipeline', 'HALT.cleared');
+  let watcher: chokidar.FSWatcher | null = null;
+  let disposed = false;
+
+  // Start the watcher
+  try {
+    watcher = chokidar.watch(haltPath, { ignoreInitial: true });
+
+    watcher.on('unlink', async () => {
+      if (disposed) return;
+
+      // Re-verify the file is actually gone
+      const stillExists = await exists(haltPath);
+      if (!stillExists) {
+        // Task 15: attribute the clear to its cause before waking the
+        // daemon. A `HALT.cleared` sibling means the rekick flow renamed
+        // HALT away (cause='rekick'); its absence means an operator deleted
+        // HALT directly (cause='operator'). The append is synchronous and
+        // happens BEFORE onCleared() fires, so the record always precedes
+        // any re-dispatch/dispose race (AC5).
+        const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
+        appendHaltClearedRecord(worktreePath, cause);
+        onCleared();
+      }
+    });
+
+    // Swallow watcher errors (best-effort monitoring)
+    watcher.on('error', () => {
+      /* ignore */
+    });
+  } catch {
+    // If the directory doesn't exist or the watcher fails to start,
+    // just return a no-op dispose
+    watcher = null;
+  }
+
+  // Return idempotent dispose function
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    if (watcher) {
+      watcher.close().catch(() => {
+        /* best-effort cleanup */
+      });
+    }
+  };
+}
+
+/**
+ * Factory for the DaemonDeps watchHaltCleared seam (Task 12).
+ *
+ * Creates a seam-compatible function `(slug: string, onCleared: () => void) => () => void`
+ * that uses the real filesystem watcher to detect HALT marker removal.
+ *
+ * @param worktreeBase Directory under which per-feature worktrees live
+ * @returns DaemonDeps-compatible watchHaltCleared function
+ */
+export function makeWatchHaltClearedSeam(
+  worktreeBase: string,
+): (slug: string, onCleared: () => void) => () => void {
+  return (slug: string, onCleared: () => void) => {
+    return watchHaltCleared(worktreeBase, slug, onCleared);
+  };
 }

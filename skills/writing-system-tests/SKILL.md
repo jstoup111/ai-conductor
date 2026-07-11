@@ -3,6 +3,7 @@ name: writing-system-tests
 description: "Use BEFORE implementing any feature that has stories in .docs/stories/ — generates failing acceptance specs from acceptance criteria as the RED phase of TDD. Generates HTTP/request-level acceptance tests for headless/API projects, end-to-end UI tests for projects with a frontend, using the project's own test framework and directory conventions."
 enforcement: gating
 phase: build
+requires: [verify-claims]
 ---
 
 # Writing Acceptance Tests
@@ -12,6 +13,11 @@ phase: build
 Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Each acceptance
 criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
 implementation — they are the RED phase of BDD.
+
+**Correctness gate:** a test encodes an expected-behavior claim. Per the `/verify-claims` protocol,
+if a spec rests on an assumption about what "correct" means that is not pinned by the story's
+acceptance criteria, the FR, or the ADR, surface it with its confidence and HARD-BLOCK for operator
+approval (HALT if autonomous) rather than freezing a guess into a passing/failing assertion.
 
 This skill is **language- and framework-agnostic.** It describes *what* acceptance tests to
 write and *why*; the concrete syntax, test runner, file layout, and fixture mechanism come
@@ -89,6 +95,19 @@ infrastructure (database, queues, caches, background jobs). Only mock **third-pa
 services** (payment APIs, email providers, external webhooks) that are outside the project's
 control. If a spec requires infrastructure that isn't available in the test environment,
 configure the test environment to provide it — don't mock it away.
+
+### 2.5. Schema Consistency Check
+
+Before generating specs, compare model/entity column definitions against migration files:
+- Check that column names in models match column names in migrations (e.g., `external_id` in
+  model vs `external_reference_id` in migration is a mismatch)
+- Check that column types match (e.g., `payload` string vs `request_payload`/`response_payload`
+  split columns)
+- If the project uses fake/stub column definitions (e.g., `fake_columns.rb`), verify those
+  match the real migration definitions
+
+**Do not generate specs from inconsistent schemas — resolve the mismatch first.** Specs
+generated against a mismatched schema will either pass incorrectly or fail for the wrong reason.
 
 ### 3. Parse Acceptance Criteria
 
@@ -503,3 +522,16 @@ Unit tests (TDD per-model/module)  — Domain/model logic in isolation
 **Each layer tests something the others don't.** If a test could live in a lower layer, it should.
 Acceptance specs are expensive — only use them for multi-step flows that can't be verified at a
 lower level. This skill handles the top layer. TDD handles the bottom two.
+
+## Verify
+
+- [ ] Acceptance specs generated for every story's happy AND negative paths
+- [ ] The new specs were EXECUTED, not just written — a spec that never ran does not
+      establish RED
+- [ ] The real RED run's results recorded to `.pipeline/acceptance-specs-red.json`
+      (command, targetSpecs, executed/passed/failed/skipped/errors counts) — the
+      completion gate validates this file and rejects runs where the feature's own
+      specs were skipped, deselected, or errored at collection
+- [ ] Failures are for the RIGHT reason (missing implementation), not
+      import/syntax/collection errors
+- [ ] Specs use the project's own test framework and directory conventions

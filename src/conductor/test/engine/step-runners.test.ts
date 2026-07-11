@@ -232,7 +232,7 @@ describe('DefaultStepRunner', () => {
   // genuinely created. The auto-finish prompt must direct writes to ABSOLUTE
   // worktree paths derived from pipelineDir.
 
-  it('auto-mode finish prompt uses ABSOLUTE pipelineDir paths for the markers', async () => {
+  it('auto-mode finish prompt uses the ABSOLUTE pipelineDir in the finish-record command', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -242,13 +242,10 @@ describe('DefaultStepRunner', () => {
     await runner.run('finish', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/finish-choice');
-    expect(opts.systemPrompt).toContain('/wt/feature-x/.pipeline/conduct-state.json');
-    // Must not push the marker write to after cleanup.
-    expect(opts.systemPrompt).not.toContain('must be your final action');
+    expect(opts.systemPrompt).toContain('--pipeline-dir /wt/feature-x/.pipeline');
   });
 
-  it('auto-mode finish prompt falls back to relative paths when pipelineDir is unset', async () => {
+  it('auto-mode finish prompt falls back to the relative .pipeline dir when pipelineDir is unset', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       mode: 'auto',
@@ -257,8 +254,79 @@ describe('DefaultStepRunner', () => {
     await runner.run('finish', emptyState);
 
     const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(opts.systemPrompt).toContain('`.pipeline/finish-choice`');
-    expect(opts.systemPrompt).not.toContain('/.pipeline/finish-choice');
+    expect(opts.systemPrompt).toContain('--pipeline-dir .pipeline');
+    expect(opts.systemPrompt).not.toContain('--pipeline-dir /.pipeline');
+  });
+
+  // --- Auto-mode finish: prompt ends with the one `finish-record` command ---
+  // The finish skill and engine prompt used to instruct Claude to hand-write
+  // the marker files, which drifted from the real gate contract (finish-record
+  // verifies the PR/push evidence before writing). The auto-mode prompt must
+  // instead end with the single `conduct-ts finish-record` command so the CLI
+  // — not free-form writes — is the source of truth.
+
+  it('auto-mode finish prompt with pipelineDir set contains the finish-record command with absolute --pipeline-dir', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice pr --pr-url');
+    expect(opts.systemPrompt).toContain('--pipeline-dir /wt/feature-x/.pipeline');
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice keep --pipeline-dir /wt/feature-x/.pipeline');
+  });
+
+  it('auto-mode finish prompt no longer contains the manual "write the single word" instructions', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).not.toContain('write the single word');
+  });
+
+  it('auto-mode finish prompt without pipelineDir falls back to the relative .pipeline rendering', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+    });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice pr --pr-url');
+    expect(opts.systemPrompt).toContain('--pipeline-dir .pipeline');
+    expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice keep --pipeline-dir .pipeline');
+  });
+
+  it('non-auto or non-finish prompts remain unchanged (no finish-record command)', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      totalSteps: 14,
+    });
+
+    // finish, but not auto mode (collaborative path)
+    await runner.run('finish', emptyState);
+    const finishOpts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(finishOpts.systemPrompt).not.toContain('finish-record');
+
+    vi.clearAllMocks();
+
+    const autoRunner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      totalSteps: 14,
+    });
+    await autoRunner.run('build', emptyState);
+    const buildOpts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(buildOpts.systemPrompt).not.toContain('finish-record');
   });
 
   // --- Feature 2: Session creation marker ---
@@ -309,7 +377,7 @@ describe('DefaultStepRunner', () => {
       // lazy-init would set sessionStarted=true and `--resume` a brand-new
       // session id that was never created → "No conversation found" → "session
       // unavailable (expired or in use)". The conductor calls resetSession()
-      // before each step under freshContextPerStep; it must win over the stale
+      // before every step (unconditional fresh-per-step); it must win over the stale
       // marker and force a create.
       await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
       await writeFile(join(pipeDir, 'conduct-session-id'), 'stale-id', 'utf-8');
@@ -824,15 +892,15 @@ TIER: M`,
       expect(result.waitSeconds).toBe(300);
     });
 
-    it('reads wait seconds from line 2 of the rate-limit-hit marker', async () => {
+    it('sources wait seconds from provider result', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: false,
         output: 'rate limited',
         exitCode: 1,
         rateLimited: true,
+        waitSeconds: 450,
       });
-      await writeFile(join(pipeDir, 'rate-limit-hit'), 'timestamp\n450\n', 'utf-8');
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
       });
@@ -840,6 +908,24 @@ TIER: M`,
       const result = await runner.run('worktree', emptyState);
 
       expect(result.waitSeconds).toBe(450);
+    });
+
+    it('falls back to 300 seconds when provider omits waitSeconds', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'rate limited',
+        exitCode: 1,
+        rateLimited: true,
+        // waitSeconds: undefined
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result.waitSeconds).toBe(300);
     });
 
     it('surfaces sessionExpired=true when provider reports it', async () => {
@@ -958,7 +1044,66 @@ TIER: M`,
         const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect(opts.interactive).toBe(false);
       });
+
+      it(`${step}: passes interactive: true when mode is 'interactive'`, async () => {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'interactive',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(true);
+      });
     }
+
+    // FR-1-2: Test conversational steps NOT in INTERACTIVE_STEPS (like prd_audit)
+    // should dispatch with interactive: true in mode='interactive' and
+    // interactive: false in mode='default'
+    it('prd_audit: passes interactive: false in mode default (not in INTERACTIVE_STEPS)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'default',
+      });
+
+      await runner.run('prd_audit', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.interactive).toBe(false);
+    });
+
+    it('prd_audit: passes interactive: true in mode interactive (conversational, not one-shot)', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'interactive',
+      });
+
+      await runner.run('prd_audit', emptyState);
+
+      const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(opts.interactive).toBe(true);
+    });
+
+    // FR-2: Verify that steps in interactive mode continue to the next step normally
+    it('after a conversational step completes in mode interactive, run advances to next step with same flow', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        mode: 'interactive',
+      });
+
+      const result1 = await runner.run('explore', emptyState);
+      const result2 = await runner.run('stories', emptyState);
+
+      // Both steps should complete successfully
+      expect(result1.success).toBe(true);
+      expect(result2.success).toBe(true);
+      // Both should have been dispatched with interactive: true
+      const opts1 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      const opts2 = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
+      expect(opts1.interactive).toBe(true);
+      expect(opts2.interactive).toBe(true);
+    });
 
     it('complexity-adjacent one-shot steps stay print-mode even in default mode', async () => {
       const oneShotSteps: StepName[] = [
@@ -970,6 +1115,26 @@ TIER: M`,
         const provider = createMockProvider();
         const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
           mode: 'default',
+        });
+
+        await runner.run(step, emptyState);
+
+        const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+        expect(opts.interactive).toBe(false);
+      }
+    });
+
+    // Verify that one-shot steps stay print-mode even in interactive mode
+    it('one-shot steps stay print-mode even in interactive mode', async () => {
+      const oneShotSteps: StepName[] = [
+        'conflict_check',
+        'architecture_diagram',
+        'retro',
+      ];
+      for (const step of oneShotSteps) {
+        const provider = createMockProvider();
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+          mode: 'interactive',
         });
 
         await runner.run(step, emptyState);
@@ -1069,6 +1234,182 @@ TIER: M`,
         expect.stringContaining('Downgraded from fable to opus'),
       );
       warnSpy.mockRestore();
+    });
+  });
+
+  // ── build_review one-shot grader dispatch (jstoup111/ai-conductor#324, Task 11) ──
+  // build_review is a fresh, isolated grader session — never resumes the
+  // conductor's own session (constructor sessionId 'session-1'). Follows the
+  // resolveRebaseConflict one-shot pattern (step-runners.ts:594-610).
+  describe('build_review one-shot dispatch', () => {
+    let dir: string;
+    let planPath: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-runner-'));
+      planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    function scriptedGit() {
+      const git = async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      };
+      return git;
+    }
+
+    it('dispatches with a fresh uuid and resume:false, never the constructor session', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(invoke).toHaveBeenCalledOnce();
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.resume).toBe(false);
+      expect(opts.sessionId).not.toBe('session-1');
+      // A real uuid, not empty/undefined.
+      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'no models available',
+        exitCode: 1,
+        modelUnavailable: true,
+      });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('resolveSetupFailure one-shot dispatch', () => {
+    it('assembles a fresh session with uuid and calls provider with output tail in prompt', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      const result = await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'npm ERR! Something went wrong',
+        slug: 'my-feature',
+      });
+
+      expect(result.attempted).toBe(true);
+      expect(invoke).toHaveBeenCalledOnce();
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      // Must be a fresh session, not the constructor's session
+      expect(opts.sessionId).not.toBe('session-1');
+      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      // Must use resume:false for fresh session
+      expect(opts.resume).toBe(false);
+      // Prompt must contain the output tail
+      expect(opts.prompt).toContain('npm ERR! Something went wrong');
+      // System prompt must be present
+      expect(opts.systemPrompt).toBeTruthy();
+    });
+
+    it('respects the AI_CONDUCTOR_NO_REAL_EXEC kill-switch in tests', async () => {
+      const originalEnv = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      try {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+        const invoke = vi.fn().mockResolvedValue({
+          success: true,
+          output: 'done',
+          exitCode: 0,
+        });
+        const provider: LLMProvider = {
+          invoke,
+          invokeInteractive: vi.fn().mockResolvedValue(undefined),
+        };
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+        const result = await runner.resolveSetupFailure({
+          worktreePath: '/wt/feature-x',
+          outputTail: 'error output',
+          slug: 'my-feature',
+        });
+
+        expect(result.attempted).toBe(true);
+      } finally {
+        if (originalEnv !== undefined) {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = originalEnv;
+        } else {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        }
+      }
+    });
+
+    it('passes dangerouslySkipPermissions=true like other one-shot fix-session patterns', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'error',
+        slug: 'my-feature',
+      });
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.dangerouslySkipPermissions).toBe(true);
+    });
+
+    it('sets cwd to the worktreePath', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'error',
+        slug: 'my-feature',
+      });
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.cwd).toBe('/wt/feature-x');
     });
   });
 });

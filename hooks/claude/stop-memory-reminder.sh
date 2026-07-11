@@ -34,7 +34,9 @@ if git log --oneline -1 --since="1 hour ago" >/dev/null 2>&1; then
     WORK_HAPPENED=true
   fi
 fi
-if [ -f ".pipeline/task-status.json" ]; then
+# Engine-owned run state signals a pipeline session (H4 writer audit: hooks
+# never reference the engine's derived task cache).
+if [ -f ".pipeline/conduct-state.json" ]; then
   WORK_HAPPENED=true
 fi
 

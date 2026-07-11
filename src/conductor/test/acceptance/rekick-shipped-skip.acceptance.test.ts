@@ -97,7 +97,7 @@ function shippedRecordBody(slug: string): string {
 beforeEach(async () => {
   repoDir = await mkdtemp(join(tmpdir(), 'rekick-dedup-repo-'));
   worktreeBase = await mkdtemp(join(tmpdir(), 'rekick-dedup-worktrees-'));
-  await execFile('git', ['init', '-q'], { cwd: repoDir });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoDir });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoDir });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoDir });
   await writeFile(join(repoDir, 'README.md'), 'init\n');

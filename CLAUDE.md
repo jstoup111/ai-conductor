@@ -12,6 +12,20 @@ communication protocol, enforcement levels, and conventions — are defined in:
 
 Claude MUST read and follow HARNESS.md at the start of every session.
 
+## Design Principles
+
+**Deterministic where possible; LLM only where necessary.** When designing any fix or
+feature for this harness, first ask: can the engine, a git hook, a gate, or plain code
+do this mechanically? Dispatch an LLM agent only for the parts that genuinely require
+judgement (synthesis, code authoring, ambiguous resolution). Never rely on prompt
+discipline for something machinery can enforce or compute — prompt-level rules drift
+under long builds and cost operator interventions; deterministic enforcement is instant,
+token-free, and fails at the point of violation. When an agent repeatedly violates a
+rule, the fix is machinery that stamps/validates/rejects at the moment of the mistake —
+not a stronger prompt. (Precedents: the evidence gate derives completion from commits
+rather than trusting agent reports; #426 fixed path matching engine-side; #433 replaces
+trailer discipline with engine-stamped task ids and commit hooks.)
+
 ## Harness Architecture
 
 - **Skills** (`skills/`) — Each has a `SKILL.md` with YAML frontmatter. One skill, one responsibility.
@@ -94,6 +108,28 @@ to this repo must honor these gates:
    ```` ```bash migration ```` fenced block. `bin/migrate` will execute these
    blocks (after user approval) when consumers update past this version.
 
+   **Waiver (self-host builds only, adr-2026-07-06-migration-gate-waiver).**
+   When the self-host release gate's path-based classifier flags a breaking
+   surface but the actual edit is internal-only (e.g. deleting a private
+   helper, no consumer-visible CLI/hook/schema change), a migration block is
+   not the right fix — commit a waiver instead of inventing an empty one.
+   Add a file under `.docs/release-waivers/<plan-stem>.md` in the SAME diff as:
+   ```
+   Waives: <comma-separated canonical surface names>
+
+   Rationale: <non-empty prose — why this is internal-only>
+   ```
+   Canonical surface names are exactly: `bin/conduct CLI`, `skill symlink
+   targets`, `hook wiring`, `settings.json schema` (must match
+   `CANONICAL_BREAKING_SURFACES` in `release-gate.ts` verbatim — an unknown
+   name is treated as malformed, never silently accepted). The waiver must
+   list every touched surface (partial coverage HALTs naming the gap) and
+   must be part of the `base...HEAD` diff — a waiver merged by a prior
+   feature never satisfies a later one (fail-closed freshness). An
+   undeterminable change set (null diff) can never be waived. Do NOT use a
+   waiver when the edit changes actual CLI/hook/schema *behavior* — that
+   always needs a real migration block.
+
 3. **Releases are cut by CI on merge to main.** `.github/workflows/release.yml`
    reads `VERSION`, tags `vX.Y.Z`, rewrites the `[Unreleased]` block under
    `## [X.Y.Z] - <today>`, bumps `VERSION` to the next patch, and publishes a
@@ -123,6 +159,4 @@ HARNESS.md is the single source of truth for behavioral rules consumed by projec
 
 - All behavioral changes (communication protocol, model selection, conventions) go in HARNESS.md
 - This CLAUDE.md describes the harness repo itself; HARNESS.md describes rules for projects
-- `check_harness_config()` in `bin/conduct` auto-detects missing HARNESS.md references in
-  project CLAUDE.md files and prompts the user to upgrade
-- When the harness is pulled, HARNESS.md updates propagate to all projects automatically
+- `hooks/claude/session-start-context.sh` detects when a consumer CLAUDE.md is missing the HARNESS.md reference and prints the required block; consumers must add it manually (not auto-applied)

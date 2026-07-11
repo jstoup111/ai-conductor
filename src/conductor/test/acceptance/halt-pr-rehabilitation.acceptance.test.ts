@@ -56,20 +56,41 @@ function makeGhFake(state: {
   body?: string;
 }): { gh: GhRunner; calls: string[][]; getBody: () => string } {
   let body = state.body ?? '';
+  let labels = state.labels;
+  let isDraft = state.isDraft;
   const calls: string[][] = [];
   const gh: GhRunner = async (args) => {
     calls.push([...args]);
     if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
-      return { stdout: JSON.stringify({ body }) };
+      // readHaltPresentation calls: pr view <url> --json isDraft,labels,body
+      return {
+        stdout: JSON.stringify({
+          isDraft,
+          labels: labels.map((name) => ({ name })),
+          body,
+        }),
+      };
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       return {
         stdout: JSON.stringify({
           title: state.title,
-          isDraft: state.isDraft,
-          labels: state.labels.map((name) => ({ name })),
+          isDraft,
+          labels: labels.map((name) => ({ name })),
         }),
       };
+    }
+    if (args[0] === 'pr' && args[1] === 'ready' && args.includes('--undo')) {
+      isDraft = true;
+      return { stdout: '' };
+    }
+    if (args[0] === 'pr' && args[1] === 'ready') {
+      isDraft = false;
+      return { stdout: '' };
+    }
+    if (args[0] === 'api' && args.includes('DELETE')) {
+      labels = labels.filter((l) => l !== 'needs-remediation');
+      return { stdout: '' };
     }
     if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
       body = args[args.indexOf('--body') + 1];

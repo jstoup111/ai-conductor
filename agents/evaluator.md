@@ -86,6 +86,17 @@ Execute in order. Failures in earlier stages block later stages.
 - Could invalid states be represented?
 - **Verdict:** PASS or FAIL with specific findings
 
+## Confidence Calibration (verify-claims)
+
+Every finding you report is a claim, and a confident-but-wrong one does real damage — it blocks
+good work or waves through a defect. Apply the `verify-claims` discipline to each finding:
+
+- Attach a **confidence %** and its **basis**: `verified` (you reproduced or traced it in the
+  code/output) or `inferred` (derived from adjacent evidence, not directly observed).
+- **Never assert a finding you have not verified.** If you could not confirm it, say so.
+- A finding below high confidence is **tentative** — label it; do not state it as a hard defect.
+- Do not inflate severity or certainty beyond what the evidence supports.
+
 ## Output Format
 
 ```markdown

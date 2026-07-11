@@ -45,7 +45,7 @@ async function git(args: string[], cwd: string): Promise<string> {
 // ---------------------------------------------------------------------------
 async function makeGitRepo(): Promise<{ repoPath: string; defaultBranch: string }> {
   const repoPath = await mkdtemp(join(tmpdir(), 'authoring-guards-test-'));
-  await execFile('git', ['init', '-q'], { cwd: repoPath });
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: repoPath });
   await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: repoPath });
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repoPath });
   await writeFile(join(repoPath, 'README.md'), 'init\n');

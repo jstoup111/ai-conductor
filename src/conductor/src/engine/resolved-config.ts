@@ -1,3 +1,4 @@
+import { homedir } from 'os';
 import type { StepName, Phase, ComplexityTier } from '../types/index.js';
 import type {
   HarnessConfig,
@@ -37,6 +38,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
   build: 'haiku',
+  build_review: 'opus',
   manual_test: 'sonnet',
   prd_audit: 'opus',
   architecture_review_as_built: 'sonnet',
@@ -61,6 +63,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   worktree: 'low',
   acceptance_specs: 'medium',
   build: 'low',
+  build_review: 'high',
   manual_test: 'medium',
   prd_audit: 'high',
   architecture_review_as_built: 'medium',
@@ -85,6 +88,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   worktree: 1,
   acceptance_specs: 3,
   build: 5,
+  build_review: 3,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -109,6 +113,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   worktree: 'auto',
   acceptance_specs: 'auto',
   build: 'auto',
+  build_review: 'conditional', // marker written only on FAIL verdict (kickback)
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
@@ -356,6 +361,17 @@ export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
 
 export const DEFAULT_SELF_HOST_ACTIVATION: SelfHostActivation = 'auto';
 
+/** Default daemon build authentication mode (TR-1/2/3/4). */
+export const DEFAULT_BUILD_AUTH_MODE = 'daemon-token';
+
+/**
+ * Default path for daemon build-auth token file (TR-1/2/3/4).
+ * Resolves to ~/.ai-conductor/build-auth at resolution time.
+ */
+export function getDefaultBuildAuthTokenPath(): string {
+  return `${homedir()}/.ai-conductor/build-auth`;
+}
+
 /** Fully-resolved self-host guardrail settings (no optional fields). */
 export interface ResolvedSelfHostConfig {
   activation: SelfHostActivation;
@@ -367,6 +383,34 @@ export interface ResolvedSelfHostConfig {
   versionFreeze: string | null;
   /** Timeout in minutes for credentials park-and-poll (TR-2/3/4/5). */
   authParkTimeoutMinutes: number;
+  /** Daemon build authentication mode (TR-1/2/3/4). Defaults to 'daemon-token'. */
+  buildAuthMode: string;
+  /** Expanded path to daemon build-auth token file (TR-1/2/3/4). Defaults to ~/.ai-conductor/build-auth. */
+  buildAuthTokenPath: string;
+}
+
+/**
+ * Expand ~ to home directory in a path string.
+ * If the path starts with ~, it is replaced with the result of homedir().
+ * Otherwise, the path is returned unchanged.
+ */
+function expandTildePath(path: string): string {
+  if (path.startsWith('~')) {
+    return path.replace(/^~/, homedir());
+  }
+  return path;
+}
+
+/**
+ * Normalize a token path by trimming whitespace and expanding tilde.
+ * Returns the default path if the input is empty/whitespace.
+ */
+function resolveTokenPath(rawPath: string | undefined): string {
+  const trimmed = rawPath?.trim() || '';
+  if (!trimmed) {
+    return getDefaultBuildAuthTokenPath();
+  }
+  return expandTildePath(trimmed);
 }
 
 /**
@@ -377,11 +421,14 @@ export interface ResolvedSelfHostConfig {
  */
 export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
   const block = config?.harness_self_host;
+  const buildAuthBlock = block?.build_auth;
+
   let timeoutMinutes = block?.auth_park_timeout_minutes ?? 60;
   // Negative or non-numeric values fall back to 60
   if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 0) {
     timeoutMinutes = 60;
   }
+
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
@@ -392,5 +439,63 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     // empty VERSION read — safe-by-default like every other field here.
     versionFreeze: block?.version_freeze?.trim() || null,
     authParkTimeoutMinutes: timeoutMinutes,
+    // Daemon build authentication mode: explicit or default to daemon-token
+    buildAuthMode: buildAuthBlock?.mode || DEFAULT_BUILD_AUTH_MODE,
+    // Daemon build-auth token path: explicit, tilde-expanded, or default
+    buildAuthTokenPath: resolveTokenPath(buildAuthBlock?.token_path),
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Mergeable autoresolve configuration (auto-resolve merge conflicts on open PRs)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED = false;
+export const DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES = 60;
+
+/** Fully-resolved mergeable autoresolve settings (no optional fields). */
+export interface ResolvedMergeableAutoresolveConfig {
+  enabled: boolean;
+  cooldownMinutes: number;
+  suiteCommand: string | undefined;
+}
+
+/**
+ * Resolve the `mergeable_autoresolve` block to concrete settings.
+ * Absent block defaults to disabled (safe-by-default).
+ * Validation of the raw block happens in `validateConfig`; this resolver
+ * assumes a validated (or absent) block and only applies defaults.
+ */
+export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMergeableAutoresolveConfig {
+  const block = config?.mergeable_autoresolve;
+  return {
+    enabled: block?.enabled ?? DEFAULT_MERGEABLE_AUTORESOLVE_ENABLED,
+    cooldownMinutes: block?.cooldownMinutes ?? DEFAULT_MERGEABLE_AUTORESOLVE_COOLDOWN_MINUTES,
+    suiteCommand: block?.suiteCommand,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// build_review configuration (opt-in judgement gate at the build → manual_test seam)
+// ────────────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_BUILD_REVIEW_ENABLED = false;
+
+/** Fully-resolved build_review settings (no optional fields). */
+export interface ResolvedBuildReviewConfig {
+  enabled: boolean;
+}
+
+/**
+ * Resolve the `build_review` block to concrete settings.
+ * Absent/malformed block defaults to disabled (safe-by-default) — mirrors
+ * `resolveMergeableAutoresolve` above. Validation and warning emission for
+ * malformed input happens in `validateConfig`; this resolver assumes a
+ * validated (or absent) block and only applies the default.
+ */
+export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildReviewConfig {
+  const block = config?.build_review;
+  return {
+    enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
   };
 }

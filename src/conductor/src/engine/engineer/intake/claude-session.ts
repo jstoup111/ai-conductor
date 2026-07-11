@@ -6,7 +6,7 @@
 // Polling adapters are deferred to 9.3b.
 
 import { parseEnvelope } from './port.js';
-import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta } from './port.js';
+import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } from './port.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,8 +78,13 @@ export function buildChatEnvelope(params: ChatEnvelopeParams): Envelope {
  */
 export function createClaudeSessionAdapter(): IntakePort {
   return {
-    async report(_sourceRef: string, _status: EnvelopeStatus, _meta?: ReportMeta): Promise<void> {
+    async report(
+      _sourceRef: string,
+      _status: EnvelopeStatus,
+      _meta?: ReportMeta,
+    ): Promise<ReportOutcome> {
       // no-op — 9.3b write-back deferred; meta accepted but ignored for claude-session
+      return { ok: true };
     },
   };
 }

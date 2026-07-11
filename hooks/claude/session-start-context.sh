@@ -10,7 +10,9 @@ HARNESS_MD="${HARNESS_DIR}/HARNESS.md"
 MEMORY_INDEX=".memory/index.md"
 STORIES_DIR=".docs/stories"
 PLANS_DIR=".docs/plans"
-PIPELINE_STATE=".pipeline/task-status.json"
+# Engine-owned run state (H4 writer audit: hooks never reference the
+# engine's derived task cache; conduct-state.json is the sanctioned signal).
+PIPELINE_STATE=".pipeline/conduct-state.json"
 
 # Inject HARNESS.md behavioral rules (mechanical guarantee — not advisory)
 if [ -f "$HARNESS_MD" ]; then
@@ -64,15 +66,17 @@ if compgen -G "${STORIES_DIR}/*.md" > /dev/null 2>&1; then
   fi
 fi
 
-# Pipeline
+# Pipeline — summarize the conductor's step state. (The old task-count
+# display parsed the agent-era object-form task cache, which the engine now
+# owns and writes in array form; step state is the stable session signal.)
 if [ -f "$PIPELINE_STATE" ]; then
   python3 -c "
 import json
 with open('$PIPELINE_STATE') as f:
     state = json.load(f)
-total = len(state)
-done = sum(1 for v in state.values() if isinstance(v, dict) and v.get('status') == 'completed')
-print(f'Pipeline: {done}/{total} tasks completed')
+steps = {k: v for k, v in state.items() if isinstance(v, str)}
+done = sum(1 for v in steps.values() if v in ('done', 'skipped'))
+print(f'Pipeline: {done}/{len(steps)} steps done')
 " 2>/dev/null || true
 fi
 

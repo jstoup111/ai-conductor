@@ -40,14 +40,21 @@ import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
+import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
-import { claimUnblocked, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
+import {
+  claimUnblocked,
+  resolveClaimBands,
+  type DependencyClaimQueue,
+} from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
+import { ghIssueLabelReader } from './backlog-priority.js';
+import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 
 /**
@@ -102,6 +109,7 @@ export type EngineerDispatch =
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
+  | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -189,6 +197,33 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     return { kind: 'forget', sourceRef };
   }
 
+  if (subCmd === 'resolve') {
+    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]` — mark
+    // a claimed entry as delivered when write-back fails. Recovers from the stranded
+    // state (claimed + no prUrl) by stamping prUrl + optional branch evidence.
+    // The sourceRef is the first positional arg that doesn't start with --.
+    let sourceRef: string | null = null;
+    for (let i = 4; i < argv.length; i++) {
+      if (!argv[i].startsWith('--')) {
+        sourceRef = argv[i];
+        break;
+      }
+      // Skip flag values (if argv[i] is a flag, skip the value too)
+      if (argv[i].startsWith('--') && i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
+        i += 1;
+      }
+    }
+    if (!sourceRef) {
+      return { kind: 'guide' };
+    }
+    const prUrl = parseFlag(argv, '--pr-url');
+    if (!prUrl) {
+      return { kind: 'guide' };
+    }
+    const branch = parseFlag(argv, '--branch') ?? undefined;
+    return { kind: 'resolve', sourceRef, prUrl, branch };
+  }
+
   if (subCmd === 'migrate-issue-deps') {
     // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
     // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
@@ -259,6 +294,14 @@ export interface DispatchEngineerOpts {
    * is NOT injected), so tests that stub the launcher never hit the network.
    */
   prePoll?: () => number | Promise<number>;
+  /**
+   * Injected brain-loop liveness check (for tests). When it returns true, the
+   * production default `prePoll` is skipped entirely (the launcher defers to the
+   * live brain loop — single-writer gate). Defaults to the real `brainLoopAlive()`
+   * (pidfile or `cc-brain-*` tmux session). Ignored when `prePoll` is injected
+   * directly.
+   */
+  brainLoopAlive?: () => boolean;
   /**
    * Whether we are already inside a Claude Code session (default: reads CLAUDECODE).
    * When true, the 'launch' kind prints an in-session note instead of spawning a
@@ -357,6 +400,7 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer worktree --project <n> --idea "<i>"                     — create the per-idea authoring worktree\n' +
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
       '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
@@ -364,8 +408,10 @@ function printGuide(print: (s: string) => void): void {
   );
 }
 
-// Construct the real gh runner used in production.
-function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
+// Construct the real gh runner used in production. Exported so other
+// composition roots (e.g. the intake-loop CLI, Task 17) can reuse the exact
+// same production `gh` wiring without duplicating it.
+export function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
   return async (args: string[], opts: { cwd: string }) => {
     const result = await execFileP('gh', args, { cwd: opts.cwd });
     return { stdout: String(result.stdout) };
@@ -378,8 +424,11 @@ function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
  * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
  * the CLI is the only place that may. Shared by `poll`, `claim`, the launch pre-poll,
  * and the `--source-ref` write-back on `land`/`handoff`.
+ *
+ * Exported (Task 17) so the production `intake-loop` CLI dispatch can reuse
+ * this exact composition root instead of duplicating adapter wiring.
  */
-function buildIntake(deps: {
+export function buildIntake(deps: {
   engineerDir: string;
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;
@@ -478,9 +527,13 @@ export async function dispatchEngineer(
       // that stub the launcher never hit the network. A CLI-supplied idea drives a
       // specific idea and skips polling. Best-effort — a poll failure never blocks
       // the launch.
+      // Single-writer gate (ADR Q2): when a background brain loop is already
+      // running, it owns intake polling — the interactive launcher's pre-poll
+      // defers to it rather than racing to enqueue/dedup against the same ledger.
+      const brainAlive = (opts.brainLoopAlive ?? brainLoopAlive)();
       const prePoll =
         opts.prePoll ??
-        (opts.launchInteractive
+        (opts.launchInteractive || brainAlive
           ? undefined
           : () =>
               prePollIntake({
@@ -696,6 +749,29 @@ export async function dispatchEngineer(
         // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
         // retained worktree path so retention is actionable.
         printErr(`engineer handoff: worktree kept for inspection at "${worktree}".`);
+
+        // Task 9: Record branch evidence in the ledger if sourceRef is present.
+        // This enables the operator to retry via `engineer resolve` if the write-back
+        // fails. Non-fatal: if the ledger write fails, continue with exit 0.
+        if (sourceRef) {
+          try {
+            const engDir = engineerDir ?? resolveEngineerDir({});
+            const ledger = createLedger(join(engDir, 'ledger.json'));
+            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+            if (entry) {
+              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                branch,
+                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+              });
+            }
+          } catch (e: unknown) {
+            printErr(
+              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            // Continue — handoff still succeeds
+          }
+        }
+
         print(
           JSON.stringify({
             kind: 'local-commit',
@@ -736,6 +812,26 @@ export async function dispatchEngineer(
         }
       } else {
         // pr-skipped — record authored key manually (openSpecPr already records on skip).
+        // Task 9: Also record branch evidence in the ledger if sourceRef is present.
+        if (sourceRef) {
+          try {
+            const engDir = engineerDir ?? resolveEngineerDir({});
+            const ledger = createLedger(join(engDir, 'ledger.json'));
+            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+            if (entry) {
+              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                branch,
+                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+              });
+            }
+          } catch (e: unknown) {
+            printErr(
+              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+            );
+            // Continue — handoff still succeeds
+          }
+        }
+
         print(
           JSON.stringify({
             kind: 'local-commit',
@@ -790,17 +886,35 @@ export async function dispatchEngineer(
     // /engineer skill can route it. claim+ack removes it from the inbox (the ledger
     // is the durable record); the ledger advances to `claimed`. On an empty inbox,
     // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
+    //
+    // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
+    // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+
+      // Wrap the queue with the delivery guard decorator (Task 8: integration point).
+      // The guard is transparent to claimUnblocked; it only filters/heals problematic
+      // candidates via ledger + gh state checks.
+      const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
+        gh,
+        logger: { info: (msg) => printErr(msg) },
+      });
 
       // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
       // to a single walk, so reusing one across calls would leak stale verdicts
       // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
       const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd: process.cwd() }) });
+      // Claim-time label read — no cache: a relabel between claims must be
+      // honored on the very next claim (TR-1 happy 3). A throwing reader is
+      // handled inside claimUnblocked (falls back to drain order, warns once
+      // via `log`) — never caught here.
+      const labelReader = ghIssueLabelReader((args) => gh(args, { cwd: process.cwd() }));
       const outcome = await claimUnblocked({
-        queue: queue as unknown as DependencyClaimQueue,
+        queue: guardedQueue as unknown as DependencyClaimQueue,
         resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+        resolveBands: (refs) => resolveClaimBands(labelReader, refs),
+        log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
       });
 
       if (outcome.kind === 'empty') {
@@ -877,6 +991,57 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── resolve ─────────────────────────────────────────────────────────────
+    // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
+    // mark a claimed entry as delivered when write-back fails (recovery from the
+    // stranded state where the spec was authored/handed off but not recorded as done).
+    // If entry doesn't exist: return {kind:'resolve', found:false} exit 0 (soft failure).
+    // If entry exists: transition to 'done' with prUrl + optional branch override.
+    // Branch is optional; if not provided, preserve existing entry.meta.branch.
+    // Output: {kind:'resolve', sourceRef, priorStatus, prUrl, branch} for operator verification.
+    // Exit code always 0 (resolve is advisory, never a hard failure).
+    case 'resolve': {
+      const { sourceRef, prUrl, branch: newBranch } = dispatch;
+
+      // Validate --pr-url format: must be http(s)://
+      if (!prUrl.match(/^https?:\/\//)) {
+        printErr(`resolve: invalid --pr-url "${prUrl}" (must be http(s)://…)`);
+        return 1;
+      }
+
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+
+      // Attempt to get the entry; if absent, return found:false (soft failure).
+      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (!entry) {
+        print(JSON.stringify({ kind: 'resolve', sourceRef, found: false }));
+        return 0;
+      }
+
+      // Entry exists: prepare the transition.
+      // Preserve existing branch unless --branch provided.
+      const priorStatus = entry.status;
+      const existingBranch = entry.branch ?? '';
+      const branch = newBranch !== undefined ? newBranch : existingBranch;
+
+      // Transition the entry to 'done' with prUrl + branch evidence.
+      await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'done', { prUrl, branch });
+
+      // Output: all 4 fields for operator verification.
+      print(
+        JSON.stringify({
+          kind: 'resolve',
+          sourceRef,
+          priorStatus,
+          prUrl,
+          branch,
+        }),
+      );
+
       return 0;
     }
 

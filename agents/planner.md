@@ -32,6 +32,16 @@ complexity, and consider edge cases — without over-specifying.
 5. **Surface edge cases** — failure modes, boundary conditions, integration points
 6. **Propose structure** — how the feature decomposes into stories
 
+## Confidence Calibration (verify-claims)
+
+A spec that silently encodes an unconfirmed assumption ships that assumption into every downstream
+task. Apply the `verify-claims` discipline:
+
+- Do not invent scope, behavior, or a technical detail on an assumption. Prefer a cheap check
+  (read the code, the FR, the ADR) over a guess.
+- List anything you had to assume in **Open Questions** with a **confidence %** and its impact if
+  wrong — surface it for the operator rather than baking a guess into the spec.
+
 ## Output Format
 
 ```markdown

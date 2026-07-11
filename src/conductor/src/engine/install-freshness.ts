@@ -14,10 +14,11 @@
 // the policy is unit-testable without touching the real install or a TTY.
 
 import { execa } from 'execa';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access, constants } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
+import { readRegistry, resolveRegistryPath } from './registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,150 @@ export async function resolveHarnessRoot(): Promise<string | null> {
     }
   }
   return null;
+}
+
+// ── Installed-root resolution (#363 / adr-2026-07-06) ───────────────────────
+//
+// `resolveHarnessRoot` (above) answers "where does this MODULE live?" — the
+// right question for self-host DETECTION, and its body is deliberately
+// untouched (the PathSelfHostDetector shares it; changing its semantics would
+// silently disable the whole guardrail bundle). But a worktree checkout is a
+// full harness (it has bin/install), so for an engine running from a
+// worktree's dist that probe resolves the WORKTREE — and incident #363 showed
+// what happens when such a root authorizes writes to operator globals: every
+// global bin/skill/hook path was repointed at a directory deleted at ship
+// time. `resolveInstalledHarnessRoot` answers the different question "where is
+// the INSTALLED main checkout?", and is used ONLY where the resolved root
+// authorizes operator-global writes (relink preflight, sandbox harnessRoot).
+
+/** Result of the installed-root resolution ladder — never a bare worktree. */
+export type InstalledRootResolution =
+  | { status: 'ok'; root: string }
+  | { status: 'rejected'; reason: string; detail: string }
+  | { status: 'unresolved' };
+
+export interface InstalledRootOptions {
+  /** Override the module-relative probe (tests). Defaults to resolveHarnessRoot. */
+  probeRoot?: () => Promise<string | null>;
+  /** Injected git runner: run `git <args>` in `cwd`, return trimmed stdout. */
+  git?: (args: string[], cwd: string) => Promise<string>;
+  /** Injected fs seam: true iff `path` exists. */
+  pathExists?: (path: string) => Promise<boolean>;
+  /** Registry file override for the advisory cross-check (tests). */
+  registryPath?: string;
+  /** Diagnostic sink (defaults to stderr). */
+  log?: (message: string) => void;
+}
+
+const realGitRunner = async (args: string[], cwd: string): Promise<string> => {
+  const r = await execa('git', args, { cwd });
+  return r.stdout.trim();
+};
+
+const realPathExists = (p: string): Promise<boolean> =>
+  access(p).then(
+    () => true,
+    () => false,
+  );
+
+/** True iff `p` (normalized) sits under a `.worktrees/` directory. */
+function isUnderWorktrees(p: string): boolean {
+  return resolve(p).split(sep).includes('.worktrees');
+}
+
+/**
+ * Resolve the INSTALLED harness main-checkout root — the only root allowed to
+ * authorize writes to operator globals. Ladder (per the ADR):
+ *   a. module-relative probe (existing `resolveHarnessRoot` semantics);
+ *   b. worktree detection: probed path under `.worktrees/`, OR its
+ *      `git rev-parse --git-common-dir` resolves outside the probed root;
+ *   c. for a worktree, derive the main checkout from the git common dir
+ *      (`<main>/.git` → `<main>`) — authoritative, no registry guessing;
+ *   d. assert `bin/install` exists at the final root and hard-reject any root
+ *      still under `.worktrees/` — callers fail loudly, never fall back to a
+ *      worktree;
+ *   e. advisory registry cross-check: warn (log only) when the resolved root
+ *      is not recorded in ~/.ai-conductor/registry.json.
+ * Never throws; every failure is a `rejected` result whose detail names the
+ * offending path. A null probe is `unresolved` (parity with the existing
+ * null-root skip semantics of `resolveHarnessRoot` callers).
+ */
+export async function resolveInstalledHarnessRoot(
+  opts: InstalledRootOptions = {},
+): Promise<InstalledRootResolution> {
+  const log = opts.log ?? ((m: string) => console.error(m));
+  const probe = opts.probeRoot ?? resolveHarnessRoot;
+  const git = opts.git ?? realGitRunner;
+  const pathExists = opts.pathExists ?? realPathExists;
+
+  try {
+    const probed = await probe();
+    if (probed === null) return { status: 'unresolved' };
+    const probedRoot = resolve(probed);
+
+    let commonDirAbs: string;
+    try {
+      const raw = await git(['rev-parse', '--git-common-dir'], probedRoot);
+      commonDirAbs = isAbsolute(raw) ? resolve(raw) : resolve(probedRoot, raw);
+    } catch (err) {
+      return {
+        status: 'rejected',
+        reason: 'git-failure',
+        detail:
+          `git rev-parse --git-common-dir failed at ${probedRoot}: ` +
+          `${err instanceof Error ? err.message : String(err)}. Cannot verify the probed root ` +
+          'is the installed main checkout, so it must not authorize operator-global writes.',
+      };
+    }
+
+    const commonDirInsideProbed =
+      commonDirAbs === probedRoot || commonDirAbs.startsWith(probedRoot + sep);
+    const isWorktree = isUnderWorktrees(probedRoot) || !commonDirInsideProbed;
+
+    // Worktree → the main checkout owns the common dir (`<main>/.git`).
+    const root = isWorktree ? dirname(commonDirAbs) : probedRoot;
+
+    if (isUnderWorktrees(root)) {
+      return {
+        status: 'rejected',
+        reason: 'worktree-root',
+        detail:
+          `resolved root ${root} still sits under .worktrees/ — a build worktree must never ` +
+          'authorize operator-global writes (it is deleted at ship time).',
+      };
+    }
+
+    if (!(await pathExists(join(root, 'bin', 'install')))) {
+      return {
+        status: 'rejected',
+        reason: 'missing-installer',
+        detail: `derived root ${root} has no bin/install — not an installed harness checkout.`,
+      };
+    }
+
+    // Advisory only: the registry cannot mark "the harness", so a mismatch is
+    // a warning, never a rejection — git derivation above is authoritative.
+    try {
+      const registryPath = opts.registryPath ?? resolveRegistryPath();
+      const records = await readRegistry(registryPath);
+      if (records.length > 0 && !records.some((r) => resolve(r.path) === root)) {
+        log(
+          `installed-root: resolved root ${root} is not recorded in the project registry ` +
+            `(${registryPath}) — proceeding anyway (registry is advisory).`,
+        );
+      }
+    } catch {
+      // Missing/unreadable registry never blocks resolution.
+    }
+
+    return { status: 'ok', root };
+  } catch (err) {
+    return {
+      status: 'rejected',
+      reason: 'resolver-error',
+      detail: `installed-root resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 /** Runs `bin/install <args>` rooted at the harness; resolves to its exit code. */
@@ -142,11 +287,21 @@ export async function ensureInstallFresh(opts: EnsureFreshOptions = {}): Promise
 // reaches here and `ensureInstallFresh`'s normal-repo behavior is unchanged.
 
 export interface RelinkPreflightOptions {
-  /** Override harness-root discovery (tests). */
+  /**
+   * Override harness-root discovery (tests). An explicit string behaves as an
+   * `ok` resolution at that root; `null` behaves as `unresolved` (skip).
+   * Takes precedence over `resolveInstalledRoot`.
+   */
   harnessRoot?: string | null;
   /** Override the `bin/install` runner (tests). When set, the real installer-
    *  existence check is skipped (the injected runner models install behavior). */
   runner?: InstallRunner;
+  /**
+   * Override installed-root resolution (tests). Defaults to
+   * `resolveInstalledHarnessRoot` — the relink authorizes writes to operator
+   * globals, so it must never run against a worktree-resolved root (#363).
+   */
+  resolveInstalledRoot?: () => Promise<InstalledRootResolution>;
   /** Diagnostic sink (defaults to stderr). */
   log?: (message: string) => void;
 }
@@ -160,13 +315,35 @@ export interface RelinkPreflightOptions {
  */
 export async function relinkSkillsForSelfBuild(opts: RelinkPreflightOptions = {}): Promise<void> {
   const log = opts.log ?? ((m: string) => console.error(m));
-  const harnessRoot =
-    opts.harnessRoot !== undefined ? opts.harnessRoot : await resolveHarnessRoot();
-  if (!harnessRoot) {
+
+  // Root discovery goes through the INSTALLED-root resolver (#363): the relink
+  // repoints operator globals, so a worktree-resolved root must abort loudly
+  // (HALT upstream), never run the installer. An explicit harnessRoot override
+  // keeps the existing test seam: string → ok, null → unresolved.
+  const resolution: InstalledRootResolution =
+    opts.harnessRoot !== undefined
+      ? opts.harnessRoot === null
+        ? { status: 'unresolved' }
+        : { status: 'ok', root: opts.harnessRoot }
+      : opts.resolveInstalledRoot
+        ? await opts.resolveInstalledRoot()
+        : await resolveInstalledHarnessRoot({ log });
+
+  if (resolution.status === 'unresolved') {
     // Nothing to link against — report and skip rather than crash (TR-4 negative).
     log('skill-relink preflight: harness root unresolved; skipping the self-build relink.');
     return;
   }
+
+  if (resolution.status === 'rejected') {
+    throw new InstallStaleError(
+      `Skill relink refused for the harness self-build: ${resolution.detail} ` +
+        'Running `bin/install --update` at this root would repoint operator globals at a ' +
+        'directory that is deleted at ship time (#363). Not dispatching.',
+    );
+  }
+
+  const harnessRoot = resolution.root;
 
   // Production path (no injected runner): verify the real installer up front so a
   // missing / non-executable `bin/install` surfaces a keyed error naming the
