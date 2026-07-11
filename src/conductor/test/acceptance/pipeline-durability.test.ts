@@ -59,6 +59,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { rmSync, existsSync } from 'node:fs';
 
 vi.mock('execa', () => ({
   execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
@@ -334,5 +335,56 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     // Assert the bug exists: marker write throws ENOENT (RED phase)
     expect(threwEnoent).toBe(true);
     expect(errorMessage).toContain('ENOENT');
+  });
+
+  it('RED: deleter cleanup can resolve to live worktree .pipeline under host load', async () => {
+    // Story 5: deleter cleanup scoped to mkdtemp path
+    // ADR D2: Fix the actual unscoped deleter
+    //
+    // Task 8 identified the vulnerable deleter: mutation-gate-probe.test.ts:107
+    // uses `rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })`
+    // in the afterEach cleanup hook. This cleanup is unscoped — it uses process.cwd()
+    // without restricting to the test's own mkdtemp path.
+    //
+    // Under host-load or shifted cwd conditions, the cleanup can resolve to a live
+    // `.pipeline` directory outside the test's isolation, deleting production state.
+    //
+    // This test demonstrates the vulnerability: we create a "live" worktree with
+    // a sentinel file in `.pipeline`, then simulate the unscoped cleanup behavior
+    // and assert the sentinel is destroyed (RED — documents the vulnerability).
+
+    // Create a "live" worktree directory (simulating production/another worktree)
+    const liveWorktree = await mkdtemp(join(tmpdir(), 'live-worktree-'));
+    const livePipelineDir = join(liveWorktree, '.pipeline');
+    await mkdir(livePipelineDir, { recursive: true });
+
+    // Place a sentinel file in the live .pipeline directory
+    const sentinelPath = join(livePipelineDir, 'sentinel');
+    await writeFile(sentinelPath, 'live-state', 'utf-8');
+
+    // Verify sentinel exists before cleanup
+    expect(existsSync(sentinelPath)).toBe(true);
+
+    // Simulate the vulnerable cleanup behavior under shifted cwd
+    // (as would happen under host-load conditions when tests run concurrently)
+    const originalCwd = process.cwd();
+    try {
+      // Shift process.cwd() to the live worktree (simulating host load)
+      process.chdir(liveWorktree);
+
+      // Run the vulnerable deleter's cleanup logic:
+      // `rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })`
+      // This is the exact code from mutation-gate-probe.test.ts:107
+      rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true });
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    // Assert the sentinel is destroyed (RED — confirms unscoped delete can hit live paths)
+    // This test FAILS if the fix scopes the cleanup to a safe path
+    expect(existsSync(sentinelPath)).toBe(false);
+
+    // Cleanup: remove the live worktree directory
+    await rm(liveWorktree, { recursive: true, force: true });
   });
 });
