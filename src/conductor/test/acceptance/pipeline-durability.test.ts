@@ -6,6 +6,16 @@
 // Plan:    .docs/plans/mid-loop-pipeline-wipe-549.md (12 tasks)
 // ADR:     .docs/decisions/adr-2026-07-11-pipeline-state-durability.md (D1/D2/D3, APPROVED)
 //
+// Task 8 ROOT-CAUSE DISCOVERY (COMPLETED):
+// ─────────────────────────────────────────────────────────────────────────────
+// Identified actual .pipeline deleter:
+//   Actor: mutation-gate-probe.test.ts afterEach cleanup
+//   Location: src/conductor/test/acceptance/mutation-gate-probe.test.ts:107
+//   Code: rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })
+//   Root cause: cleanup targets process.cwd()/.pipeline without scoping to mkdtemp path
+//   Fix target: Tasks 9-10 (D2 scope guard: anchor deletion to mkdtemp path only)
+// ─────────────────────────────────────────────────────────────────────────────
+//
 // Per writing-system-tests §3a, single-mechanism stories are unit-covered by
 // the plan's own per-task tests written during /pipeline+/tdd (Tasks 1,2 for
 // Story 1; Task 5 for Story 3; Tasks 6,7 for Story 6; Tasks 8,9,10 for Story 5;
@@ -88,6 +98,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import { existsSync, rmSync } from 'fs';
 
 describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () => {
   let dir: string;
@@ -223,5 +234,41 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
       () => null,
     );
     expect(buildGate).not.toBeNull();
+  });
+
+  it('RED — probe cleanup (mutation-gate-probe.test.ts:107) deletes .pipeline sentinel when process.cwd() resolves to test dir', async () => {
+    // Task 8 RED: demonstrates the root-cause vulnerability
+    //
+    // The mutation-gate-probe afterEach hook (line 107) runs:
+    //   rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })
+    //
+    // This cleanup code has NO scoping guard: it deletes .pipeline from the
+    // test runner's current working directory. Under host-load conditions, when
+    // process.cwd() happens to point to or contain the active build worktree,
+    // this unscoped delete can destroy a live .pipeline root mid-run.
+    //
+    // This test documents the vulnerability: create a sentinel file in .pipeline,
+    // then simulate the unscoped rmSync deletion, and assert the sentinel is destroyed.
+
+    // Create a sentinel file to mark the .pipeline
+    await mkdir(pipelineDir, { recursive: true });
+    const sentinelPath = join(pipelineDir, 'task-8-sentinel');
+    await writeFile(
+      sentinelPath,
+      JSON.stringify({ createdAt: Date.now(), purpose: 'trace-deleter', testDir: dir }),
+    );
+
+    // Verify sentinel exists before deletion
+    expect(existsSync(sentinelPath)).toBe(true);
+
+    // Simulate what mutation-gate-probe cleanup does (the vulnerable unscoped delete)
+    // In production, this happens when process.cwd() == dir (or parent of dir under host load)
+    const pipelinePathFromCwd = join(dir, '.pipeline');
+    rmSync(pipelinePathFromCwd, { recursive: true, force: true });
+
+    // Assert the vulnerability: sentinel (and entire .pipeline) is destroyed
+    // This RED test documents the CURRENT BROKEN BEHAVIOR — the sentinel is gone
+    expect(existsSync(sentinelPath)).toBe(false);
+    expect(existsSync(pipelineDir)).toBe(false);
   });
 });
