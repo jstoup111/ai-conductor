@@ -48,6 +48,13 @@
 
 ## Story 4 — Implementation PR closes the issue (FR-4, FR-6, FR-7)
 
+> **Scope note (2026-07-10, conflict resolution for #492 observed-close):** this story
+> holds for fixes with NO observation marker (legacy) or a `close-on-merge` declaration.
+> A fix declaring a watched observation signature gets `Refs` (non-closing) instead, and
+> its issue closes on first production observation — see
+> `issues-close-on-first-production-observation-of-th.md` and
+> `adr-2026-07-10-observed-close-watch-registry.md`.
+
 **As** an operator, **I want** the daemon implementation PR to close the issue on merge
 **so that** completed work is reflected on the issue tracker automatically.
 
