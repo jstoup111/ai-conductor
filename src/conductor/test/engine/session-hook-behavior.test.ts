@@ -451,6 +451,87 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     });
   });
 
+  describe('abstain loudly when the status file is unreadable', () => {
+    it('removes the stamp and emits diagnostic when task-status.json is absent and a stamp exists', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      // Stamp file exists with id "1"
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '1', 'utf-8');
+
+      // But task-status.json is absent
+      const statusPath = join(pipelineDir, 'task-status.json');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 2',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(existsSync(currentTaskPath)).toBe(false);
+      expect(stderr).toContain('pre-dispatch-hook: abstain — task-status.json unreadable (dispatch Task: 2)');
+    });
+
+    it('exits 0 with diagnostic when task-status.json is absent and no stamp exists', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      // No stamp file exists
+      const currentTaskPath = join(pipelineDir, 'current-task');
+
+      // And task-status.json is absent
+      const statusPath = join(pipelineDir, 'task-status.json');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 2',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(existsSync(currentTaskPath)).toBe(false);
+      expect(stderr).toContain('pre-dispatch-hook: abstain — task-status.json unreadable (dispatch Task: 2)');
+    });
+  });
+
   describe('fail-open on unparseable payloads', () => {
     function seedTempDirWithStatus(): { pipelineDir: string; statusPath: string; seededStatus: string } {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
