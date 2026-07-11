@@ -265,6 +265,16 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
     isCheckpoint: false,
     skillName: 'remediate',
   },
+  attribution_verify: {
+    name: 'attribution_verify',
+    label: 'Attribution Verify',
+    phase: 'SHIP',
+    enforcement: 'advisory',
+    prerequisites: [],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'attribution-verify',
+  },
 };
 
 const stepMap = new Map(ALL_STEPS.map((s) => [s.name, s]));

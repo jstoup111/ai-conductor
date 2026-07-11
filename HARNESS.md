@@ -142,6 +142,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | rebase | fable | max | Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk. |
 | finish | haiku | low | Mechanical checks — run tests, check git status, verify coverage. |
 | remediate | fable | high | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning. |
+| attribution-verify | opus | high | Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages. |
 | verify-claims | inherits caller |  | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
 | domain-reviewer | sonnet (<50-line diff), opus (≥50-line diff) |  | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
 | evaluator | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |  | Right-sized by batch content. |

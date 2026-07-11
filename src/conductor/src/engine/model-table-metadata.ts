@@ -41,6 +41,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   rebase: 'Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
   finish: 'Mechanical checks — run tests, check git status, verify coverage.',
   remediate: 'Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning.',
+  attribution_verify: 'Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages.',
 };
 
 // ────────────────────────────────────────────────────────────────────────────
