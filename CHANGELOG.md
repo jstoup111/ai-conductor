@@ -10,6 +10,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- Armed `attribution_enforcement_cutover` (2026-07-11T08:30Z) in the committed
+  project config: daemon builds now enforce inline-work attribution
+  fail-closed (#505 machinery live, not just loaded). Canary evidence: with
+  hooks stamping but enforcement unarmed, 4 of 5 canary commits auto-carried
+  trailers and the one inline refactor escaped — the class this arming ends.
+
+
 ### Fixed
 
 - `session-hooks-provisioning` integration test parses hook command strings
