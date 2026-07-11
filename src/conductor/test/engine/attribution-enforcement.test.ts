@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   isEnforcementConfigured,
   markerPath,
@@ -9,6 +10,14 @@ import {
   removeBuildStepMarker,
 } from '../../src/engine/attribution-enforcement.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+
+// execa is consumed transitively (WorktreeManager); never fork real git.
+vi.mock('execa', () => ({ execa: vi.fn() }));
+
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepName } from '../../src/types/index.js';
 
 // #505 TS-2: enforcement predicate + marker file helpers. The marker file is
 // the session-hook-visible signal that inline build work is in flight so
@@ -84,5 +93,142 @@ describe('writeBuildStepMarker / removeBuildStepMarker', () => {
     expect(existsSync(markerPath(root))).toBe(false);
     expect(() => removeBuildStepMarker(root)).not.toThrow();
     expect(() => removeBuildStepMarker(root)).not.toThrow();
+  });
+});
+
+// #505 TS-3: marker lifecycle wired into the conductor's build-step
+// dispatch. The marker must exist only for the duration of a build-step
+// session and only when enforcement is configured — cleanup is guaranteed by
+// a `finally`, on both the success and error paths.
+describe('conductor build-step marker lifecycle', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+  const FUTURE_CUTOVER = { attribution_enforcement_cutover: '2027-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-marker-attr-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('marker exists during the build-step session when the cutover has passed', async () => {
+    let sawMarkerDuringBuild = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          sawMarkerDuringBuild = existsSync(markerPath(dir));
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(sawMarkerDuringBuild).toBe(true);
+  });
+
+  it('marker is absent after normal session end (finally cleanup)', async () => {
+    const runner: StepRunner = {
+      run: async (): Promise<StepRunResult> => ({ success: true }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(existsSync(markerPath(dir))).toBe(false);
+  });
+
+  it('marker is absent after a build session that throws', async () => {
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') throw new Error('boom in build');
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    // The loop converts the throw into a recoverable HALT; run() must not
+    // reject, and the marker must still be cleaned up.
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(existsSync(markerPath(dir))).toBe(false);
+  });
+
+  it('marker is never written when enforcement is not configured (cutover absent)', async () => {
+    let sawMarkerDuringBuild = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          sawMarkerDuringBuild = existsSync(markerPath(dir));
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      // no config passed — cutover absent
+    });
+
+    await conductor.run();
+
+    expect(sawMarkerDuringBuild).toBe(false);
+    expect(existsSync(markerPath(dir))).toBe(false);
+  });
+
+  it('marker is never written when the cutover is in the future', async () => {
+    let sawMarkerDuringBuild = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          sawMarkerDuringBuild = existsSync(markerPath(dir));
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: FUTURE_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(sawMarkerDuringBuild).toBe(false);
+    expect(existsSync(markerPath(dir))).toBe(false);
   });
 });

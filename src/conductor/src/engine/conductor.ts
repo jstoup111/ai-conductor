@@ -29,6 +29,7 @@ import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { resolveBuildProgressConfig } from './config.js';
+import { isEnforcementConfigured, writeBuildStepMarker, removeBuildStepMarker } from './attribution-enforcement.js';
 import {
   readState,
   writeState,
@@ -1525,6 +1526,18 @@ export class Conductor {
               : null;
           buildWatcher?.start();
 
+          // #505 TS-3: build-step-active marker. Written right before the
+          // build session spawns and removed in `finally` (guaranteed on
+          // both success and error paths) so a session hook firing mid-step
+          // can tell "dispatched build work is in flight" from unattributed
+          // session activity. Never written when enforcement isn't
+          // configured (absent/future cutover) — zero overhead for
+          // operators who haven't opted in.
+          const markerActive = step.name === 'build' && isEnforcementConfigured(this.config);
+          if (markerActive) {
+            writeBuildStepMarker(this.projectRoot);
+          }
+
           let result: StepRunResult;
           try {
             result =
@@ -1539,6 +1552,9 @@ export class Conductor {
                       : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
           } finally {
             buildWatcher?.stop();
+            if (markerActive) {
+              removeBuildStepMarker(this.projectRoot);
+            }
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
