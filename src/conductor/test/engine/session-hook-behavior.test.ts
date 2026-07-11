@@ -770,6 +770,247 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     }, 5000);
   });
 
+  describe('pre-dispatch healthy-path invariance (no abstain diagnostics)', () => {
+    it('does not emit abstain diagnostic when dispatching a valid task', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'pending' },
+          { id: '3', status: 'pending' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 2',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+
+      const updated = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+        tasks: Array<{ id: string; status: string }>;
+      };
+      expect(updated.tasks.find((t) => t.id === '2')?.status).toBe('in_progress');
+
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
+      expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('2');
+    });
+
+    it('does not emit abstain diagnostic on idempotent re-dispatch', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'in_progress' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '2', 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 2',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+
+      expect(existsSync(currentTaskPath)).toBe(true);
+      expect(readFileSync(currentTaskPath, 'utf-8')).toBe('2');
+    });
+
+    it('does not emit abstain diagnostic on overlap guard', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'in_progress' },
+          { id: '3', status: 'pending' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '2', 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 3',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+
+      const updated = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+        tasks: Array<{ id: string; status: string }>;
+      };
+      expect(updated.tasks.find((t) => t.id === '3')?.status).toBe('in_progress');
+
+      // Overlap guard: stamp removed
+      expect(existsSync(currentTaskPath)).toBe(false);
+    });
+
+    it('still exits 2 (unknown id block) with healthy status file', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = JSON.stringify({
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'in_progress' },
+          { id: '3', status: 'pending' },
+        ],
+      });
+      writeFileSync(statusPath, seededStatus, 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 99',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(2);
+      expect(stderr).toContain('99');
+      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+
+      expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    });
+
+    it('does not emit abstain diagnostic for Task: none', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      const statusPath = join(pipelineDir, 'task-status.json');
+      const seededStatus = {
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'in_progress' },
+          { id: '7', status: 'pending' },
+        ],
+      };
+      writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: none',
+      });
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      }
+
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+
+      expect(readFileSync(statusPath, 'utf-8')).toBe(JSON.stringify(seededStatus));
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
+    });
+  });
+
   describe('dispatch-count sentinel', () => {
     function runHook(tempDirParam: string, prompt: string): number {
       const hookPath = join(tempDirParam, 'pre-dispatch-hook.sh');
