@@ -47,6 +47,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Rekick resume no longer dispatches steps past an unsatisfied on-disk gate
+  verdict — the resume entry clamps backward to the earliest unsatisfied
+  loop-region gate (#532).
 - `session-hooks-provisioning` integration test parses hook command strings
   as `path [argv…]` instead of stat-ing the whole string — the mutation
   gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
