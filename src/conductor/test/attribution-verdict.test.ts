@@ -725,4 +725,264 @@ describe('parseAttributionVerdict — fail-closed parser for attribution verdict
       expect(planTaskIds).toEqual(originalIds);
     });
   });
+
+  describe('anchor validation — stale verdicts invalidate entire file', () => {
+    it('stale anchor.head (mismatch) — entire result map becomes no-verdict', () => {
+      const raw = {
+        schema: 1,
+        anchor: { head: 'stale_abc123', residue: ['7', '9'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'adds sweep' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+          {
+            taskId: '9',
+            verdict: 'unsatisfied',
+            reason: 'not implemented',
+          },
+        ],
+      };
+      const currentHead = 'current_def789';
+      const plannedResidueIds = ['7', '9'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      // All verdicts should be no-verdict due to stale anchor
+      expect(result.size).toBe(2);
+      expect(result.get('7')).toBe('no-verdict');
+      expect(result.get('9')).toBe('no-verdict');
+    });
+
+    it('matching anchor.head — verdict passes through normally', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'adds sweep' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const plannedResidueIds = ['7'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('satisfied');
+    });
+
+    it('residue-set mismatch (extra residue) — entire file invalidates', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead, residue: ['7', '9', '12'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const planTaskIds = ['7'];
+      const plannedResidueIds = ['7']; // plan has only 7, but anchor has 7, 9, 12
+
+      const result = parseAttributionVerdict(raw, planTaskIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('no-verdict');
+    });
+
+    it('residue-set mismatch (missing residue) — entire file invalidates', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+          {
+            taskId: '9',
+            verdict: 'unsatisfied',
+            reason: 'not implemented',
+          },
+        ],
+      };
+      const planTaskIds = ['7', '9'];
+      const plannedResidueIds = ['7', '9']; // plan has 7 and 9, but anchor only has 7
+
+      const result = parseAttributionVerdict(raw, planTaskIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(2);
+      expect(result.get('7')).toBe('no-verdict');
+      expect(result.get('9')).toBe('no-verdict');
+    });
+
+    it('missing anchor field — entire result map becomes no-verdict', () => {
+      const raw = {
+        schema: 1,
+        // anchor missing
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const currentHead = 'abc123';
+      const plannedResidueIds = ['7'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('no-verdict');
+    });
+
+    it('missing anchor.head field — entire result map becomes no-verdict', () => {
+      const raw = {
+        schema: 1,
+        anchor: { residue: ['7'] }, // head missing
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const currentHead = 'abc123';
+      const plannedResidueIds = ['7'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('no-verdict');
+    });
+
+    it('missing anchor.residue field — entire result map becomes no-verdict', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead }, // residue missing
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const plannedResidueIds = ['7'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('no-verdict');
+    });
+
+    it('currentHead parameter missing — entire result map becomes no-verdict', () => {
+      const raw = {
+        schema: 1,
+        anchor: { head: 'abc123', residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+        ],
+      };
+      const plannedResidueIds = ['7'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, undefined, plannedResidueIds);
+
+      expect(result.size).toBe(1);
+      expect(result.get('7')).toBe('no-verdict');
+    });
+
+    it('multiple tasks with matching anchor — all verdicts pass through', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead, residue: ['1', '2', '3'] },
+        results: [
+          {
+            taskId: '1',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+          {
+            taskId: '2',
+            verdict: 'unsatisfied',
+            reason: 'not implemented',
+          },
+          {
+            taskId: '3',
+            verdict: 'no-verdict',
+            reason: 'ambiguous',
+          },
+        ],
+      };
+      const plannedResidueIds = ['1', '2', '3'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(3);
+      expect(result.get('1')).toBe('satisfied');
+      expect(result.get('2')).toBe('unsatisfied');
+      expect(result.get('3')).toBe('no-verdict');
+    });
+
+    it('numeric residue IDs in anchor normalize correctly', () => {
+      const currentHead = 'abc123';
+      const raw = {
+        schema: 1,
+        anchor: { head: currentHead, residue: [7, 9, 12] },
+        results: [
+          {
+            taskId: 7,
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'test' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: 'pass' },
+          },
+          {
+            taskId: 9,
+            verdict: 'unsatisfied',
+            reason: 'not found',
+          },
+          {
+            taskId: 12,
+            verdict: 'no-verdict',
+            reason: 'ambiguous',
+          },
+        ],
+      };
+      const plannedResidueIds = ['7', '9', '12'];
+
+      const result = parseAttributionVerdict(raw, plannedResidueIds, currentHead, plannedResidueIds);
+
+      expect(result.size).toBe(3);
+      expect(result.get('7')).toBe('satisfied');
+      expect(result.get('9')).toBe('unsatisfied');
+      expect(result.get('12')).toBe('no-verdict');
+    });
+  });
 });
