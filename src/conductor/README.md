@@ -665,6 +665,87 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 `adr-2026-07-10-session-hook-task-stamping.md`, and
 `adr-2026-07-10-inline-work-attribution-enforcement.md`.
 
+
+#### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
+
+The deterministic evidence gate (trailers, path corroboration) is the sole
+completion authority, but six escape cycles revealed a class of builds with real
+work but misattributed metadata. Rather than adding more proxies (which would
+grow the mechanical lane, making it harder to reason about), a semantic
+verification lane runs an engine-embedded judge to validate unresolved residue:
+
+- **Trigger:** after `deriveCompletion` + `applyDerivedCompletion`, if unresolved
+  tasks remain (the "residue"), the cutover flag is active (`attribution_judge_cutover`),
+  and the residue is new (not memoized), the engine dispatches the attribution
+  verifier.
+
+- **Memoization:** verdict requests are keyed by `(HEAD sha, sorted residue ids)`.
+  An unchanged key never re-dispatches; a retry without new commits reuses the
+  prior verdict at zero cost.
+
+- **Judge dispatch:** fresh UUID session, `resume: false`, `invokeWithLadder`, model
+  and effort from `resolvedConfigFor('attribution_verify')` (opus/high from
+  resolved-config.ts). The engine assembles the **entire input** to prevent prompt
+  discipline: residue task definitions (verbatim plan sections), candidate commits
+  (sha + subject + full diff) not already cited, and the plan's declared Files:/test
+  lines. The session receives **nothing else** — no task-status, no maker transcript,
+  no prior verdicts, no project context.
+
+- **Verdict:** the verifier writes `.pipeline/attribution-verdict.json` (schema:
+  adr-2026-07-11-attribution-verdict-interface.md). Parsing is fail-closed: un-
+  parseable, schema-invalid, or missing files → abstention for every residue task.
+
+- **Engine-side validation (the no-whitewash gate):** for each `satisfied` task
+  verdict, the ENGINE mechanically verifies BEFORE writing a stamp:
+  - Every cited SHA exists, is reachable from HEAD, is not empty, not a bookkeeping
+    commit (`CONDUCT_ENGINE_COMMIT=1`), and passes `git merge-base --is-ancestor`.
+  - The union of cited diffs is non-empty and overlaps task-declared paths
+    (adr-2026-07-09-deterministic-evidence-attribution-enforcement, fileMatchesPlanPath).
+  - The verdict carries test evidence (command, exit 0) for the task.
+
+  Any check fails ⇒ **no stamp, ever** — the task stays unresolved, the retry
+  ladder proceeds unchanged.
+
+- **Stamping:** validated verdicts are written by the ENGINE as `semantic-verified`
+  evidence stamps. The gate re-evaluates; judged tasks count as `resolvedTasksAfter`,
+  resetting the `noEvidenceAttempts` counter via the existing progress branch
+  (conductor.ts Task-12 block).
+
+- **Split attribution:** the verdict is per-task; multiple tasks may cite the same
+  SHA (bundled commit case). The validator accepts overlapping citations.
+
+- **Id normalization:** every task-id comparison (residue, verdict `taskId`, memo
+  keys, stamp keys) normalizes both sides via `String()` so numeric IDs from agent-
+  authored files never silently fail to match.
+
+- **Retry hints:** `unsatisfied` verdicts (genuinely unimplemented) feed into
+  `pendingRetryHints`, so the next build try names exactly the missing tasks.
+
+- **Spot-audit measurement:** every judge dispatch emits a fact to
+  `.pipeline/attribution-audit.jsonl` including the decision outcome. The optional
+  `attribution_audit_sample_pct` (0-100, default 10) controls sampling — post-
+  processing measures judge accuracy over time (adr-2026-07-11-attribution-spot-
+  audit-measurement.md).
+
+- **Mechanical-lane policy:** with the judged lane in place, the mechanical
+  attribution lane is CAPPED. New proxy-escape shapes are handled as judge residue,
+  not new machinery (adr-2026-07-11-semantic-attribution-verification-lane.md,
+  Decision 9).
+
+Configuration:
+
+```yaml
+# .ai-conductor/config.yml
+attribution_judge_cutover: "2026-07-11T08:30:00Z"   # ISO-8601 instant; absent = off
+attribution_audit_sample_pct: 10                     # 0-100; absent = 10; clamped with warning
+```
+
+See `src/engine/attribution-lane.ts` (orchestrator), `attribution-verdict.ts`
+(verdict interface), `attribution-validate.ts` (engine-side validation),
+`attribution-audit.ts` (audit sampling), `test/attribution-verdict.test.ts`,
+and `test/acceptance/evidence-gate-validates-provenance-proxies-not-whe.acceptance.test.ts`.
+
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked

@@ -57,6 +57,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Semantic attribution verification lane at the build evidence gate (#520).** The
+  build gate now runs an engine-embedded judge lane to validate provenance proxies
+  when the deterministic evidence (commit trailers, path corroboration) leaves tasks
+  unresolved. The lane is controlled by project config `attribution_judge_cutover`
+  (absent/future = off, default; past ISO-8601 instant = on) and operates on three
+  principles: (1) **trigger** — runs when unresolved tasks remain AND enforcement is
+  active AND the residue state is new (memoized by HEAD sha + residue ids; unchanged
+  residue never re-dispatches); (2) **judge dispatch** — fresh UUID session, opus/high,
+  input-starved (residue task definitions + candidate commits + scoped tests; no maker
+  transcript or prior verdicts); (3) **validation** — the engine mechanically validates
+  every cited SHA (reachable from HEAD, not empty, not bookkeeping) and overlaps with
+  task-declared paths before stamping. Verdicts are written as `semantic-verified`
+  evidence stamps (adr-2026-07-11-attribution-verdict-interface), optionally sampled
+  via `attribution_audit_sample_pct` (0-100, default 10) for separate spot-audit
+  measurement (adr-2026-07-11-attribution-spot-audit-measurement). Unsatisfied
+  verdicts feed into `pendingRetryHints` (the next build try names exactly the missing
+  tasks). See `adr-2026-07-11-semantic-attribution-verification-lane.md`, README.md,
+  and `src/conductor/README.md`.
+
 - **Attribution enforcement gate surfaces (commit-msg + mutation gate) for inline
   build-work attribution (#505).** Two engine-owned hook surfaces, gated behind
   project config `attribution_enforcement_cutover` (absent/future = off, default;
@@ -140,6 +159,40 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   medium → low → unlabeled. READMEs document the new vocabulary.
 
 ### Migration
+
+**Attribution judgment and audit config keys (schema change for new judge lane).**
+
+The semantic attribution verification lane requires two new optional config keys
+in `.ai-conductor/config.yml`:
+
+```yaml
+# Semantic attribution judgment gate cutover: ISO-8601 instant
+# Absent or future → judge lane disabled (default, inert behavior)
+# Past instant → judge lane enabled for residue evaluation
+# Requires daemon/conductor restart to take effect
+attribution_judge_cutover: "2026-07-11T08:30:00Z"
+
+# Spot-audit sampling percentage: integer [0, 100]
+# Default: 10 (when absent, audit sampled at 10%)
+# Only used when attribution_judge_cutover is active
+# Clamped to [0, 100] with a startup warning if out of range
+attribution_audit_sample_pct: 10
+```
+
+**Consumer action:** neither key is required. If you do not configure them,
+the judge lane remains inactive and all builds proceed with deterministic
+evidence only (current behavior). To enable semantic verification:
+
+```bash migration
+# Edit your project config to add the cutover instant:
+cd .ai-conductor
+# Add attribution_judge_cutover and optionally attribution_audit_sample_pct
+# to config.yml, then restart the daemon or conductor:
+conduct-ts daemon restart
+```
+
+Both keys follow the safe-by-default principle: absent = inert, no retroactive
+behavior change.
 
 **Session-hook wiring for #477 (hook wiring is a canonical breaking surface).**
 
