@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { retitleFloor } from '../../src/engine/halt-pr-rehabilitation.js';
+import { retitleFloor, ensureShipReady } from '../../src/engine/halt-pr-rehabilitation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
 function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
@@ -106,5 +106,70 @@ describe('retitleFloor (Task 6)', () => {
     const result = await retitleFloor(gh, CWD, PR_URL, { branch: 'feat/x' });
 
     expect(result.title).not.toContain('needs-remediation:');
+  });
+});
+
+describe('ensureShipReady (Task 7)', () => {
+  const noopSleep = async () => {};
+
+  it('flips a clean-titled unlabeled draft PR to ready, verified by re-read', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // read before
+      { stdout: '' }, // gh pr ready
+      { stdout: JSON.stringify({ isDraft: false, labels: [], body: '' }) }, // verify re-read
+    ]);
+
+    const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
+
+    expect(result).toBe('flipped-ready');
+    const readyCall = calls.find((c) => c[0] === 'pr' && c[1] === 'ready');
+    expect(readyCall).toEqual(['pr', 'ready', PR_URL]);
+
+    // No unlabel/retitle/body mutation attempted — distinct from rehabilitateHaltPr.
+    expect(calls.some((c) => c.includes('--add-label') || c.includes('--remove-label'))).toBe(false);
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(calls.some((c) => c.includes('--body'))).toBe(false);
+    expect(calls.some((c) => c[0] === 'api')).toBe(false);
+  });
+
+  it('is a no-op for an already-ready PR — zero gh pr ready calls', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ isDraft: false, labels: [], body: '' }) }, // read before
+    ]);
+
+    const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
+
+    expect(result).toBe('no-op');
+    const readyCall = calls.find((c) => c[0] === 'pr' && c[1] === 'ready');
+    expect(readyCall).toBeUndefined();
+    expect(calls.length).toBe(1);
+  });
+
+  it('returns a non-fatal partial outcome when still draft after bounded retries', async () => {
+    const logs: string[] = [];
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // read before
+      { stdout: '' }, // attempt 1: gh pr ready
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 1: still draft
+      { stdout: '' }, // attempt 2: gh pr ready
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 2: still draft
+      { stdout: '' }, // attempt 3: gh pr ready
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 3: still draft
+    ]);
+
+    const result = await ensureShipReady(gh, CWD, PR_URL, (msg) => logs.push(msg), noopSleep);
+
+    expect(result).toBe('partial');
+    const readyCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'ready');
+    expect(readyCalls.length).toBe(3);
+    expect(logs.length).toBeGreaterThan(0);
+  });
+
+  it('returns partial and never throws when the initial read fails', async () => {
+    const { gh } = fakeGh([new Error('gh: network error')]);
+
+    const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
+
+    expect(result).toBe('partial');
   });
 });
