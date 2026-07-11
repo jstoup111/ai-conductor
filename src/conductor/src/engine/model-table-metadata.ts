@@ -147,6 +147,12 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
       'Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration.',
   },
   {
+    name: 'intake',
+    model: 'inherits caller',
+    rationale:
+      'Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch.',
+  },
+  {
     name: 'conduct',
     model: 'haiku',
     rationale: 'Artifact checking and status reporting — mechanical.',

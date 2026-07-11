@@ -149,6 +149,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | debugging | fable |  | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes. |
 | simplify | sonnet |  | Pattern matching for duplication and complexity — structured checklist work. |
 | engineer | fable |  | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration. |
+| intake | inherits caller |  | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | haiku |  | Artifact checking and status reporting — mechanical. |
 | pr | sonnet |  | Diff analysis and structured PR body — templated output. |
 | tdd-red | sonnet |  | Writing one test at a time — focused, constrained. |

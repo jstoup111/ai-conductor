@@ -1274,13 +1274,14 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (23 total)
+### Skills (24 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
 | `/bootstrap` | Advisory | sonnet | Detect/scaffold project, .claudeignore, smoke test, MCP setup |
 | `/memory` | Gating | haiku | Recall/persist decisions, patterns, gotchas across sessions |
 | `/assess` | Gating | haiku | Dispatch 9 CTO specialists for codebase health assessment |
+| `/intake` | Gating | inherits caller | Author intake issues: WHAT (verbatim evidence, impact) + desired OUTCOMES (observable acceptance signals); HOW quarantined to labeled Hypotheses — DECIDE owns it |
 | `/explore` | Advisory | sonnet | Context + approaches + decide product/technical track (no design doc) |
 | `/prd` | Gating | opus | Product-only PRD with FRs (product track only); scope check, API contract |
 | `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
@@ -1502,6 +1503,7 @@ ai-conductor/
 │   ├── conflict-check/
 │   ├── debugging/
 │   ├── finish/
+│   ├── intake/
 │   ├── manual-test/
 │   ├── memory/
 │   ├── pipeline/

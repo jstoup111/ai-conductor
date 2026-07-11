@@ -12,6 +12,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **New `/intake` skill — assisted authoring of intake issues (#490 companion).**
+  Guides filing GitHub intake issues in the WHAT/OUTCOMES shape the intake
+  convention requires: gather verbatim evidence first (exact commands + output,
+  log excerpts with sources, `file:line`/SHA/PR references, repro steps,
+  frequency data) while context is warm, state Impact honestly, write Desired
+  outcomes as observable acceptance signals (litmus: verifiable without knowing
+  the implementation), and quarantine every HOW into an explicitly-labeled
+  Hypotheses section. Includes a pre-file GATE checklist (verbatim artifact
+  present, outcomes observable, no HOW leakage, claims calibrated per
+  verify-claims), symptom-not-solution title guidance, and filing mechanics
+  (`gh issue create --assignee @me` so the engineer's intake poll captures the
+  issue; exact `priority: <band>` label vocabulary with the REST fallback for
+  label edits). Registered in the HARNESS.md model-selection table
+  (`inherits caller` — authoring runs in whatever session observed the problem).
+
 - **Engine-invoked task start/done stamping at subagent dispatch (#477).** The
   conductor now installs a Claude-session `PreToolUse`/`PostToolUse` hook pair
   (`pre-dispatch.sh`, `post-dispatch.sh`) into every feature worktree's
@@ -86,6 +101,16 @@ git worktree prune
 # The daemon re-provisions worktrees on its next dispatch, installing the new
 # .pipeline/session-hooks/{pre,post}-dispatch.sh and wiring
 # .claude/settings.local.json automatically. No further action needed.
+```
+
+**New `/intake` skill (skill symlink targets is a canonical breaking surface).**
+
+`skills/intake/` is a new skill directory; installed harness consumers need
+their skill symlinks refreshed or `/intake` resolves as an unknown command:
+
+```bash migration
+# Link the new intake skill into ~/.claude/skills.
+./bin/install
 ```
 
 ### Changed
