@@ -1273,6 +1273,9 @@ Task 1 → Task 2
 
     it('handles undefined content gracefully, returning false without throwing', () => {
       expect(planHasDependencyTree(undefined as any)).toBe(false);
+    });
+  });
+
   describe('validateBuildReviewVerdict', () => {
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({

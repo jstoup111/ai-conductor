@@ -3040,7 +3040,6 @@ describe('engine/conductor', () => {
       return process;
     }) as typeof process.on);
 
-    // The SIGTERM handler calls process.exit(143); stub it so the real exit
     // The SIGTERM handler calls process.exit(1); stub it so the real exit
     // doesn't surface as an unhandled rejection that fails the vitest run.
     const exitSpy = vi
@@ -3084,43 +3083,22 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
-  it('saves state on SIGHUP before exit', async () => {
-    let sighupHandler: (() => void) | undefined;
   it('SIGTERM with no wait in progress still exits safely', async () => {
     let sigtermHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
       event: string,
       handler: (...args: unknown[]) => void,
     ) => {
-      if (event === 'SIGHUP') {
-        sighupHandler = handler as () => void;
       if (event === 'SIGTERM') {
         sigtermHandler = handler as () => void;
       }
       return process;
     }) as typeof process.on);
 
-    // The SIGHUP handler calls process.exit(129); stub it so the real exit
-    // doesn't surface as an unhandled rejection that fails the vitest run.
     const exitSpy = vi
       .spyOn(process, 'exit')
       .mockImplementation((() => undefined) as never);
 
-    // Create a runner that blocks on the 3rd step so we can trigger SIGHUP
-    let stepCount = 0;
-    let resolveBlock: (() => void) | undefined;
-    const blockPromise = new Promise<void>((resolve) => {
-      resolveBlock = resolve;
-    });
-
-    const runner: StepRunner = {
-      run: async (step: StepName) => {
-        stepCount++;
-        if (stepCount === 3) {
-          // Trigger SIGHUP while we're "running" step 3
-          if (sighupHandler) sighupHandler();
-          // Let the step finish after SIGHUP handler runs
-          resolveBlock!();
     // Create a runner that triggers SIGTERM on 2nd step
     let stepCount = 0;
     const runner: StepRunner = {
@@ -3137,14 +3115,57 @@ describe('engine/conductor', () => {
     const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
     await conductor.run();
 
-    // SIGHUP handler should have been registered
-    expect(processOnSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
-
-    // State should have been saved (handler calls writeState)
     // Should exit safely with status 1
     expect(exitSpy).toHaveBeenCalledWith(1);
 
     // State should have been saved
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('saves state on SIGHUP before exit', async () => {
+    let sighupHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGHUP') {
+        sighupHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // The SIGHUP handler calls process.exit(129); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that triggers SIGHUP on the 3rd step
+    let stepCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGHUP while we're "running" step 3
+          if (sighupHandler) sighupHandler();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGHUP handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
+
+    // State should have been saved (handler calls writeState) and the
+    // handler exits with 129 (128 + SIGHUP)
+    expect(exitSpy).toHaveBeenCalledWith(129);
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
 
@@ -3182,6 +3203,8 @@ describe('engine/conductor', () => {
 
     processOnSpy.mockRestore();
     processOffSpy.mockRestore();
+  });
+
   it('no SIGTERM listener leak after sequential conductor runs', async () => {
     const exitSpy = vi
       .spyOn(process, 'exit')
@@ -6506,6 +6529,7 @@ describe('build-step stall circuit breaker', () => {
     // But runInteractive should NOT have been called in auto mode
     expect(runner.runInteractive).not.toHaveBeenCalled();
   });
+
 });
 
 // Task 14: Engine records the active plan path
