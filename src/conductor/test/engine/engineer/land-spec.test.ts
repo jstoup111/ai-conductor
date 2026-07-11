@@ -77,9 +77,15 @@ async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
   await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'observation'), { recursive: true });
   await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
   await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
   await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  // Add a valid observation marker (watched mode)
+  await writeFile(
+    join(dir, '.docs', 'observation', 'dep-bump.md'),
+    'Signature: dep-bump-fixed\nSurface: daemon-log\nWindow-days: 7'
+  );
   return dir;
 }
 
@@ -255,6 +261,12 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     await writeFile(join(worktree, '.docs', 'plans', 'dep-bump.md'), '');
     await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
     await writeFile(join(worktree, '.docs', 'plans', '2026-07-03-feature.md'), PLAN_WITH_DEPS);
+    // Update observation marker to match the new plan stem
+    await rm(join(worktree, '.docs', 'observation', 'dep-bump.md'), { force: true });
+    await writeFile(
+      join(worktree, '.docs', 'observation', '2026-07-03-feature.md'),
+      'Signature: feature-fixed\nSurface: daemon-log\nWindow-days: 7'
+    );
 
     const gh: GhRunner = async () => ({ stdout: 'carol\n' });
 
@@ -283,16 +295,29 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     // (seedValidWorktree always seeds specs/stories/plans under a fixed
     // "dep-bump" filename regardless of the idea text.)
     await rm(join(worktree, '.docs', 'plans', 'dep-bump.md'), { force: true });
+    await rm(join(worktree, '.docs', 'observation', 'dep-bump.md'), { force: true });
 
     const olderPlanPath = join(worktree, '.docs', 'plans', 'other-idea.md');
     await writeFile(olderPlanPath, PLAN_WITH_DEPS);
     const oldDate = new Date('2020-01-01T00:00:00Z');
     await utimes(olderPlanPath, oldDate, oldDate);
+    // Create observation marker for the older plan
+    await writeFile(
+      join(worktree, '.docs', 'observation', 'other-idea.md'),
+      'Signature: other-idea-fixed\nSurface: daemon-log\nWindow-days: 7'
+    );
+    await utimes(join(worktree, '.docs', 'observation', 'other-idea.md'), oldDate, oldDate);
 
     const newerPlanPath = join(worktree, '.docs', 'plans', '2026-07-03-this-idea.md');
     await writeFile(newerPlanPath, PLAN_WITH_DEPS);
     const newDate = new Date();
     await utimes(newerPlanPath, newDate, newDate);
+    // Create observation marker for the newer plan
+    await writeFile(
+      join(worktree, '.docs', 'observation', '2026-07-03-this-idea.md'),
+      'Signature: this-idea-fixed\nSurface: daemon-log\nWindow-days: 7'
+    );
+    await utimes(join(worktree, '.docs', 'observation', '2026-07-03-this-idea.md'), newDate, newDate);
 
     const gh: GhRunner = async () => ({ stdout: 'dana\n' });
 

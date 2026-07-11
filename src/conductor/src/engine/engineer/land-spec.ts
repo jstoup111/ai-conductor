@@ -43,6 +43,7 @@ import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planSt
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
+import { parseObservationMarker } from '../observation-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -274,6 +275,32 @@ export async function landSpec(
           'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
       );
     }
+  }
+
+  // 4f. Observation marker gate — the spec must have a valid observation marker
+  //     at `.docs/observation/<plan-stem>.md`. The marker specifies how the daemon
+  //     should watch for fixes becoming observable in production (watched or close-on-merge).
+  const markerStem = planStem(planFile);
+  const markerPath = join(worktreePath, '.docs', 'observation', `${markerStem}.md`);
+  let markerContent: string;
+  try {
+    markerContent = await readFile(markerPath, 'utf-8');
+  } catch {
+    throw new Error(
+      `landSpec: observation marker is missing at "${markerPath}". ` +
+        'A marker file is required before landing — it specifies how the daemon watches ' +
+        'for the fix to become observable in production. ' +
+        'Create ".docs/observation/' + markerStem + '.md" with either watched or close-on-merge mode.',
+    );
+  }
+
+  // Parse and validate the marker
+  const markerParseResult = parseObservationMarker(markerContent);
+  if (markerParseResult.kind === 'parse_error') {
+    throw new Error(
+      `landSpec: observation marker at "${markerPath}" failed to parse: ${markerParseResult.message}. ` +
+        'Fix the marker format (watched or close-on-merge mode) and try again.',
+    );
   }
 
   // 5. Commit in place on the worktree's branch. The branch already exists (it is the
