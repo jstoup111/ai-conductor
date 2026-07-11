@@ -223,3 +223,117 @@ export async function rewriteObservationWatch(
     log?.(`[observation-sweep] failed to rewrite registry: ${err}`);
   }
 }
+
+// ── Awaiting-merge state machine ────────────────────────────────────────────
+
+/**
+ * Shell runner for the `gh` CLI. Injected in tests; nothing here touches the
+ * network directly.
+ */
+export type GhRunner = (
+  args: string[],
+  opts: { cwd: string },
+) => Promise<{ stdout: string }>;
+
+/**
+ * Result of polling a PR's state and merge timestamp.
+ */
+interface PrState {
+  state: 'MERGED' | 'CLOSED';
+  mergedAt?: number;
+}
+
+/**
+ * Poll a PR's state and mergedAt timestamp via gh.
+ * Returns null if there's an error; logs the error if a logger is provided.
+ */
+async function prStateWithMergedAt(
+  gh: GhRunner,
+  prUrl: string,
+  log?: Logger,
+): Promise<PrState | null> {
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'state,mergedAt'], {
+      cwd: process.cwd(),
+    });
+    const data: Record<string, unknown> = JSON.parse(stdout);
+
+    const state = data.state as string;
+    if (state !== 'MERGED' && state !== 'CLOSED') {
+      log?.(`[observation-sweep] unexpected PR state: ${state}`);
+      return null;
+    }
+
+    const result: PrState = { state: state as 'MERGED' | 'CLOSED' };
+
+    // mergedAt is only present for MERGED PRs
+    if (state === 'MERGED' && typeof data.mergedAt === 'number') {
+      result.mergedAt = data.mergedAt;
+    }
+
+    return result;
+  } catch (err) {
+    log?.(`[observation-sweep] prStateWithMergedAt(${prUrl}) error: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Sweep the observation watch registry: poll awaiting-merge entries for PR state,
+ * record mergedAt when merged, and prune closed PRs.
+ *
+ * Per-entry throttle: skip entries polled in the last 5 minutes.
+ * Survivors are entries that passed sweep logic (transition to watching or retry).
+ * Pruned entries (CLOSED unmerged PRs) are removed from the registry.
+ */
+export async function sweepObservationWatch(
+  registryPath: string,
+  deps: {
+    gh: GhRunner;
+    log?: Logger;
+  },
+): Promise<void> {
+  const entries = await readObservationWatch(registryPath, deps.log);
+  const survivors: ObservationEntry[] = [];
+  const now = Date.now();
+  const throttleMs = 5 * 60 * 1000; // 5 minutes
+
+  for (const entry of entries) {
+    // Skip if not due for poll (5-minute throttle)
+    if (entry.lastPollAt && now - entry.lastPollAt < throttleMs) {
+      survivors.push(entry);
+      continue;
+    }
+
+    // Poll PR state
+    try {
+      const prState = await prStateWithMergedAt(deps.gh, entry.prUrl, deps.log);
+      if (!prState) {
+        // gh error — retry later
+        survivors.push({
+          ...entry,
+          lastPollAt: now,
+        });
+        continue;
+      }
+
+      if (prState.state === 'MERGED') {
+        // Transition to watching
+        survivors.push({
+          ...entry,
+          mergedAt: prState.mergedAt,
+          lastPollAt: now,
+        });
+      } else if (prState.state === 'CLOSED') {
+        // Cancel and prune
+        deps.log?.(`[daemon] observing: cancelled ${entry.sourceRef}`);
+        // Don't add to survivors (prune)
+      }
+    } catch (err) {
+      deps.log?.(`[observation-sweep] sweep failed for ${entry.prUrl}: ${err}`);
+      survivors.push(entry);  // Retry later
+    }
+  }
+
+  await rewriteObservationWatch(registryPath, survivors, deps.log);
+}
