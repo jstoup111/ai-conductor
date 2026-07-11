@@ -3,6 +3,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import {
   gateSatisfied,
   selectNextGate,
+  earliestUnsatisfiedGateIndex,
   type SelectorInput,
 } from '../../src/engine/selector.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -214,5 +215,116 @@ describe('engine/selector — gateSatisfied', () => {
 
   it('stale overrides a stale satisfied verdict (kickback cascade re-opens it)', () => {
     expect(gateSatisfied('build', { build: 'stale' }, { build: VSAT })).toBe(false);
+  });
+});
+
+describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
+  it('returns the index of the earliest unsatisfied gate in the region', () => {
+    const state = { ...frontDone(), build: 'pending' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {};
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+    // build is the first step after regionStart ('stories'), and it's pending/unsatisfied
+    const buildIdx = ALL_STEPS.findIndex((s) => s.name === 'build');
+    expect(idx).toBe(buildIdx);
+  });
+
+  it('overrides satisfied verdict and returns stale step index', () => {
+    const state: ConductState = { ...frontDone(), build: 'stale' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT, // verdict says satisfied
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+    // stale status overrides the verdict, so build should be returned
+    const buildIdx = ALL_STEPS.findIndex((s) => s.name === 'build');
+    expect(idx).toBe(buildIdx);
+  });
+
+  it('returns -1 when all gates in the region are satisfied', () => {
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      build_review: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
+      retro: VSAT,
+      rebase: VSAT,
+      finish: VSAT,
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(frontDone(), verdicts));
+    expect(idx).toBe(-1);
+  });
+
+  it('skips tier-skippable steps (retro on Small) and returns next unsatisfied', () => {
+    const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      build_review: VSAT,
+      manual_test: VSAT,
+      prd_audit: VSAT,
+      architecture_review_as_built: VSAT,
+      rebase: VSAT,
+      // retro is pending and tier-skipped; should be skipped
+      // finish is pending and unsatisfied, so it should be returned
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+    const finishIdx = ALL_STEPS.findIndex((s) => s.name === 'finish');
+    expect(idx).toBe(finishIdx);
+  });
+
+  it('respects regionStart boundary and ignores steps before it', () => {
+    // stories is at some index, regionStart is 'plan'
+    // plan is before build in the overall list, but regionStart moves the boundary forward
+    // so steps before 'plan' in regionStart should be ignored
+    const state: ConductState = { ...frontDone(), plan: 'pending', build: 'pending' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {};
+    const regionStart: StepName = 'build';
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts, regionStart));
+    // plan is before regionStart='build', so even though it's pending, it should be ignored
+    // build is at regionStart, and it's pending, so it should be returned
+    const buildIdx = ALL_STEPS.findIndex((s) => s.name === 'build');
+    expect(idx).toBe(buildIdx);
+  });
+
+  it('throws when regionStart is not in the step list', () => {
+    expect(() =>
+      earliestUnsatisfiedGateIndex(input(frontDone(), {}, 'nope' as StepName)),
+    ).toThrow(/regionStart/);
+  });
+
+  it('skips explicitly marked skipped steps', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'skipped',
+      build_review: 'skipped',
+      manual_test: 'skipped',
+      retro: 'skipped',
+      // prd_audit is pending and unsatisfied
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      architecture_review_as_built: VSAT,
+      rebase: VSAT,
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+    const prdAuditIdx = ALL_STEPS.findIndex((s) => s.name === 'prd_audit');
+    expect(idx).toBe(prdAuditIdx);
+  });
+
+  it('detects unsatisfied gate with kickback reason', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      plan: 'stale',
+      build: 'pending',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      plan: {
+        satisfied: false,
+        checkedAt: 2,
+        kickback: { from: 'build', evidence: 'AC-7 needs a new table' },
+      },
+    };
+    const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
+    // plan is stale and has unsatisfied verdict with kickback
+    const planIdx = ALL_STEPS.findIndex((s) => s.name === 'plan');
+    expect(idx).toBe(planIdx);
   });
 });
