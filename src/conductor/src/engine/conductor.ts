@@ -111,6 +111,7 @@ import {
   runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  recordRebaseStepCompletion,
   writeHalt,
   originDefaultBranch,
   type RebaseOutcome,
@@ -2942,8 +2943,11 @@ export class Conductor {
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
-          // written atomically in their engine handlers. For all other steps, here.
-          if (step.name !== 'complexity' && step.name !== 'worktree') {
+          // written atomically in their engine handlers. `rebase` is also
+          // written atomically in runRebaseStep via recordRebaseStepCompletion
+          // (#436) — gated on the rebase outcome, so a conflict_halt is never
+          // stamped 'done' here. For all other steps, here.
+          if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await saveStepStatus(this.stateFilePath, step.name, 'done');
           }
           state[step.name] = 'done';
@@ -3506,6 +3510,7 @@ export class Conductor {
       const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
       await applyRebaseVerdicts(this.projectRoot, outcome, ranManualTest);
       await emitRebaseEvent(this.events, outcome);
+      await recordRebaseStepCompletion(this.stateFilePath, outcome);
       return { success: true };
     }
 
@@ -3610,6 +3615,8 @@ export class Conductor {
     if (outcome.kind === 'conflict_halt') {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
     }
+
+    await recordRebaseStepCompletion(this.stateFilePath, outcome);
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
     // routing. A conflict_halt is surfaced there, not as a step failure.

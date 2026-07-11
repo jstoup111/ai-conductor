@@ -6,6 +6,7 @@ import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { saveStepStatus } from './state.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -827,6 +828,28 @@ export async function applyRebaseVerdicts(
     kickedBack.push(target);
   }
   return { satisfied: true, kickedBack, reverified };
+}
+
+/**
+ * Record rebase-step completion in engine state (#436 refactor).
+ *
+ * A rebase outcome is "done" for state-recording purposes whenever
+ * `applyRebaseVerdicts` wrote a satisfied gate verdict — i.e. every outcome
+ * kind except `conflict_halt` (noop / changelog_resolved / changed all leave
+ * the branch current with base). A `conflict_halt` outcome parks the step for
+ * human resolution and must NOT be stamped `done` — the gate stays
+ * unsatisfied and a resumed run needs to re-attempt the rebase.
+ *
+ * Shared by the in-loop `runRebaseStep` (conductor.ts) and the pre-loop
+ * `resumeRebaseFirst` re-kick path (daemon-rekick.ts) so both call sites
+ * record identically instead of drifting (#436).
+ */
+export async function recordRebaseStepCompletion(
+  stateFilePath: string,
+  outcome: RebaseOutcome,
+): Promise<void> {
+  if (outcome.kind === 'conflict_halt') return;
+  await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 
 /** Map a rebase outcome to its structured event. Best-effort emission. */

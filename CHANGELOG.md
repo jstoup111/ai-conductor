@@ -1351,6 +1351,10 @@ no action needed — the token requirement is skipped.
   `.pipeline/HALT`, so operators never lose sight of what the agent needed. Stall remediations
   share the existing `MAX_KICKBACKS_PER_GATE` budget (no new counter). See ADR-2026-07-10 and
   the updated `/remediate` and `/pipeline` SKILL.md for full details.
+- Rekick pre-loop rebase now records rebase step state (#436): the re-kick
+  play-forward path (`resumeRebaseFirst`) now calls `recordRebaseStepCompletion`,
+  the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
+  rebase stamps `state.rebase` instead of leaving it silently unmarked.
 
 ## Migration
 
