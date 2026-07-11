@@ -163,6 +163,24 @@ describe('Task 23: loop startup loads registry + store, reports counts (FR-1)', 
     expect(src).not.toMatch(/createInterface/);
   });
 
+  // #505 Task 8: loop.ts's scaffold-init `git commit` (createOnNoFit path) must
+  // mark itself engine-authored so the commit-msg gate never demands a Task:
+  // trailer on it — this is bookkeeping (repo scaffolding), never dispatched
+  // implementation work. A real end-to-end hook fixture here would require
+  // standing up the full "create <path>" confirmation flow (registry reader,
+  // io.prompt mocking, runCreate) for a single-commit assertion; the static
+  // check locks the actual spawn call site instead, same pattern as the C2
+  // regression locks above.
+  it('[#505 Task 8] loop.ts scaffold-init commit spawn passes CONDUCT_ENGINE_COMMIT via withEngineCommitEnv()', async () => {
+    const src = await readFile(loopSrcPath(), 'utf8');
+    expect(src).toMatch(/import\s*\{\s*withEngineCommitEnv\s*\}\s*from\s*['"]\.\.\/engine-commit-env\.js['"]/);
+    // The scaffold commit call itself must pass the env through.
+    const idx = src.indexOf('chore: engineer scaffold initial commit');
+    expect(idx).toBeGreaterThan(-1);
+    const nearby = src.slice(idx, idx + 200);
+    expect(nearby).toMatch(/env:\s*withEngineCommitEnv\(\)/);
+  });
+
   // FR-1 / C5 static invariant: loop.ts imports from intake/port.js (port seam present).
   // RED until loop.ts is updated to import from intake/port.js.
   it('[FR-1] loop.ts imports from intake/port.js (port seam is the dependency)', async () => {
