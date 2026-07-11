@@ -235,4 +235,18 @@ export type ConductorEvent =
       checks: string[];
       attempts: number;
       phase: 'detected' | 'dispatched' | 'exhausted';
+    }
+  // ── Semantic attribution verification (Task 17) ──
+  | {
+      /**
+       * Audit disagreement: the spot-audit verdict disagrees with the fast-lane
+       * verdict (agree: false). Emitted when an audited task is recorded to the
+       * accuracy ledger with a divergent verdict. No stamps are revoked, no halt
+       * markers are written — audit results are observational, never prescriptive.
+       */
+      type: 'attribution_divergence';
+      /** Feature slug being audited */
+      feature: string;
+      /** Task ID with divergent verdict */
+      taskId: string;
     };

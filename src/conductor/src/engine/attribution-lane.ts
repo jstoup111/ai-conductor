@@ -25,6 +25,7 @@ import { assembleAttributionInputs } from './attribution-inputs.js';
 import { buildAttributionPrompt } from './attribution-prompt.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { createTaskEvidence } from './task-evidence.js';
+import { parseAttributionVerdict } from './attribution-verdict.js';
 
 /**
  * Verifier dispatch options.
@@ -312,6 +313,12 @@ export interface AttributionLaneResult {
   stampedTaskIds: string[];
   dispatched: boolean;
   error?: string;
+  /**
+   * Task ID → unsatisfied reason mapping for retry hints.
+   * Only populated when verdict was successfully parsed and validated.
+   * no-verdict and invalidated verdicts are excluded.
+   */
+  unsatisfiedReasons?: Map<string, string>;
 }
 
 /**
@@ -385,7 +392,45 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     };
   }
 
+  // Task 13: Parse verdict and extract unsatisfied reasons for retry hints.
+  // Read the verdict file written by the verifier.
+  const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+  let unsatisfiedReasons: Map<string, string> | undefined;
+
+  try {
+    const verdictRaw = await readFile(verdictPath, 'utf-8');
+    const verdictData = JSON.parse(verdictRaw);
+
+    // Parse the verdict with fail-closed coercion
+    const verdictMap = parseAttributionVerdict(verdictData, residueIds, headSha, residueIds);
+
+    // Extract unsatisfied verdicts and their reasons
+    const unsatisfied = new Map<string, string>();
+    for (const entry of (verdictData?.results as unknown[]) || []) {
+      if (!entry || typeof entry !== 'object') continue;
+      const entryObj = entry as Record<string, unknown>;
+      const taskId = String(entryObj.taskId);
+      const verdict = verdictMap.get(taskId);
+
+      // Only include unsatisfied verdicts (not no-verdict, not invalidated)
+      if (verdict === 'unsatisfied' && typeof entryObj.reason === 'string') {
+        unsatisfied.set(taskId, entryObj.reason);
+      }
+    }
+
+    if (unsatisfied.size > 0) {
+      unsatisfiedReasons = unsatisfied;
+    }
+  } catch {
+    // Verdict file missing or unparseable — continue without retry hints
+    // (the verdict coercion itself already handles fail-closed behavior)
+  }
+
   // TODO (Task 12 GREEN): parse verdict, validate, apply stamps, return stampedTaskIds.
   // For now, return empty stamps to allow RED phase tests to complete.
-  return { stampedTaskIds: [], dispatched: true };
+  return {
+    stampedTaskIds: [],
+    dispatched: true,
+    unsatisfiedReasons,
+  };
 }

@@ -1908,6 +1908,21 @@ export class Conductor {
                     },
                   });
 
+                  // Task 13: Merge unsatisfied verdicts into pending retry hints.
+                  // Unsatisfied reasons sharpen the BUILD retry hint by naming tasks
+                  // that the verifier found unsatisfied. no-verdict and invalidated
+                  // verdicts contribute nothing (mechanical hint unchanged).
+                  if (laneResult.unsatisfiedReasons && laneResult.unsatisfiedReasons.size > 0) {
+                    const unsatisfiedByTask = Array.from(laneResult.unsatisfiedReasons.entries())
+                      .map(([taskId, reason]) => `task ${taskId}: ${reason}`)
+                      .join('; ');
+                    const verdictHint =
+                      `Semantic attribution judge found unsatisfied tasks:\n${unsatisfiedByTask}\n` +
+                      `These tasks lack sufficient evidence in commits and tests. Review the verifier's ` +
+                      `analysis and address the implementation gaps.`;
+                    pendingRetryHints.set('build', verdictHint);
+                  }
+
                   // Task 12: Counter reset. If the lane dispatched and stamped
                   // tasks, those stamps are now in task-evidence.json. On the
                   // NEXT evaluation cycle (next auto-heal or gate check), the

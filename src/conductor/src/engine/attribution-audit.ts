@@ -343,3 +343,51 @@ export async function runSpotAudit(opts: SpotAuditDispatchOptions): Promise<Spot
   // Return immediately without waiting for dispatch to complete
   return { dispatched: true };
 }
+
+/**
+ * Event emitter interface for attribution_divergence event emission.
+ */
+export interface AttributionEventEmitter {
+  emit(type: 'attribution_divergence', event: { feature: string; taskId: string }): void;
+}
+
+/**
+ * Record an audit result and emit divergence event if audit disagrees with fast-lane.
+ *
+ * Appends the accuracy ledger record and, when agree: false, emits an
+ * `attribution_divergence` event with feature and taskId. No stamps are
+ * revoked, no halt markers are written — audit results are observational.
+ *
+ * DOMAIN: Divergence signaling (Task 17)
+ * ======================================
+ *
+ * When the spot-audit disagrees with the fast-lane verdict (agree: false),
+ * the engine emits `attribution_divergence` through the event stream so
+ * false positives become visible in logs/dashboards without destabilizing
+ * shipped builds. Stamps and state files are never touched — divergence is
+ * purely informational.
+ *
+ * References:
+ * - adr-2026-07-11-attribution-spot-audit-measurement § "Divergence signal"
+ * - Task 17: Divergence event emission
+ *
+ * @param ledgerPath - Path to .daemon/attribution-accuracy.jsonl
+ * @param record - Accuracy ledger record (includes agree boolean)
+ * @param emitter - Event emitter for attribution_divergence
+ */
+export async function recordAuditResultWithEvent(
+  ledgerPath: string,
+  record: AccuracyLedgerRecord,
+  emitter?: AttributionEventEmitter,
+): Promise<void> {
+  // Append record to accuracy ledger
+  await appendAccuracyLedger(ledgerPath, record);
+
+  // Emit divergence event if audit disagrees with fast-lane
+  if (!record.agree && emitter) {
+    emitter.emit('attribution_divergence', {
+      feature: record.feature,
+      taskId: record.taskId,
+    });
+  }
+}

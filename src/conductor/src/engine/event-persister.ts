@@ -46,6 +46,7 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'parallel_started',
   'parallel_completed',
   'parallel_failure',
+  'attribution_divergence',
 ];
 
 /**
