@@ -9,6 +9,7 @@ import {
   customStepEntries,
   mergeConfigs,
   resolveMemoryProvider,
+  isAttributionEnforcementActive,
 } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -654,6 +655,60 @@ complexity:
         const result = await loadConfig(tmpDir);
         expect(result.ok).toBe(true);
       });
+    });
+  });
+
+  // Task 1 (#505): attribution_enforcement_cutover — mirrors owner_gate_cutover's
+  // validation pattern but with its own activation predicate.
+  describe('attribution_enforcement_cutover config field', () => {
+    it('parses and exposes attribution_enforcement_cutover', () => {
+      const result = validateConfig({
+        attribution_enforcement_cutover: '2026-06-30T00:00:00Z',
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.attribution_enforcement_cutover).toBe('2026-06-30T00:00:00Z');
+    });
+
+    it('is optional — absent key parses fine', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.attribution_enforcement_cutover).toBeUndefined();
+    });
+
+    it('REJECTS a malformed (unparseable) attribution_enforcement_cutover with a clear error', () => {
+      const result = validateConfig({ attribution_enforcement_cutover: 'not-a-date' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toMatch(/attribution_enforcement_cutover.*not.*parseable/i);
+      expect(result.error.message).toMatch(/not-a-date/);
+    });
+
+    it('rejects a non-string attribution_enforcement_cutover', () => {
+      const result = validateConfig({ attribution_enforcement_cutover: 1234 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(
+        /attribution_enforcement_cutover must be an ISO-8601 date string/,
+      );
+    });
+  });
+
+  describe('isAttributionEnforcementActive', () => {
+    it('is disabled when the cutover key is absent', () => {
+      expect(isAttributionEnforcementActive(undefined)).toBe(false);
+    });
+
+    it('is enabled when the cutover instant is in the past', () => {
+      const now = new Date('2026-07-10T00:00:00Z');
+      expect(isAttributionEnforcementActive('2026-01-01T00:00:00Z', now)).toBe(true);
+    });
+
+    it('is disabled when the cutover instant is in the future', () => {
+      const now = new Date('2026-07-10T00:00:00Z');
+      expect(isAttributionEnforcementActive('2027-01-01T00:00:00Z', now)).toBe(false);
     });
   });
 
