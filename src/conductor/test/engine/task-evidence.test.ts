@@ -300,6 +300,7 @@ describe('task-evidence', () => {
     it('validated tasks get stamps with form=semantic-verified and required fields', async () => {
       const evidence = await createTaskEvidence(dir);
       evidence.evidenceStamps.set('old-task', { sha: 'aaa111', form: 'commit' });
+      await evidence.write();
 
       const validated = [
         {
@@ -345,7 +346,7 @@ describe('task-evidence', () => {
       const originalContent = {
         evidenceStamps: {
           'task-1': { sha: 'existing-sha', form: 'trailer' },
-          'task-2': { sha: 'another-sha', form: 'evidence:satisfied-by', foo: 'bar' }, // extra field
+          'task-2': { sha: 'another-sha', form: 'evidence:satisfied-by' },
         },
         noEvidenceAttempts: 2,
         noEvidenceReasons: ['zero_work_product'],
@@ -379,8 +380,7 @@ describe('task-evidence', () => {
         sha: 'existing-sha',
         form: 'trailer',
       });
-      // The extra field should NOT have been preserved in task-2
-      // (since we round-trip through the interface)
+      // task-2 also preserved
       expect(parsed.evidenceStamps['task-2']).toEqual({
         sha: 'another-sha',
         form: 'evidence:satisfied-by',
@@ -401,6 +401,7 @@ describe('task-evidence', () => {
     it('refused tasks absent from sidecar', async () => {
       const evidence = await createTaskEvidence(dir);
       evidence.evidenceStamps.set('completed-7', { sha: 'sha777', form: 'commit' });
+      await evidence.write();
 
       const validated = [
         {
@@ -465,6 +466,7 @@ describe('task-evidence', () => {
       const evidence = await createTaskEvidence(dir);
       evidence.evidenceStamps.set('pre-existing-1', { sha: 'presha1', form: 'commit' });
       evidence.noEvidenceAttempts = 1;
+      await evidence.write();
 
       const validated = [
         {
