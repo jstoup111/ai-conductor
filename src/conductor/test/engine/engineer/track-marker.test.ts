@@ -52,8 +52,14 @@ async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<s
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
+  await mkdir(join(dir, '.docs/observation'), { recursive: true });
   await writeFile(join(dir, '.docs/stories/t.md'), ACCEPTED_STORIES);
   await writeFile(join(dir, '.docs/plans/t.md'), PLAN);
+  // Add observation marker
+  await writeFile(
+    join(dir, '.docs/observation/t.md'),
+    'Signature: t-fixed\nSurface: daemon-log\nWindow-days: 7'
+  );
   if (opts.spec) {
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
     await writeFile(join(dir, '.docs/specs/t.md'), '# PRD: t\n\nApproved.\n');

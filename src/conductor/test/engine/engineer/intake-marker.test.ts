@@ -191,9 +191,15 @@ describe('landSpec intake marker (FR-1)', () => {
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'observation'), { recursive: true });
     await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    // Add observation marker
+    await writeFile(
+      join(wt.worktreePath, '.docs', 'observation', 'dep-bump.md'),
+      'Signature: dep-bump-fixed\nSurface: daemon-log\nWindow-days: 7'
+    );
 
     const result = await landSpec(target(), 'dep bump', wt.worktreePath, 'acme/app#7', {
       ownerConfig: { spec_owner: 'alice' },
@@ -211,9 +217,15 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(wt.worktreePath, '.docs', 'observation'), { recursive: true });
     await writeFile(join(wt.worktreePath, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
     await writeFile(join(wt.worktreePath, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    // Add observation marker
+    await writeFile(
+      join(wt.worktreePath, '.docs', 'observation', 'dep-bump.md'),
+      'Signature: dep-bump-fixed\nSurface: daemon-log\nWindow-days: 7'
+    );
     return wt.worktreePath;
   }
 
