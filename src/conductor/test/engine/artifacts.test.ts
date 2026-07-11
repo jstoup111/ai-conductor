@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+// Spy target for the finish predicate's Phase 2 presentation check
+// (readStaleHaltTitle, invoked with a gh runner). Mocked so tests can assert
+// it is never reached when a Phase 1 evidence condition (e.g. push
+// verification) already failed the gate.
+const readStaleHaltTitleSpy = vi.fn(async () => null);
+vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
+  readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
+}));
+
 import {
   STEP_ARTIFACT_GLOBS,
   findArtifactFiles,
@@ -24,6 +34,7 @@ describe('engine/artifacts', () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
+    readStaleHaltTitleSpy.mockClear();
   });
 
   afterEach(async () => {
@@ -440,6 +451,20 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
+    });
+
+    it('two-phase ordering: does not invoke the presentation (gh) check when push evidence fails', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false,
+      });
+      expect(result.done).toBe(false);
+      expect(readStaleHaltTitleSpy).not.toHaveBeenCalled();
     });
 
     it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {

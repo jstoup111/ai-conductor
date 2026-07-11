@@ -1149,8 +1149,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         missing: 'other',
       };
     }
+    // ---- Phase 1: evidence — all non-presentation conditions. Each miss
+    // returns immediately, before any presentation (gh) call is made. ----
+    let prUrl: string | undefined;
     if (choice === 'pr') {
-      let prUrl: string | undefined;
       try {
         const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
         const state = JSON.parse(raw) as { pr_url?: string };
@@ -1168,23 +1170,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
           missing: 'recording',
         };
-      }
-      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
-      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
-      // `needs-remediation:` — the skill must rewrite the reused halt PR's
-      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
-      // null): network unavailability never blocks a ship.
-      try {
-        const staleTitle = await readStaleHaltTitle(makeProductionGh(), dir, prUrl);
-        if (staleTitle !== null) {
-          return {
-            done: false,
-            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
-            missing: 'other',
-          };
-        }
-      } catch {
-        // fail-open — presentation is not worth blocking a ship on gh failure
       }
 
       // adr-2026-07-06-daemon-false-ship-guard (Task 5+6): Evidence check for push
@@ -1209,7 +1194,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               missing: 'other',
             };
           }
-          // pushed === true: continue to done: true
+          // pushed === true: continue to Phase 2
         } catch (error) {
           return {
             done: false,
@@ -1217,6 +1202,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             missing: 'other',
           };
         }
+      }
+    }
+
+    // ---- Phase 2: presentation — only reached once every Phase 1 evidence
+    // condition has been satisfied. ----
+    if (choice === 'pr' && prUrl) {
+      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
+      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
+      // `needs-remediation:` — the skill must rewrite the reused halt PR's
+      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
+      // null): network unavailability never blocks a ship.
+      try {
+        const staleTitle = await readStaleHaltTitle(makeProductionGh(), dir, prUrl);
+        if (staleTitle !== null) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
       }
     }
     return { done: true };
