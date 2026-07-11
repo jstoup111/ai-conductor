@@ -15,22 +15,45 @@ import { spawnSync } from 'node:child_process';
 
 export const DAEMON_SESSION_PREFIX = 'cc-daemon-';
 
-function tmux(args: string[]): { code: number; stdout: string } {
+/** Result of a single tmux invocation. `spawnError` means the process never
+ * ran at all (e.g. tmux not installed) — distinct from a clean exec that
+ * merely returned a non-zero exit code. */
+export type TmuxResult = {
+  stdout: string;
+  stderr: string;
+  code: number;
+  spawnError?: boolean;
+};
+
+/** Injectable seam so tests can assert on exact argv and control results
+ * without a real tmux binary. */
+export type TmuxRunner = (args: string[]) => TmuxResult;
+
+/** Default runner — the real `spawnSync('tmux', …)` wrapper. */
+export const realTmuxRunner: TmuxRunner = (args: string[]): TmuxResult => {
   const result = spawnSync('tmux', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf-8',
   });
   if (result.error) {
-    // tmux not installed (CI runners) — report "no sessions" so the guard
-    // degrades to a no-op instead of failing environments without tmux.
-    return { code: 1, stdout: '' };
+    // tmux not installed (CI runners), or the spawn itself failed — distinct
+    // from a clean exec that returned a non-zero code.
+    return { code: 1, stdout: '', stderr: '', spawnError: true };
   }
-  return { code: result.status ?? 1, stdout: (result.stdout as string | null) ?? '' };
+  return {
+    code: result.status ?? 1,
+    stdout: (result.stdout as string | null) ?? '',
+    stderr: (result.stderr as string | null) ?? '',
+  };
+};
+
+function tmux(args: string[], runner: TmuxRunner): TmuxResult {
+  return runner(args);
 }
 
 /** Names of live `cc-daemon-*` tmux sessions (empty when tmux is absent/idle). */
-export function listDaemonSessions(): string[] {
-  const result = tmux(['list-sessions', '-F', '#{session_name}']);
+export function listDaemonSessions(runner: TmuxRunner = realTmuxRunner): string[] {
+  const result = tmux(['list-sessions', '-F', '#{session_name}'], runner);
   if (result.code !== 0) return [];
   return result.stdout
     .split('\n')
@@ -39,25 +62,28 @@ export function listDaemonSessions(): string[] {
 }
 
 /** Pane cwd of a session's active pane — the leak's fixture-dir fingerprint. */
-export function sessionPaneCwd(name: string): string {
-  const result = tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_current_path}']);
+export function sessionPaneCwd(name: string, runner: TmuxRunner = realTmuxRunner): string {
+  const result = tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_current_path}'], runner);
   return result.code === 0 ? result.stdout.trim() : '(unknown)';
 }
 
-export function killDaemonSession(name: string): void {
-  tmux(['kill-session', '-t', `=${name}`]);
+export function killDaemonSession(name: string, runner: TmuxRunner = realTmuxRunner): void {
+  tmux(['kill-session', '-t', `=${name}`], runner);
 }
 
 /**
  * Diff live sessions against the suite-start snapshot; kill and describe
  * every leaked one. Returns the leak descriptions (empty = clean run).
  */
-export function reapLeakedDaemonSessions(before: ReadonlySet<string>): string[] {
+export function reapLeakedDaemonSessions(
+  before: ReadonlySet<string>,
+  runner: TmuxRunner = realTmuxRunner
+): string[] {
   const leaks: string[] = [];
-  for (const name of listDaemonSessions()) {
+  for (const name of listDaemonSessions(runner)) {
     if (before.has(name)) continue;
-    const cwd = sessionPaneCwd(name);
-    killDaemonSession(name);
+    const cwd = sessionPaneCwd(name, runner);
+    killDaemonSession(name, runner);
     leaks.push(`${name} (pane cwd: ${cwd})`);
   }
   return leaks;
