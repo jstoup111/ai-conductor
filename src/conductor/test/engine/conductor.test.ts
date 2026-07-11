@@ -2445,6 +2445,58 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('explore');
   });
 
+  it('explicit fromStep bypasses the resume verdict clamp (#532)', async () => {
+    // Story 1 negative path: fromStep is an exempt operator override.
+    // Set up the #532 fixture: all steps before build are done, build failed with unsatisfied
+    // verdicts, rebase done (so finish's state-only gate passes).
+    // When using fromStep='finish', the clamp must NOT apply — finish should dispatch, not build.
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: everything before build is done, build is failed, rebase is done.
+    // Steps after build (build_review, manual_test, etc.) are left unset to match
+    // the fixture pattern in resume-verdict-clamp.test.ts.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;  // Stop before build, don't set build and beyond
+      seed[s.name] = 'done';
+    }
+    seed.build = 'failed';
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write unsatisfied gate verdicts (as if build/build_review/manual_test failed rebase kickback).
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Run with fromStep: 'finish' (NOT resume).
+    // The clamp must NOT apply: finish should be dispatched, not build.
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, fromStep: 'finish',
+    });
+
+    await conductor.run();
+
+    // Assert: finish is the first step run, not build (the clamp would have clamped to build if applied).
+    // Since fromStep overrides the clamp, finish dispatches first without interference.
+    // What happens after finish is out of scope for this test.
+    expect(stepsRun[0]).toBe('finish');
+  });
+
   it('daemon-path resume with verdict clamp: step_started names build, never finish before gate flips (Story 1: #532, GREEN after Task 2)', async () => {
     // Regression pin: This test already passes after Task 2's verdict-aware resume clamp fix.
     // Set up the #532 fixture (three unsatisfied kickback verdicts + build:'failed'/rebase:'done' state).
