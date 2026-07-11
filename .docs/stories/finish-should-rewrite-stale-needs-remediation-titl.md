@@ -143,8 +143,14 @@ deterministically after finish so that they never depend on session behavior.
 - [ ] New engine module exports `rehabilitateHaltPr` with injected gh runner,
       returning a discriminated outcome
       (`'not-halt-pr' | 'rehabilitated' | 'partial' | 'gh-unavailable'`).
-- [ ] `daemon-cli.ts` post-run tail invokes it beside (or absorbing)
-      `closeIssueOnImplementationMerge` for items with a recorded `pr_url`.
+- [ ] ~~`daemon-cli.ts` post-run tail invokes it beside (or absorbing)
+      `closeIssueOnImplementationMerge` for items with a recorded `pr_url`.~~
+      **SUPERSEDED (2026-07-11):** the invocation moves into the finish step's
+      completion evaluation, order-gated after the non-presentation conditions pass;
+      the post-run tail call is removed. See
+      `adr-2026-07-11-finish-step-engine-completion-machinery.md` (amends
+      adr-2026-07-03 Decision 2) and
+      `.docs/stories/finish-step-completion-becomes-engine-machinery-re.md`.
 - [ ] Unit tests with injected runners cover every negative path above; an
       acceptance test drives halt → remediate → finish and asserts the final
       PR state (ready, unlabeled, Closes exactly once, clean title).
