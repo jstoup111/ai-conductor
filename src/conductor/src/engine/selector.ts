@@ -70,15 +70,16 @@ function isSkipped(step: StepDefinition, state: ConductState): boolean {
 }
 
 /**
- * Pick the earliest unsatisfied, non-skipped gate at or after `regionStart`.
- * Returns `done` when every gate in the region is satisfied.
+ * Internal scan helper: find the index of the earliest unsatisfied, non-skipped
+ * gate at or after `regionStart`. Returns -1 when every gate in the region is
+ * satisfied.
  */
-export function selectNextGate(input: SelectorInput): SelectorDecision {
+function findNextGateInRegion(input: SelectorInput): number {
   const { steps, state, verdicts, regionStart } = input;
   const startIdx = steps.findIndex((s) => s.name === regionStart);
   if (startIdx === -1) {
     throw new Error(
-      `selectNextGate: regionStart "${regionStart}" is not in the resolved step list`,
+      `findNextGateInRegion: regionStart "${regionStart}" is not in the resolved step list`,
     );
   }
 
@@ -86,13 +87,35 @@ export function selectNextGate(input: SelectorInput): SelectorDecision {
     const step = steps[i];
     if (isSkipped(step, state)) continue;
     if (gateSatisfied(step.name, state, verdicts)) continue;
-
-    const v = verdicts[step.name];
-    const reason = v?.kickback
-      ? `kickback from ${v.kickback.from}: ${v.kickback.evidence}`
-      : (v?.reason ?? `${step.name} not yet satisfied`);
-    return { kind: 'run', step: step.name, reason };
+    return i;
   }
 
-  return { kind: 'done', reason: 'all gates in the looped region are satisfied' };
+  return -1;
+}
+
+/**
+ * Pick the earliest unsatisfied, non-skipped gate at or after `regionStart`.
+ * Returns `done` when every gate in the region is satisfied.
+ */
+export function selectNextGate(input: SelectorInput): SelectorDecision {
+  const idx = findNextGateInRegion(input);
+  if (idx === -1) {
+    return { kind: 'done', reason: 'all gates in the looped region are satisfied' };
+  }
+
+  const step = input.steps[idx];
+  const v = input.verdicts[step.name];
+  const reason = v?.kickback
+    ? `kickback from ${v.kickback.from}: ${v.kickback.evidence}`
+    : (v?.reason ?? `${step.name} not yet satisfied`);
+  return { kind: 'run', step: step.name, reason };
+}
+
+/**
+ * Return the index of the earliest unsatisfied gate in the region, or -1 when
+ * every gate is satisfied. Pure selector logic useful for resume entry logic
+ * that needs to know which gate to re-enter without building a decision.
+ */
+export function earliestUnsatisfiedGateIndex(input: SelectorInput): number {
+  return findNextGateInRegion(input);
 }
