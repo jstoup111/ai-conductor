@@ -280,6 +280,275 @@ describe('selectAuditSample — deterministic spot-audit sampler', () => {
   });
 });
 
+// #505 TS-16: Accuracy ledger appends — record audit outcomes to a
+// concurrent-safe append-only ledger for agreement measurement.
+//
+// Pattern: write audit outcomes to .daemon/attribution-accuracy.jsonl via
+// O_APPEND single-write per line. Each line is a complete JSON record:
+// {ts, feature, taskId, fastLaneForm, fastLaneSha, auditVerdict, agree, citations?, reason?}
+//
+// Two parallel appends must yield two complete lines (no interleave/truncation).
+
+describe('appendAccuracyLedger — accuracy ledger writer', () => {
+  describe('RED: accuracy ledger contract', () => {
+    it('appends complete JSON line to .daemon/attribution-accuracy.jsonl', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'accuracy-ledger-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+
+        const record = {
+          ts: Date.now(),
+          feature: 'test-feature',
+          taskId: 'task-1',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'abc123def456',
+          auditVerdict: 'satisfied',
+          agree: true,
+        };
+
+        await appendAccuracyLedger(ledgerPath, record);
+
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n');
+        expect(lines).toHaveLength(1);
+
+        const parsed = JSON.parse(lines[0]);
+        expect(parsed.ts).toBe(record.ts);
+        expect(parsed.feature).toBe(record.feature);
+        expect(parsed.taskId).toBe(record.taskId);
+        expect(parsed.fastLaneForm).toBe(record.fastLaneForm);
+        expect(parsed.fastLaneSha).toBe(record.fastLaneSha);
+        expect(parsed.auditVerdict).toBe(record.auditVerdict);
+        expect(parsed.agree).toBe(record.agree);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('includes all required fields in appended record', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'ledger-fields-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+
+        const record = {
+          ts: 1625097600000,
+          feature: 'my-feature',
+          taskId: 'task-42',
+          fastLaneForm: 'trailer',
+          fastLaneSha: 'def456abc123',
+          auditVerdict: 'unsatisfied',
+          agree: false,
+        };
+
+        await appendAccuracyLedger(ledgerPath, record);
+
+        const content = await readFile(ledgerPath, 'utf-8');
+        const parsed = JSON.parse(content.trim());
+
+        expect(parsed).toHaveProperty('ts');
+        expect(parsed).toHaveProperty('feature');
+        expect(parsed).toHaveProperty('taskId');
+        expect(parsed).toHaveProperty('fastLaneForm');
+        expect(parsed).toHaveProperty('fastLaneSha');
+        expect(parsed).toHaveProperty('auditVerdict');
+        expect(parsed).toHaveProperty('agree');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('includes optional citations field when present', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'ledger-citations-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+
+        const record = {
+          ts: 1625097600000,
+          feature: 'test-feature',
+          taskId: 'task-1',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'abc123',
+          auditVerdict: 'satisfied',
+          agree: true,
+          citations: [
+            { sha: 'commit-sha-1', rationale: 'first citation' },
+            { sha: 'commit-sha-2', rationale: 'second citation' },
+          ],
+        };
+
+        await appendAccuracyLedger(ledgerPath, record);
+
+        const content = await readFile(ledgerPath, 'utf-8');
+        const parsed = JSON.parse(content.trim());
+
+        expect(parsed.citations).toBeDefined();
+        expect(Array.isArray(parsed.citations)).toBe(true);
+        expect(parsed.citations).toHaveLength(2);
+        expect(parsed.citations[0].sha).toBe('commit-sha-1');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('includes optional reason field when present', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'ledger-reason-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+
+        const record = {
+          ts: 1625097600000,
+          feature: 'test-feature',
+          taskId: 'task-1',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'abc123',
+          auditVerdict: 'unsatisfied',
+          agree: false,
+          reason: 'Tests did not pass validation',
+        };
+
+        await appendAccuracyLedger(ledgerPath, record);
+
+        const content = await readFile(ledgerPath, 'utf-8');
+        const parsed = JSON.parse(content.trim());
+
+        expect(parsed.reason).toBe('Tests did not pass validation');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('two parallel appends yield two complete lines with no interleave', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'ledger-parallel-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+
+        const record1 = {
+          ts: 1000,
+          feature: 'feature-a',
+          taskId: 'task-1',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'sha-1',
+          auditVerdict: 'satisfied',
+          agree: true,
+        };
+
+        const record2 = {
+          ts: 2000,
+          feature: 'feature-b',
+          taskId: 'task-2',
+          fastLaneForm: 'trailer',
+          fastLaneSha: 'sha-2',
+          auditVerdict: 'unsatisfied',
+          agree: false,
+        };
+
+        // Start both appends in parallel
+        await Promise.all([
+          appendAccuracyLedger(ledgerPath, record1),
+          appendAccuracyLedger(ledgerPath, record2),
+        ]);
+
+        // Read and validate result
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n');
+
+        // Should have exactly 2 complete lines
+        expect(lines).toHaveLength(2);
+
+        // Both lines should be valid JSON
+        const parsed1 = JSON.parse(lines[0]);
+        const parsed2 = JSON.parse(lines[1]);
+
+        // Verify both records are present (order may vary due to parallelism)
+        const records = [parsed1, parsed2];
+        const taskIds = records.map((r) => r.taskId);
+        expect(taskIds).toContain('task-1');
+        expect(taskIds).toContain('task-2');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('appends to existing ledger without truncation', async () => {
+      const { appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, readFile, rm, writeFile, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'ledger-append-'));
+
+      try {
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+
+        // Write initial record
+        const initialRecord = {
+          ts: 1000,
+          feature: 'feature-1',
+          taskId: 'task-1',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'sha-1',
+          auditVerdict: 'satisfied',
+          agree: true,
+        };
+        await writeFile(ledgerPath, JSON.stringify(initialRecord) + '\n', 'utf-8');
+
+        // Append another record
+        const newRecord = {
+          ts: 2000,
+          feature: 'feature-2',
+          taskId: 'task-2',
+          fastLaneForm: 'trailer',
+          fastLaneSha: 'sha-2',
+          auditVerdict: 'unsatisfied',
+          agree: false,
+        };
+        await appendAccuracyLedger(ledgerPath, newRecord);
+
+        // Read and validate
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n');
+
+        expect(lines).toHaveLength(2);
+        expect(JSON.parse(lines[0]).taskId).toBe('task-1');
+        expect(JSON.parse(lines[1]).taskId).toBe('task-2');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
 // #505 TS-15: Post-green spot-audit dispatch — fire-and-forget verifier
 // invocation after build gate verdict is written.
 //

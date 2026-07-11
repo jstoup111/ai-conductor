@@ -40,17 +40,139 @@
  *   - Audit can run indefinitely without affecting build outcome
  *   - Errors during dispatch don't prevent build progression
  *
+ * DOMAIN: Accuracy Ledger Pattern (Task 16)
+ * ==========================================
+ *
+ * Record audit outcomes to a concurrent-safe append-only ledger for agreement
+ * measurement. Each audited task appends a record to .daemon/attribution-accuracy.jsonl:
+ *
+ * {
+ *   ts: number,                              // timestamp
+ *   feature: string,                          // feature slug
+ *   taskId: string,                           // task ID being audited
+ *   fastLaneForm: string,                     // evidence form (commit, trailer, etc)
+ *   fastLaneSha: string,                      // evidence SHA
+ *   auditVerdict: 'satisfied'|'unsatisfied',  // verifier's verdict
+ *   agree: boolean,                           // whether verdict matches fastLane
+ *   citations?: Array<{sha, rationale}>,     // optional citations
+ *   reason?: string                           // optional explanation
+ * }
+ *
+ * CONCURRENCY:
+ *   - O_APPEND flag guarantees line-atomic writes at OS level
+ *   - Two parallel appends yield two complete, uninterleaved lines
+ *   - No truncation possible; each write is atomic-append-only
+ *
  * References:
  * - adr-2026-07-11-attribution-verdict-interface § "Spot-audit sampler"
  * - adr-2026-07-11-attribution-verdict-interface § "Fire-and-forget dispatch"
  * - Task 14: Deterministic spot-audit sampler (selectAuditSample)
  * - Task 7: Fresh-session verifier dispatch (dispatchAttributionVerifier)
+ * - Task 16: Accuracy ledger appends (appendAccuracyLedger)
  */
 
 import * as crypto from 'node:crypto';
-import { access } from 'node:fs/promises';
+import { access, mkdir } from 'node:fs/promises';
+import { openSync, writeSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { TaskEvidence, EvidenceStamp } from './task-evidence.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
+
+/**
+ * Accuracy ledger record for audit outcomes.
+ * Each record captures one audited task's verdict and agreement status.
+ */
+export interface AccuracyLedgerRecord {
+  /** Unix timestamp (milliseconds) when record was created */
+  ts: number;
+  /** Feature slug for correlation */
+  feature: string;
+  /** Task ID being audited */
+  taskId: string;
+  /** Evidence form (commit, trailer, semantic-verified, etc) */
+  fastLaneForm: string;
+  /** Evidence SHA or identifier */
+  fastLaneSha: string;
+  /** Audit verdict from verifier: satisfied or unsatisfied */
+  auditVerdict: 'satisfied' | 'unsatisfied' | 'no-verdict';
+  /** Whether audit verdict agrees with fast lane (agreement flag) */
+  agree: boolean;
+  /** Optional citations from verifier */
+  citations?: Array<{ sha: string; rationale: string }>;
+  /** Optional explanation for verdict or disagreement */
+  reason?: string;
+}
+
+/**
+ * DOMAIN: Accuracy Ledger Writer (Task 16)
+ * ==========================================
+ *
+ * The accuracy ledger records spot-audit outcomes in `.daemon/attribution-accuracy.jsonl`.
+ * Each record captures:
+ * - ts: timestamp when audit was recorded
+ * - feature: feature slug (for grouping/filtering audits by feature)
+ * - taskId: task being audited
+ * - fastLaneForm & fastLaneSha: the fast-path evidence (what was already recorded)
+ * - auditVerdict: verdict from the spot verifier (satisfied/unsatisfied/no-verdict)
+ * - agree: boolean flag indicating whether audit verdict matches fast-lane verdict
+ * - citations, reason: optional contextual data
+ *
+ * CONCURRENCY GUARANTEES:
+ * The implementation uses O_APPEND file flag, which guarantees that each write is
+ * atomic at the OS kernel level:
+ * 1. Two parallel writeSync calls with O_APPEND flag
+ * 2. Each write is atomic — the kernel advances the file pointer AFTER the write
+ * 3. Result: two complete, non-interleaved lines in the file
+ * 4. No partial content, no truncation, no race conditions
+ *
+ * This is superior to mutex/locking because:
+ * - No runtime locks required
+ * - No await needed during write
+ * - Works even if process crashes (data not lost)
+ * - OS-level atomicity guarantees
+ *
+ * LINE FORMAT:
+ * Each record is serialized as JSON + newline, making the file line-delimited
+ * (jsonl format). Readers can safely split on \n and parse each line independently.
+ *
+ * CONSUMPTION PATTERN:
+ * Accuracy metrics can be computed by:
+ * 1. Reading .daemon/attribution-accuracy.jsonl line by line
+ * 2. Parsing each line as JSON
+ * 3. Computing agreement rate: count(agree: true) / total
+ * 4. Filtering by feature, timestamp range, verdict type, etc
+ *
+ * # Task 16: Accuracy ledger appends
+ * References: adr-2026-07-11-attribution-verdict-interface § "Accuracy ledger"
+ */
+export async function appendAccuracyLedger(ledgerPath: string, record: AccuracyLedgerRecord): Promise<void> {
+  // Ensure directory exists
+  const dir = dirname(ledgerPath);
+  try {
+    await mkdir(dir, { recursive: true });
+  } catch (err) {
+    // Directory may already exist; continue
+  }
+
+  // Prepare JSON line (with trailing newline)
+  const line = JSON.stringify(record) + '\n';
+
+  // Open file with O_APPEND flag for atomic append writes
+  // O_APPEND guarantees that each write will append atomically,
+  // preventing interleaving even with concurrent writes.
+  const fd = openSync(ledgerPath, 'a');
+
+  try {
+    // Write the complete line in a single operation
+    // This is atomic at the OS level due to O_APPEND
+    writeSync(fd, line, 'utf-8');
+  } finally {
+    // Close the file descriptor
+    import('node:fs/promises').then((m) => m.close(fd)).catch(() => {
+      // Ignore close errors
+    });
+  }
+}
 
 /**
  * Deterministic spot-audit sampler for semantic attribution verification.
