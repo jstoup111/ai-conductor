@@ -15,6 +15,9 @@ import { markerPath } from './attribution-enforcement.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { ClaudeProvider } from '../execution/claude-provider.js';
+import { loadConfig } from './config.js';
+import { dispatchAttributionVerifier } from './attribution-lane.js';
 
 export type EvidenceDispatch =
   | { kind: 'guide' }
@@ -98,9 +101,9 @@ export async function dispatchEvidence(
 async function runEvidenceJudgeCLI(
   projectRoot: string,
   slug: string,
-  opts: { print?: (msg: string) => void; dryRun?: boolean } = {},
+  opts: { print?: (msg: string) => void; dryRun?: boolean; injectedDispatcher?: (inputs: { residueIds: string[] }) => Promise<unknown> } = {},
 ): Promise<number> {
-  const { print = console.log, dryRun = false } = opts;
+  const { print = console.log, dryRun = false, injectedDispatcher } = opts;
 
   try {
     const manager = new WorktreeManager(projectRoot);
@@ -120,6 +123,26 @@ async function runEvidenceJudgeCLI(
     // Find the plan file for this feature
     const planPath = join(worktree.path, '.docs', 'plans', `${slug}.md`);
 
+    // Load config for dispatcher
+    const configResult = await loadConfig(projectRoot);
+    const config = configResult.ok ? configResult.config : undefined;
+
+    // Construct the dispatcher wrapper
+    let dispatchVerifier: ((inputs: { residueIds: string[] }) => Promise<unknown>) | undefined;
+    if (!injectedDispatcher) {
+      const provider = new ClaudeProvider();
+      dispatchVerifier = async (inputs: { residueIds: string[] }) => {
+        return await dispatchAttributionVerifier({
+          provider,
+          projectDir: projectRoot,
+          planPath,
+          residueIds: inputs.residueIds,
+          featureWorktreePath: worktree.path,
+          config,
+        });
+      };
+    }
+
     // Invoke the judge
     const result = await runEvidenceJudge({
       featureSlug: slug,
@@ -127,6 +150,8 @@ async function runEvidenceJudgeCLI(
       projectRoot: worktree.path,
       dryRun,
       resolveWorktree: async () => ({ root: worktree.path, branch: 'main' }),
+      dispatchVerifier,
+      injectedDispatcher,
     });
 
     if (!result.ok) {
@@ -167,6 +192,8 @@ export interface RunEvidenceJudgeOptions {
   resolveWorktree: (slug: string) => Promise<{ root: string; branch: string } | null>;
   /** Dispatcher to run the verifier (for testing). */
   dispatchVerifier?: (inputs: { residueIds: string[] }) => Promise<unknown>;
+  /** Injected dispatcher for testing (overrides dispatchVerifier). */
+  injectedDispatcher?: (inputs: { residueIds: string[] }) => Promise<unknown>;
 }
 
 /**
@@ -199,6 +226,7 @@ export async function runEvidenceJudge(
     dryRun = false,
     resolveWorktree,
     dispatchVerifier,
+    injectedDispatcher,
   } = opts;
 
   try {
@@ -277,8 +305,9 @@ export async function runEvidenceJudge(
 
     // Dispatch the verifier
     // The verifier dispatcher writes .pipeline/attribution-verdict.json
-    if (dispatchVerifier) {
-      await dispatchVerifier({ residueIds });
+    const activeDispatcher = injectedDispatcher ?? dispatchVerifier;
+    if (activeDispatcher) {
+      await activeDispatcher({ residueIds });
     }
 
     // Read the verdict file written by the dispatcher
