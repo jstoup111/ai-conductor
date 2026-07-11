@@ -138,30 +138,67 @@ describe('snapshotDaemonSessions (#437) — success vs genuine-empty classificat
   });
 });
 
+describe('reapLeakedDaemonSessions (#437) — two-signal kill decision', () => {
+  it('kills only a new, baseline-ok, tmpdir-rooted session; leaves indeterminate empty', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-a\ncc-daemon-b\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 0, stdout: `${os.tmpdir()}/leak-fixture-b\n`, stderr: '' };
+      }
+      if (args[0] === 'kill-session') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const baseline = snapshotDaemonSessions(runner);
+    expect(baseline).toEqual({ sessions: ['cc-daemon-a', 'cc-daemon-b'], failed: false });
+
+    // Overwrite baseline to just {A} to simulate B being new since baseline.
+    const snapshot = { sessions: ['cc-daemon-a'], failed: false };
+
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+
+    expect(result.killed).toHaveLength(1);
+    expect(result.killed[0]).toContain('cc-daemon-b');
+    expect(result.killed[0]).toContain('pane cwd:');
+    expect(result.indeterminate).toEqual([]);
+
+    const killCalls = calls.filter((a) => a[0] === 'kill-session');
+    expect(killCalls).toHaveLength(1);
+    expect(killCalls[0]).toEqual(['kill-session', '-t', '=cc-daemon-b']);
+  });
+});
+
 describe('tmux-leak-guard (#377)', () => {
   it('a pre-existing session set yields no leaks (operator daemons untouched)', () => {
-    const before = new Set(listDaemonSessions());
-    expect(reapLeakedDaemonSessions(before)).toEqual([]);
+    const before = snapshotDaemonSessions();
+    expect(reapLeakedDaemonSessions(before)).toEqual({ killed: [], indeterminate: [] });
   });
 
   it('kills and reports a cc-daemon-* session created after the snapshot', async () => {
     if (!(await tmuxInstalled())) return; // no tmux in this sandbox — skip
 
-    const before = new Set(listDaemonSessions());
+    const before = snapshotDaemonSessions();
     const name = `cc-daemon-leaktest-${randomBytes(4).toString('hex')}`;
 
     // Create the "leak" the way an escape would: real tmux, kill-switch off.
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     try {
-      await newDetachedSession(name, 'bash -c "sleep 60"', '/tmp');
+      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
       expect(await hasSession(name)).toBe(true);
 
-      const leaks = reapLeakedDaemonSessions(before);
+      const { killed, indeterminate } = reapLeakedDaemonSessions(before);
 
       // Reported by name with a pane-cwd fingerprint…
-      expect(leaks.some((l) => l.includes(name))).toBe(true);
-      expect(leaks.find((l) => l.includes(name))).toContain('pane cwd:');
+      expect(killed.some((l) => l.includes(name))).toBe(true);
+      expect(killed.find((l) => l.includes(name))).toContain('pane cwd:');
+      expect(indeterminate).toEqual([]);
       // …and actually gone (nothing left resident).
       expect(await hasSession(name)).toBe(false);
     } finally {
