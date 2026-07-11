@@ -44,3 +44,14 @@ auto_restart_on_stale_engine: true
 # absent) the hooks stamp but never block — the observed 4/5 canary state.
 # Read at daemon startup; restart the daemon to apply.
 attribution_enforcement_cutover: "2026-07-11T08:30:00Z"
+
+# Attribution judge cutover (#520, PR #525). On/after this instant the semantic
+# attribution judgment gate activates: mechanical-lane residue at the build gate
+# is judged by a fresh-context verifier and engine-stamped on PASS. Absent =
+# disabled. Armed 2026-07-11 immediately after the #520 merge (operator order);
+# first live firing doubles as the lane's production observation.
+attribution_judge_cutover: "2026-07-11T18:30:00Z"
+
+# Spot-audit sampling percentage for judged-vs-mechanical agreement measurement
+# (defaults to 10 when the judge cutover is armed; explicit here for visibility).
+attribution_audit_sample_pct: 10

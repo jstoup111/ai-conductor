@@ -11,6 +11,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
+
+### Added
 
 - Semantic attribution verification lane at the build evidence gate
   (`conduct-ts` only, opt-in via `attribution_judge_cutover`): an engine-embedded
