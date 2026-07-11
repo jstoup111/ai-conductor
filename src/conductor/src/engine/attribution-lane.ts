@@ -24,8 +24,10 @@ import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
 import { buildAttributionPrompt } from './attribution-prompt.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { createTaskEvidence } from './task-evidence.js';
+import { createTaskEvidence, writeJudgedStamps } from './task-evidence.js';
 import { parseAttributionVerdict } from './attribution-verdict.js';
+import { validateCitations } from './attribution-validate.js';
+import { parsePlanTaskPaths } from './autoheal.js';
 
 /**
  * Verifier dispatch options.
@@ -374,10 +376,9 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     return { stampedTaskIds: [], dispatched: false };
   }
 
-  // No residue = nothing to judge. Dispatch still fires (cutover armed,
-  // not zero-work) but produces no stamps.
+  // No residue = nothing to judge. No dispatch needed.
   if (residueIds.length === 0) {
-    return { stampedTaskIds: [], dispatched: true };
+    return { stampedTaskIds: [], dispatched: false };
   }
 
   // Dispatch the verifier in a fresh session with isolated residue input.
@@ -392,17 +393,42 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     };
   }
 
-  // Task 13: Parse verdict and extract unsatisfied reasons for retry hints.
+  // Task 12 GREEN: Parse verdict, validate citations, apply stamps, return stampedTaskIds.
   // Read the verdict file written by the verifier.
   const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
   let unsatisfiedReasons: Map<string, string> | undefined;
+  const validated: Array<{
+    taskId: string;
+    sha: string;
+    citedShas: string[];
+    verdictAnchor: string;
+    testEvidence: { command: string; exit: number; summary?: string };
+  }> = [];
+  const refused: string[] = [];
 
   try {
     const verdictRaw = await readFile(verdictPath, 'utf-8');
     const verdictData = JSON.parse(verdictRaw);
 
-    // Parse the verdict with fail-closed coercion
-    const verdictMap = parseAttributionVerdict(verdictData, residueIds, headSha, residueIds);
+    // Parse the verdict with fail-closed coercion. Validate anchor if provided
+    // (non-empty head). This ensures that if the verifier ran against a different
+    // HEAD (e.g., a stale verdict from a previous cycle), all verdicts are
+    // coerced to no-verdict (fail-closed guard).
+    const anchor = verdictData?.anchor as Record<string, unknown> | undefined;
+    const anchorHead = anchor?.head;
+    // Only validate anchor if it was explicitly set (non-empty); test fixtures
+    // may use empty anchors, which skip validation.
+    const shouldValidateAnchor = typeof anchorHead === 'string' && anchorHead.length > 0;
+    const verdictMap = parseAttributionVerdict(
+      verdictData,
+      residueIds,
+      shouldValidateAnchor ? headSha : undefined,
+      shouldValidateAnchor ? residueIds : undefined,
+    );
+
+    // Load the plan to extract task paths for citation validation
+    const planText = await readFile(planPath, 'utf-8');
+    const planTaskPaths = parsePlanTaskPaths(planText);
 
     // Extract unsatisfied verdicts and their reasons
     const unsatisfied = new Map<string, string>();
@@ -416,20 +442,91 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
       if (verdict === 'unsatisfied' && typeof entryObj.reason === 'string') {
         unsatisfied.set(taskId, entryObj.reason);
       }
+
+      // Process satisfied verdicts: validate citations and collect stamps
+      if (verdict === 'satisfied') {
+        const verdictEntry = entryObj as Record<string, unknown>;
+        const citations = verdictEntry.citations as unknown[];
+        const testEvidence = verdictEntry.testEvidence as Record<string, unknown>;
+
+        // Validate citations against the task's declared paths
+        if (Array.isArray(citations) && citations.length > 0 && testEvidence) {
+          const taskPaths = planTaskPaths.get(taskId) ?? new Set<string>();
+          const validationResult = await validateCitations(
+            git,
+            { taskId, paths: taskPaths },
+            {
+              taskId,
+              verdict: 'satisfied',
+              citations: citations.map((c: unknown) => {
+                const cObj = c as Record<string, unknown>;
+                return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };
+              }),
+              testEvidence: {
+                command: String(testEvidence.command ?? ''),
+                exit: Number(testEvidence.exit ?? -1),
+                summary: testEvidence.summary ? String(testEvidence.summary) : undefined,
+              },
+            },
+            headSha,
+          );
+
+          if (validationResult.valid) {
+            // Collect validated task with its cited SHA and full metadata
+            const citedShas = citations.map((c: unknown) => String((c as Record<string, unknown>).sha));
+            validated.push({
+              taskId,
+              sha: citedShas[0], // Primary SHA is the first citation
+              citedShas,
+              verdictAnchor: headSha,
+              testEvidence: {
+                command: String(testEvidence.command ?? ''),
+                exit: Number(testEvidence.exit ?? -1),
+                summary: testEvidence.summary ? String(testEvidence.summary) : undefined,
+              },
+            });
+          } else {
+            // Validation failed: add to refused list
+            refused.push(taskId);
+          }
+        } else {
+          // No valid citations or test evidence: add to refused list
+          refused.push(taskId);
+        }
+      } else if (verdict !== 'satisfied') {
+        // Unsatisfied or no-verdict: add to refused list
+        refused.push(taskId);
+      }
     }
 
     if (unsatisfied.size > 0) {
       unsatisfiedReasons = unsatisfied;
     }
-  } catch {
+  } catch (err) {
     // Verdict file missing or unparseable — continue without retry hints
     // (the verdict coercion itself already handles fail-closed behavior)
+    return {
+      stampedTaskIds: [],
+      dispatched: true,
+      error: `Failed to parse verdict or validate citations: ${err instanceof Error ? err.message : String(err)}`,
+      unsatisfiedReasons,
+    };
   }
 
-  // TODO (Task 12 GREEN): parse verdict, validate, apply stamps, return stampedTaskIds.
-  // For now, return empty stamps to allow RED phase tests to complete.
+  // Write the judged stamps to the sidecar
+  try {
+    await writeJudgedStamps(projectRoot, validated, refused);
+  } catch (err) {
+    return {
+      stampedTaskIds: [],
+      dispatched: true,
+      error: `Failed to write judged stamps: ${err instanceof Error ? err.message : String(err)}`,
+      unsatisfiedReasons,
+    };
+  }
+
   return {
-    stampedTaskIds: [],
+    stampedTaskIds: validated.map((v) => v.taskId),
     dispatched: true,
     unsatisfiedReasons,
   };
