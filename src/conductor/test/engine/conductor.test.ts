@@ -584,6 +584,78 @@ describe('engine/conductor', () => {
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:prd_audit');
       expect(log).not.toContain('run:acceptance_specs');
     });
+
+    it('daemon resume: all-satisfied fast-forward — resume at finish, parity with findResumeIndex (Story 4 happy path)', async () => {
+      // Story 4 happy path: BUILD/SHIP progress with all verdicts satisfied.
+      // Set up state with all steps done and write SATISFIED verdicts for all gates.
+      // Resume must start at finish (the next pending step) and equal findResumeIndex's output.
+      // This pins parity: findResumeIndex (raw, unclamped) matches the actual resume entry point
+      // when all gates are satisfied.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      // Mark all steps up to and including finish as 'done'
+      for (const s of ALL_STEPS) {
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      // Write SATISFIED verdicts for all gates
+      for (const gateName of ['build', 'build_review', 'manual_test', 'prd_audit',
+        'architecture_review_as_built', 'retro', 'rebase'] as StepName[]) {
+        await writeVerdict(dir, gateName, { satisfied: true, checkedAt: 1 });
+      }
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      // Assert: resume starts at finish (the first pending step after all done steps)
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+
+      // Parity assertion: the resume entry index equals findResumeIndex's raw output
+      // With all steps marked done, findResumeIndex should return finish's index
+      const expectedIndex = findResumeIndex(seed);
+      const finishIndex = ALL_STEPS.findIndex((s) => s.name === 'finish');
+      expect(expectedIndex).toBe(finishIndex);
+    });
+
+    it('daemon resume (regression pin): fresh dispatch starts at acceptance_specs unmodified', async () => {
+      // Regression: ensure the existing fresh dispatch behavior remains green.
+      // With DECIDE pre-seeded done and no verdict files, resume must start at acceptance_specs,
+      // not regress to an earlier step or skip BUILD entirely.
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'acceptance_specs') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed);
+
+      const { runner, log } = trackingRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        resume: true,
+      });
+
+      await conductor.run();
+
+      // Assert: fresh feature still begins BUILD at acceptance_specs
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:acceptance_specs');
+    });
   });
 
   it('an unexpected throw inside the loop HALTs (state flushed) instead of crashing', async () => {
