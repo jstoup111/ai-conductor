@@ -69,7 +69,54 @@ export async function prepareWorktree(
   await writeGitHooksAndWire(worktreePath, log);
   await writeSessionHooks(worktreePath, log);
   await wireSessionHookSettings(worktreePath, log);
+  await excludeEngineArtifacts(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Ensure the engine's own provisioned artifacts (`.claude/` for the session
+ * hook settings) are invisible to git via the worktree's `info/exclude`.
+ * Without this, a freshly-prepared worktree reads as dirty (`?? .claude/`) to
+ * any porcelain-based consumer — most critically the setup-triage tree
+ * classifier, which would mis-classify a clean tree as dirty and engage
+ * quarantine machinery on the engine's own bookkeeping.
+ *
+ * Idempotent (skips entries already present) and fail-open like its siblings:
+ * an exclusion failure never blocks worktree setup.
+ */
+async function excludeEngineArtifacts(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const { stdout } = await execa(
+      'git',
+      ['-C', worktreePath, 'rev-parse', '--git-path', 'info/exclude'],
+      { all: true },
+    );
+    const rel = stdout.trim();
+    const excludePath = rel.startsWith('/') ? rel : join(worktreePath, rel);
+
+    let existing = '';
+    try {
+      existing = await readFile(excludePath, 'utf-8');
+    } catch {
+      // No exclude file yet — start fresh.
+    }
+    const lines = new Set(existing.split('\n').map((l) => l.trim()));
+    const wanted = ['.claude/'];
+    const missing = wanted.filter((w) => !lines.has(w));
+    if (missing.length === 0) {
+      return;
+    }
+    await mkdir(join(excludePath, '..'), { recursive: true });
+    const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+    await writeFile(excludePath, `${existing}${sep}${missing.join('\n')}\n`, 'utf-8');
+    log?.(`git exclude: engine artifacts excluded (${missing.join(', ')})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`git exclude: skipped (${msg})`);
+  }
 }
 
 /**
