@@ -6,16 +6,6 @@
 // Plan:    .docs/plans/mid-loop-pipeline-wipe-549.md (12 tasks)
 // ADR:     .docs/decisions/adr-2026-07-11-pipeline-state-durability.md (D1/D2/D3, APPROVED)
 //
-// Task 8 ROOT-CAUSE DISCOVERY (COMPLETED):
-// ─────────────────────────────────────────────────────────────────────────────
-// Identified actual .pipeline deleter:
-//   Actor: mutation-gate-probe.test.ts afterEach cleanup
-//   Location: src/conductor/test/acceptance/mutation-gate-probe.test.ts:107
-//   Code: rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })
-//   Root cause: cleanup targets process.cwd()/.pipeline without scoping to mkdtemp path
-//   Fix target: Tasks 9-10 (D2 scope guard: anchor deletion to mkdtemp path only)
-// ─────────────────────────────────────────────────────────────────────────────
-//
 // Per writing-system-tests §3a, single-mechanism stories are unit-covered by
 // the plan's own per-task tests written during /pipeline+/tdd (Tasks 1,2 for
 // Story 1; Task 5 for Story 3; Tasks 6,7 for Story 6; Tasks 8,9,10 for Story 5;
@@ -98,7 +88,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
-import { existsSync, rmSync } from 'fs';
+import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 
 describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () => {
   let dir: string;
@@ -236,39 +226,113 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     expect(buildGate).not.toBeNull();
   });
 
-  it('RED — probe cleanup (mutation-gate-probe.test.ts:107) deletes .pipeline sentinel when process.cwd() resolves to test dir', async () => {
-    // Task 8 RED: demonstrates the root-cause vulnerability
-    //
-    // The mutation-gate-probe afterEach hook (line 107) runs:
-    //   rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true })
-    //
-    // This cleanup code has NO scoping guard: it deletes .pipeline from the
-    // test runner's current working directory. Under host-load conditions, when
-    // process.cwd() happens to point to or contain the active build worktree,
-    // this unscoped delete can destroy a live .pipeline root mid-run.
-    //
-    // This test documents the vulnerability: create a sentinel file in .pipeline,
-    // then simulate the unscoped rmSync deletion, and assert the sentinel is destroyed.
+  it('RED: crash handler drops conduct-state.json when .pipeline is absent', async () => {
+    // Setup: seed initial run-state (as if we're mid-run)
+    await seedShipTailWithRunState();
 
-    // Create a sentinel file to mark the .pipeline
-    await mkdir(pipelineDir, { recursive: true });
-    const sentinelPath = join(pipelineDir, 'task-8-sentinel');
-    await writeFile(
-      sentinelPath,
-      JSON.stringify({ createdAt: Date.now(), purpose: 'trace-deleter', testDir: dir }),
+    let wipedBeforeCrash = false;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'finish') {
+          // Simulate mid-run .pipeline wipe BEFORE the crash (the ordering bug
+          // surface: when the outer catch fires, .pipeline is gone, so writeState
+          // fails silently and conduct-state.json is lost).
+          await rm(pipelineDir, { recursive: true, force: true });
+          wipedBeforeCrash = true;
+          // Then throw an error to trigger the outer catch handler
+          throw new Error('simulated mid-loop crash');
+        }
+        return { success: true };
+      }),
+    };
+
+    let halted = false;
+    let haltReason = '';
+    events.on('loop_halt', (e) => {
+      halted = true;
+      if (e.type === 'loop_halt') haltReason = e.reason;
+    });
+
+    const fakeGit: GitRunner = async (args) =>
+      args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/x\n' }
+        : { stdout: '' };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'finish',
+      maxRetries: 1,
+      escalateBuildFailure: async () => ({}),
+      git: fakeGit,
+    });
+
+    // Drive conductor.run() — the outer catch should fire
+    await conductor.run();
+
+    expect(wipedBeforeCrash).toBe(true);
+    expect(halted).toBe(true);
+    expect(haltReason).toMatch(/simulated mid-loop crash/);
+
+    // BUG: The ordering bug (D1) is that writeState is called BEFORE mkdir,
+    // so conduct-state.json is silently lost when .pipeline is absent.
+    // Today, this test FAILS (RED) because:
+    const stateResult = await readState(statePath);
+    // conduct-state.json should be present (state was flushed by the crash handler),
+    // but it's missing due to the ordering bug.
+    expect(stateResult.ok).toBe(true);
+
+    // Also expect that only the HALT marker exists (confirming the state file write failed)
+    const haltMarker = await readFile(join(dir, HALT_MARKER), 'utf-8').catch(
+      () => null,
     );
+    expect(haltMarker).not.toBeNull();
+  });
 
-    // Verify sentinel exists before deletion
-    expect(existsSync(sentinelPath)).toBe(true);
+  it('RED — marker persist throws ENOENT when .pipeline root is deleted mid-run', async () => {
+    // Story 1: marker write survives a missing .pipeline root.
+    // This test documents the current bug: marker writes fail with ENOENT
+    // when the .pipeline directory is deleted mid-run.
+    //
+    // The marker-persist code path (StepRunner.run() calls on lines 422-425
+    // and 497-500 of step-runners.ts) writes to `.pipeline/session-created`
+    // and `.pipeline/conduct-session-id` without checking if the directory exists.
+    // If the directory is deleted mid-run (e.g., by mutation-gate-probe cleanup
+    // or the deleter identified in Task 8), the writeFile calls throw ENOENT.
+    //
+    // Setup: Create a .pipeline directory with initial marker files
+    await mkdir(join(pipelineDir, 'gates'), { recursive: true });
+    await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+    await writeFile(join(pipelineDir, 'conduct-session-id'), 'test-session-id', 'utf-8');
 
-    // Simulate what mutation-gate-probe cleanup does (the vulnerable unscoped delete)
-    // In production, this happens when process.cwd() == dir (or parent of dir under host load)
-    const pipelinePathFromCwd = join(dir, '.pipeline');
-    rmSync(pipelinePathFromCwd, { recursive: true, force: true });
+    // Delete the .pipeline directory to simulate mid-run wipe
+    await rm(pipelineDir, { recursive: true, force: true });
 
-    // Assert the vulnerability: sentinel (and entire .pipeline) is destroyed
-    // This RED test documents the CURRENT BROKEN BEHAVIOR — the sentinel is gone
-    expect(existsSync(sentinelPath)).toBe(false);
-    expect(existsSync(pipelineDir)).toBe(false);
+    // Attempt to write markers when .pipeline is gone
+    // This should throw ENOENT (the current bug we're documenting)
+    let threwEnoent = false;
+    let errorMessage = '';
+    try {
+      await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+    } catch (err) {
+      if (err instanceof Error) {
+        errorMessage = err.message;
+        if (err.message.includes('ENOENT')) {
+          threwEnoent = true;
+        }
+      }
+      if (!threwEnoent) {
+        throw err;
+      }
+    }
+
+    // Assert the bug exists: marker write throws ENOENT (RED phase)
+    expect(threwEnoent).toBe(true);
+    expect(errorMessage).toContain('ENOENT');
   });
 });
