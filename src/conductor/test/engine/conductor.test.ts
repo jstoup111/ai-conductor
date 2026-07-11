@@ -41,6 +41,7 @@ import {
   approvalKey,
   buildRetryHint,
   appendRemediationTasks,
+  findResumeIndex,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -2651,6 +2652,266 @@ describe('engine/conductor', () => {
 
     // Assert: first step is build, not finish (clamp applies using state-only fallback).
     expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
+
+  it('resume with finish:in_progress clamps to build when verdicts unsatisfied (Story 2a: #532)', async () => {
+    // Story 2 path (a): finish marked 'in_progress' with unsatisfied verdicts.
+    // The clamp should still apply: resume starts at build (the earliest unsatisfied gate),
+    // not at finish (even though it's in_progress). This tests that the 'in_progress' status
+    // does not bypass the verdict clamp.
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: everything before build is done, build is failed, rebase is done,
+    // and finish is marked 'in_progress' (was being worked on).
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      seed[s.name] = 'done';
+    }
+    seed.build = 'failed';
+    seed.finish = 'in_progress';
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write unsatisfied verdicts for gates (build, build_review, manual_test).
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Resume with finish in_progress but verdicts unsatisfied. The clamp must apply.
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: resume starts at build (the earliest unsatisfied gate), not finish.
+    expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
+  it('resume with build:in_progress keeps entry at build even with unsatisfied later gates (Story 2b: #532)', async () => {
+    // Story 2 path (b): build marked 'in_progress', and later gates unsatisfied.
+    // The min() logic must not move the entry point later than build.
+    // Resume should start at build, proving that in_progress doesn't jump past unsatisfied gates.
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: everything before build is done, build is marked 'in_progress',
+    // rebase is done.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      seed[s.name] = 'done';
+    }
+    seed.build = 'in_progress';
+    seed.rebase = 'done';
+    seed.last_step = 'build';
+    await writeState(statePath, seed as ConductState);
+
+    // Write unsatisfied verdicts for later gates (build_review, manual_test).
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Resume with build in_progress. The min() logic must keep entry at build.
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: resume starts at build (the in_progress step), not skipped or moved.
+    expect(stepsRun[0]).toBe('build');
+  });
+
+  it('resume with finish:in_progress starts at finish when ALL verdicts satisfied (Story 2c: #532)', async () => {
+    // Story 2 path (c): finish marked 'in_progress' and ALL verdicts satisfied.
+    // The clamp is a no-op: resume should start at finish (no unsatisfied gates to clamp to).
+    // This tests that when the clamp has no unsatisfied gates, it does not interfere.
+
+    // Seed state: everything including finish is done, finish is marked 'in_progress',
+    // rebase is done.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      seed[s.name] = 'done';
+    }
+    seed.finish = 'in_progress';
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write ALL verdicts as satisfied (no unsatisfied gates to clamp to).
+    await writeVerdict(dir, 'worktree', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'memory', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'explore', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'stories', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'plan', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'prd', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'bootstrap', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'manual_test', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'finish', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Resume with finish in_progress and all verdicts satisfied.
+    // The clamp should be a no-op, and resume should start at finish.
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: resume starts at finish (the in_progress step), not clamped.
+    expect(stepsRun[0]).toBe('finish');
+  });
+
+  it('post-rebase kickback verdicts steer resume to earliest kicked-back gate (Story 3, happy path a)', async () => {
+    // Story 3 happy path (a): All three gates (build, build_review, manual_test) have kickback
+    // verdicts from rebase. When resuming, the run should start at build (earliest).
+    // State has all three gates done, but rebase wrote kickback verdicts to invalidate them.
+    // Rebase is done, so resume can proceed.
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: build, build_review, manual_test all done; rebase also done.
+    // last_step is finish (simulating a prior completed run).
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build' || s.name === 'build_review' || s.name === 'manual_test') {
+        seed[s.name] = 'done';
+      } else if (s.name === 'finish') {
+        seed[s.name] = 'done';
+      } else if (s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase') {
+        seed[s.name] = 'done';
+      }
+    }
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write kickback verdicts (unsatisfied) for all three gates from rebase.
+    // This simulates rebase discovering a file change that invalidates all downstream work.
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: first step is build (earliest kicked-back gate), not finish.
+    expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
+  it('post-rebase kickback verdicts steer resume to intermediate gate (Story 3, happy path b)', async () => {
+    // Story 3 happy path (b): Only manual_test has an unsatisfied kickback verdict.
+    // Build and build_review are re-verified satisfied (verdicts show satisfied:true).
+    // When resuming, the run should start at manual_test (the first/earliest unsatisfied).
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/manual_test/foo.ts',
+    };
+
+    // Seed state: build, build_review, manual_test all done; rebase also done.
+    // last_step is finish (simulating a prior completed run).
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build' || s.name === 'build_review' || s.name === 'manual_test') {
+        seed[s.name] = 'done';
+      } else if (s.name === 'finish') {
+        seed[s.name] = 'done';
+      } else if (s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase') {
+        seed[s.name] = 'done';
+      }
+    }
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write verdicts: build and build_review are satisfied (re-verified), only manual_test is unsatisfied.
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: first step is manual_test (the only unsatisfied gate), not finish.
+    expect(stepsRun[0]).toBe('manual_test');
     expect(stepsRun).not.toContain('finish');
   });
 
