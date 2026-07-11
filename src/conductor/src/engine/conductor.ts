@@ -3375,9 +3375,21 @@ export class Conductor {
 
           if (planPath) {
             const gateVerdictPath = join(this.projectRoot, '.pipeline', 'gates', 'build.json');
+            const ledgerPath = join(this.projectRoot, '.daemon', 'attribution-accuracy.jsonl');
 
             // Fire-and-forget dispatch: start audit without blocking build progression.
             // Errors during dispatch are caught and logged but never propagated.
+            // Create an emitter adapter that forwards attribution_divergence events
+            const emitterAdapter = {
+              emit: (type: 'attribution_divergence', event: { feature: string; taskId: string }): void => {
+                void this.events.emit({
+                  type: 'attribution_divergence',
+                  feature: event.feature,
+                  taskId: event.taskId,
+                });
+              },
+            };
+
             void runSpotAudit({
               evidence: this.taskEvidence,
               featureSlug: state.feature_desc || 'unknown',
@@ -3385,6 +3397,8 @@ export class Conductor {
               projectDir: this.projectRoot,
               featureWorktreePath: this.projectRoot,
               gateVerdictPath,
+              ledgerPath,
+              emitter: emitterAdapter,
               dispatch: async (inputs): Promise<import('./attribution-lane.js').VerifierDispatchResult> => {
                 try {
                   // Dispatch via stepRunner's dispatchVerifier if available,
