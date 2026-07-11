@@ -20,6 +20,7 @@ import { execa } from 'execa';
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 import { deriveCompletion, applyDerivedCompletion, listCommitsWithTrailers } from '../../src/engine/autoheal.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { runAttributionLane } from '../../src/engine/attribution-lane.js';
 
 describe('#417/#505/#501/#492/#390 escape: attribution corpus replay', () => {
   let dir: string;
@@ -368,5 +369,257 @@ Core schema refactor.
 
     expect(derived['4']).toBeDefined();
     expect(derived['4'].completed).toBe(false);
+  });
+});
+
+// ── Task 23: escape corpus — gate + lane convergence to green ─────────────
+//
+// The tests above prove the MECHANICAL gate leaves these three provenance-
+// drift shapes as residue. These tests prove the other half of the story:
+// handing that residue to the judged lane (runAttributionLane) converges
+// each fixture to green via a `semantic-verified` stamp, with zero manual
+// stamps — the same nested-mkdtemp-per-repo convention used throughout this
+// file, plus a verdict-writing dispatcher standing in for the real verifier
+// session (it only ever writes .pipeline/attribution-verdict.json; the
+// engine is the sole writer of task-evidence.json).
+
+describe('Task 23 escape corpus: gate + lane convergence to green', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-corpus-convergence-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function gitInit() {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), '# Test\n');
+    await execa('git', ['add', 'README.md'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'chore: init'], { cwd: dir });
+  }
+
+  async function writePlan(slug: string, body: string): Promise<string> {
+    const planPath = join(dir, '.docs/plans', `${slug}.md`);
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(planPath, body, 'utf-8');
+    return planPath;
+  }
+
+  async function writeTaskStatus(taskIds: string[]): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = taskIds.map((id) => ({ id, status: 'pending' }));
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks }, null, 2) + '\n',
+      'utf-8',
+    );
+  }
+
+  async function commit(file: string, contents: string, message: string): Promise<string> {
+    const filePath = join(dir, file);
+    const dirPath = filePath.split('/').slice(0, -1).join('/');
+    await mkdir(dirPath, { recursive: true });
+    await writeFile(filePath, contents);
+    await execa('git', ['add', file], { cwd: dir });
+    await execa('git', ['commit', '-m', message], { cwd: dir });
+    const result = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
+    return result.stdout.trim();
+  }
+
+  async function headSha(): Promise<string> {
+    const result = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
+    return result.stdout.trim();
+  }
+
+  const gitRunner = async (args: string[]) => {
+    const res = await execa('git', args, { cwd: dir, reject: false });
+    return { stdout: String(res.stdout ?? ''), stderr: String(res.stderr ?? ''), exitCode: res.exitCode ?? 1 };
+  };
+
+  async function deriveAndApply(planPath: string) {
+    const commits = await listCommitsWithTrailers(dir);
+    const evidence = await createTaskEvidence(dir);
+    const derived = await deriveCompletion(dir, planPath, '', commits, evidence);
+    const heal = await applyDerivedCompletion(dir, derived);
+    return { derived, heal };
+  }
+
+  async function readStatusRows(): Promise<Array<{ id: string; status?: string }>> {
+    const raw = await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    return (JSON.parse(raw) as { tasks: Array<{ id: string; status?: string }> }).tasks;
+  }
+
+  function unresolvedIds(rows: Array<{ id: string; status?: string }>): string[] {
+    return rows.filter((r) => r.status !== 'completed' && r.status !== 'skipped').map((r) => r.id);
+  }
+
+  /**
+   * A dispatcher standing in for the real verifier session: it only ever
+   * writes .pipeline/attribution-verdict.json, exactly as production does.
+   * The lane under test reads the verdict back from disk — never trusts a
+   * return value's content — matching the real dispatch seam.
+   */
+  function makeVerdictWritingDispatcher(verdictBuilder: (residueIds: string[]) => unknown) {
+    return async (inputs: { residueIds: string[] }) => {
+      const verdict = verdictBuilder(inputs.residueIds);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { ranSession: true };
+    };
+  }
+
+  it('id-grammar variant: "Task: task-07" for plan id 7 converges to green via a semantic-verified stamp, zero manual stamps', async () => {
+    await gitInit();
+    const planPath = await writePlan('idgrammar', '### Task 7\n**Files:** `src/widget.ts`\n\nBuild the widget.\n');
+    await writeTaskStatus(['7']);
+    const sha = await commit('src/widget.ts', 'export const widget = 1;\n', 'feat: implement widget\n\nTask: task-07\n');
+
+    // RED: mechanical gate alone leaves task 7 as residue.
+    const before = await deriveAndApply(planPath);
+    expect(before.derived['7']?.completed).toBe(false);
+    expect(unresolvedIds(await readStatusRows())).toEqual(['7']);
+
+    const dispatch = makeVerdictWritingDispatcher((residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'satisfied',
+        citations: [{ sha, rationale: 'implements the widget the task names' }],
+        testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+      })),
+    }));
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['7'],
+      headSha: await headSha(),
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier: dispatch,
+    });
+
+    expect(result.stampedTaskIds).toEqual(['7']);
+
+    // GREEN: same evaluation cycle, re-derive/re-apply picks up the judged stamp.
+    await deriveAndApply(planPath);
+    expect(unresolvedIds(await readStatusRows())).toEqual([]);
+
+    const evidenceRaw = await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8');
+    expect(evidenceRaw).toMatch(/semantic-verified/);
+    // Zero manual stamps: nothing but the engine-written semantic-verified
+    // form appears for task 7 in the evidence sidecar.
+    expect(evidenceRaw).not.toMatch(/"manual"/);
+  });
+
+  it('paragraph-split trailer body: a "Task:" line trailed by more prose is invisible to git trailer parsing, judged stamp still converges to green', async () => {
+    await gitInit();
+    const planPath = await writePlan('paragraph', '### Task 9\n**Files:** `src/report.ts`\n\nBuild the report.\n');
+    await writeTaskStatus(['9']);
+    // "Task: 9" followed by ANOTHER paragraph pushes it out of git's
+    // trailing trailer block entirely — listCommitsWithTrailers must report
+    // empty trailers for this commit.
+    const sha = await commit(
+      'src/report.ts',
+      'export const report = 1;\n',
+      'feat: implement report\n\nSome explanation of the change.\n\nTask: 9\n\nMore prose after the trailer-shaped line, ' +
+        'which pushes it out of the trailing trailer block entirely.\n',
+    );
+
+    const commits = await listCommitsWithTrailers(dir);
+    const reportCommit = commits.find((c) => c.sha === sha);
+    expect(reportCommit?.trailers.Task ?? []).toEqual([]);
+
+    // RED: mechanical gate alone leaves task 9 as residue.
+    const before = await deriveAndApply(planPath);
+    expect(before.derived['9']?.completed).toBe(false);
+    expect(unresolvedIds(await readStatusRows())).toEqual(['9']);
+
+    const dispatch = makeVerdictWritingDispatcher((residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'satisfied',
+        citations: [{ sha, rationale: 'implements the report the task names' }],
+        testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+      })),
+    }));
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['9'],
+      headSha: await headSha(),
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier: dispatch,
+    });
+
+    expect(result.stampedTaskIds).toEqual(['9']);
+
+    // GREEN: same evaluation cycle, re-derive/re-apply picks up the judged stamp.
+    await deriveAndApply(planPath);
+    expect(unresolvedIds(await readStatusRows())).toEqual([]);
+
+    const evidenceRaw = await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8');
+    expect(evidenceRaw).toMatch(/semantic-verified/);
+    expect(evidenceRaw).not.toMatch(/"manual"/);
+  });
+
+  it('no trailers at all: a diff that plainly satisfies the task converges to green via the judged lane with zero manual stamps', async () => {
+    await gitInit();
+    const planPath = await writePlan('notrailers', '### Task 3\n**Files:** `src/cli.ts`\n\nAdd the CLI flag.\n');
+    await writeTaskStatus(['3']);
+    const sha = await commit('src/cli.ts', 'export const flag = true;\n', 'feat: add cli flag');
+
+    // RED: mechanical gate alone leaves task 3 as residue (no trailer at all).
+    const before = await deriveAndApply(planPath);
+    expect(before.derived['3']?.completed).toBe(false);
+    expect(unresolvedIds(await readStatusRows())).toEqual(['3']);
+
+    const dispatch = makeVerdictWritingDispatcher((residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'satisfied',
+        citations: [{ sha, rationale: 'adds the flag the task names' }],
+        testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+      })),
+    }));
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['3'],
+      headSha: await headSha(),
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier: dispatch,
+    });
+
+    expect(result.stampedTaskIds).toEqual(['3']);
+
+    // GREEN: same evaluation cycle, re-derive/re-apply picks up the judged stamp.
+    await deriveAndApply(planPath);
+    expect(unresolvedIds(await readStatusRows())).toEqual([]);
+
+    const evidenceRaw = await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8');
+    expect(evidenceRaw).toMatch(/semantic-verified/);
+    expect(evidenceRaw).not.toMatch(/"manual"/);
   });
 });
