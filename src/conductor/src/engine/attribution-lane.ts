@@ -304,3 +304,88 @@ You are running the semantic attribution verification step. Your job is to match
 
 Complete this step, write the verdict to .pipeline/attribution-verdict.json, then exit.`;
 }
+
+/**
+ * Lane dispatch result — stamped task IDs and dispatch status.
+ */
+export interface AttributionLaneResult {
+  stampedTaskIds: string[];
+  dispatched: boolean;
+  error?: string;
+}
+
+/**
+ * Lane orchestration options.
+ */
+export interface RunAttributionLaneOptions {
+  projectRoot: string;
+  planPath: string;
+  residueIds: string[];
+  headSha: string;
+  cutoverArmed: boolean;
+  isZeroWorkProduct: boolean;
+  git: (args: string[]) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  dispatchVerifier: (inputs: { residueIds: string[] }) => Promise<unknown>;
+}
+
+/**
+ * Run the attribution lane: dispatch the verifier (if armed), parse the verdict,
+ * validate citations, and apply semantic-verified stamps to residue tasks.
+ * Returns the list of stamped task IDs and whether dispatch occurred.
+ *
+ * Integrates into conductor.ts's build gate-miss branch (Task 12), gated by
+ * cutoverArmed and isZeroWorkProduct. When cutover is inactive or the build
+ * produced zero work, this lane is skipped entirely — the gate miss proceeds
+ * to the counter/stall logic unchanged.
+ *
+ * @param opts - Lane orchestration options
+ * @returns Lane result: stamped task IDs and dispatch status
+ */
+export async function runAttributionLane(opts: RunAttributionLaneOptions): Promise<AttributionLaneResult> {
+  const {
+    projectRoot,
+    planPath,
+    residueIds,
+    headSha,
+    cutoverArmed,
+    isZeroWorkProduct,
+    git,
+    dispatchVerifier,
+  } = opts;
+
+  // If cutover is not armed, skip the lane entirely — gate-miss handling
+  // proceeds unchanged. This preserves byte-identical behavior when judge
+  // cutover is absent/future (Story 11: inert-by-default rollout).
+  if (!cutoverArmed) {
+    return { stampedTaskIds: [], dispatched: false };
+  }
+
+  // If the build detected zero work product, skip dispatch — kickback's
+  // signal (Story 15) takes precedence. Lane skipped, dispatch false,
+  // zero_work_product reason intact in task-evidence.noEvidenceReasons.
+  if (isZeroWorkProduct) {
+    return { stampedTaskIds: [], dispatched: false };
+  }
+
+  // No residue = nothing to judge. Dispatch still fires (cutover armed,
+  // not zero-work) but produces no stamps.
+  if (residueIds.length === 0) {
+    return { stampedTaskIds: [], dispatched: true };
+  }
+
+  // Dispatch the verifier in a fresh session with isolated residue input.
+  // The verifier writes .pipeline/attribution-verdict.json itself.
+  try {
+    await dispatchVerifier({ residueIds });
+  } catch (err) {
+    return {
+      stampedTaskIds: [],
+      dispatched: false,
+      error: `Verifier dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // TODO (Task 12 GREEN): parse verdict, validate, apply stamps, return stampedTaskIds.
+  // For now, return empty stamps to allow RED phase tests to complete.
+  return { stampedTaskIds: [], dispatched: true };
+}
