@@ -286,6 +286,95 @@ describe('integration/git-hooks-attribution', () => {
       const res = await commitFile('n.txt', 'n', 'feat: legacy untrailered commit');
       expect(res.code).toBe(0);
     });
+
+    // --- Task 8 negative path tests: out-of-set rejection, index-shaped rejection ---
+
+    it('rejects Task: 17 when ids 1..16 are seeded (out-of-set id)', async () => {
+      await seedTaskStatus(Array.from({ length: 16 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
+      const res = await commitFile('task8_out_of_set.txt', 'content', 'feat: out-of-set id\n\nTask: 17');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('rejects Task: 0 when ids are non-numeric (array index rejection)', async () => {
+      // Fixture with non-numeric ids (A.1, A.2) to ensure Task: 0 is rejected as an array index
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: 'A.1', name: 'task A.1', status: 'pending' },
+            { id: 'A.2', name: 'task A.2', status: 'pending' },
+          ],
+        }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('task8_array_index.txt', 'content', 'feat: array index id\n\nTask: 0');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('still rejects task-3 grammar-drift format', async () => {
+      const res = await commitFile('task8_grammar_drift.txt', 'content', 'feat: grammar drift\n\nTask: task-3');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('task-N format');
+    });
+
+    it('accepts any Task: trailer when task-status.json is missing (tolerance unchanged)', async () => {
+      // Remove the status file to test fallback tolerance
+      await rm(join(dir, '.pipeline', 'task-status.json'), { force: true });
+      const res = await commitFile('task8_missing_status.txt', 'content', 'feat: missing status file\n\nTask: 999');
+      expect(res.code).toBe(0);
+    });
+
+    it('exempts merge commits from validation (no Task: required for merge)', async () => {
+      // Set up a merge scenario: create a branch with a commit, then attempt merge on main
+      // This properly sets MERGE_HEAD and allows testing the merge exemption
+      await writeCurrentTask('7');
+      await commitFile('base.txt', 'base', 'feat: base commit on main\n\nTask: 7');
+
+      // Create a feature branch with a commit
+      await git('checkout', '-b', 'merge-feature');
+      await commitFile('feature.txt', 'feature', 'feat: feature commit\n\nTask: 7');
+
+      // Go back to main and create an unrelated commit
+      await git('checkout', 'main');
+      await commitFile('other.txt', 'other', 'feat: other commit on main\n\nTask: 7');
+
+      // Start a merge (this will put us in a merge state with MERGE_HEAD present)
+      const mergeResult = await git('merge', 'merge-feature');
+
+      // If merge conflicts, resolve them; if auto-merged, commit it
+      if (mergeResult.code !== 0) {
+        // There's a conflict - resolve it and commit
+        await writeFile(join(dir, 'feature.txt'), 'feature-resolved', 'utf-8');
+        await git('add', 'feature.txt');
+        // At this point, MERGE_HEAD exists and a commit without Task: should be allowed
+        const commitRes = await git('commit', '--no-edit');
+        expect(commitRes.code).toBe(0);
+      } else {
+        // Auto-merge succeeded and was auto-committed (fast-forward or merge commit)
+        // Verify the merge commit exists
+        const msg = await lastCommitMessage();
+        expect(msg).toContain('Merge branch');
+      }
+    });
+
+    it('exempts CONDUCT_ENGINE_COMMIT=1 commits from validation', async () => {
+      // Run git commit with CONDUCT_ENGINE_COMMIT=1 environment variable
+      await writeFile(join(dir, 'task8_engine.txt'), 'engine-content', 'utf-8');
+      await git('add', 'task8_engine.txt');
+      try {
+        const result = await execFileAsync('bash', [
+          '-c',
+          `cd "${dir}" && CONDUCT_ENGINE_COMMIT=1 git commit -m 'chore: engine bookkeeping'`,
+        ]);
+        expect(result.stdout + result.stderr).not.toContain('rejected');
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string };
+        fail(`Expected engine commit to succeed, got error: ${e.stderr}`);
+      }
+    });
   });
 
   // --- Story 6 happy path 3: chaining to the repo's own hooks ---
