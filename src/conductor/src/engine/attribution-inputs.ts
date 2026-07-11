@@ -1,11 +1,18 @@
 /**
- * Candidate commit collector for semantic attribution verification.
+ * Candidate commit collector and residue input assembler for semantic
+ * attribution verification.
  *
  * Extracts commits not yet cited by any stamp, excluding empty commits and
  * engine bookkeeping commits (env-exempt class). Returns candidates with
  * sha, subject, and full diff for input assembly.
+ *
+ * Input assembly gathers task definitions and candidate commits into a
+ * prompt object, deliberately starving the inputs to avoid leaking
+ * implementation state (task-status.json, maker-summary artifacts).
+ * Pattern: mirror build-review-inputs.ts isolation model.
  */
 
+import { readFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import type { TaskEvidence } from './task-evidence.js';
 import type { GitRunner } from './rebase.js';
@@ -99,4 +106,104 @@ export async function collectCandidateCommits(
   }
 
   return candidates;
+}
+
+/**
+ * Verifier inputs: residue task sections, candidate commits, and file declarations.
+ * Deliberately excludes task-status.json and maker-summary artifacts.
+ */
+export interface AttributionInputs {
+  /** Assembled task sections + candidate commits, ready for verifier input. */
+  prompt: string;
+}
+
+/**
+ * Assemble attribution verifier inputs: residue task sections + candidates.
+ *
+ * Reads the plan file and extracts task sections for the given residue IDs,
+ * includes candidate commits with sha/subject/diff, and preserves Files: lines.
+ * Deliberately excludes task-status.json content and maker-summary artifacts
+ * (input isolation — the verifier judges diffs against tasks, never maker narrative).
+ *
+ * Pattern mirrors build-review-inputs.ts: Inputs are strictly
+ * (planPath, residueIds, candidates) — no conductor state, no sidecars.
+ *
+ * @param planPath - Path to the plan file
+ * @param residueIds - Array of task IDs needing attribution verification
+ * @param candidates - Candidate commits from collectCandidateCommits (sha/subject/diff)
+ * @returns String prompt assembled from plan tasks + candidates, ready for verifier
+ */
+export async function assembleAttributionInputs(
+  planPath: string,
+  residueIds: string[],
+  candidates: CandidateCommit[],
+): Promise<string> {
+  const planBody = await readFile(planPath, 'utf-8');
+
+  // Parse task sections: extract lines between "### Task {id}" and the next task or EOF
+  // Pattern: "### Task N:" or "### Task N — " followed by content until next "### Task" or end
+  const taskSections: Record<string, string[]> = {};
+
+  const lines = planBody.split('\n');
+  let currentTaskId: string | null = null;
+  let currentLines: string[] = [];
+
+  for (const line of lines) {
+    // Match task headers: "### Task {number}" at the beginning
+    const taskMatch = line.match(/^###\s+Task\s+(\d+)/);
+    if (taskMatch) {
+      // Save the previous task if exists
+      if (currentTaskId !== null) {
+        taskSections[currentTaskId] = currentLines;
+      }
+      // Start new task
+      currentTaskId = taskMatch[1];
+      currentLines = [line];
+    } else if (currentTaskId !== null) {
+      // Collect lines for current task (but skip Maker Summary section)
+      // Deliberately exclude maker-summary content by stopping at certain markers
+      if (line.match(/^##\s+Maker\s+Summary/) || line.match(/^##\s+maker-summary/)) {
+        // Stop collecting task lines when we hit a Maker Summary section
+        break;
+      }
+      currentLines.push(line);
+    }
+  }
+
+  // Save the last task
+  if (currentTaskId !== null) {
+    taskSections[currentTaskId] = currentLines;
+  }
+
+  // Assemble output: task sections for residue IDs + candidate commits
+  const output: string[] = [];
+
+  output.push('## Residue Tasks for Attribution Verification\n');
+
+  // Add task sections for each residue ID (preserve order of residueIds)
+  for (const taskId of residueIds) {
+    if (taskSections[taskId]) {
+      // Join lines and trim trailing empty lines within the task
+      const taskContent = taskSections[taskId].join('\n').trimEnd();
+      output.push(taskContent);
+      output.push('');
+    }
+  }
+
+  // Add candidate commits section
+  if (candidates.length > 0) {
+    output.push('## Candidate Commits\n');
+    for (const candidate of candidates) {
+      output.push(`### Commit ${candidate.sha}`);
+      output.push(`**Subject:** ${candidate.subject}`);
+      output.push('');
+      output.push('**Diff:**');
+      output.push('```');
+      output.push(candidate.diff);
+      output.push('```');
+      output.push('');
+    }
+  }
+
+  return output.join('\n');
 }
