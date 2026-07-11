@@ -805,4 +805,388 @@ Another line without timestamp test-substring
       expect(result.line).toContain('[daemon] test-substring: fixed');
     });
   });
+
+  describe('no-show window expiry flow', () => {
+    let mod: Record<string, unknown>;
+    let sweepObservationWatch: any;
+    let tempDir: string;
+
+    beforeEach(async () => {
+      mod = await load();
+      sweepObservationWatch = requireFn(mod, 'sweepObservationWatch');
+
+      // Create a temp directory for the registry
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      tempDir = path.join(os.tmpdir(), `obs-no-show-test-${Date.now()}-${Math.random()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      // Clean up temp directory
+      const fs = await import('fs/promises');
+      try {
+        await fs.rm(tempDir, { recursive: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+
+    it('Test A: watching: window expiry with no post-merge match → no-show comment + label + prune', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const windowDays = 7;
+      const mergedAt = now - (windowDays + 1) * 86400000; // Window expired 1 day ago
+
+      // Setup: entry in watching state, window expired, no observation found yet
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'never-observed-sig',
+        isRegex: false,
+        windowDays,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write empty daemon.log (no observations)
+      const logDir = path.join(tempDir, '.daemon');
+      await fs.writeFile(path.join(logDir, 'daemon.log'), '2026-07-11T10:00:00Z [daemon] started\n');
+
+      // Mock gh runner
+      const ghCalls: string[][] = [];
+      const fakeGh = vi.fn(async (args) => {
+        ghCalls.push(args);
+        if (args[0] === 'api' || args[0] === 'issue') {
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - gh.run called with issue comment
+      const issueCalls = ghCalls.filter((args) => args[0] === 'issue' || (args[0] === 'api' && args.includes('labels')));
+      expect(issueCalls.length).toBeGreaterThan(0);
+
+      // - Comment contains no-show message
+      const commentCall = ghCalls.find((args) => args.includes('--body'));
+      expect(commentCall).toBeDefined();
+      if (commentCall) {
+        const bodyIdx = commentCall.indexOf('--body');
+        const comment = commentCall[bodyIdx + 1];
+        expect(comment).toContain('No observation of production fix');
+        expect(comment).toContain(`${windowDays} days`);
+        expect(comment).toContain('never-observed-sig');
+      }
+
+      // - Entry is pruned from survivors
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+
+      // - Success logged
+      expect(logs.some((l) => l.includes('no-show') || l.includes('observe'))).toBe(true);
+    });
+
+    it('Test B: watching: window expiry match on same tick wins over no-show', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const windowDays = 7;
+      const mergedAt = now - (windowDays * 86400000); // Window expires exactly now
+
+      // Setup: entry in watching state, window expires THIS tick, match found THIS tick
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'observed-sig',
+        isRegex: false,
+        windowDays,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write daemon.log with matching observation (hardcoded ISO string without milliseconds)
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] observed-sig: fix was observed in production
+2026-07-11T10:10:00Z [daemon] continuing
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner
+      const ghCalls: string[][] = [];
+      const fakeGh = vi.fn(async (args) => {
+        ghCalls.push(args);
+        return { stdout: '' };
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - Issue is closed (observation wins)
+      const closeCall = ghCalls.find((args) => args.includes('close'));
+      expect(closeCall).toBeDefined();
+
+      // - No-show label is NOT added
+      const labelCall = ghCalls.find((args) => args.includes('observation:no-show'));
+      expect(labelCall).toBeUndefined();
+
+      // - Entry is pruned
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+
+      // - Closed logged, not no-show
+      expect(logs.some((l) => l.includes('closed'))).toBe(true);
+      expect(logs.some((l) => l.includes('no-show'))).toBe(false);
+    });
+
+    it('Test C: watching: label failure still attempts comment, both logged', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const windowDays = 7;
+      const mergedAt = now - (windowDays + 1) * 86400000; // Window expired
+
+      // Setup: entry in watching state, window expired, no observation
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-sig',
+        isRegex: false,
+        windowDays,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write empty daemon.log (no observations)
+      const logDir = path.join(tempDir, '.daemon');
+      await fs.writeFile(path.join(logDir, 'daemon.log'), '2026-07-11T10:00:00Z [daemon] started\n');
+
+      // Mock gh runner: label call throws (api with labels), comment succeeds
+      const ghCalls: string[][] = [];
+      const fakeGh = vi.fn(async (args) => {
+        ghCalls.push(args);
+        if (args[0] === 'api' && args.some((arg: string) => arg.includes('labels'))) {
+          throw new Error('Label API error');
+        }
+        return { stdout: '' };
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - Comment was still posted
+      const issueCommentCall = ghCalls.find((args) => args.includes('--body'));
+      expect(issueCommentCall).toBeDefined();
+
+      // - Error is logged (check for 'label' and 'failed', or 'observe' in logs)
+      expect(logs.some((l) => l.includes('label') && (l.includes('failed') || l.includes('error')))).toBe(true);
+
+      // - Entry is pruned anyway (no re-flag loop)
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+    });
+
+    it('Test D: watching: post-merge match that occurred during daemon outage still closes, not no-show', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const windowDays = 7;
+      const mergedAt = now - 8 * 86400000; // Merged 8 days ago, window is 7 days
+
+      // Setup: entry merged 8 days ago, window is 7 days, observation found (just never scanned until now)
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'late-observed-sig',
+        isRegex: false,
+        windowDays,
+        enrolledAt: now - 100000,
+        mergedAt,
+        // No lastScanAt — first scan happening now
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write daemon.log with observation timestamped during window (hardcoded ISO without ms)
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-04T10:00:00Z [daemon] late-observed-sig: fix was in production
+2026-07-11T10:00:00Z [daemon] continuing
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner
+      const ghCalls: string[][] = [];
+      const fakeGh = vi.fn(async (args) => {
+        ghCalls.push(args);
+        return { stdout: '' };
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - Issue is closed (observation wins)
+      const closeCall = ghCalls.find((args) => args.includes('close'));
+      expect(closeCall).toBeDefined();
+
+      // - No-show label is NOT added
+      const labelCall = ghCalls.find((args) => args.some((arg: string) => arg.includes('observation:no-show')));
+      expect(labelCall).toBeUndefined();
+
+      // - Entry is pruned
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+
+      // - Closed logged, not no-show
+      expect(logs.some((l) => l.includes('closed'))).toBe(true);
+      expect(logs.some((l) => l.includes('no-show'))).toBe(false);
+    });
+
+    it('Test E: watching: already-flagged issue doesn\'t re-flag on future ticks', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const windowDays = 7;
+      const mergedAt = now - (windowDays + 1) * 86400000; // Window expired 1 day ago
+
+      // Setup: entry already marked no-show (has a property tracking this)
+      // For now, we simulate this by having the sweep run and then running again
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-sig',
+        isRegex: false,
+        windowDays,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write empty daemon.log
+      const logDir = path.join(tempDir, '.daemon');
+      await fs.writeFile(path.join(logDir, 'daemon.log'), '2026-07-11T10:00:00Z [daemon] started\n');
+
+      // Mock gh runner
+      let callCount = 0;
+      const fakeGh = vi.fn(async (args) => {
+        if (args[0] === 'issue' || args[0] === 'api') {
+          callCount++;
+        }
+        return { stdout: '' };
+      });
+
+      // First sweep: flag as no-show
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir });
+      const firstCallCount = callCount;
+      expect(firstCallCount).toBeGreaterThan(0); // Comment and/or label called
+
+      // Verify entry was pruned
+      let content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      let lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+
+      // Re-enroll the entry (simulating if it somehow got re-added)
+      // But in practice, a pruned entry should not re-appear
+      // This test verifies that a pruned entry is gone for good
+
+      // Expected:
+      // - Entry is pruned on first tick (no re-flag on future ticks)
+      // - Running sweep again should have zero no-show entries to flag
+      callCount = 0;
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir });
+
+      content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0); // Still empty
+    });
+  });
 });

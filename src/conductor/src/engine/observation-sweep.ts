@@ -365,6 +365,38 @@ function isAlreadyClosedError(err: any): boolean {
 }
 
 /**
+ * Ensure the `observation:no-show` label exists in the repo.
+ * Creates it if needed; silently continues if it already exists.
+ */
+async function ensureLabel(
+  gh: GhRunner,
+  owner: string,
+  repo: string,
+  label: string,
+  log?: Logger,
+): Promise<void> {
+  try {
+    await gh(
+      [
+        'label',
+        'create',
+        '--repo',
+        `${owner}/${repo}`,
+        label,
+        '--description',
+        'Fix was not observed in production within observation window',
+      ],
+      { cwd: process.cwd() },
+    );
+  } catch (err) {
+    // Label may already exist — silently continue
+    if (!((err as any)?.message || '').includes('already exists')) {
+      log?.(`[observation-sweep] label creation warning: ${err}`);
+    }
+  }
+}
+
+/**
  * Sweep the observation watch registry: poll awaiting-merge entries for PR state,
  * record mergedAt when merged, and prune closed PRs. Scan watching entries for
  * observations and close issues on first match.
@@ -432,8 +464,12 @@ export async function sweepObservationWatch(
     }
 
     // Watching state: mergedAt is set
-    // Skip if scanned recently (60-second throttle)
-    if (entry.lastScanAt && now - entry.lastScanAt < scanThrottleMs) {
+    // Check window expiry (before throttle check)
+    const windowExpiry = entry.mergedAt + (entry.windowDays * 86400000);
+    const isWindowExpired = now >= windowExpiry;
+
+    // Skip if scanned recently (60-second throttle) and window not yet expired
+    if (entry.lastScanAt && now - entry.lastScanAt < scanThrottleMs && !isWindowExpired) {
       survivors.push(entry);
       continue;
     }
@@ -441,7 +477,10 @@ export async function sweepObservationWatch(
     // Scan logs for observation
     if (!deps.logDir) {
       // No log dir provided — skip scan, keep entry
-      survivors.push(entry);
+      if (!isWindowExpired) {
+        survivors.push(entry);
+      }
+      // If window expired and no logDir, we can't scan — prune anyway to prevent infinite loops
       continue;
     }
 
@@ -454,7 +493,8 @@ export async function sweepObservationWatch(
       );
 
       if (match) {
-        // Close issue with comment quoting the match
+        // Found observation — close issue with comment quoting the match
+        // This takes precedence over window expiry (observation on same tick wins)
         const comment = `Observation: ${match.line}\n\nTimestamp: ${new Date(match.timestamp).toISOString()}`;
         try {
           const [owner, repo] = extractOwnerRepo(entry.prUrl);
@@ -485,8 +525,56 @@ export async function sweepObservationWatch(
             survivors.push({ ...entry, lastScanAt: now });
           }
         }
+      } else if (isWindowExpired) {
+        // No observation found and window expired — flag as no-show
+        try {
+          const [owner, repo] = extractOwnerRepo(entry.prUrl);
+          const issueNum = entry.sourceRef.replace(/^#/, '');
+
+          // Post no-show comment
+          const noShowComment = `No observation of production fix within ${entry.windowDays} days. Signature: ${entry.signature}`;
+          await deps.gh(
+            [
+              'issue',
+              'comment',
+              '--repo',
+              `${owner}/${repo}`,
+              issueNum,
+              '--body',
+              noShowComment,
+            ],
+            { cwd: process.cwd() },
+          );
+
+          // Add label via REST API
+          try {
+            await ensureLabel(deps.gh, owner, repo, 'observation:no-show', deps.log);
+            await deps.gh(
+              [
+                'api',
+                '-X',
+                'POST',
+                `/repos/${owner}/${repo}/issues/${issueNum}/labels`,
+                '-f',
+                'labels[]=observation:no-show',
+              ],
+              { cwd: process.cwd() },
+            );
+          } catch (labelErr) {
+            deps.log?.(
+              `[daemon] observe: label failed for ${entry.sourceRef}: ${labelErr}`,
+            );
+            // Continue anyway — comment was posted
+          }
+
+          deps.log?.(`[daemon] observe: no-show flagged ${entry.sourceRef}`);
+          // Prune entry (don't add to survivors)
+        } catch (err) {
+          deps.log?.(`[daemon] observe: no-show flag failed for ${entry.sourceRef}: ${err}`);
+          // Prune anyway (no re-flag loop)
+        }
       } else {
-        // No match yet — update scan time and continue watching
+        // No match yet and window not expired — update scan time and continue watching
         survivors.push({ ...entry, lastScanAt: now });
       }
     } catch (err) {
