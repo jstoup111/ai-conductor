@@ -49,6 +49,11 @@ describe('integration/git-hooks-attribution', () => {
     await writeFile(join(dir, '.pipeline', 'current-task'), id, 'utf-8');
   }
 
+  async function createBuildStepActive(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'build-step-active'), '', 'utf-8');
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'git-hooks-attr-'));
     await git('init', '-b', 'main');
@@ -452,6 +457,54 @@ describe('integration/git-hooks-attribution', () => {
         const res = await commitFile('t.txt', 't', 'feat: no prepare common hook');
         expect(res.code).toBe(0);
       });
+    });
+  });
+
+  // --- Story 5: Loud-path composition — abstain, reject, self-stamp, accept ---
+
+  describe('Story 5: Loud-path composition with #509 build-step-active gate', () => {
+    it('rejects an untrailered commit when build-step-active is present and no stamp exists', async () => {
+      await createBuildStepActive();
+      const res = await commitFile('u.txt', 'u', 'feat: no stamp during build step');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('add a Task: <id> trailer');
+    });
+
+    it('accepts an explicit valid Task: 2 trailer on retry after rejection', async () => {
+      await createBuildStepActive();
+      // First attempt without trailer should be rejected
+      const firstAttempt = await commitFile('v.txt', 'v', 'feat: first attempt');
+      expect(firstAttempt.code).not.toBe(0);
+
+      // Retry with explicit Task: 2 should be accepted
+      const retryRes = await commitFile('w.txt', 'w', 'feat: retry with task trailer\n\nTask: 2');
+      expect(retryRes.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 2$/m);
+    });
+
+    it('rejects an invalid Task: 99 by real-id validation, even with explicit trailer during build step', async () => {
+      await createBuildStepActive();
+      const res = await commitFile('x.txt', 'x', 'feat: invalid task id\n\nTask: 99');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('auto-stamps and accepts an untrailered commit when build-step-active is present but a stamp exists (control)', async () => {
+      await createBuildStepActive();
+      await writeCurrentTask('2');
+      const res = await commitFile('y.txt', 'y', 'feat: stamp present during build step');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 2$/m);
+    });
+
+    it('accepts an untrailered commit when build-step-active is absent (control)', async () => {
+      // Do NOT create build-step-active — outside a build step
+      const res = await commitFile('z.txt', 'z', 'feat: no build step active');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).not.toMatch(/^Task: /m);
     });
   });
 });
