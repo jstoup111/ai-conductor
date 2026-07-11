@@ -621,6 +621,50 @@ mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
 `src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
 `test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
 
+#### Attribution enforcement: inline build-work commits (#505)
+
+A Claude session driving a build step can commit or mutate files directly, bypassing
+the per-task subagent dispatch the pipeline uses to stamp a `Task: <id>` commit
+trailer. Inline build-work attribution enforcement adds two engine-owned gate
+surfaces (documented for orchestrators in `skills/pipeline/SKILL.md`, not a new
+orchestrator instruction):
+
+- **Surface A — commit-msg gate** (`git-hook-assets.ts` → `COMMIT_MSG_HOOK`). Rejects
+  an unattributed build-step commit: no `Task:` trailer while
+  `.pipeline/build-step-active` is present.
+- **Surface B — session mutation gate** (`session-hook-assets.ts` →
+  `MUTATION_GATE_HOOK`). A `PreToolUse` hook wired to `Edit|Write|NotebookEdit|Bash`
+  that blocks a direct mutation (or a `git commit` invocation) issued in the
+  orchestrator session — outside a stamped subagent dispatch — while a build step is
+  active.
+
+Both surfaces gate on the same predicate: `attribution_enforcement_cutover` (project
+config), read via `isAttributionEnforcementActive` / `isEnforcementConfigured`
+(`src/engine/attribution-enforcement.ts`, `src/engine/config.ts`). Absent or a future
+instant → enforcement inactive, both hooks pass through unchanged (pre-feature
+behavior). A past ISO-8601 instant → enforcement active for build steps dispatched
+after that instant. The value is read once at daemon/conductor start — **changing it
+requires an engine restart** to take effect.
+
+**Exemption matrix (both surfaces short-circuit before rejecting):**
+
+1. **Merge commits** — `MERGE_HEAD` present; a merge commit legitimately lacks a
+   `Task:` trailer.
+2. **Amend of a pre-enforcement commit** — `COMMIT_SOURCE`/invoking-command detection
+   (`--amend`) abstains rather than restamping or rejecting an old commit.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
+   intentional evidence-only commit is accepted; an empty commit with neither a
+   `Task:` trailer nor a resolvable `Evidence:` trailer is rejected.
+
+Rebase replay and `CONDUCT_ENGINE_COMMIT=1` (engine bookkeeping commits) are
+additional commit-msg-gate-only abstentions. An unparseable hook payload fails open
+(exit 0) on both surfaces, matching the #494 degradation rule.
+
+See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
+`src/engine/session-hook-assets.ts`, `test/engine/attribution-enforcement.test.ts`,
+`adr-2026-07-10-session-hook-task-stamping.md`, and
+`adr-2026-07-10-inline-work-attribution-enforcement.md`.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked

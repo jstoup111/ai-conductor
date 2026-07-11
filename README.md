@@ -1002,6 +1002,38 @@ When opening a PR against main:
 - If MINOR/MAJOR/undeterminable, the PR HALTs; manually record the approved version in
   `.pipeline/version-approval` to proceed
 
+### Attribution enforcement (inline build-work commits, `conduct-ts` only)
+
+Session-driven Claude sessions can commit or edit files directly, bypassing the
+per-task subagent dispatch the pipeline relies on for its `Task: <id>` commit trailer.
+Inline build-work attribution enforcement closes that gap with two engine-owned gate
+surfaces (not new orchestrator rules — see `skills/pipeline/SKILL.md` → "Attribution
+enforcement (engine gate surfaces)"):
+
+- **Surface A — commit-msg gate.** Rejects an unattributed build-step commit (no
+  `Task:` trailer, dispatched while `.pipeline/build-step-active` is present).
+- **Surface B — session mutation gate.** Blocks `Edit`/`Write`/`NotebookEdit` calls
+  and `git commit` invocations issued directly in the orchestrator session (outside a
+  stamped subagent dispatch) while a build step is active.
+
+```yaml
+# .ai-conductor/config.yml
+attribution_enforcement_cutover: "2026-07-01T00:00:00Z"   # ISO-8601 instant; absent = off
+```
+
+- **Default off.** With the key absent (or set to a future instant), enforcement is
+  inactive and unattributed commits/mutations land unchanged — pre-feature behavior.
+- **Enable it** by setting `attribution_enforcement_cutover` to a past ISO-8601
+  timestamp — enforcement activates for any build step that dispatches after that
+  instant.
+- **Requires an engine restart to take effect.** The daemon/conductor reads this
+  value once at process start; editing the config file mid-run does not retroactively
+  arm or disarm a build step already in flight.
+- **Exemptions (both surfaces):** a merge commit, an amend of a pre-enforcement
+  commit, and an empty commit carrying a resolvable `Evidence: satisfied-by <sha>`
+  trailer are never blocked — these are legitimate patterns that predate or fall
+  outside normal attributed build work.
+
 ### OpenTelemetry observability (`conduct-ts` only)
 
 The TypeScript conductor can export run/step traces and metrics to any OTel-compatible
