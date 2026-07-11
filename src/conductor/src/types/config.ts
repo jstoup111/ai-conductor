@@ -356,6 +356,14 @@ export interface HarnessConfig {
    */
   owner_gate_cutover?: string;
   /**
+   * Attribution enforcement cutover (#505): the ISO-8601 instant on/after
+   * which inline build-work attribution enforcement gates activate. Validated
+   * at load time — a malformed (unparseable) value is REJECTED rather than
+   * silently defaulted. Absent → enforcement disabled. See
+   * `isAttributionEnforcementActive` in engine/config.ts.
+   */
+  attribution_enforcement_cutover?: string;
+  /**
    * Maximum number of Claude-assisted conflict-resolution attempts inside the
    * rebase step before the engine halts for operator intervention.
    * Default: 3. Set to 0 to disable automated resolution (conflict always

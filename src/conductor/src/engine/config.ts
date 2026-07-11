@@ -174,6 +174,8 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
+    // Attribution enforcement cutover (#505): gate activation instant.
+    'attribution_enforcement_cutover',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
@@ -506,6 +508,23 @@ export function validateConfig(
     }
   }
 
+  // attribution_enforcement_cutover — the instant on/after which inline
+  // build-work attribution enforcement gates activate (#505). Same contract
+  // as owner_gate_cutover: malformed values are a hard load-time error, never
+  // silently defaulted. Absent → enforcement disabled (see
+  // isAttributionEnforcementActive).
+  if (obj.attribution_enforcement_cutover !== undefined) {
+    if (typeof obj.attribution_enforcement_cutover !== 'string') {
+      return errVal('attribution_enforcement_cutover must be an ISO-8601 date string');
+    }
+    if (Number.isNaN(Date.parse(obj.attribution_enforcement_cutover))) {
+      return errVal(
+        `attribution_enforcement_cutover is not a parseable date: "${obj.attribution_enforcement_cutover}". ` +
+          'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
+      );
+    }
+  }
+
   // harness_self_host — self-host guardrail activation override + per-gate
   // toggles (adr-2026-06-30-self-host-detection-seam / TR-11). Absent → safe
   // default (auto-detect, all gates on) applied by resolveSelfHostConfig.
@@ -605,6 +624,23 @@ export function validateConfig(
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
+}
+
+/**
+ * Whether inline build-work attribution enforcement is active right now
+ * (#505). Mirrors the owner-gate cutover activation shape: a missing cutover
+ * means enforcement is off; a cutover in the past (relative to `now`) turns
+ * it on; a cutover in the future keeps it off until that instant passes.
+ * The config value itself is validated (parseable ISO-8601) at load time by
+ * `validateConfig`, so this function trusts a defined input to already
+ * parse cleanly.
+ */
+export function isAttributionEnforcementActive(
+  cutover: string | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (cutover === undefined) return false;
+  return Date.parse(cutover) <= now.getTime();
 }
 
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
