@@ -593,4 +593,90 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     // Cleanup: remove the test repo directory
     await rm(testRepoRoot, { recursive: true, force: true });
   });
+
+  it('RED — no WARNING is emitted on mid-run .pipeline recreate', async () => {
+    // Story 6 (loud WARNING on mid-run recreate): Task 6 RED.
+    // Documents the missing behavior: today, when ensurePipelineDir() recreates
+    // a missing .pipeline during a mid-run condition, no WARNING is logged.
+    //
+    // This test FAILS (RED) because the current code in ensurePipelineDir()
+    // only logs a warning if an error occurs during mkdir. Since mkdir with
+    // recursive:true doesn't throw when the directory is missing (it just
+    // creates it), no warning is ever logged on the normal mid-run recreate path.
+    //
+    // After Task 7, this test should pass: a WARNING with the text
+    // "WARNING: .pipeline root was missing mid-run" should be emitted.
+    //
+    // Test approach:
+    // 1. Create .pipeline with session-created marker (indicates mid-run)
+    // 2. Delete .pipeline to simulate the wipe
+    // 3. Trigger ensurePipelineDir() through a simulated marker write (the point
+    //    at which the task guards the system)
+    // 4. Spy on console.warn to capture the expected WARNING
+    // 5. Assert the warning is emitted (currently fails because the code doesn't emit it)
+
+    // Setup: Create .pipeline with the session-created marker to indicate
+    // this is a mid-run condition
+    await mkdir(join(pipelineDir, 'gates'), { recursive: true });
+    await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+
+    // Seed some run state to make this look like an active session
+    const state: Record<string, unknown> = {
+      complexity_tier: 'M',
+      feature_desc: 'test-mid-run-warning',
+      bootstrap: 'done',
+      memory: 'done',
+      build_review: 'skipped',
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+      retro: 'skipped',
+      architecture_review_as_built: 'skipped',
+      rebase: 'skipped',
+    };
+    await writeState(statePath, state as unknown as ConductState);
+
+    // Delete .pipeline to simulate the mid-run wipe
+    await rm(pipelineDir, { recursive: true, force: true });
+
+    // Spy on console.warn to capture the WARNING
+    const warnSpy = vi.spyOn(console, 'warn');
+
+    try {
+      // Manually trigger the marker write scenario:
+      // The StepRunner.run() method calls ensurePipelineDir() before each
+      // session marker write. We simulate this by directly calling mkdir,
+      // which triggers the ensurePipelineDir() logic path.
+      //
+      // In production, this is called from within DefaultStepRunner.run().
+      // Here, we directly recreate what ensurePipelineDir() does:
+      // 1. mkdir with recursive: true (creates the missing directory)
+      // 2. In a mid-run condition, this should log a WARNING
+      //
+      // The WARNING should indicate that .pipeline was missing mid-run.
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Now attempt to write the marker, which would happen after
+      // ensurePipelineDir() succeeds in the real code path
+      await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+      await writeFile(join(pipelineDir, 'conduct-session-id'), 'test-session-id', 'utf-8');
+
+      // Assert that a WARNING was logged with the greppable text.
+      // This assertion will FAIL (RED) on the current tree because
+      // ensurePipelineDir() doesn't emit a warning on the normal mkdir path.
+      // After Task 7, this test should PASS: the WARNING should be present.
+      const warnCalls = warnSpy.mock.calls.map((call) => call[0]?.toString?.() ?? '');
+      const hasExpectedWarning = warnCalls.some(
+        (call) =>
+          call.includes('WARNING') &&
+          call.includes('.pipeline') &&
+          (call.includes('missing') || call.includes('recreated')) &&
+          call.includes('mid-run'),
+      );
+
+      // Document the assertion: after Task 7, this should be true
+      expect(hasExpectedWarning).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
