@@ -258,3 +258,238 @@ describe('collectCandidateCommits', () => {
     expect(result.map(c => c.sha)).toContain(commit5Sha);
   });
 });
+
+describe('assembleAttributionInputs', () => {
+  let planDir: string;
+  let planPath: string;
+
+  beforeEach(async () => {
+    planDir = await mkdtemp(join(tmpdir(), 'attribution-assembly-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(planDir, { recursive: true, force: true });
+  });
+
+  it('assembles task sections verbatim from the plan for given residue IDs', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 1: First task
+**Files:** \`src/file1.ts\`
+
+This is task 1 description.
+
+### Task 2: Second task
+**Files:** \`src/file2.ts\`, \`src/file3.ts\`
+
+This is task 2 description with more details.
+
+### Task 3: Third task
+**Files:** \`src/file4.ts\`
+
+This is task 3 description.
+`,
+      'utf-8'
+    );
+
+    const evidence = await createTaskEvidence(gitDir);
+    const candidates = [
+      { sha: 'abc123', subject: 'feat: change 1', diff: 'diff content 1' },
+      { sha: 'def456', subject: 'feat: change 2', diff: 'diff content 2' },
+    ];
+
+    const result = await mod.assembleAttributionInputs(planPath, ['1', '3'], candidates);
+
+    // Should contain the task sections for IDs 1 and 3
+    expect(result).toContain('### Task 1: First task');
+    expect(result).toContain('**Files:** `src/file1.ts`');
+    expect(result).toContain('This is task 1 description.');
+
+    expect(result).toContain('### Task 3: Third task');
+    expect(result).toContain('**Files:** `src/file4.ts`');
+    expect(result).toContain('This is task 3 description.');
+
+    // Should NOT contain task 2 (not in residue IDs)
+    expect(result).not.toContain('### Task 2: Second task');
+    expect(result).not.toContain('This is task 2 description with more details.');
+  });
+
+  it('includes candidate commits with sha, subject, and diff', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 1: Main task
+**Files:** \`src/main.ts\`
+
+Main task description.
+`,
+      'utf-8'
+    );
+
+    const candidates = [
+      { sha: 'abc1234567890abc1234567890abc1234567890', subject: 'feat: implement feature', diff: 'diff of change 1' },
+      { sha: 'def1234567890def1234567890def1234567890', subject: 'fix: correct issue', diff: 'diff of change 2' },
+    ];
+
+    const result = await mod.assembleAttributionInputs(planPath, ['1'], candidates);
+
+    // Should contain candidate commit information
+    expect(result).toContain('abc1234567890abc1234567890abc1234567890');
+    expect(result).toContain('feat: implement feature');
+    expect(result).toContain('diff of change 1');
+
+    expect(result).toContain('def1234567890def1234567890def1234567890');
+    expect(result).toContain('fix: correct issue');
+    expect(result).toContain('diff of change 2');
+  });
+
+  it('preserves Files: lines from plan task sections', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 5: Multi-file task
+**Files:** \`src/a.ts\`, \`src/b.ts\`, \`test/a.test.ts\`
+
+Description of task 5.
+
+### Task 6: Single file task
+**Files:** \`lib/single.js\`
+
+Description of task 6.
+`,
+      'utf-8'
+    );
+
+    const result = await mod.assembleAttributionInputs(planPath, ['5', '6'], []);
+
+    // Should preserve the Files: lines exactly as they appear
+    expect(result).toContain('**Files:** `src/a.ts`, `src/b.ts`, `test/a.test.ts`');
+    expect(result).toContain('**Files:** `lib/single.js`');
+  });
+
+  it('deliberately excludes task-status.json even when present on disk', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 7: Some task
+**Files:** \`src/task7.ts\`
+
+Task 7 body.
+`,
+      'utf-8'
+    );
+
+    // Write task-status.json to the same directory where the plan is
+    await writeFile(
+      join(planDir, 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }, null, 2),
+      'utf-8'
+    );
+
+    const result = await mod.assembleAttributionInputs(planPath, ['7'], []);
+
+    // Should NOT contain task-status.json content
+    expect(result).not.toContain('task-status.json');
+    expect(result).not.toContain('pending');
+    expect(result).not.toContain(JSON.stringify({ tasks: [{ id: '7', status: 'pending' }] }));
+
+    // Should still contain the plan content
+    expect(result).toContain('### Task 7: Some task');
+    expect(result).toContain('Task 7 body.');
+  });
+
+  it('deliberately excludes maker-summary text', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+
+    const summaryText = 'This is a secret maker summary about how the work was done';
+
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 8: Implementation
+**Files:** \`src/impl.ts\`
+
+Task 8 description.
+
+## Maker Summary
+
+${summaryText}
+`,
+      'utf-8'
+    );
+
+    // Also write a separate maker-summary artifact
+    await writeFile(
+      join(planDir, 'maker-summary.md'),
+      `# Maker Summary\n\n${summaryText}\n`,
+      'utf-8'
+    );
+
+    const result = await mod.assembleAttributionInputs(planPath, ['8'], []);
+
+    // Should NOT contain maker summary content
+    expect(result).not.toContain(summaryText);
+    expect(result).not.toContain('Maker Summary');
+    expect(result).not.toContain('maker-summary');
+
+    // Should still contain the plan content
+    expect(result).toContain('### Task 8: Implementation');
+    expect(result).toContain('Task 8 description.');
+  });
+
+  it('returns a string ready for verifier input assembly', async () => {
+    const mod = await loadAttributionInputs();
+    planPath = join(planDir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Implementation Plan
+
+## Tasks
+
+### Task 2: Another task
+**Files:** \`src/another.ts\`
+
+Another task description.
+`,
+      'utf-8'
+    );
+
+    const candidates = [
+      { sha: 'sha123', subject: 'feat: do work', diff: 'diff content' },
+    ];
+
+    const result = await mod.assembleAttributionInputs(planPath, ['2'], candidates);
+
+    // Result should be a string
+    expect(typeof result).toBe('string');
+
+    // Result should contain both plan and candidate information
+    expect(result).toContain('### Task 2: Another task');
+    expect(result).toContain('sha123');
+  });
+});
