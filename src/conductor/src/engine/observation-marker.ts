@@ -19,6 +19,14 @@
 // Line-oriented parsing mirrors intake-marker.ts style. Regex validation happens
 // at parse time — an invalid regex pattern fails the parse with a typed error.
 
+import * as fs from 'fs/promises';
+import * as path from 'path';
+
+/** Logger interface for diagnostic output. */
+export interface Logger {
+  warn(msg: string): void;
+}
+
 /**
  * Watched declaration: the marker parsed cleanly and specifies production observation.
  */
@@ -192,4 +200,39 @@ function parseWatched(fields: Record<string, string>): ParseResult {
     windowDays,
     surface: 'daemon-log',
   };
+}
+
+/**
+ * Read and parse an observation marker from `.docs/observation/<slug>.md`.
+ *
+ * Returns:
+ * - ObservationDeclaration if the file exists and parses cleanly
+ * - undefined if the file is missing (silently; missing files are expected)
+ * - undefined if the file is malformed (logs warning with parse error details)
+ *
+ * Never throws beyond the module boundary.
+ */
+export async function readObservationDeclaration(
+  worktreePath: string,
+  slug: string,
+  log?: Logger,
+): Promise<ObservationDeclaration | undefined> {
+  try {
+    const markerPath = path.join(worktreePath, '.docs', 'observation', `${slug}.md`);
+    const content = await fs.readFile(markerPath, 'utf-8');
+    const result = parseObservationMarker(content);
+
+    if (result.kind === 'parse_error') {
+      log?.warn(
+        `observation marker at ${markerPath} has parse error: ${result.message}`,
+      );
+      return undefined;
+    }
+
+    return result;
+  } catch (err) {
+    // File not found or other read error — return undefined silently
+    // (missing files are expected when observation is not declared)
+    return undefined;
+  }
 }

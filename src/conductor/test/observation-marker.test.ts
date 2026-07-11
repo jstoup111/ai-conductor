@@ -126,4 +126,41 @@ Window-days: not-a-number`;
       message: expect.stringContaining('Window-days'),
     });
   });
+
+  it('readObservationDeclaration returns undefined when file is missing', async () => {
+    const mod = await load();
+    const readObservationDeclaration = requireFn(mod, 'readObservationDeclaration');
+
+    const result = await readObservationDeclaration('/nonexistent/path', 'missing-file', undefined);
+
+    expect(result).toBeUndefined();
+  });
+
+  it('readObservationDeclaration returns undefined and logs warning when file is malformed', async () => {
+    const mod = await load();
+    const readObservationDeclaration = requireFn(mod, 'readObservationDeclaration');
+
+    const logs: string[] = [];
+    const mockLogger = {
+      warn: (msg: string) => logs.push(msg),
+    };
+
+    // Use a temp file with malformed content
+    const { writeFileSync, mkdtempSync, rmSync } = await import('fs');
+    const tempDir = mkdtempSync('/tmp/obs-marker-test-');
+    try {
+      const obsDir = `${tempDir}/.docs/observation`;
+      const { mkdirSync } = await import('fs');
+      mkdirSync(obsDir, { recursive: true });
+      writeFileSync(`${obsDir}/malformed.md`, 'Signature: /[invalid/\nSurface: daemon-log\nWindow-days: 14');
+
+      const result = await readObservationDeclaration(tempDir, 'malformed', mockLogger as any);
+
+      expect(result).toBeUndefined();
+      expect(logs.length).toBeGreaterThan(0);
+      expect(logs[0]).toMatch(/parse error/);
+    } finally {
+      rmSync(tempDir, { recursive: true });
+    }
+  });
 });
