@@ -745,6 +745,45 @@ See `src/engine/attribution-lane.ts` (orchestrator), `attribution-verdict.ts`
 `attribution-audit.ts` (audit sampling), `test/attribution-verdict.test.ts`,
 and `test/acceptance/evidence-gate-validates-provenance-proxies-not-whe.acceptance.test.ts`.
 
+**CLI: `conduct-ts evidence judge <slug> [--dry-run]`** (`src/engine/evidence-cli.ts`,
+wired in `src/cli.ts`) runs the same lane by hand, outside the daemon's automatic
+dispatch — for replaying a stranded build's evidence gate against a live acceptance
+corpus, or investigating a halted feature without waiting for the next poll:
+
+- `detectEvidenceCommand(argv)` is pure argv parsing (no I/O), mirroring the
+  `derive-feedback-cli.ts` pattern: `conduct evidence judge <slug>` → dispatch;
+  `conduct evidence judge <slug> --dry-run` → dispatch with `dryRun: true`; a missing
+  subcommand or slug → the usage guide (exit 2); an unknown top-level subcommand → `null`
+  (not this command at all).
+- `dispatchEvidence` resolves `<slug>` via `WorktreeManager.scan()`; an unknown slug prints
+  the known-slugs list and exits 1.
+- **Active-build refusal:** if `.pipeline/build-step-active` exists in the resolved
+  worktree, the judge refuses to run (exit non-zero, zero writes) rather than racing a
+  build step in flight.
+- **`--dry-run`:** runs assembly → dispatch → parse → validate exactly as the live path,
+  but skips the evidence-sidecar write. Output reports `wouldStamp` (the task IDs that
+  *would* be stamped) instead of `stampedTaskIds`.
+- **Output:** one JSON line — `{ before, after, stampedTaskIds, wouldStamp }` — where
+  `before`/`after` are unresolved-residue counts, letting a caller script diff the
+  before/after state without parsing prose.
+- **HALT/REKICK recovery tail (Task 21):** when a judge run fully resolves all residue
+  for a feature (partial resolution — some residue remains — leaves halt state
+  untouched), the CLI removes a stale `.pipeline/HALT` marker and writes
+  `.pipeline/REKICK`. This is the identical sentinel the daemon's own re-kick sweep
+  (see "Halt-reconciliation" below) uses to re-dispatch a parked feature on the next
+  poll — a manual judge run that clears all residue doesn't require an extra manual
+  un-park step.
+
+**Accuracy ledger (`.pipeline/attribution-audit.jsonl` / `.daemon/attribution-accuracy.jsonl`,
+Task 16):** every judge dispatch (automatic or via the CLI above) appends a fact recording
+the decision outcome; sampled spot-audits additionally append an agreement record —
+`{ ts, feature, taskId, fastLaneForm, fastLaneSha, auditVerdict, agree, citations?, reason? }`
+— one JSON object per line, safe to split on `\n` and parse independently
+(`appendAccuracyLedger`, `src/engine/attribution-audit.ts`). This is the corpus
+`attribution_audit_sample_pct` measurement post-processes to track judge accuracy over
+time; it never feeds back into gate decisions (audit is read-only, fire-and-forget,
+dispatched only after the build gate verdict is already final).
+
 
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 

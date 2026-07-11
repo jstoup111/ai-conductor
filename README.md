@@ -1109,6 +1109,29 @@ attribution_audit_sample_pct: 10
 - Absent `attribution_audit_sample_pct` → defaults to 10% sampling
 - Both are inert when the judgment gate is inactive
 
+**Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
+can be triggered by hand for a parked/halted feature:
+
+```bash
+conduct-ts evidence judge <slug>              # resolve <slug> to its worktree, run the judge
+conduct-ts evidence judge <slug> --dry-run    # judge only — print would-be stamps, write nothing
+```
+
+- Resolves `<slug>` to a registered worktree; unknown slug or unreachable worktree exits
+  non-zero and lists known slugs.
+- Refuses to run (non-zero exit, no writes) while `.pipeline/build-step-active` is present —
+  judging concurrently with an in-flight build step is rejected, not queued.
+- Prints a single JSON line: `{ before, after, stampedTaskIds, wouldStamp }` — unresolved-task
+  counts before/after the run, plus the task IDs actually stamped (`--dry-run` omits
+  `stampedTaskIds` and reports `wouldStamp` instead; no evidence sidecar write occurs).
+- **Recovery tail:** if the run fully resolves all residue (partial resolution leaves this
+  untouched), the CLI drops a stale `.pipeline/HALT` marker and writes `.pipeline/REKICK`,
+  the same signal the daemon's own re-kick sweep uses — so a manually-judged, now-green
+  feature is picked back up on the next poll instead of staying parked.
+
+See `src/conductor/README.md` → "Semantic attribution verification lane" for the full
+CLI/ledger/spot-audit detail.
+
 See `adr-2026-07-11-semantic-attribution-verification-lane.md` for the full design,
 constraints, and trade-offs.
 

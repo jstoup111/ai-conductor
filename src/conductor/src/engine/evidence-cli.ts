@@ -84,7 +84,7 @@ export async function dispatchEvidence(
   }
 
   if (cmd.kind === 'judge') {
-    return runEvidenceJudgeCLI(cwd, cmd.slug, { print });
+    return runEvidenceJudgeCLI(cwd, cmd.slug, { print, dryRun: cmd.dryRun === true });
   }
 
   // Should never reach here
@@ -98,9 +98,9 @@ export async function dispatchEvidence(
 async function runEvidenceJudgeCLI(
   projectRoot: string,
   slug: string,
-  opts: { print?: (msg: string) => void } = {},
+  opts: { print?: (msg: string) => void; dryRun?: boolean } = {},
 ): Promise<number> {
-  const { print = console.log } = opts;
+  const { print = console.log, dryRun = false } = opts;
 
   try {
     const manager = new WorktreeManager(projectRoot);
@@ -125,7 +125,7 @@ async function runEvidenceJudgeCLI(
       featureSlug: slug,
       planPath,
       projectRoot: worktree.path,
-      dryRun: false,
+      dryRun,
       resolveWorktree: async () => ({ root: worktree.path, branch: 'main' }),
     });
 
@@ -140,6 +140,7 @@ async function runEvidenceJudgeCLI(
         before: result.before,
         after: result.after,
         stampedTaskIds: result.stampedTaskIds,
+        wouldStamp: result.wouldStamp,
       }),
     );
 

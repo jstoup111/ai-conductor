@@ -10,6 +10,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Semantic attribution verification lane at the build evidence gate
+  (`conduct-ts` only, opt-in via `attribution_judge_cutover`): an engine-embedded
+  opus/high judge validates unresolved task residue by analyzing candidate
+  commit diffs and scoped test evidence, with the ENGINE (not the judge)
+  mechanically verifying every citation before stamping — no-whitewash by
+  construction. Configured via two new inert-when-absent config keys,
+  `attribution_judge_cutover` (ISO-8601 cutover instant) and
+  `attribution_audit_sample_pct` (0-100 spot-audit sampling, default 10).
+  See `src/conductor/README.md` → "Semantic attribution verification lane".
+- `conduct-ts evidence judge <slug> [--dry-run]` CLI: manually resolve a
+  feature slug to its worktree and run the judge lane by hand, outside the
+  daemon's automatic dispatch. Refuses to run while a build step is active;
+  `--dry-run` reports would-be stamps without writing the evidence sidecar.
+  Fully resolving all residue drops a stale `.pipeline/HALT` marker and
+  writes `.pipeline/REKICK`, so a manually-judged feature is picked back up
+  by the daemon on the next poll.
+- Accuracy ledger (`.daemon/attribution-accuracy.jsonl`): append-only,
+  concurrent-safe JSONL record of spot-audit outcomes (agreement between the
+  judge's live verdict and the sampled re-audit), for measuring judge
+  accuracy over time without feeding back into gate decisions.
+
 ### Changed
 
 - Armed `attribution_enforcement_cutover` (2026-07-11T08:30Z) in the committed
@@ -2495,6 +2518,52 @@ elif [ -d "${_link}" ]; then
   echo "Migration complete. .memory/ is now a symlink to the canonical store."
 else
   echo ".memory/ does not exist — it will be created automatically on next 'conduct' run."
+fi
+```
+
+## Migration
+
+The semantic attribution verification lane, its two config keys
+(`attribution_judge_cutover`, `attribution_audit_sample_pct`), and the
+`conduct-ts evidence judge <slug> [--dry-run]` CLI subcommand are additive and
+opt-in. No existing `.ai-conductor/config.yml` needs to change:
+
+- **`attribution_judge_cutover` absent** → the judge lane never dispatches; the
+  deterministic evidence gate (trailers, path corroboration) is the sole
+  completion authority, exactly as before this change.
+- **`attribution_audit_sample_pct` absent** → defaults to `10` but is itself
+  inert while `attribution_judge_cutover` is absent (the judgment gate controls
+  whether any audit sampling happens at all).
+- **`conduct-ts evidence judge`** is a new CLI subcommand; it does not replace or
+  alter any existing subcommand's behavior, flags, or output. No script relying
+  on the prior CLI surface needs to change.
+
+Only projects that want the semantic judge lane need to act, and the action is
+config-only (no schema migration, no hook re-provisioning, no worktree
+recreation):
+
+```bash migration
+# Opt in to the semantic attribution verification lane by adding the cutover
+# key to .ai-conductor/config.yml. No-op / prints guidance if the file is
+# missing or the key is already present.
+CONFIG_FILE=".ai-conductor/config.yml"
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "No $CONFIG_FILE found — nothing to migrate. Create one and add" \
+       "attribution_judge_cutover to opt in when ready."
+elif grep -q '^attribution_judge_cutover:' "$CONFIG_FILE" 2>/dev/null; then
+  echo "$CONFIG_FILE already sets attribution_judge_cutover — no migration needed."
+else
+  cat <<'EOF' >> "$CONFIG_FILE"
+
+# Semantic attribution judgment gate (opt-in; absent = disabled).
+# Uncomment and set a past ISO-8601 instant to activate the judge lane for
+# unresolved evidence-gate residue. Restart the daemon/conductor to apply.
+# attribution_judge_cutover: "2026-07-11T08:30:00Z"
+# attribution_audit_sample_pct: 10
+EOF
+  echo "Appended commented-out attribution_judge_cutover / attribution_audit_sample_pct" \
+       "template to $CONFIG_FILE. Uncomment and set a cutover instant to opt in;" \
+       "restart the daemon after editing."
 fi
 ```
 
