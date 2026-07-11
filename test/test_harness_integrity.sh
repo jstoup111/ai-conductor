@@ -502,6 +502,115 @@ else
   done
 fi
 
+# ── Pipeline SKILL.md — no imperative CLI stamping text ────────────────────────
+# skills/pipeline/SKILL.md documents session-hook machinery for task
+# start/done stamping (adr-2026-07-10-session-hook-task-stamping.md); it must
+# never instruct the orchestrator to imperatively run the CLI as a per-task
+# step. Mentions of `conduct-ts task start/done` as operator/recovery
+# machinery (descriptive, not imperative) are fine.
+_pipeline_skill="${HARNESS_DIR}/skills/pipeline/SKILL.md"
+if [ -f "$_pipeline_skill" ]; then
+  _imperative_cli_hits=$(grep -nE '(^|[^\`])Run `conduct-ts task (start|done)' "$_pipeline_skill" || true)
+  if [ -z "$_imperative_cli_hits" ]; then
+    assert "pipeline SKILL.md — no imperative 'Run \`conduct-ts task start/done\`' text" 0
+  else
+    assert "pipeline SKILL.md — imperative CLI stamping text found (should describe session hooks instead)" 1
+    echo "$_imperative_cli_hits" | while read -r hit; do
+      [ -z "$hit" ] && continue
+      echo -e "    ${RED}Violation:${NC} ${hit}"
+    done
+  fi
+else
+  assert "pipeline SKILL.md exists" 1
+fi
+
+# ── 11. Issue-template YAML validity and blank-issues guard ─────────────────
+# Validates that all issue templates in .github/ISSUE_TEMPLATE/ contain valid YAML
+# and that blank_issues_enabled is not set to false (which would prevent users from
+# creating custom issues).
+#
+# Parsing strategy:
+#  1. Try python3 with pyyaml if available
+#  2. Fall back to node js-yaml from src/conductor/node_modules
+#  3. Warn (not fail) if neither parser is available
+
+echo ""
+echo -e "${BOLD}11. Issue-template YAML validity and blank-issues guard${NC}"
+
+issue_templates_dir="${HARNESS_DIR}/.github/ISSUE_TEMPLATE"
+
+# If directory doesn't exist, that's fine — templates are optional
+if [ ! -d "$issue_templates_dir" ]; then
+  assert "no .github/ISSUE_TEMPLATE directory — skipping" 0
+else
+  # Check all .yml and .yaml files in the directory
+  for template in "$issue_templates_dir"/*.{yml,yaml}; do
+    # Skip if no matches (glob didn't expand)
+    if [ ! -f "$template" ]; then
+      continue
+    fi
+
+    template_name=$(basename "$template")
+
+    # Try python3 first
+    if command -v python3 >/dev/null 2>&1; then
+      set +e
+      python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$template" 2>/dev/null
+      py_exit=$?
+      set -e
+
+      if [ "$py_exit" -eq 0 ]; then
+        assert "${template_name} — valid YAML (python3)" 0
+      else
+        assert "${template_name} — invalid YAML (python3 parse failed)" 1
+        continue
+      fi
+    # Fall back to node js-yaml
+    elif [ -f "${HARNESS_DIR}/src/conductor/node_modules/.bin/ts-node" ] || [ -d "${HARNESS_DIR}/src/conductor/node_modules/js-yaml" ]; then
+      set +e
+      node -e "const yaml = require('js-yaml'); yaml.load(require('fs').readFileSync('$template', 'utf8'));" 2>/dev/null
+      node_exit=$?
+      set -e
+
+      if [ "$node_exit" -eq 0 ]; then
+        assert "${template_name} — valid YAML (node)" 0
+      else
+        assert "${template_name} — invalid YAML (node parse failed)" 1
+        continue
+      fi
+    else
+      # No YAML parser available — warn but don't fail
+      warn_check "${template_name} — skipped (no YAML parser available)" 1
+      continue
+    fi
+  done
+
+  # Check config.yml for blank_issues_enabled: false
+  config_file="${issue_templates_dir}/config.yml"
+  if [ -f "$config_file" ]; then
+    # Use the same parser priority as above
+    if command -v python3 >/dev/null 2>&1; then
+      set +e
+      if python3 -c "import yaml,sys; d=yaml.safe_load(open(sys.argv[1])); print(d.get('blank_issues_enabled', True))" "$config_file" 2>/dev/null | grep -q "False"; then
+        assert "config.yml — blank_issues_enabled must not be false" 1
+      else
+        assert "config.yml — blank_issues_enabled is not set to false" 0
+      fi
+      set -e
+    elif [ -f "${HARNESS_DIR}/src/conductor/node_modules/.bin/ts-node" ] || [ -d "${HARNESS_DIR}/src/conductor/node_modules/js-yaml" ]; then
+      set +e
+      if node -e "const yaml = require('js-yaml'); const d = yaml.load(require('fs').readFileSync('$config_file', 'utf8')); process.exit((d.blank_issues_enabled === false) ? 0 : 1);" 2>/dev/null; then
+        assert "config.yml — blank_issues_enabled must not be false" 1
+      else
+        assert "config.yml — blank_issues_enabled is not set to false" 0
+      fi
+      set -e
+    else
+      warn_check "config.yml — blank_issues_enabled check skipped (no YAML parser available)" 1
+    fi
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

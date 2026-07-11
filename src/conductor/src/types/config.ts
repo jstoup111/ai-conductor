@@ -220,6 +220,23 @@ export interface OtelConfig {
 }
 
 /**
+ * Intra-step build progress event config: polling cadence, quiet/stall
+ * thresholds, and heartbeat cadence for the build progress emitter on the
+ * conductor event bus. All fields optional — absent block resolves to
+ * documented defaults (see `resolveBuildProgressConfig` in engine/config.ts).
+ */
+export interface BuildProgressConfig {
+  /** How often (seconds) to poll for build progress. Defaults to 30. */
+  poll_seconds?: number;
+  /** Minutes of no output before a step is considered stalled. Defaults to 15. */
+  quiet_minutes?: number;
+  /** Minutes between heartbeat events while a step is running. Defaults to 5. */
+  heartbeat_minutes?: number;
+  /** Master on/off switch for build progress events. Defaults to true. */
+  enabled?: boolean;
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -259,6 +276,17 @@ export interface HarnessSelfHostConfig {
    * Omitted → 60.
    */
   auth_park_timeout_minutes?: number;
+  /**
+   * Daemon build authentication configuration (TR-1/2/3/4).
+   * Specifies the authentication mode and token path for daemon-owned build
+   * credentials. Omitted → defaults applied by resolveSelfHostConfig.
+   */
+  build_auth?: {
+    /** Authentication mode: 'daemon-token' or 'api-key'. Optional; defaults apply at resolution. */
+    mode?: string;
+    /** Path to the daemon build-auth token file. Optional; defaults apply at resolution. */
+    token_path?: string;
+  };
 }
 
 export interface HarnessConfig {
@@ -305,6 +333,12 @@ export interface HarnessConfig {
   /** OpenTelemetry exporter config. Absent = disabled (default off, FR-1). */
   otel?: OtelConfig;
   /**
+   * Intra-step build progress event config. Absent block resolves to
+   * defaults: { poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5,
+   * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
+   */
+  build_progress?: BuildProgressConfig;
+  /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the
    * gh-login fallback. Absent/blank → fall through the resolution chain.
@@ -321,6 +355,14 @@ export interface HarnessConfig {
    * as indeterminate and skipped).
    */
   owner_gate_cutover?: string;
+  /**
+   * Attribution enforcement cutover (#505): the ISO-8601 instant on/after
+   * which inline build-work attribution enforcement gates activate. Validated
+   * at load time — a malformed (unparseable) value is REJECTED rather than
+   * silently defaulted. Absent → enforcement disabled. See
+   * `isAttributionEnforcementActive` in engine/config.ts.
+   */
+  attribution_enforcement_cutover?: string;
   /**
    * Maximum number of Claude-assisted conflict-resolution attempts inside the
    * rebase step before the engine halts for operator intervention.

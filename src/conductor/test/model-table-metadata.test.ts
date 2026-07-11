@@ -60,6 +60,7 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'debugging',
   'simplify',
   'engineer',
+  'intake',
   'conduct',
   'pr',
   'tdd-red',

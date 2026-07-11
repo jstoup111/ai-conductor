@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import type { TriageOutcome } from '../../src/engine/setup-triage.js';
+import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -153,6 +155,294 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
   });
 
+  describe('daemon-only triage routing (Task 13 — makeRunFeature wiring)', () => {
+    // Story TS-2: setup-failure triage + daemon mode dispatch flow
+    // Story TS-1: non-setup errors keep today's path
+    // Use TriageOutcome type to keep import alive
+    type TriageHandler = (error: any, worktree: any, item: any) => Promise<TriageOutcome>;
+
+    // Minimal SetupFailureError mock (imported from worktree-prepare)
+    class SetupFailureError extends Error {
+      outputTail: string;
+
+      constructor(message: string, outputTail: string = '') {
+        super(message);
+        this.name = 'SetupFailureError';
+        this.outputTail = outputTail;
+      }
+    }
+
+    interface TriageRecorder {
+      triageCalls?: Array<{ error: string; daemon: boolean }>;
+      triageReturnValue?: { kind: 'quarantined-pass' | 'park'; outputTail?: string };
+    }
+
+    function depsWithTriageOrder(
+      order: string[],
+      rec: TriageRecorder & { teardownKeep?: boolean } = {},
+      opts: {
+        prepareThrows?: 'setup-failure' | 'plain-error';
+        daemon?: boolean;
+        triageThrows?: boolean;
+      } = {},
+    ): FeatureRunnerDeps {
+      const base = deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        },
+        rec,
+      );
+      const triageHandler: TriageHandler = async (error: any, _worktree: any, _item: any) => {
+        order.push('triage');
+        if (!rec.triageCalls) rec.triageCalls = [];
+        rec.triageCalls.push({ error: error.message, daemon: opts.daemon ?? false });
+        if (opts.triageThrows) throw new Error('triage dispatch failed');
+        return rec.triageReturnValue ?? { kind: 'quarantined-pass', outputTail: '' };
+      };
+      return {
+        ...base,
+        daemon: opts.daemon ?? false,
+        createWorktree: async (slug) => {
+          order.push('createWorktree');
+          return { path: `/wt/${slug}`, branch: `feat/${slug}` };
+        },
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          if (opts.prepareThrows === 'setup-failure') {
+            throw new SetupFailureError(
+              'project setup (bin/setup) failed: pg unreachable',
+              'tail of output',
+            );
+          }
+          if (opts.prepareThrows === 'plain-error') {
+            throw new Error('some random error');
+          }
+        },
+        runConductor: async () => {
+          order.push('runConductor');
+        },
+        runSetupTriage: triageHandler,
+      };
+    }
+
+    it('TS-2 happy: SetupFailureError with daemon=true invokes triage → quarantined-pass continues to runConductor', async () => {
+      const order: string[] = [];
+      const rec: TriageRecorder & { teardownKeep?: boolean } = {
+        triageReturnValue: { kind: 'quarantined-pass', outputTail: '' },
+      };
+      const run = makeRunFeature(
+        depsWithTriageOrder(order, rec, {
+          prepareThrows: 'setup-failure',
+          daemon: true,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done'); // continued to runConductor and got outcome
+      expect(order).toEqual(['createWorktree', 'prepareWorktree', 'triage', 'runConductor']);
+      expect(rec.triageCalls).toHaveLength(1);
+    });
+
+    it('TS-2 routing: SetupFailureError with triage returning park → runConductor never runs, error outcome', async () => {
+      const order: string[] = [];
+      const rec: TriageRecorder & { teardownKeep?: boolean } = {
+        triageReturnValue: { kind: 'park', outputTail: 'setup is broken' },
+      };
+      const run = makeRunFeature(
+        depsWithTriageOrder(order, rec, {
+          prepareThrows: 'setup-failure',
+          daemon: true,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('error');
+      expect(out.reason).toMatch(/setup is broken/);
+      expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+      expect(order).toEqual(['createWorktree', 'prepareWorktree', 'triage']);
+    });
+
+    it("TS-1 negative: plain Error during prepare bypasses triage (today's path)", async () => {
+      const order: string[] = [];
+      const rec: TriageRecorder & { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithTriageOrder(order, rec, {
+          prepareThrows: 'plain-error',
+          daemon: true,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('error');
+      expect(out.reason).toMatch(/some random error/);
+      expect(rec.triageCalls).toBeUndefined(); // triage never invoked
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']); // today's path byte-identical
+    });
+
+    it('prepare succeeding bypasses triage (no side effects)', async () => {
+      const order: string[] = [];
+      const rec: TriageRecorder & { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithTriageOrder(order, rec, {
+          prepareThrows: undefined,
+          daemon: true,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+      expect(rec.triageCalls).toBeUndefined(); // triage never invoked
+      expect(order).toEqual(['createWorktree', 'prepareWorktree', 'runConductor']);
+    });
+
+    it('runSetupTriage absent → SetupFailureError reverts to today\'s error path (no-op)', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const base = deps(
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'http://pr/1',
+        },
+        rec,
+      );
+      const run = makeRunFeature({
+        ...base,
+        daemon: true,
+        createWorktree: async (slug) => {
+          order.push('createWorktree');
+          return { path: `/wt/${slug}`, branch: `feat/${slug}` };
+        },
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          class SetupFailureError extends Error {
+            outputTail: string;
+
+            constructor(message: string, outputTail: string = '') {
+              super(message);
+              this.name = 'SetupFailureError';
+              this.outputTail = outputTail;
+            }
+          }
+          throw new SetupFailureError('setup failed', 'output');
+        },
+        runConductor: async () => {
+          order.push('runConductor');
+        },
+        // Intentionally absent: runSetupTriage
+      });
+      const out = await run(ITEM);
+      expect(out.status).toBe('error');
+      expect(out.reason).toMatch(/setup failed/);
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']); // no triage injection
+    });
+  });
+
+  describe('quarantine surfacing to the resuming build agent (Task 14 — makeRunFeature wiring)', () => {
+    class SetupFailureError extends Error {
+      outputTail: string;
+      constructor(message: string, outputTail: string = '') {
+        super(message);
+        this.name = 'SetupFailureError';
+        this.outputTail = outputTail;
+      }
+    }
+
+    function depsWithSurfacing(
+      rec: { teardownKeep?: boolean },
+      opts: {
+        triageReturnValue: TriageOutcome;
+        surfaceQuarantineRef?: FeatureRunnerDeps['surfaceQuarantineRef'];
+      },
+    ): FeatureRunnerDeps {
+      const base = deps(
+        { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
+        rec,
+      );
+      return {
+        ...base,
+        daemon: true,
+        createWorktree: async (slug) => ({ path: `/wt/${slug}`, branch: `feat/${slug}` }),
+        prepareWorktree: async () => {
+          throw new SetupFailureError('project setup failed', 'tail');
+        },
+        runConductor: async () => {},
+        runSetupTriage: async () => opts.triageReturnValue,
+        surfaceQuarantineRef: opts.surfaceQuarantineRef,
+      };
+    }
+
+    it('quarantine happened this rotation → surfaceQuarantineRef is invoked with the outcome before dispatch', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const calls: Array<{ slug: string; outcome: TriageOutcome }> = [];
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-feat-x',
+          },
+          surfaceQuarantineRef: async (_wt, slug, outcome) => {
+            calls.push({ slug, outcome });
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].slug).toBe('feat-x');
+      expect(calls[0].outcome.quarantineRef).toBe('wip/setup-quarantine-feat-x');
+    });
+
+    it('no quarantine present → surfaceQuarantineRef is still invoked (it decides internally whether to write)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const calls: TriageOutcome[] = [];
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: { kind: 'pass', outputTail: '' },
+          surfaceQuarantineRef: async (_wt, _slug, outcome) => {
+            calls.push(outcome);
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].kind).toBe('pass');
+      expect(calls[0].quarantineRef).toBeUndefined();
+    });
+
+    it('surfaceQuarantineRef throwing does not block dispatch (fail-open)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-feat-x',
+          },
+          surfaceQuarantineRef: async () => {
+            throw new Error('sentinel write blew up');
+          },
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done'); // dispatch proceeded despite the surfacing failure
+    });
+
+    it('surfaceQuarantineRef absent → makeRunFeature builds normally (backward compatible)', async () => {
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature(
+        depsWithSurfacing(rec, {
+          triageReturnValue: { kind: 'quarantined-pass', outputTail: '', quarantineRef: 'wip/setup-quarantine-feat-x' },
+          surfaceQuarantineRef: undefined,
+        }),
+      );
+      const out = await run(ITEM);
+      expect(out.status).toBe('done');
+    });
+  });
+
   describe('prepareWorktree (write namespace + run bin/setup)', () => {
     function depsWithOrder(
       order: string[],
@@ -200,6 +490,34 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(out.reason).toMatch(/bin\/setup failed/);
       expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached
       expect(rec.teardownKeep).toBe(true); // worktree kept for inspection
+    });
+
+    // #446 conflict resolution (Task 16): supersedes the prior pin that a
+    // prepareWorktree failure is *always* terminal/errored. Since Task 13 wired
+    // triage into makeRunFeature, a SetupFailureError in daemon mode with a
+    // triage handler present is routed to triage instead of erroring directly
+    // (see the 'daemon-only triage routing (Task 13)' describe block below for
+    // the full routed-to-triage matrix). This test pins the backward-compat
+    // half of that split: when the triage dependency is absent (e.g. manual
+    // /conduct runs, or daemon builds that haven't wired triage), a
+    // SetupFailureError still falls through to the legacy errored path.
+    // keep-worktree is unchanged either way.
+    it('a SetupFailureError with no triage dep present keeps the legacy errored path (backward compat)', async () => {
+      const order: string[] = [];
+      const rec: { teardownKeep?: boolean } = {};
+      const run = makeRunFeature({
+        ...depsWithOrder(order, {}, rec),
+        daemon: false, // no triage dep wired: runSetupTriage is absent
+        prepareWorktree: async () => {
+          order.push('prepareWorktree');
+          throw new SetupFailureError('project setup (bin/setup) failed: pg unreachable', 'tail of output');
+        },
+      });
+      const out = await run(ITEM);
+      expect(out.status).toBe('error'); // legacy errored path, not routed-to-triage
+      expect(out.reason).toMatch(/pg unreachable/);
+      expect(order).toEqual(['createWorktree', 'prepareWorktree']); // runConductor never reached, triage never invoked
+      expect(rec.teardownKeep).toBe(true); // worktree kept for inspection — unchanged
     });
 
     it('writes a diagnostic .pipeline/HALT into the worktree on an error (so it is not opaque)', async () => {
@@ -700,6 +1018,178 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         expect(true).toBe(true); // placeholder assertion
       });
     });
+
+    describe('Task 11: Park evidence — extended diagnostic HALT (TS-4)', () => {
+      // Story TS-4 happy: a `park` triage outcome produces a `.pipeline/HALT` whose
+      // content includes the output tail, the quarantine ref when taken, the literal
+      // statement that no quarantine exists in the clean-HEAD case, and the contract outcome.
+      // Park status/rekick eligibility identical to a plain errored feature.
+
+      it('park triage outcome with quarantine ref produces HALT with output tail, quarantine ref, and contract outcome (TS-4 happy)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-park-'));
+        try {
+          const triageEvidence: TriageOutcome = {
+            kind: 'park',
+            outputTail: 'setup failed: database connection timeout\nretrying...\nfailed again',
+            quarantineRef: 'wip/setup-quarantine-abc123',
+            contractOutcome: 'contract violation: schema mismatch',
+          };
+          const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: false,
+                halted: false,
+                triageEvidence,
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          // Park produces error status, keeps worktree, doesn't mark processed
+          expect(out.status).toBe('error');
+          expect(rec.processed).toBeUndefined();
+          expect(rec.teardownKeep).toBe(true);
+          // HALT must exist and contain all evidence
+          const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+          expect(halt).toContain('setup failed: database connection timeout');
+          expect(halt).toContain('retrying...');
+          expect(halt).toContain('failed again');
+          expect(halt).toContain('wip/setup-quarantine-abc123');
+          expect(halt).toContain('contract violation: schema mismatch');
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('park triage outcome without quarantine ref produces HALT with explicit no-quarantine statement (TS-4 negative)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-park-clean-'));
+        try {
+          const triageEvidence: TriageOutcome = {
+            kind: 'park',
+            outputTail: 'setup completed but validation failed\nerror: validation returned false',
+            contractOutcome: 'contract violation: test suite incomplete',
+          };
+          const rec: { teardownKeep?: boolean; processed?: boolean } = {};
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: false,
+                halted: false,
+                triageEvidence,
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          });
+          const out = await run(ITEM);
+          // Park produces error status, keeps worktree, doesn't mark processed
+          expect(out.status).toBe('error');
+          expect(rec.processed).toBeUndefined();
+          expect(rec.teardownKeep).toBe(true);
+          // HALT must exist and contain output tail and contract, plus explicit no-quarantine statement
+          const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+          expect(halt).toContain('setup completed but validation failed');
+          expect(halt).toContain('error: validation returned false');
+          expect(halt).toContain('contract violation: test suite incomplete');
+          // No-quarantine case must have explicit statement
+          expect(halt).toMatch(/no quarantine|clean-HEAD|quarantine.*not.*present/i);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+    });
+
+    describe('Task 12: HALT-write failure still parks (Story 4, negative path)', () => {
+      // Story 4 acceptance criteria: when HALT write fails (e.g., unwritable .pipeline),
+      // feature outcome is still `error` (parking unaffected), log sink receives the
+      // write-failure line, and no dispatch happens.
+
+      it('HALT write failure: feature still parked with error status (Task 12)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-halt-write-fail-'));
+        try {
+          const logCalls: string[] = [];
+          const rec: { teardownKeep?: boolean } = {};
+
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+            prepareWorktree: async () => {
+              // Simulate a setup failure
+              throw new Error('bin/setup failed: database unreachable');
+            },
+            log: (msg: string) => {
+              logCalls.push(msg);
+            },
+          });
+
+          // Pre-create .pipeline as a file (not a directory) to force write failure
+          await writeFile(join(wt, '.pipeline'), 'this blocks the directory', 'utf-8');
+
+          const out = await run(ITEM);
+
+          // Verify outcome is error (parking maintained despite write failure)
+          expect(out.status).toBe('error');
+          expect(out.reason).toMatch(/bin\/setup failed/);
+
+          // Verify worktree is kept for inspection
+          expect(rec.teardownKeep).toBe(true);
+
+          // Verify log sink received the write-failure notification
+          const haltFailLog = logCalls.find(msg => msg.includes('HALT') && (msg.includes('error') || msg.includes('Error')));
+          expect(haltFailLog).toBeTruthy();
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+
+      it('HALT write failure does not dispatch (no markProcessed or enrollWatch calls)', async () => {
+        const wt = await mkdtemp(join(tmpdir(), 'wt-halt-dispatch-'));
+        try {
+          const rec: TestRecorder = {};
+
+          const run = makeRunFeature({
+            ...deps(
+              {
+                done: true,
+                halted: false,
+                finishChoice: 'pr',
+                prUrl: 'https://github.com/owner/repo/pull/123',
+              },
+              rec,
+            ),
+            createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+            prepareWorktree: async () => {
+              throw new Error('network timeout');
+            },
+          });
+
+          // Make .pipeline unwritable
+          await writeFile(join(wt, '.pipeline'), 'blocked', 'utf-8');
+
+          const out = await run(ITEM);
+
+          // Verify outcome is error (not shipped)
+          expect(out.status).toBe('error');
+
+          // Verify no dispatch side effects (must never ship despite any write outcome)
+          expect(rec.processedCalls).toHaveLength(0);
+          expect(rec.enrollCalls).toHaveLength(0);
+        } finally {
+          await rm(wt, { recursive: true, force: true });
+        }
+      });
+    });
+
   });
 
   // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING

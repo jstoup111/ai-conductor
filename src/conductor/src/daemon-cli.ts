@@ -41,6 +41,7 @@ import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
 import { resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
+import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
   readRestartMarkerWithStatus,
   clearRestartMarker,
@@ -61,6 +62,8 @@ import { isOperatorParked } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
+import { prepareWorktree } from './engine/worktree-prepare.js';
+import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -557,47 +560,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
 
-  // Task 8: Capture engine identity at startup and log ARMED/DISARMED status
+  // Tasks 8-10: Boot sequence wired through initStaleEngineState primitive
+  // - Capture engine identity at startup
+  // - Log ARMED/DISARMED status (gated by config + self-host mode)
+  // - Startup handshake (read, log, clear RESTART_PENDING marker if present)
+  // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
-  const engineIdentity = await captureEngineIdentity(engineEntryPath);
-  if (engineIdentity) {
-    log(`daemon identity: ${engineIdentity}`);
-  }
+  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  const engineIdentity = await initStaleEngineState({
+    repoPath: projectRoot,
+    entryPath: engineEntryPath,
+    flag: isArmed,
+    log,
+  });
+
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
   // capture failure ⇒ permanently disabled checker (always 'current', warns once).
   const staleEngineChecker =
     engineIdentity !== null
       ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
       : createStaleEngineChecker(null, log);
-  const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
-  log(`${isArmed ? 'ARMED' : 'DISARMED'} — stale-engine auto-restart`);
-
-  // Task 9: Startup handshake — check for restart marker and log if present
-  // If engineIdentity is null, the check was disabled (capture failed), so skip handshake.
-  if (engineIdentity !== null) {
-    const markerStatus = await readRestartMarkerWithStatus(projectRoot, log);
-
-    if (markerStatus.kind === 'present') {
-      const marker = markerStatus.marker!;
-      log(
-        `restarted for engine refresh — from ${marker.fromIdentity} to ${marker.targetIdentity}, fresh ${engineIdentity}`,
-      );
-
-      // Task 10: Suppression — record when fresh identity differs from target
-      // (non-convergence at boot). This prevents restart loops when the engine
-      // identity hasn't reached the target yet.
-      if (engineIdentity !== marker.targetIdentity) {
-        log(
-          `suppressing restart loop — target was ${marker.targetIdentity}, now ${engineIdentity}`,
-        );
-        await recordSuppression(engineIdentity, projectRoot, log);
-      }
-
-      await clearRestartMarker(projectRoot);
-    }
-    // If absent or absent-corrupt: no handshake log.
-    // Task 6 (readRestartMarkerWithStatus) already logs + removes corrupt markers.
-  }
 
   // One shared provider + event bus across workers (rate limits are shared).
   const events = new ConductorEventEmitter();
@@ -819,6 +801,79 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
   };
 
+  // Task 15: Production wiring of setup-failure triage in daemon-cli.
+  // Construct runSetupTriage with real deps: git runner for worktree,
+  // prepareWorktree for retry, and fix-session dispatcher that constructs
+  // fresh DefaultStepRunner per dispatch (uuid session).
+  const runSetupTriage = async (
+    error: any, // SetupFailureError
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => {
+    // Kill-switch for testing: prevent actual LLM dispatch
+    if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
+      return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
+    }
+
+    // Create a git runner rooted at the worktree path
+    const git: GitRunner = makeGitRunner(worktree.path);
+
+    // Inject prepareWorktree for retry after quarantine
+    const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath, log);
+
+    // Triage stage 1: run-triage (TS-2/TS-3)
+    // Classify tree state and route: clean → pass, dirty → quarantine+retry
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+
+    // A park with no quarantineRef is a genuine PRESERVATION failure (the
+    // quarantine commit/branch itself could not be created) — stop immediately,
+    // never risk a fix-session on top of an unsafe tree. A park WITH a
+    // quarantineRef means quarantine succeeded but the post-quarantine retry
+    // still failed (committed breakage at a now-clean HEAD) — per the ADR this
+    // must still proceed to the bounded fix-session (Stage 2), not stop here.
+    if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {
+      return triageOutcome;
+    }
+
+    // A quarantined-pass outcome means stage-1 retry succeeded and setup is now
+    // passing at a clean HEAD. Per adr-2026-07-09-setup-failure-triage sub-decision 4,
+    // stage 2 (fix-session) should only run 'if setup still fails at a clean HEAD',
+    // so quarantined-pass skips directly to normal build dispatch.
+    if (triageOutcome.kind === 'quarantined-pass') {
+      return triageOutcome;
+    }
+
+    // Triage stage 2: fix-session (Task 10)
+    // For non-park outcomes, dispatch LLM fix session and mechanically verify
+    const dispatchFixSession = async () => {
+      // Construct a fresh DefaultStepRunner for this fix session
+      const sessionId = uuidv4();
+      const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
+        featureDesc: `setup-fix-${item.slug}`,
+        config,
+        mode: 'auto',
+      });
+      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      await stepRunner.resolveSetupFailure({
+        worktreePath: worktree.path,
+        outputTail: error.outputTail ?? '',
+        slug: item.slug,
+      });
+    };
+
+    // Run fix-session: dispatch LLM, verify contract (prepare + clean tree)
+    const fixOutcome = await fixSession(git, worktree.path, item.slug, dispatchFixSession, runPrepare);
+
+    // A stage-1 quarantine ref must never be lost from the final outcome —
+    // fixSession() doesn't know about it, so carry it forward if the fix
+    // itself also failed (park) and didn't already attach its own ref.
+    if (fixOutcome.kind === 'park' && !fixOutcome.quarantineRef && triageOutcome.quarantineRef) {
+      return { ...fixOutcome, quarantineRef: triageOutcome.quarantineRef };
+    }
+
+    return fixOutcome;
+  };
+
   const deps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
@@ -827,6 +882,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     provider,
     memoryProvider,
     log,
+    runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
 
@@ -1395,6 +1451,19 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // Colors mirror the TTY dashboard palette (ui/dashboard-text.ts): green ✓,
   // cyan ▶, red ✗, yellow warnings, dim chrome. chalk auto-disables under
   // NO_COLOR / non-TTY, so piped or redirected daemon logs stay plain text.
+  //
+  // Task 11: a throwing renderer must never crash the daemon run — the whole
+  // switch is wrapped defensively so a malformed/unexpected event payload
+  // (e.g. from a future event kind whose formatter assumes a field that
+  // isn't there) degrades to a dropped line, not a process crash.
+  try {
+    renderDaemonEventUnsafe(event, log);
+  } catch {
+    // Best-effort: rendering a daemon.log line must never disrupt the run.
+  }
+}
+
+function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
     case 'step_started':
@@ -1442,6 +1511,33 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
+      break;
+    case 'build_progress': {
+      // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
+      // step, N/total, current task, feature slug. No warning coloring —
+      // this is routine progress, kept visually distinct from no_progress/stall.
+      const task = event.currentTaskName
+        ? ` — ${event.currentTaskName}`
+        : event.currentTaskId
+          ? ` — task ${event.currentTaskId}`
+          : '';
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${event.resolved}/${event.total}${task}${slug}`);
+      break;
+    }
+    case 'build_no_progress': {
+      // Warning line: distinct glyph + yellow coloring so it stands out from
+      // the plain build_progress heartbeat above during a quiet episode.
+      const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      log(
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`)}${slug}`,
+      );
+      break;
+    }
+    case 'build_stall':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
+      );
       break;
     default:
       break;

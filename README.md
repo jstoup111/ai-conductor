@@ -219,6 +219,63 @@ automation is not disabled. The engine's hooks run first, and exit codes propaga
 For implementation details and hook asset definitions, see `src/conductor/src/engine/git-hook-assets.ts`
 and `src/conductor/README.md` → "Task attribution automation".
 
+**Session-hook stamping at subagent dispatch (#477)** — Git-trailer attribution proves a task's
+commits happened, but it fires at commit time, after the fact. A second, earlier layer stamps task
+state at the moment a subagent is actually **dispatched**, independent of whether the dispatching
+agent remembers to call `conduct-ts task start|done` itself.
+
+When the daemon provisions a feature worktree, it writes two scripts —
+`.pipeline/session-hooks/pre-dispatch.sh` and `.pipeline/session-hooks/post-dispatch.sh` — and wires
+them as Claude-session `PreToolUse`/`PostToolUse` hooks (matcher `Task|Agent`) in that worktree's
+`.claude/settings.local.json`. Every subagent dispatch (the `Task`/`Agent` tool call) passes through
+these hooks before and after the subagent runs.
+
+**The line-1 dispatch-marker contract:** every dispatch template's prompt MUST start with exactly one
+of these as its first line:
+
+```
+Task: <id>
+```
+```
+Task: none
+```
+
+`<id>` is the bare task id from the plan header (e.g. `7`), matching a row in
+`.pipeline/task-status.json`. Templates that dispatch implementation work (the `pipeline` skill's
+per-task DISPATCH step) use `Task: <id>`; templates that dispatch non-implementation work
+(evaluator/`code-review`, `/simplify`, micro-retro, memory-checkpoint) use `Task: none`. Only line 1
+is parsed — a later line, or an unrelated `Task:`-looking token in the prompt body (e.g. commit
+trailer instructions), is invisible to the hook.
+
+**What the hooks do:**
+- `pre-dispatch.sh` (`PreToolUse`) parses line 1 of the dispatched prompt. `Task: <id>` flips that
+  task's row to `in_progress` in `.pipeline/task-status.json` and writes `.pipeline/current-task`
+  (atomic temp-file + rename); an existing stamp for a *different* id is removed first (overlap
+  guard). `Task: none` is a pass-through no-op.
+- `post-dispatch.sh` (`PostToolUse`) removes the `.pipeline/current-task` stamp if it still matches,
+  once the subagent returns. It never writes `completed` — task completion is still derived from the
+  evidence gate (#456/#463), not from the hooks.
+
+**Fail-open vs. fail-closed:** the two failure regimes are deliberately different.
+- **Fail-open (exit 0, no state change):** the hook cannot parse the payload at all (e.g. malformed
+  JSON on stdin). This mirrors #452's abstain path — an unreadable signal must never block dispatch.
+- **Fail-closed (exit 2, blocks dispatch):** the payload parses but line 1 violates the grammar —
+  unknown task id, missing marker, wrong format (`Task:7`, `task: 7`), or two ids on one line. stderr
+  names the problem so it's actionable. This is a deliberate machinery-enforced guard against
+  drift in dispatch-template authoring (see this repo's "Design Principles": deterministic
+  enforcement over prompt discipline).
+
+**`settings.local.json` ownership:** `.claude/settings.local.json` inside a feature worktree is
+**untracked and engine-managed** — the daemon writes/merges it on every worktree provisioning pass,
+preserving any unrelated keys and backing up (not discarding) a corrupt file before rebuilding it.
+It is never committed and never read as project config; do not hand-edit it inside a build worktree,
+since the next provisioning pass will merge over the hook entries again (identified by the
+`session-hooks/` path in the wired command).
+
+For implementation details, see `src/conductor/src/engine/session-hook-assets.ts` (hook script
+bodies), `src/conductor/src/engine/worktree-prepare.ts` (provisioning/wiring), and
+`src/conductor/README.md` → "Session-hook task stamping at subagent dispatch".
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
@@ -226,14 +283,15 @@ features by priority band **after** passing the eligibility gate. This enables
 human-driven build prioritization without changing the gate logic.
 
 **Priority bands (highest to lowest):**
-- `priority: high` — highest priority (no-issue status escalated)
+- `priority: critical` — fixes for complete breakage or very severe degradation; dispatched first among issue-linked work
+- `priority: high` — highest routine priority
 - `priority: medium` — standard priority
 - `priority: low` — lower priority
 - Unlabeled (no priority label) — fallback chronological order
 
 **Label vocabulary:**
 The daemon reads GitHub issue labels via the REST API on each daemon scan.
-Label names are exact matches: `priority: high`, `priority: medium`, `priority: low`.
+Label names are exact matches: `priority: critical`, `priority: high`, `priority: medium`, `priority: low`.
 If an issue has multiple priority labels, the highest-priority one wins.
 Mixed or malformed labels are ignored (safe-fail).
 
@@ -264,6 +322,29 @@ The daemon consumes existing specs — it never authors them — and only picks 
 already shipped. Ineligible features are skipped with a logged reason. A feature
 that can't converge is left in its worktree (`.pipeline/HALT`) for you; the pool
 keeps going.
+
+**Daemon stall remediation (ADR-2026-07-10).** When the build step writes
+`.pipeline/halt-user-input-required` (a question the agent couldn't autonomously
+resolve), the daemon does not immediately halt. Instead:
+
+- **Capture question** — the conductor reads the marker content before clearing it,
+  persisting it to `.pipeline/build-stall-question.md` as evidence.
+- **Dispatch `/remediate`** — the planner reasons over the question plus committed
+  artifacts (plan, stories, ADRs, task-status) to determine if it's answerable.
+- **Answerable** — the planner returns the answer in `.pipeline/remediation.json`
+  with `tasks: []`. The conductor resumes the build retry loop with the answer as
+  context (no retry burned), and the build proceeds.
+- **Unanswerable** — the planner routes to a human (architectural-clarity,
+  product-scope, or unanswerable). The conductor writes `.pipeline/HALT` with the
+  original question preserved verbatim.
+- **Fail-safe** — if remediation fails (dispatch throws), returns no valid disposition, or
+  misroutes to a non-`build` target, `.pipeline/HALT` still carries the question. The operator
+  never loses sight of what the agent needed.
+- **Budget** — stall remediations share the existing `remediationRounds` counter (capped by
+  `MAX_KICKBACKS_PER_GATE`; no new counter was added). Blocking `prd_audit` gaps draw from the
+  same shared pool, so a run with both a build stall and a prd-audit gap can exhaust the budget
+  faster than either alone. See `src/conductor/README.md` → "Daemon build-stall remediation" for
+  the implementation (`readHaltMarkerContent`, `writeStallQuestionEvidence`, `writeStallHalt`).
 
 A blocking SHIP gate tries to self-heal before it halts: the conductor dispatches the
 `/remediate` planner over the gate's gap artifact — a blocking prd-audit
@@ -320,6 +401,18 @@ outcome (never confused with an empty queue) when every pending idea is stuck. A
 describe dependencies as prose into real GitHub issue-dependency links so the gate can see them.
 See [`src/conductor/README.md`](src/conductor/README.md#dependency-ordered-intake-and-dispatch)
 for details.
+
+**Claim ordering honors priority bands.** `conduct-ts engineer claim` serves pending
+intake ideas **priority-band-first**: no-issue (no `sourceRef`) first, then
+`critical` → `high` → `medium` → `low`, with unlabeled ideas last. Within a band,
+ideas are served **oldest-first** by `receivedAt` (a stable sort, so ties never
+reorder). Priority labels are read from GitHub **at claim time** — not cached
+across claims — so relabeling an issue between claims is honored on the very next
+claim. If GitHub is unreachable (API outage, auth error) when resolving labels,
+the claim **fails open to plain FIFO order** and logs a single warning to stderr;
+it never blocks or drops the claim. This ordering only changes *which* pending
+idea is served first — the claimed idea's JSON output shape is unchanged:
+`{kind, text, source, sourceRef}`.
 It also tracks the base-branch tip SHA (`.daemon/last-base-sha`): when
 the base branch **actually advances** — live, or while the daemon was down — it
 **re-kicks every halted feature** (aborting any paused rebase, preserving the reason
@@ -443,6 +536,14 @@ LEAK-SUSPECT WARN with per-file diff-stat so stalls are never silent. Operator w
 heal requires whole-tree byte-identity to a known branch, so ambiguous dirtystate keeps hands off.
 See `src/conductor/README.md` → "Main-checkout leak triage and auto-heal" for the detailed
 implementation and guarantee model.
+
+**Setup-failure triage (self-host only).** When `bin/setup` fails while preparing a daemon
+worktree, a bounded two-stage recovery runs instead of leaving the wedge for an agent to
+untangle blind: dirty state is first quarantined to a `wip/setup-quarantine-<slug>` branch and
+setup is retried once at clean HEAD; if it still fails, exactly one fix-session is dispatched
+with the setup error tail, and the engine mechanically verifies the success contract (setup
+exits 0, tree clean) rather than trusting the agent's report. See `src/conductor/README.md` →
+"Setup-failure triage" for the detailed stage flow.
 
 **Write-fence sandbox for self-host builds (self-host only).** When a self-host build runs in a
 sandbox, it now has a daemon-owned PreToolUse hook that blocks writes to the harness main checkout
@@ -596,6 +697,39 @@ conduct-ts brain stop    # kill the session
   `conduct-ts engineer` launcher's manual pre-poll is skipped (see
   `src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
   same ledger.
+
+### Intake-Issue Shape: WHAT vs. HOW
+
+Intake issues follow a strict format that separates **WHAT** (the problem and desired state)
+from **HOW** (the solution approach). This division ensures that intake captures observable
+facts and outcomes, while implementation decisions remain the engineer's (DECIDE phase) responsibility.
+
+**The four sections:**
+
+1. **Observed** (required) — Evidence of the problem. What did you actually observe?
+   Factual description of the current state, without jumping to solutions.
+
+2. **Impact** (optional) — Who or what is hurting, and how often? Describes the scope
+   and frequency of the problem to help prioritize.
+
+3. **Desired outcome** (required) — Observable behavior that must hold afterward.
+   State what success looks like in measurable, observable terms, not in terms of implementation.
+
+4. **Hypotheses** (optional) — Your guesses about HOW to solve this. These are candidate
+   ideas—DECIDE treats them as one option among many and may discard them in favor of alternatives.
+   Hypotheses are the ONLY place for implementation suggestions in an intake issue.
+
+**WHAT vs. HOW principle:** Intake issues state the **WHAT** (problem definition and desired outcomes);
+the engineer during the DECIDE phase owns the **HOW** (implementation, design, technical approach).
+Never prescribe implementation details, technology choices, or internal mechanisms in the Observed,
+Impact, or Desired outcome sections — those belong in Hypotheses *only*, and even there they're
+advisory, not binding.
+
+**References:**
+- [Intake idea issue template](.github/ISSUE_TEMPLATE/intake.yml) — The template that enforces
+  this shape when filing issues on the web or via `gh issue create`.
+- [HARNESS.md Key Conventions](HARNESS.md#key-conventions) — "Intake states WHAT and outcomes — DECIDE owns HOW"
+  documents this rule in detail.
 
 ## Choosing a Conductor
 
@@ -880,6 +1014,38 @@ When opening a PR against main:
 - If MINOR/MAJOR/undeterminable, the PR HALTs; manually record the approved version in
   `.pipeline/version-approval` to proceed
 
+### Attribution enforcement (inline build-work commits, `conduct-ts` only)
+
+Session-driven Claude sessions can commit or edit files directly, bypassing the
+per-task subagent dispatch the pipeline relies on for its `Task: <id>` commit trailer.
+Inline build-work attribution enforcement closes that gap with two engine-owned gate
+surfaces (not new orchestrator rules — see `skills/pipeline/SKILL.md` → "Attribution
+enforcement (engine gate surfaces)"):
+
+- **Surface A — commit-msg gate.** Rejects an unattributed build-step commit (no
+  `Task:` trailer, dispatched while `.pipeline/build-step-active` is present).
+- **Surface B — session mutation gate.** Blocks `Edit`/`Write`/`NotebookEdit` calls
+  and `git commit` invocations issued directly in the orchestrator session (outside a
+  stamped subagent dispatch) while a build step is active.
+
+```yaml
+# .ai-conductor/config.yml
+attribution_enforcement_cutover: "2026-07-01T00:00:00Z"   # ISO-8601 instant; absent = off
+```
+
+- **Default off.** With the key absent (or set to a future instant), enforcement is
+  inactive and unattributed commits/mutations land unchanged — pre-feature behavior.
+- **Enable it** by setting `attribution_enforcement_cutover` to a past ISO-8601
+  timestamp — enforcement activates for any build step that dispatches after that
+  instant.
+- **Requires an engine restart to take effect.** The daemon/conductor reads this
+  value once at process start; editing the config file mid-run does not retroactively
+  arm or disarm a build step already in flight.
+- **Exemptions (both surfaces):** a merge commit, an amend of a pre-enforcement
+  commit, and an empty commit carrying a resolvable `Evidence: satisfied-by <sha>`
+  trailer are never blocked — these are legitimate patterns that predate or fall
+  outside normal attributed build work.
+
 ### OpenTelemetry observability (`conduct-ts` only)
 
 The TypeScript conductor can export run/step traces and metrics to any OTel-compatible
@@ -917,6 +1083,54 @@ otel:
 
 See `src/conductor/README.md → OpenTelemetry exporter` for the full implementation
 reference.
+
+### Intra-step build progress & stall events (`conduct-ts` only)
+
+Long-running `build` steps used to be a black box between `step_started` and
+`step_completed` — no visibility into whether the agent was making progress or stuck. The
+TypeScript conductor now runs a lightweight `BuildProgressWatcher` alongside the build step
+that polls `.pipeline/task-status.json`, the no-evidence-attempt counter, and git `HEAD`,
+and emits three new events on the existing conductor event bus:
+
+- **`build_progress`** — a change-driven heartbeat emitted whenever resolved/total task
+  counts advance, the current task changes, a new commit lands, or the no-evidence
+  counter bumps. Carries `resolved`, `total`, `currentTaskId`/`currentTaskName`,
+  `commitCount` (new commits since the last tick, best-effort), and `noEvidenceAttempts`.
+- **`build_no_progress`** — a quiet-episode warning emitted once the step has gone
+  `quiet_minutes` without any observed task-status change. Carries `quietMinutes`,
+  `resolved`/`total`, and `lastCommitAt` if tracked.
+- **`build_stall`** — a stronger, terminal no-progress signal (`reason:
+  'no_task_progress' | 'halt_marker'`) with `resolvedBefore`/`resolvedAfter`.
+
+All three subscribers already wired to the event bus render them:
+
+- **daemon.log** (`daemon-cli.ts`) — a cyan `▶` heartbeat line for `build_progress`, a
+  yellow `⚠` quiet-episode line for `build_no_progress`, and a red `✋` stall line for
+  `build_stall`.
+- **TTY dashboard** (`ui/create-renderer.ts`) — matching progress/no-progress/stall lines
+  in the live region.
+- **OTel exporter** (when `otel:` is configured) — recorded as span events
+  (`span-manager.ts#onBuildProgress/onBuildNoProgress/onBuildStall`) on the active step
+  span; a no-op (with a single warning) if no span is available.
+- **Event persister** — all three kinds are persisted to `.pipeline/events.jsonl` like
+  every other conductor event.
+
+**Configuration** — optional `build_progress:` block in project config:
+
+```yaml
+build_progress:
+  poll_seconds: 30       # how often to poll for progress. Default: 30
+  quiet_minutes: 15      # minutes of no task-status change before build_no_progress. Default: 15
+  heartbeat_minutes: 5   # cadence for periodic heartbeats. Default: 5
+  enabled: true          # master on/off switch. Default: true
+```
+
+Absent block → the documented defaults above, watcher enabled. Set `enabled: false` as an
+escape hatch to disable emission entirely without deleting the block.
+
+See `src/conductor/README.md` → "Intra-step build progress & stall events" for the
+implementation reference (watcher lifecycle, snapshot tolerance, and per-subscriber
+rendering).
 
 ### Sandbox auth-expiry park-and-poll
 
@@ -959,6 +1173,48 @@ On auth failure or expiry, the feature HALTs immediately instead of waiting.
    and re-queue the feature via the base-SHA advance re-kick logic (see ADR-013) or manual dispatch.
 
 See `src/conductor/README.md` → "Sandbox auth-expiry park-and-poll" for implementation details.
+
+### Daemon build-auth (`conduct-ts` only) — isolating daemon builds from operator OAuth
+
+Self-host daemon builds no longer have to share the operator's own interactive `.credentials.json`
+OAuth session. Configure `harness_self_host.build_auth` to give the daemon its own build
+credential:
+
+```yaml
+# .ai-conductor/config.yml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; default shown
+```
+
+**Modes:**
+- **`daemon-token` (default).** The daemon reads a token from `token_path` (default
+  `~/.ai-conductor/build-auth`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` for the sandboxed
+  build step only — the operator's own session is untouched. Mint it once with:
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+- **`api-key`.** The build authenticates via an `ANTHROPIC_API_KEY` already present in the
+  daemon's environment; no token file is needed and the token pre-flight is skipped.
+
+**HALT remediation.** If `daemon-token` mode is configured and the token file is missing, empty,
+or unreadable, the daemon HALTs *before* provisioning the sandbox with a reason naming the mint
+command (`claude setup-token`), the resolved token path, and the config keys to set — it never
+burns the step's retry budget. Clear the HALT once the token exists and re-queue the feature. A
+mid-build auth failure in `daemon-token` mode parks and polls the token file for a refresh (same
+mechanism, and same `auth_park_timeout_minutes` timeout, as the operator-credentials park-and-poll
+above); in `api-key` mode there is nothing to poll, so an auth failure HALTs immediately naming
+`ANTHROPIC_API_KEY`.
+
+**Backward compatibility.** Leave `harness_self_host.build_auth` unset and nothing changes: the
+daemon keeps using the operator-credentials pre-flight and park-and-poll described above. Setting
+`build_auth.mode` explicitly switches the build to its own isolated credential and disables the
+operator-credentials pre-flight for that project.
+
+See `src/conductor/README.md` → "Daemon build-auth" for the module-level reference, and the
+`CHANGELOG.md` `[Unreleased]` migration block for copy-pasteable setup commands.
 
 ### Harness self-host guardrails (`conduct-ts` only)
 
@@ -1085,13 +1341,14 @@ UNDERSTAND → DECIDE → BUILD → SHIP
 | BUILD | `/writing-system-tests` → `/pipeline` or `/tdd`, `/code-review`, `/debugging` | Acceptance specs → TDD → evaluator gates |
 | SHIP | `/manual-test` → `/prd-audit` → `/architecture-review --as-built` → `/retro` → `/finish`, `/pr` | curl/browser validation → PRD compliance audit → as-built architecture sweep → dual retrospective → verification → pull request |
 
-### Skills (23 total)
+### Skills (24 total)
 
 | Skill | Enforcement | Model | Purpose |
 |-------|-------------|-------|---------|
 | `/bootstrap` | Advisory | sonnet | Detect/scaffold project, .claudeignore, smoke test, MCP setup |
 | `/memory` | Gating | haiku | Recall/persist decisions, patterns, gotchas across sessions |
 | `/assess` | Gating | haiku | Dispatch 9 CTO specialists for codebase health assessment |
+| `/intake` | Gating | inherits caller | Author intake issues: WHAT (verbatim evidence, impact) + desired OUTCOMES (observable acceptance signals); HOW quarantined to labeled Hypotheses — DECIDE owns it |
 | `/explore` | Advisory | sonnet | Context + approaches + decide product/technical track (no design doc) |
 | `/prd` | Gating | opus | Product-only PRD with FRs (product track only); scope check, API contract |
 | `/stories` | Gating | sonnet | User stories with mandatory negative paths (10 categories) |
@@ -1313,6 +1570,7 @@ ai-conductor/
 │   ├── conflict-check/
 │   ├── debugging/
 │   ├── finish/
+│   ├── intake/
 │   ├── manual-test/
 │   ├── memory/
 │   ├── pipeline/

@@ -196,6 +196,9 @@ docker compose down
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
 - [ ] Results displayed to user
+- [ ] Per-story PASS/FAIL results written to `.pipeline/manual-test-results.md` BEFORE
+      exiting — the completion gate reads this file; a run that tests everything but
+      records nothing fails the step
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly

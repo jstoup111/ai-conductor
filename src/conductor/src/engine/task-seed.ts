@@ -3,6 +3,31 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parsePlanTasks, PlanTask } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
+import { removeBuildStepMarker } from './attribution-enforcement.js';
+
+/**
+ * Defensively clear a stale build-step-active marker at step entry (Task 4,
+ * #505). Mirrors the stale `current-task` stamp clearing inside
+ * `seedTaskStatus` below: a marker left behind by a crashed prior session
+ * (or an unclean shutdown mid-build-step) must not leak into the next
+ * step's attribution decisions. Called at EVERY step entry, not just build
+ * steps — a subsequent build step re-writes the marker fresh immediately
+ * after this runs, so clearing here never races the real write.
+ *
+ * Reuses `removeBuildStepMarker`, which is already idempotent (no error if
+ * the marker is absent). Any unexpected error is caught and logged rather
+ * than thrown, so a marker-removal failure can never block step dispatch
+ * (fail-open, matching the current-task stamp clearing pattern).
+ */
+export function clearStaleMarker(projectRoot: string): void {
+  try {
+    removeBuildStepMarker(projectRoot);
+  } catch (err) {
+    console.warn(
+      `[task-seed] Failed to clear stale build-step marker: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
 
 interface TaskStatusRecord {
   id: string;
@@ -33,7 +58,8 @@ interface EngineState {
  * 5. Second re-seed produces byte-identical JSON (idempotent)
  * 6. Wholesale-wiped file is fully restored
  * 7. Write is atomic (temp file + rename)
- * 8. First seed (sidecar absent) stamps existing terminal rows as migration-grandfather
+ * 8. (Retired H8) First seed no longer grandfathers existing terminal rows;
+ *    completion is derived solely from evidence stamps (see Task 9)
  * 9. (Task 14) Uses engine-recorded plan path; detects ambiguity when multiple plans exist
  *
  * @param projectRoot - Project root directory
@@ -61,7 +87,6 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     }
 
     const statusPath = join(pipelineDir, 'task-status.json');
-    const sidecarPath = join(pipelineDir, 'task-evidence.json');
     const engineStatePath = join(pipelineDir, 'engine-state.json');
 
     // Read engine-recorded plan path if available
@@ -95,15 +120,6 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       absolutePlanPath = join(projectRoot, resolvedPlanPath);
     }
 
-    // Check if this is a first seed (sidecar absent = pre-cutover)
-    let isFirstSeed = false;
-    try {
-      await fsPromises.access(sidecarPath);
-    } catch {
-      // Sidecar doesn't exist — this is a first seed
-      isFirstSeed = true;
-    }
-
     // Parse plan tasks
     let planText: string;
     try {
@@ -128,8 +144,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
             // In-flight migration (H1): agent-written files also use the
             // object form `tasks: { "<id>": {...} }`. Normalize to the
             // engine's array form instead of discarding — dropping these
-            // rows would lose real pre-cutover completions AND their H8
-            // grandfather eligibility.
+            // rows would lose real pre-cutover completions.
             const objTasks = existingStatus.tasks as unknown as Record<string, unknown>;
             existingStatus.tasks = Object.entries(objTasks)
               .filter((e): e is [string, Record<string, unknown>] => !!e[1] && typeof e[1] === 'object')
@@ -147,23 +162,6 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
     // Load task evidence (sidecar)
     const evidence = await createTaskEvidence(projectRoot);
-
-    // On first seed, stamp existing terminal rows as migration-grandfather —
-    // but only for ids the plan actually defines (parsePlanTasks, colon-
-    // required headers). A terminal row for an id the plan doesn't recognize
-    // isn't a pre-cutover legacy row; it's indistinguishable from a forged
-    // row an agent wrote directly (H4/H6), so it must NOT be grandfathered.
-    if (isFirstSeed && existingStatus.tasks && Array.isArray(existingStatus.tasks)) {
-      for (const task of existingStatus.tasks) {
-        if (
-          task.id &&
-          (task.status === 'completed' || task.status === 'skipped') &&
-          planTasks.has(String(task.id))
-        ) {
-          evidence.migrationGrandfather.add(String(task.id));
-        }
-      }
-    }
 
     // Merge logic
     const taskMap = new Map<string, TaskStatusRecord>();
@@ -188,10 +186,10 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
           continue;
         }
 
-        // Preserve terminal rows backed by engine evidence: a real stamp, or
-        // the H8 migration grandfather (stamped moments ago on first seed —
-        // demoting a just-grandfathered row here would make the grandfather a
-        // no-op and re-open the demote-completed-work loop this feature fixes).
+        // Preserve terminal rows backed by engine evidence: a real evidence
+        // stamp, or a legacy migrationGrandfather entry from before H8 was
+        // retired. Nothing writes new grandfather entries anymore (see Task
+        // 8/9) — completion is derived solely from evidence stamps.
         if (existing.status === 'completed' || existing.status === 'skipped') {
           const stamp = evidence.evidenceStamps.get(taskId);
           if (stamp || evidence.migrationGrandfather.has(taskId)) {
@@ -253,7 +251,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       await fsPromises.rm(tempDir, { recursive: true, force: true });
     }
 
-    // Write task evidence (with grandfather stamps if first seed)
+    // Write task evidence
     await evidence.write();
   } catch (err) {
     console.error(

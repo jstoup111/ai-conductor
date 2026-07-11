@@ -16,6 +16,10 @@ import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
 import { escalateBuildFailure } from './build-failure-escalation.js';
+import { makeGitRunner } from './rebase.js';
+import { surfaceQuarantine } from './setup-triage.js';
+import type { SetupFailureError } from './worktree-prepare.js';
+import type { TriageOutcome } from './setup-triage.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -35,6 +39,12 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
+  runSetupTriage?: (
+    error: SetupFailureError,
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => Promise<TriageOutcome>;
 }
 
 const PROCESSED_SUBDIR = '.daemon/processed';
@@ -128,6 +138,17 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
         log: cfg.log,
       });
     },
+
+    // Task 15: Thread the setup-triage handler when present (daemon mode only).
+    // The handler uses git runner for worktree, prepareWorktree for retry,
+    // and fix-session dispatcher constructing fresh DefaultStepRunner per dispatch.
+    runSetupTriage: cfg.runSetupTriage,
+
+    // Task 14 (TS-5): surface quarantine evidence to the resuming build agent.
+    // Rooted at the feature's own worktree (not the main checkout) so
+    // `rev-parse --verify wip/setup-quarantine-<slug>` sees that worktree's refs.
+    surfaceQuarantineRef: (wt, slug, outcome) =>
+      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: cfg.log ?? (() => {}) }),
   };
 }
 

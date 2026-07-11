@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, chmod, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
+import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -149,6 +152,355 @@ describe('git-hook-assets — embedding hook scripts', () => {
           expect(hook, `${hookName} should not invoke ${forbiddenPattern.source}`).not.toMatch(forbiddenPattern);
         }
       }
+    });
+  });
+
+  describe('Surface A: commit-msg rejects unattributed build-step commits (#505 Task 5)', () => {
+    // Real hook-wired temp repo — drives an actual `git commit`, no mocking of
+    // git or the hook scripts. The `.pipeline/build-step-active` marker is the
+    // same marker the engine writes around a build-step session (Task 3).
+
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
+      await writeFile(join(repoDir, name), body, 'utf-8');
+      await git('add', name);
+      return git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-surface-a-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      // Wires PREPARE_COMMIT_MSG_HOOK + COMMIT_MSG_HOOK via core.hooksPath.
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('rejects a non-empty commit with no Task: trailer when the marker is present', async () => {
+      await writeMarker();
+      const res = await commitFile('a.txt', 'a', 'feat: unattributed change');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/Task:/);
+      expect(res.stderr.toLowerCase()).toMatch(/dispatch|task/);
+    });
+
+    it('passes a commit stamped with a Task: trailer while the marker is present', async () => {
+      await writeMarker();
+      const res = await commitFile('b.txt', 'b', 'feat: attributed change\n\nTask: 1');
+      expect(res.code).toBe(0);
+    });
+
+    it('passes a trailer-less commit when the marker is absent (marker gates the check)', async () => {
+      const res = await commitFile('c.txt', 'c', 'feat: pre-cutover behavior unchanged');
+      expect(res.code).toBe(0);
+    });
+
+    it('rejects an unattributed commit made with git commit -m (direct form)', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'd.txt'), 'd', 'utf-8');
+      await git('add', 'd.txt');
+      const res = await git('commit', '-m', 'feat: direct unattributed');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/Task:/);
+    });
+
+    it('rejects an unattributed commit produced via an editor-driven (interactive-style) commit-msg file', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'e.txt'), 'e', 'utf-8');
+      await git('add', 'e.txt');
+      // Simulate the interactive form: git writes the message to
+      // COMMIT_EDITMSG and invokes commit-msg with that file — `git commit`
+      // with no -m does exactly this when GIT_EDITOR leaves the templated
+      // message untouched, so we drive commit-msg directly against a
+      // hand-written COMMIT_EDITMSG-equivalent file to exercise the same
+      // code path without needing a real interactive editor in CI.
+      const commonDir = (await git('rev-parse', '--git-common-dir')).stdout;
+      const absCommonDir = commonDir.startsWith('/') ? commonDir : join(repoDir, commonDir);
+      const hookPath = join(repoDir, '.pipeline', 'git-hooks', 'commit-msg');
+      const msgFile = join(repoDir, '.git-editmsg-test');
+      await writeFile(msgFile, 'feat: interactive unattributed\n', 'utf-8');
+      void absCommonDir;
+      try {
+        await execFileAsync(hookPath, [msgFile], { cwd: repoDir });
+        throw new Error('expected commit-msg hook to reject');
+      } catch (err) {
+        const e = err as { code?: number };
+        expect(e.code).not.toBe(0);
+      }
+    });
+  });
+
+  describe('Surface A exemptions: merge, amend, rebase (#505 Task 6)', () => {
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
+      await writeFile(join(repoDir, name), body, 'utf-8');
+      await git('add', name);
+      return git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-surface-a-exempt-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('lands a merge commit trailer-less even with the marker present', async () => {
+      // Create a diverging branch so the merge is non-fast-forward and
+      // produces a real merge commit with MERGE_HEAD set during commit.
+      await git('checkout', '-b', 'feature');
+      await commitFile('feature.txt', 'feature', 'feat: feature work\n\nTask: 1');
+      await git('checkout', 'main');
+      await commitFile('main.txt', 'main', 'feat: main work\n\nTask: 1');
+      await writeMarker();
+      const res = await git('merge', '--no-ff', 'feature', '-m', 'merge: combine feature into main');
+      expect(res.code).toBe(0);
+    });
+
+    it('lands an amend of a pre-enforcement commit trailer-less', async () => {
+      // Commit made before the marker existed (pre-enforcement), no trailer.
+      await commitFile('pre.txt', 'pre', 'feat: pre-enforcement change');
+      // Enforcement activates afterward.
+      await writeMarker();
+      const res = await git('commit', '--amend', '-m', 'feat: pre-enforcement change (reworded)');
+      expect(res.code).toBe(0);
+    });
+
+    it('lands trailer-less commits replayed during a rebase', async () => {
+      await git('checkout', '-b', 'feature');
+      await commitFile('rebase-me.txt', 'content', 'feat: to be rebased');
+      await git('checkout', 'main');
+      await commitFile('main2.txt', 'main2', 'feat: main advances\n\nTask: 1');
+      await writeMarker();
+      const res = await git('rebase', 'main', 'feature');
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects a non-merge, non-amend, non-rebase commit without a trailer when the marker is present', async () => {
+      await writeMarker();
+      const res = await commitFile('plain.txt', 'plain', 'feat: plain unattributed change');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/Task:/);
+    });
+  });
+
+  describe('Surface A exemptions: evidence/engine/inactive (#505 Task 7)', () => {
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
+      await writeFile(join(repoDir, name), body, 'utf-8');
+      await git('add', name);
+      return git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-surface-a-exempt2-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('lands an empty commit with a resolvable Evidence: satisfied-by trailer and no Task: trailer', async () => {
+      await writeMarker();
+      const sha = (await git('rev-parse', 'HEAD')).stdout;
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        `feat: evidence-only, no task trailer\n\nEvidence: satisfied-by ${sha}`,
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('rejects an empty commit with the marker present, no Task: trailer, and no Evidence: satisfied-by trailer', async () => {
+      await writeMarker();
+      const res = await git('commit', '--allow-empty', '-m', 'feat: empty and unattributed');
+      expect(res.code).not.toBe(0);
+    });
+
+    it('lands a non-empty, trailer-less commit when CONDUCT_ENGINE_COMMIT=1 and the marker is present', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'engine.txt'), 'engine', 'utf-8');
+      await git('add', 'engine.txt');
+      let code = 0;
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', repoDir, 'commit', '-m', 'chore: engine bookkeeping commit'],
+          { env: { ...process.env, CONDUCT_ENGINE_COMMIT: '1' } },
+        );
+      } catch (err) {
+        const e = err as { code?: number };
+        code = e.code ?? 1;
+      }
+      expect(code).toBe(0);
+      const res = await git('log', '-1', '--format=%s');
+      expect(res.stdout).toBe('chore: engine bookkeeping commit');
+    });
+
+    it('lands a trailer-less content commit when the marker is entirely absent (enforcement inactive)', async () => {
+      const res = await commitFile('inactive.txt', 'inactive', 'feat: enforcement inactive, no trailer');
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects an unknown Task: id regardless of marker state (pre-feature behavior unchanged)', async () => {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(repoDir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('unknown.txt', 'unknown', 'feat: bad id\n\nTask: 999');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/not found in task-status\.json/);
+    });
+  });
+
+  describe('Engine commit spawn sites set CONDUCT_ENGINE_COMMIT=1 (#505 Task 8)', () => {
+    // Real hook-wired repos, no mocking: if a spawn site failed to set the
+    // marker, these trailer-less commits would be REJECTED by the commit-msg
+    // hook (Task 7) while the build-step-active marker is present. Landing
+    // cleanly is the proof the env var was actually threaded through.
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-task8-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('rebase.ts makeGitRunner: a trailer-less `git commit` lands under an active build-step marker', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'engine-a.txt'), 'a', 'utf-8');
+      const run = makeGitRunner(repoDir);
+      const add = await run(['add', 'engine-a.txt']);
+      expect(add.exitCode).toBe(0);
+
+      const commit = await run(['commit', '-m', 'chore: engine bookkeeping via makeGitRunner']);
+      expect(commit.exitCode).toBe(0);
+
+      const log = await git('log', '-1', '--format=%s');
+      expect(log.stdout).toBe('chore: engine bookkeeping via makeGitRunner');
+    });
+
+    it('rebase.ts makeGitRunner: does NOT set the marker for non-commit git invocations', async () => {
+      // Sanity check the marker is scoped to `commit` — a plain `status` call
+      // must not somehow bypass anything unrelated (regression guard on the
+      // args[0] === 'commit' gate in makeGitRunner).
+      const run = makeGitRunner(repoDir);
+      const status = await run(['status', '--porcelain']);
+      expect(status.exitCode).toBe(0);
+    });
+
+    it('shipped-record-cli.ts dispatchShippedRecord: commits the shipped record trailer-less under an active build-step marker', async () => {
+      await writeMarker();
+      await mkdir(join(repoDir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(repoDir, '.docs', 'stories'), { recursive: true });
+      await writeFile(join(repoDir, '.docs', 'plans', 'demo-slug.md'), '# Implementation Plan: demo\n');
+      await writeFile(join(repoDir, '.docs', 'stories', 'demo-slug.md'), '# Stories: demo\n');
+
+      const exitCode = await dispatchShippedRecord(
+        { kind: 'write', slug: 'demo-slug', pr: 'local' },
+        repoDir,
+      );
+      expect(exitCode).toBe(0);
+
+      const log = await git('log', '-1', '--format=%s');
+      expect(log.stdout).toBe('shipped record: demo-slug');
     });
   });
 });

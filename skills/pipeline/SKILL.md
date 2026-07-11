@@ -44,8 +44,19 @@ Default to **Standard** unless the user specifies otherwise.
 
 ### Per-Task Execution
 
-Before dispatching the subagent, the conductor runs `conduct-ts task start <id>` to mark
-the task as `in_progress`. Claude orchestrates the task through these steps:
+Task stamping is engine machinery, not an orchestrator instruction. A Claude-session
+PreToolUse hook, installed into the build worktree at provisioning time (see
+`adr-2026-07-10-session-hook-task-stamping.md`), inspects **line 1 only** of every
+subagent dispatch prompt. `Task: <id>` (id = bare plan header id, e.g. `Task: 9`, never
+`task-9`) flips that row to `in_progress` in `.pipeline/task-status.json` and writes
+`.pipeline/current-task`; `Task: none` passes through untouched. A missing or malformed
+line-1 marker, or an id not present in `task-status.json`, is BLOCKED (hook exit 2) with
+instructive stderr — fix the dispatch prompt's first line and redispatch. If a different
+task's stamp is already present (overlap), the hook still flips the new row but clears
+the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
+never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
+subagent return iff its content still matches that dispatch's id. Claude orchestrates
+the task through these steps:
 
 ```
 PLAN VALIDATION (at pipeline start):
@@ -56,15 +67,18 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. UPDATE STATUS — Run `conduct-ts task start <id>` to flip task status to `in_progress`
-                   BEFORE dispatching the subagent. If the task_id is not found in
-                   .pipeline/current-task after this command, it signals a configuration
-                   issue (halted by the forward-progress check). Crash recovery: if a
-                   session restarts mid-task, manually reset the task back to `pending`
-                   in .pipeline/task-status.json (same approach as before).
+0. DISPATCH MARKER — Before dispatching, ensure the subagent prompt's FIRST LINE will be
+                   `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
+                   the contract the session hook enforces mechanically (see above) — you do not
+                   run any CLI command for this step. If the hook blocks the dispatch (exit 2,
+                   stderr names the fix), correct the prompt's line 1 and redispatch; if
+                   `.pipeline/current-task` doesn't show the expected id after a successful
+                   dispatch, treat it as a configuration issue (forward-progress check will halt).
+                   Crash recovery: if a session restarts mid-task, manually reset the task back to
+                   `pending` in .pipeline/task-status.json (same approach as before).
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
-                  Dispatch template injects Task: <id> in the prompt — <id> is the bare PLAN header id (e.g. 9, not task-9).
+                  Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
                   if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
@@ -72,8 +86,13 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The engine derives completion from this trailer; the orchestrator
                   never writes `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. DONE         — After the subagent's commit lands on the branch, run `conduct-ts task done <id>` to mark
-                  the task complete. The CLI updates .pipeline/task-status.json and .pipeline/current-task.
+6. DONE         — After the subagent's commit lands on the branch, the PostToolUse session hook
+                  (same matcher as step 0/2) removes `.pipeline/current-task` once the subagent
+                  returns, iff its content still matches this dispatch's id — no CLI invocation
+                  needed. It never writes `completed`; completion is derived solely from the
+                  commit's `Task: <id>` trailer verified in step 5. If state ever needs manual
+                  correction (e.g. after a crash), `conduct-ts task start/done` remain available
+                  as operator/recovery commands, but are not part of the normal per-task flow.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
@@ -117,11 +136,47 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
-**Task status tracking:** The CLI (`conduct-ts task start/done`) and the conductor (`bin/conduct`)
-manage `.pipeline/task-status.json` automatically. You (the orchestrator) do NOT hand-edit this file —
-the engine owns it. Before dispatch, you instruct the conductor to run `conduct-ts task start <id>`.
-After the subagent's commit lands, you run `conduct-ts task done <id>`. The CLI updates the JSON;
-you report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
+### Attribution enforcement (engine gate surfaces)
+
+Task stamping (above) makes attribution *available*; attribution enforcement makes it
+*mandatory* once a project opts in via `attribution_enforcement_cutover` (project
+config, absent/future = off, past ISO-8601 instant = on, requires an engine restart
+to take effect — see the main README → "Attribution enforcement"). Like task
+stamping, both surfaces are engine machinery — nothing here is a new orchestrator
+step or instruction you must remember to run:
+
+- **Surface A — commit-msg gate.** While `.pipeline/build-step-active` is present
+  (written by the engine immediately before dispatching a build-work step, removed
+  immediately after), a commit lacking a `Task:` trailer is rejected at `git commit`
+  time with instructive stderr.
+- **Surface B — session mutation gate.** A `PreToolUse` hook wired to
+  `Edit|Write|NotebookEdit|Bash` blocks a direct file mutation or `git commit`
+  invocation made in the orchestrator session — i.e. outside a stamped subagent
+  dispatch — while a build step is active. The redirect message tells you to dispatch
+  the work via the Agent tool with a `Task: <id>` (or `Task: none`) line-1 marker
+  instead of mutating files directly.
+
+**Three exemption surfaces (both gates abstain rather than reject):**
+
+1. **Merge commits** — a merge legitimately carries no `Task:` trailer.
+2. **Amend of a pre-enforcement commit** — amending a commit that predates
+   enforcement is never restamped or rejected.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
+   intentional evidence-only commit (no diff) is accepted when it names a resolvable
+   satisfying commit; an empty commit with neither a `Task:` trailer nor a resolvable
+   `Evidence:` trailer is rejected.
+
+When enforcement is off (the default), both surfaces pass through unchanged — this
+section describes dormant machinery, not a behavior change to existing projects.
+
+**Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
+session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
+`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
+hooks stamp `in_progress` on dispatch and clear `.pipeline/current-task` on return, keyed off the
+dispatch prompt's line-1 `Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
+CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
+step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
+conductor's logging and audit trail.
 
 **Subagent context scoping:** The subagent receives ONLY:
 - The task description and acceptance criteria (from the plan)
@@ -189,7 +244,9 @@ on top of the just-completed TDD agent's API usage.
 
 At batch boundaries, dispatch an evaluator agent (see the model table below for the right
 model per tier and batch position) with **fresh, scoped context** (no shared state with the
-generator). Provide the evaluator with:
+generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
+session hook (see Per-Task Execution) enforces this marker on every Agent-tool dispatch,
+evaluator included; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
@@ -291,7 +348,7 @@ echo "Need user decision: <one-line summary of the blocker>" > \
   .pipeline/halt-user-input-required
 ```
 
-The conductor's build-retry loop checks for this file after each attempt. When
+**Interactive mode (unchanged):** The conductor's build-retry loop checks for this file after each attempt. When
 present, it:
 
 1. Emits a `build_stall` event (reason: `halt_marker`).
@@ -301,6 +358,35 @@ present, it:
 4. Re-checks the completion predicate once the REPL exits.
 5. Either succeeds (user + Claude resolved enough tasks) or falls into the
    normal recovery menu.
+
+This REPL escalation path is unaffected by daemon-mode routing below — it applies only
+when the conductor is attached to an interactive terminal.
+
+**Daemon mode (ADR-2026-07-10):** The daemon's build-retry loop has no interactive REPL to
+fall back to, so it routes the halt marker through a single bounded `/remediate` pass before
+escalating to a human:
+
+1. **Capture first.** The marker content (the question) is read and written verbatim to
+   `.pipeline/build-stall-question.md` *before* the halt marker itself is cleared
+   (`clearHaltMarker`) — the question is durably captured on disk before the ack, so it can
+   never be lost between detection and dispatch.
+2. Dispatches the `/remediate` skill once with `hintSource: { source: 'build_stall',
+   evidenceFile: '.pipeline/build-stall-question.md' }`. This is a single bounded attempt —
+   daemon mode does not loop `/remediate` against the same stall.
+3. **If answerable** — the planner returns a `build` disposition with the answer in `rationale`
+   and `tasks: []`. The conductor resumes the retry loop (no retry burned) with the answer
+   as context, and the build proceeds with the agent's question resolved.
+4. **If unanswerable** — the planner returns a `halt` disposition (category: `architectural-clarity`,
+   `product-scope`, or `unanswerable`). The conductor writes `.pipeline/HALT` with the original
+   question preserved verbatim and escalates for human triage.
+5. **Fail-safe** — if remediation fails, the budget is exhausted, or `/remediate` returns
+   `none`, the conductor writes `.pipeline/HALT` **carrying the question verbatim** and stops.
+   The operator never loses sight of what the agent needed.
+
+**Budget:** Stall remediations share the existing `MAX_KICKBACKS_PER_GATE` remediation budget
+(not a separate counter). Multiple stalls in one run consume the shared budget; once exhausted,
+subsequent stalls go straight to HALT without remediation dispatch. This prevents ask→answer→ask
+loops while keeping the fallback path safe.
 
 **Also triggered implicitly** when two consecutive build attempts produce zero
 new task completions (measured via `.pipeline/task-status.json` resolved count).
@@ -316,8 +402,8 @@ as a halt — **not** as a successful exit. Before exiting, you MUST:
 
 1. Write `.pipeline/halt-user-input-required` with a one-line summary of the
    next action (e.g. `"user requested exit; 1 regression in test_X pending fix"`).
-2. If a task is currently in-flight (marked `in_progress` by `conduct-ts task start`),
-   reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
+2. If a task is currently in-flight (marked `in_progress` by the session hook's dispatch
+   stamp), reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
    build gate will re-enter the task on resume rather than treating it as
    completed (crash-recovery pattern: manually edit the JSON if a session
    restarts mid-task).
@@ -403,7 +489,9 @@ At natural batch boundaries (after completing a group of related tasks):
 
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
-- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code)
+- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code).
+  If dispatched via the Agent tool, the `/simplify` dispatch prompt's first line MUST be
+  `Task: none` (session-hook marker contract, see Per-Task Execution).
 - Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
@@ -415,13 +503,13 @@ At natural batch boundaries (after completing a group of related tasks):
 
 ### Micro-Retros (Per-Phase)
 
-At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity.
+At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched via the Agent tool, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Memory Checkpoint (Per-Batch)
 
 **GATE: Every batch must persist at least one `.memory/` entry before proceeding.**
 
-Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write.
+Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched via the Agent tool, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Progress Log
 
@@ -478,6 +566,10 @@ mid-task telemetry. Write the file while the data is still in context.
 - [ ] Autonomy level set (default: Standard)
 - [ ] Implementation plan loaded and validated
 - [ ] Each task follows TDD cycle (not skipping RED or DOMAIN phases)
+- [ ] Every subagent dispatch's line 1 is exactly `Task: <id>` (bare plan id) so the session
+      hooks stamp `.pipeline/current-task` and commits auto-carry the trailer
+- [ ] No `completed` status was ever hand-written — completion derives solely from
+      commit-anchored evidence (trailers / `Evidence:` forms / engine stamps)
 - [ ] Quality gates enforced after each task
 - [ ] Rework budget tracked (escalate at 3 cycles)
 - [ ] State tracked in `.pipeline/` with audit trail

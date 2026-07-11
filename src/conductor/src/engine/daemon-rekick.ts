@@ -8,6 +8,7 @@ import {
   runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  recordRebaseStepCompletion,
   writeHalt,
   type RebaseOutcome,
   type RebaseResolver,
@@ -393,6 +394,14 @@ export async function resumeRebaseFirst(opts: {
   // the daemon must re-verify from scratch, not trust stale evidence. Omitting
   // preVerify here is intentional, per ADR.
   await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest);
+  // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
+  // outcomes via the shared helper (no-ops on conflict_halt) — same call
+  // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves
+  // no silent unmarked rebase state. Derived from worktreePath (same
+  // location daemon-cli.ts uses) rather than a new opts field, so every
+  // existing call site keeps working unchanged.
+  const stateFilePath = join(opts.worktreePath, '.pipeline', 'conduct-state.json');
+  await recordRebaseStepCompletion(stateFilePath, outcome);
   await emitRebaseEvent(opts.events, outcome);
 
   if (outcome.kind === 'conflict_halt') {

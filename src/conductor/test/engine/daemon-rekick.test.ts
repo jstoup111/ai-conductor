@@ -23,6 +23,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readState } from '../../src/engine/state.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -1180,5 +1181,180 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
     expect(logs.some((l) => /already shipped out-of-band/.test(l))).toBe(true);
     // The daemon-runner's outcome status reflects a verified ship.
     expect(outcome.status).toBe('done');
+  });
+});
+
+// ── #436: pre-loop rebase (resumeRebaseFirst) must stamp conduct-state's
+// `rebase` field the SAME way the finish-time `runRebaseStep` does ─────────
+//
+// `runRebaseStep` (conductor.ts) runs the rebase step INSIDE the gate loop:
+// on a successful step it falls through to the generic step-completion path
+// (conductor.ts ~2947) which calls `saveStepStatus(this.stateFilePath,
+// 'rebase', 'done')` — so conduct-state.json's `rebase` field is stamped
+// `'done'` in lockstep with the `.pipeline/gates/rebase.json` verdict that
+// `applyRebaseVerdicts` writes.
+//
+// The daemon's re-kick play-forward path calls `resumeRebaseFirst` BEFORE
+// the conductor's gate loop starts (a "pre-loop" rebase) — it writes the
+// SAME `.pipeline/gates/rebase.json` verdict via `applyRebaseVerdicts`, but
+// it never touches conduct-state.json. When the gate loop resumes it reads
+// a `satisfied: true` gate verdict for `rebase`, yet conduct-state.json's
+// `rebase` field is still `undefined`/`'pending'` — a silent, unmarked-state
+// divergence between the two records of "did the rebase step run".
+describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase', () => {
+  let dir: string;
+  let events: ConductorEventEmitter;
+  const STATE_PATH_REL = '.pipeline/conduct-state.json';
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+    return stdout.trim();
+  }
+
+  async function initFeatureRepo(): Promise<void> {
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/other.ts'), 'export const bar = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature work');
+  }
+
+  async function writeSentinel(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+  }
+
+  async function writeInitialConductState(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    // A feature mid-flight, having reached the `rebase` gate but not yet
+    // run it — the shape conduct-state.json is in the instant BEFORE a
+    // daemon re-kick fires resumeRebaseFirst pre-loop.
+    await writeFile(
+      join(dir, STATE_PATH_REL),
+      JSON.stringify({ build: 'done', last_step: 'build' }, null, 2) + '\n',
+      'utf-8',
+    );
+  }
+
+  async function fileExists(p: string): Promise<boolean> {
+    return access(p).then(() => true, () => false);
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'rekick-436-'));
+    events = new ConductorEventEmitter();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('clean play-forward rebase: gate verdict and conduct-state.rebase must agree (RED — state.rebase never stamped)', async () => {
+    await initFeatureRepo();
+    await writeInitialConductState();
+
+    // Advance base non-conflicting (mirrors the FR-12 "advanced base" fixture).
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'SIBLING.md'), '# merged\n');
+    await git('add', '.');
+    await git('commit', '-m', 'sibling merged');
+    await git('checkout', 'feature/foo');
+
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+    });
+    expect(res).toBe('rebased');
+
+    // The gate verdict IS recorded — this mirrors what runRebaseStep writes
+    // via applyRebaseVerdicts and is expected to pass today.
+    const gateVerdict = await readVerdict(dir, 'rebase');
+    expect(gateVerdict?.satisfied).toBe(true);
+
+    // conduct-state.json's `rebase` field should be stamped 'done' — exactly
+    // as runRebaseStep's fall-through to saveStepStatus(..., 'rebase',
+    // 'done') would do for the SAME successful outcome inside the gate loop.
+    // THIS IS THE RED ASSERTION: resumeRebaseFirst never writes
+    // conduct-state.json, so `rebase` stays unset here, diverging silently
+    // from the gate verdict that says the rebase is satisfied.
+    const stateResult = await readState(join(dir, STATE_PATH_REL));
+    expect(stateResult.ok).toBe(true);
+    const state = stateResult.ok ? stateResult.value : {};
+    expect(state.rebase).toBe('done');
+  });
+
+  // Negative path: a conflicted pre-loop rebase must NOT stamp state.rebase.
+  // recordRebaseStepCompletion is still called (same call site as the clean
+  // path above) but is a no-op on 'conflict_halt' outcomes — the shared
+  // helper gates on outcome kind, not on whether it ran at all. This test
+  // distinguishes "never ran" (state.rebase undefined, no HALT) from "ran
+  // but conflicted" (state.rebase ALSO undefined, but a HALT is present) —
+  // only the HALT file tells the two apart.
+  it('conflicted play-forward rebase (resolution exhausted): state.rebase stays unset and HALT is left in place', async () => {
+    // Branch and base edit the SAME file differently → guaranteed conflict
+    // (mirrors initConflictRepo in the FR-12 describe block above).
+    await execFileAsync('git', ['init', '-b', 'main', dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base');
+    await git('checkout', 'feature/foo');
+
+    await writeInitialConductState();
+
+    // Confirm the "never ran" baseline: no HALT, no state.rebase, before
+    // resumeRebaseFirst is even invoked.
+    expect(await readVerdict(dir, 'rebase')).toBeNull();
+    const beforeState = await readState(join(dir, STATE_PATH_REL));
+    const before = beforeState.ok ? beforeState.value : {};
+    expect(before.rebase).toBeUndefined();
+
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      // No resolver wired → resolution is exhausted immediately and the
+      // conflict is re-parked via the existing HALT path (mirrors the
+      // FR-12 "no resolver wired" test above).
+    });
+
+    expect(res).toBe('halted');
+
+    // The HALT is present — the rebase DID run and DID hit a real conflict.
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
+
+    // Yet conduct-state.json's `rebase` field is STILL undefined — the
+    // shared helper's outcome gate means a conflict_halt outcome is a
+    // no-op, so this is indistinguishable from "never ran" by state alone.
+    // Only the HALT file (asserted above) tells the two states apart.
+    const stateResult = await readState(join(dir, STATE_PATH_REL));
+    expect(stateResult.ok).toBe(true);
+    const state = stateResult.ok ? stateResult.value : {};
+    expect(state.rebase).toBeUndefined();
+
+    // Sanity: unaffected fields from before the re-kick are left untouched.
+    expect(state.build).toBe('done');
   });
 });

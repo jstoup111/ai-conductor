@@ -8,6 +8,7 @@ import type {
   EffortLevel,
   MarkdownViewerConfig,
   MermaidRendererConfig,
+  BuildProgressConfig,
 } from '../types/config.js';
 import type { StepName, EnforcementLevel } from '../types/index.js';
 import { ALL_STEPS } from './steps.js';
@@ -168,9 +169,13 @@ export function validateConfig(
     'memory_provider',
     // Observability
     'otel',
+    // Intra-step build progress events (poll/quiet/heartbeat cadence).
+    'build_progress',
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
+    // Attribution enforcement cutover (#505): gate activation instant.
+    'attribution_enforcement_cutover',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
@@ -505,6 +510,23 @@ export function validateConfig(
     }
   }
 
+  // attribution_enforcement_cutover — the instant on/after which inline
+  // build-work attribution enforcement gates activate (#505). Same contract
+  // as owner_gate_cutover: malformed values are a hard load-time error, never
+  // silently defaulted. Absent → enforcement disabled (see
+  // isAttributionEnforcementActive).
+  if (obj.attribution_enforcement_cutover !== undefined) {
+    if (typeof obj.attribution_enforcement_cutover !== 'string') {
+      return errVal('attribution_enforcement_cutover must be an ISO-8601 date string');
+    }
+    if (Number.isNaN(Date.parse(obj.attribution_enforcement_cutover))) {
+      return errVal(
+        `attribution_enforcement_cutover is not a parseable date: "${obj.attribution_enforcement_cutover}". ` +
+          'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
+      );
+    }
+  }
+
   // harness_self_host — self-host guardrail activation override + per-gate
   // toggles (adr-2026-06-30-self-host-detection-seam / TR-11). Absent → safe
   // default (auto-detect, all gates on) applied by resolveSelfHostConfig.
@@ -560,6 +582,12 @@ export function validateConfig(
       block.cooldownMinutes = 60;
     }
     // suiteCommand is optional and remains undefined if not provided
+  }
+
+  // build_progress — intra-step build progress event cadence knobs.
+  if (obj.build_progress !== undefined) {
+    const err = validateBuildProgressBlock(obj.build_progress);
+    if (err) return { ok: false, error: err };
   }
 
   // build_review — opt-in judgement gate at the build → manual_test seam.
@@ -626,6 +654,23 @@ export function validateConfig(
   return { ok: true, config: obj as HarnessConfig, warnings };
 }
 
+/**
+ * Whether inline build-work attribution enforcement is active right now
+ * (#505). Mirrors the owner-gate cutover activation shape: a missing cutover
+ * means enforcement is off; a cutover in the past (relative to `now`) turns
+ * it on; a cutover in the future keeps it off until that instant passes.
+ * The config value itself is validated (parseable ISO-8601) at load time by
+ * `validateConfig`, so this function trusts a defined input to already
+ * parse cleanly.
+ */
+export function isAttributionEnforcementActive(
+  cutover: string | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (cutover === undefined) return false;
+  return Date.parse(cutover) <= now.getTime();
+}
+
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
 const SELF_HOST_GATE_KEYS = [
   'skill_relink_preflight',
@@ -639,7 +684,7 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
     return { type: 'validation_error', message: 'harness_self_host must be an object' };
   }
   const obj = raw as Record<string, unknown>;
-  const allowed = new Set(['activation', 'version_freeze', ...SELF_HOST_GATE_KEYS]);
+  const allowed = new Set(['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', ...SELF_HOST_GATE_KEYS]);
   for (const k of Object.keys(obj)) {
     // Reject unknown keys so a typo'd gate name surfaces instead of silently
     // leaving that gate at its (enabled) default — TR-11 negative path.
@@ -669,6 +714,54 @@ function validateSelfHostBlock(raw: unknown): ConfigError | null {
         message: `harness_self_host.${k} must be a boolean`,
       };
     }
+  }
+  if (obj.auth_park_timeout_minutes !== undefined && typeof obj.auth_park_timeout_minutes !== 'number') {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.auth_park_timeout_minutes must be a number',
+    };
+  }
+  if (obj.build_auth !== undefined) {
+    const err = validateBuildAuthBlock(obj.build_auth);
+    if (err) return err;
+  }
+  return null;
+}
+
+function validateBuildAuthBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'harness_self_host.build_auth must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['mode', 'token_path']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in harness_self_host.build_auth: "${k}"`,
+      };
+    }
+  }
+  if (obj.mode !== undefined) {
+    if (typeof obj.mode !== 'string') {
+      return {
+        type: 'validation_error',
+        message: `harness_self_host.build_auth.mode must be a string (one of: daemon-token | api-key), got ${typeof obj.mode}`,
+      };
+    }
+    const validModes = new Set(['daemon-token', 'api-key']);
+    if (obj.mode === '' || !validModes.has(obj.mode)) {
+      return {
+        type: 'validation_error',
+        message: `harness_self_host.build_auth.mode must be one of: daemon-token | api-key, got "${obj.mode}"`,
+      };
+    }
+  }
+  if (obj.token_path !== undefined && typeof obj.token_path !== 'string') {
+    return {
+      type: 'validation_error',
+      message: 'harness_self_host.build_auth.token_path must be a string',
+    };
   }
   return null;
 }
@@ -731,6 +824,72 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
       }
     }
   }
+  return null;
+}
+
+/**
+ * Validate the `build_progress:` block (intra-step build progress event
+ * cadence knobs). Fail-closed: nonsense values are rejected outright rather
+ * than silently coerced to defaults, since these knobs control operator-
+ * facing stall detection — a bad value should surface loudly at config-load
+ * time, not swallow itself into a default that masks the mistake.
+ */
+function validateBuildProgressBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'build_progress must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in build_progress: "${k}"` };
+    }
+  }
+  if (obj.poll_seconds !== undefined) {
+    if (typeof obj.poll_seconds !== 'number' || !Number.isFinite(obj.poll_seconds) || obj.poll_seconds <= 0) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.poll_seconds must be a positive number',
+      };
+    }
+  }
+  if (obj.quiet_minutes !== undefined) {
+    if (typeof obj.quiet_minutes !== 'number' || !Number.isFinite(obj.quiet_minutes) || obj.quiet_minutes <= 0) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.quiet_minutes must be a positive number',
+      };
+    }
+  }
+  if (obj.heartbeat_minutes !== undefined) {
+    if (
+      typeof obj.heartbeat_minutes !== 'number' ||
+      !Number.isFinite(obj.heartbeat_minutes) ||
+      obj.heartbeat_minutes <= 0
+    ) {
+      return {
+        type: 'validation_error',
+        message: 'build_progress.heartbeat_minutes must be a positive number',
+      };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'build_progress.enabled must be a boolean' };
+  }
+
+  // Cross-field: the poll cadence must not exceed the quiet/stall window, or
+  // a step could be declared stalled before it was ever polled once.
+  if (
+    typeof obj.poll_seconds === 'number' &&
+    typeof obj.quiet_minutes === 'number' &&
+    obj.poll_seconds > obj.quiet_minutes * 60
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.quiet_minutes (${obj.quiet_minutes}m = ${obj.quiet_minutes * 60}s)`,
+    };
+  }
+
   return null;
 }
 
@@ -1138,4 +1297,44 @@ export async function resolveMemoryProvider(
   }
 
   return registry.tryGet('memory_provider', 'local');
+}
+
+/**
+ * Fully resolved build_progress config — all fields required. Every field
+ * falls back to its documented default when absent from the source config.
+ */
+export type ResolvedBuildProgressConfig = Required<BuildProgressConfig>;
+
+const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
+  poll_seconds: 30,
+  quiet_minutes: 15,
+  heartbeat_minutes: 5,
+  enabled: true,
+};
+
+/**
+ * Resolve the `build_progress:` block from `config`, filling in defaults for
+ * any unset field. A wholly absent block resolves to all defaults
+ * (poll_seconds: 30, quiet_minutes: 15, heartbeat_minutes: 5, enabled: true).
+ * Never throws — unknown/malformed inputs simply fall back to defaults for
+ * the affected field.
+ *
+ * @param config - The HarnessConfig (or partial) to read `build_progress` from.
+ */
+export function resolveBuildProgressConfig(
+  config: Pick<HarnessConfig, 'build_progress'>,
+): ResolvedBuildProgressConfig {
+  const buildProgress = config.build_progress;
+
+  if (!buildProgress) {
+    return { ...BUILD_PROGRESS_DEFAULTS };
+  }
+
+  return {
+    poll_seconds: buildProgress.poll_seconds ?? BUILD_PROGRESS_DEFAULTS.poll_seconds,
+    quiet_minutes: buildProgress.quiet_minutes ?? BUILD_PROGRESS_DEFAULTS.quiet_minutes,
+    heartbeat_minutes:
+      buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
+    enabled: buildProgress.enabled ?? BUILD_PROGRESS_DEFAULTS.enabled,
+  };
 }

@@ -23,6 +23,12 @@ import { fileURLToPath } from 'url';
 // Never fork real git/execa (WorktreeManager etc. consume it transitively).
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
+// Mock the build auth preflight check so tests don't fail on missing token.
+// The real tests for this function are in build-auth-preflight.test.ts.
+vi.mock('../../../src/engine/self-host/build-auth-preflight.js', () => ({
+  preflightBuildAuthCheck: vi.fn().mockResolvedValue(undefined),
+}));
+
 import type { ConductState } from '../../../src/types/index.js';
 import type { StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';

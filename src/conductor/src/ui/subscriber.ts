@@ -36,6 +36,8 @@ export class TerminalSubscriber implements UISubscriber {
       'feature_complete',
       'auto_heal',
       'mode_skip',
+      'build_progress',
+      'build_no_progress',
       'build_stall',
     ];
 

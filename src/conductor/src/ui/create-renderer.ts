@@ -202,6 +202,34 @@ export function createRenderer(
       case 'checkpoint_reached':
         region.log(chalk.dim(`\n── Checkpoint: ${event.step} complete ──`));
         break;
+
+      case 'build_progress': {
+        const task = event.currentTaskId
+          ? ` — ${event.currentTaskId}${event.currentTaskName ? ` ${event.currentTaskName}` : ''}`
+          : '';
+        region.log(
+          chalk.cyan(`  ⠿ ${event.step} — progress ${event.resolved}/${event.total}${task}`),
+        );
+        break;
+      }
+
+      case 'build_no_progress': {
+        const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
+        region.log(
+          chalk.yellow(
+            `  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${event.resolved}/${event.total})${task}`,
+          ),
+        );
+        break;
+      }
+
+      case 'build_stall':
+        region.log(
+          chalk.bold.red(
+            `  ⛔ ${event.step} — build stalled (${event.reason}): ${event.resolvedBefore}→${event.resolvedAfter} resolved`,
+          ),
+        );
+        break;
     }
   };
 }

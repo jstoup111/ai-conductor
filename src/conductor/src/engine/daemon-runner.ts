@@ -19,6 +19,8 @@ import {
   type GhRunner,
 } from './pr-labels.js';
 import type { FinishChoice } from './artifacts.js';
+import type { TriageOutcome } from './setup-triage.js';
+import { SetupFailureError } from './worktree-prepare.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -37,6 +39,13 @@ export interface WorktreeOutcome {
    * skips the shipped-record commit for those choices (#204, #205).
    */
   finishChoice?: FinishChoice;
+  /**
+   * Setup-failure triage evidence: outcome of the triage engine when a
+   * SetupFailureError is caught in daemon mode. Contains classification
+   * and diagnostics (tree state, quarantine info, output tail) for routing
+   * and human inspection.
+   */
+  triageEvidence?: TriageOutcome;
 }
 
 export interface FeatureWorktree {
@@ -133,6 +142,28 @@ export interface FeatureRunnerDeps {
     projectRoot: string;
     failureReason: string;
   }) => Promise<{ prUrl?: string }>;
+  /**
+   * Task 13: Setup-failure triage handler (daemon mode only). When a
+   * SetupFailureError is caught during prepareWorktree and daemon mode is
+   * enabled, route it here for classification. Returns 'park' to error the
+   * feature, or 'quarantined-pass' to continue to runConductor.
+   */
+  runSetupTriage?: (error: SetupFailureError, worktree: FeatureWorktree, item: BacklogItem) => Promise<TriageOutcome>;
+  /**
+   * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
+   * Called once triage settles on a non-park outcome, BEFORE the worktree is
+   * handed to `runConductor`. Writes `.pipeline/QUARANTINE` in the worktree
+   * when a quarantine ref is live (this rotation or a prior one) so the
+   * dispatched agent can see the ref, preserved paths, and recovery guidance.
+   * Optional; absent → no sentinel is written (backward-compatible). Fail-open
+   * by contract of the real implementation — daemon-runner also guards the
+   * call so a thrown error never blocks dispatch.
+   */
+  surfaceQuarantineRef?: (
+    worktree: FeatureWorktree,
+    slug: string,
+    outcome: TriageOutcome,
+  ) => Promise<void>;
 }
 
 /**
@@ -199,7 +230,55 @@ export function makeRunFeature(
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any
       // other primitive throw (worktree kept, feature errored).
-      if (deps.prepareWorktree) await deps.prepareWorktree(worktree);
+      if (deps.prepareWorktree) {
+        try {
+          await deps.prepareWorktree(worktree);
+        } catch (prepareErr) {
+          // Check if error is a SetupFailureError (by name and presence of outputTail)
+          const isSetupFailure = prepareErr instanceof Error &&
+            (prepareErr.name === 'SetupFailureError' || (prepareErr.constructor?.name === 'SetupFailureError')) &&
+            typeof (prepareErr as any).outputTail === 'string';
+          if (
+            isSetupFailure &&
+            deps.daemon &&
+            deps.runSetupTriage
+          ) {
+            // Daemon mode with triage handler: classify and route the failure
+            const triageOutcome = await deps.runSetupTriage(prepareErr as SetupFailureError, worktree, item);
+            if (triageOutcome.kind === 'park') {
+              // Triage returned park: error outcome, worktree kept
+              log(
+                `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
+              );
+              await writeErrorHalt(worktree, triageOutcome.outputTail, log, triageOutcome);
+              await deps.teardownWorktree(worktree, true);
+              return {
+                slug: item.slug,
+                status: 'error',
+                reason: triageOutcome.outputTail || 'setup failed and parked after triage',
+              };
+            }
+            // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
+            log(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
+
+            // Task 14 (TS-5): surface quarantine evidence to the resuming build
+            // agent before dispatch. Fail-open — a surfacing failure must never
+            // block the build; it is diagnostic only.
+            if (deps.surfaceQuarantineRef) {
+              try {
+                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome);
+              } catch (err) {
+                log(
+                  `[daemon-runner] quarantine surfacing error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            }
+          } else {
+            // Not a SetupFailureError, or daemon=false, or no triage handler: today's path
+            throw prepareErr;
+          }
+        }
+      }
       await deps.runConductor(worktree, item);
       const outcome = await deps.readOutcome(worktree);
 
@@ -280,7 +359,7 @@ export function makeRunFeature(
         const reason = failureReasonForFalseShip(outcome);
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -326,7 +405,12 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      await writeErrorHalt(worktree, noMarkerReason);
+      // If triage evidence is present (and it's a park outcome), pass it to writeErrorHalt
+      const triageEvidenceForHalt =
+        outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
+          ? outcome.triageEvidence
+          : undefined;
+      await writeErrorHalt(worktree, noMarkerReason, log, triageEvidenceForHalt);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -343,7 +427,7 @@ export function makeRunFeature(
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
       if (worktree) {
-        await writeErrorHalt(worktree, reason);
+        await writeErrorHalt(worktree, reason, log);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -361,15 +445,48 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktree: FeatureWorktree, reason: string): Promise<void> {
-  const note =
-    `feature errored — parked for human inspection\n${reason}\n\n` +
-    `Resume procedure:\n` +
+async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
+  let note = `feature errored — parked for human inspection\n${reason}\n`;
+
+  // If triage evidence is present and it's a park outcome, render extended diagnostics
+  const triage = triageEvidence as any;
+  if (triage && typeof triage === 'object' && triage.kind === 'park') {
+    note += `\n──── Triage Evidence ────\n`;
+
+    // Output tail
+    if (triage.outputTail) {
+      note += `\nOutput tail:\n${triage.outputTail}\n`;
+    }
+
+    // Quarantine ref or explicit no-quarantine statement
+    if (triage.quarantineRef) {
+      note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
+    } else {
+      note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
+    }
+
+    // Contract outcome
+    if (triage.contractOutcome) {
+      note += `\nContract outcome: ${triage.contractOutcome}\n`;
+    }
+
+    // Dirty paths left behind by an unverifiable half-fix
+    if (Array.isArray(triage.preservedPaths) && triage.preservedPaths.length > 0) {
+      note += `\nDirty paths after fix-session:\n${triage.preservedPaths.map((p: string) => `  - ${p}`).join('\n')}\n`;
+    }
+  }
+
+  note +=
+    `\nResume procedure:\n` +
     `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
     `  2. rm .pipeline/HALT\n` +
     `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch(() => {});
-  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch(() => {});
+  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch((err) => {
+    if (log) log(`[daemon-runner] HALT mkdir error: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch((err) => {
+    if (log) log(`[daemon-runner] HALT write error: ${err instanceof Error ? err.message : String(err)}`);
+  });
 }
 
 /**

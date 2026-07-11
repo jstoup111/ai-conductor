@@ -38,6 +38,7 @@ import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
 import { createEngineerStoreReader } from '../engineer-store.js';
+import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { routeIdea, createOnNoFit } from './routing.js';
 import { resolveTargetRepo } from './target.js';
 import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
@@ -401,7 +402,7 @@ async function processIdea(
             await execFile(
               'git',
               ['commit', '-m', 'chore: engineer scaffold initial commit'],
-              { cwd: path },
+              { cwd: path, env: withEngineCommitEnv() },
             );
           },
           registryReader,

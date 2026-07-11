@@ -20,6 +20,7 @@ import {
   renderShippedRecord,
   writeShippedRecord,
 } from './shipped-record.js';
+import { withEngineCommitEnv } from './engine-commit-env.js';
 
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
@@ -109,7 +110,10 @@ export async function dispatchShippedRecord(
       reject: false,
     });
     if (staged.exitCode !== 0) {
-      await execa('git', ['commit', '-m', `shipped record: ${slug}`, '--no-verify'], { cwd });
+      await execa('git', ['commit', '-m', `shipped record: ${slug}`, '--no-verify'], {
+        cwd,
+        env: withEngineCommitEnv(),
+      });
       console.error(`  ✓ shipped record committed: ${relPath}`);
     } else {
       console.error(`  ✓ shipped record already committed: ${relPath}`);

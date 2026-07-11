@@ -1207,4 +1207,114 @@ TIER: M`,
       expect(result.success).toBe(false);
     });
   });
+
+  describe('resolveSetupFailure one-shot dispatch', () => {
+    it('assembles a fresh session with uuid and calls provider with output tail in prompt', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      const result = await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'npm ERR! Something went wrong',
+        slug: 'my-feature',
+      });
+
+      expect(result.attempted).toBe(true);
+      expect(invoke).toHaveBeenCalledOnce();
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      // Must be a fresh session, not the constructor's session
+      expect(opts.sessionId).not.toBe('session-1');
+      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      // Must use resume:false for fresh session
+      expect(opts.resume).toBe(false);
+      // Prompt must contain the output tail
+      expect(opts.prompt).toContain('npm ERR! Something went wrong');
+      // System prompt must be present
+      expect(opts.systemPrompt).toBeTruthy();
+    });
+
+    it('respects the AI_CONDUCTOR_NO_REAL_EXEC kill-switch in tests', async () => {
+      const originalEnv = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      try {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+        const invoke = vi.fn().mockResolvedValue({
+          success: true,
+          output: 'done',
+          exitCode: 0,
+        });
+        const provider: LLMProvider = {
+          invoke,
+          invokeInteractive: vi.fn().mockResolvedValue(undefined),
+        };
+        const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+        const result = await runner.resolveSetupFailure({
+          worktreePath: '/wt/feature-x',
+          outputTail: 'error output',
+          slug: 'my-feature',
+        });
+
+        expect(result.attempted).toBe(true);
+      } finally {
+        if (originalEnv !== undefined) {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = originalEnv;
+        } else {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        }
+      }
+    });
+
+    it('passes dangerouslySkipPermissions=true like other one-shot fix-session patterns', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'error',
+        slug: 'my-feature',
+      });
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.dangerouslySkipPermissions).toBe(true);
+    });
+
+    it('sets cwd to the worktreePath', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.resolveSetupFailure({
+        worktreePath: '/wt/feature-x',
+        outputTail: 'error',
+        slug: 'my-feature',
+      });
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.cwd).toBe('/wt/feature-x');
+    });
+  });
 });

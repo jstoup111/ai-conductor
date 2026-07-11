@@ -44,6 +44,7 @@ import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { writeTrackMarker } from './track-marker.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
+import { withEngineCommitEnv } from '../engine-commit-env.js';
 
 const execFile = promisify(execFileCb);
 
@@ -586,7 +587,7 @@ export async function runAuthoring(
     await execFile(
       'git',
       ['commit', '-m', `spec: author artifacts for "${idea}" [engineer/runAuthoring]`],
-      { cwd: repoPath },
+      { cwd: repoPath, env: withEngineCommitEnv() },
     );
   } catch (err) {
     // Restore HEAD to defaultBranch and clean up the dangling branch.

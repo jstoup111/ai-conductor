@@ -126,6 +126,14 @@ correct commit no longer depends on me remembering trailer grammar (kills #433 C
 - Given `task-status.json` is corrupt JSON, when the fallback path is consulted, then the hook
   abstains cleanly (exit 0, message unchanged) — a broken sidecar must never block commits.
 
+> **Scope note (2026-07-10, #505):** the abstain scenarios above describe `prepare-commit-msg`
+> (the STAMPING hook) and remain authoritative for it: it never blocks. Whether the resulting
+> untrailered commit ultimately *lands* is now conditional — when attribution enforcement is
+> active (`attribution_enforcement_cutover` passed AND `.pipeline/build-step-active` present),
+> `commit-msg` rejects an untrailered non-empty commit per
+> `adr-2026-07-10-inline-work-attribution-enforcement` (Surface A). With enforcement inactive
+> (the default), behavior is exactly as written here.
+
 ### Done When
 - [ ] In a hook-wired test worktree: untrailered commit gains `Task: 7`; pre-trailered commit
       unchanged; fallback stamps unique `in_progress`; 0-and-2-in_progress abstains; amend and
@@ -220,6 +228,13 @@ harness files, and the operator's primary checkout is never affected.
 ---
 
 ## Story 7: Pipeline SKILL step 0 delegates to the CLI
+
+> **SUPERSEDED (2026-07-10, #477):** the orchestrator-invokes-the-CLI contract below is
+> superseded by `adr-2026-07-10-session-hook-task-stamping` — engine-installed session hooks
+> now perform the stamp/flip mechanically at subagent dispatch, and SKILL.md step 0 becomes
+> documentation of that machinery plus the line-1 `Task: <id>` / `Task: none` dispatch-prompt
+> contract. The CLI itself remains (operator/recovery use). See
+> `.docs/stories/engine-must-invoke-task-start-done-at-subagent-dis.md` Story 7.
 
 As the harness maintainer, I want the pipeline orchestrator's task bookkeeping reduced to one
 deterministic CLI call so that the last hand-edited attribution surface disappears.

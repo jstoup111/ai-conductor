@@ -202,6 +202,8 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
         resolvedBefore: 0,
         resolvedAfter: 0,
       },
+      { type: 'build_progress', step: 'build', resolved: 5, total: 21 },
+      { type: 'build_no_progress', step: 'build', quietMinutes: 15, resolved: 5, total: 21 },
       { type: 'renderer_error', rendererName: 'tty', error: 'boom' },
       { type: 'when_skip', step: 'build', expression: '${x}', undefinedKey: 'x' },
       { type: 'parallel_started', step: 'build', branches: ['a', 'b'] },
@@ -245,7 +247,14 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'rate_limit',
       'session_reset',
     ]);
-    const expected = new Set([...previousRenderingTypes, 'navigation_back', 'ci_failed']);
+    const expected = new Set([
+      ...previousRenderingTypes,
+      'navigation_back',
+      'ci_failed',
+      'build_progress',
+      'build_no_progress',
+      'build_stall',
+    ]);
 
     expect(renderingTypes).toEqual(expected);
   });

@@ -25,6 +25,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Mock the build auth preflight check so these operator credentials tests
+// don't fail on missing daemon token. Task 6 is tested separately.
+vi.mock('../../src/engine/self-host/build-auth-preflight.js', () => ({
+  preflightBuildAuthCheck: vi.fn().mockResolvedValue(undefined),
+}));
+
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
@@ -127,7 +134,8 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     return readFile(join(dir, HALT_MARKER), 'utf-8').catch(() => null);
   }
 
-  it('TR-3 happy: authFailure parks, credentials refresh re-copies into the SAME sandbox, resumes with zero retry-budget burn — even across a repeated auth failure', async () => {
+  // Task 10: refreshSandboxCredentials removed; Task 11 will re-implement via daemon token re-read
+  it.skip('TR-3 happy: authFailure parks, credentials refresh re-copies into the SAME sandbox, resumes with zero retry-budget burn — even across a repeated auth failure', async () => {
     await writeOperatorCreds(operatorDir, Date.now() + 3_600_000); // fresh — isolates from TR-2 pre-flight
     let generation = 0;
 

@@ -18,11 +18,13 @@ import {
   provisionSandboxBuildEnv,
   withSandboxBuildEnv,
   sandboxLinkTargets,
-  refreshSandboxCredentials,
   SandboxProvisionError,
   realSandboxFs,
   type SandboxFs,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
+// Task 10 & 11: refreshSandboxCredentials must not be exported
+// (Task 11 implements re-reading the daemon token on park-resume instead)
+import * as sandboxBuildEnvModule from '../../../src/engine/self-host/sandbox-build-env.js';
 
 // Phase 3 (TR-5/TR-6) — the safety core. A harness self-build must run against a
 // THROWAWAY CLAUDE_CONFIG_DIR linked to its worktree, and must NEVER mutate the
@@ -110,16 +112,12 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     }
   });
 
-  it('copies the operator credentials into the sandbox so the headless build can authenticate — as a COPY, not a symlink to global (TR-6)', async () => {
+  it('sandbox does NOT copy operator credentials — auth via CLAUDE_CODE_OAUTH_TOKEN injection instead', async () => {
     await writeFile(join(globalConfig, '.credentials.json'), '{"token":"secret"}');
     const sandbox = await provisionSandboxBuildEnv(opts());
     try {
       const credPath = join(sandbox.configDir, '.credentials.json');
-      expect(existsSync(credPath)).toBe(true);
-      expect(await readFile(credPath, 'utf-8')).toBe('{"token":"secret"}');
-      // It is a real file, not a symlink resolving back into global config.
-      expect((await lstat(credPath)).isSymbolicLink()).toBe(false);
-      expect((await realpath(credPath)).startsWith(await realpath(globalConfig))).toBe(false);
+      expect(existsSync(credPath)).toBe(false);
     } finally {
       await sandbox.teardown();
     }
@@ -374,39 +372,6 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
     expect(await readFile(stateFile, 'utf-8')).toBe(before);
   });
 
-  // ── Re-copy primitive (refreshSandboxCredentials) ──────────────────────────
-  // After provisioning a sandbox, the operator's credentials may be updated
-  // (e.g., token refresh). refreshSandboxCredentials re-copies the source
-  // .credentials.json into the sandbox, overwriting stale credentials.
-
-  it('refreshSandboxCredentials re-copies .credentials.json from source to sandbox, overwriting with new content', async () => {
-    // Initial credentials in global config.
-    const sourceCredsPath = join(globalConfig, '.credentials.json');
-    await writeFile(sourceCredsPath, '{"token":"old-token"}');
-
-    // Provision a sandbox with the initial credentials.
-    const sandbox = await provisionSandboxBuildEnv(opts());
-    try {
-      const sandboxCredsPath = join(sandbox.configDir, '.credentials.json');
-      expect(existsSync(sandboxCredsPath)).toBe(true);
-      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"old-token"}');
-
-      // Mutate the source credentials (simulating an operator token refresh).
-      await writeFile(sourceCredsPath, '{"token":"new-token"}');
-
-      // Re-copy from source to sandbox.
-      await refreshSandboxCredentials(globalConfig, sandbox.configDir);
-
-      // Sandbox credentials are now updated to the new value.
-      expect(await readFile(sandboxCredsPath, 'utf-8')).toBe('{"token":"new-token"}');
-
-      // It is a regular file, not a symlink (TR-6).
-      expect((await lstat(sandboxCredsPath)).isSymbolicLink()).toBe(false);
-      expect((await lstat(sandboxCredsPath)).isFile()).toBe(true);
-    } finally {
-      await sandbox.teardown();
-    }
-  });
 
   // ── Write-fence provisioning (TR-4) ─────────────────────────────────────────
   // The sandbox provisions a write-fence script that blocks edits to the live
@@ -503,6 +468,13 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
 
     expect(existsSync(scriptPath)).toBe(false);
     expect(existsSync(sandbox.configDir)).toBe(false);
+  });
+
+  // Task 10: refreshSandboxCredentials must not be exported.
+  // The park-resume path (Task 11) re-reads the daemon token instead of
+  // re-copying stale credentials.
+  it('does not export refreshSandboxCredentials (Task 10, Task 11 pairing)', () => {
+    expect('refreshSandboxCredentials' in sandboxBuildEnvModule).toBe(false);
   });
 });
 

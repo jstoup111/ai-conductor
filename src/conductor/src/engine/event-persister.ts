@@ -38,6 +38,8 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'dashboard_refresh',
   'auto_heal',
   'mode_skip',
+  'build_progress',
+  'build_no_progress',
   'build_stall',
   'renderer_error',
   'when_skip',

@@ -181,6 +181,51 @@ The finish/as-built hooks matter most on the **technical track**, which skips `p
 entirely — before them, those gates dead-ended in a `failed in auto mode` HALT even when the
 gap was routable.
 
+**Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
+`.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
+`Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
+and routes through `/remediate` before halting:
+
+- **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
+  reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
+  `writeStallQuestionEvidence(this.projectRoot, question)` persists it to
+  `.pipeline/build-stall-question.md` (substituting a placeholder line for empty/whitespace-only
+  questions) and returns the effective question used downstream. `clearHaltMarker` then removes
+  the marker so the retry loop doesn't re-trip on it.
+- **Dispatch `/remediate`** — the conductor calls `this.planRemediation(state, steps, prompt,
+  { source: 'build_stall' | 'build-stall', evidenceFile })` (two call sites: one immediately at
+  stall detection, one later in the retry loop keyed off the saved `stallQuestion`). The planner
+  reasons over the question plus committed artifacts (plan, stories, ADRs, task-status, prior
+  commits) to determine if it's answerable without more human input.
+- **Answerable → in-loop resume, no retry burned** — if `/remediate` returns a `route` outcome
+  targeting `build`, the conductor executes `retryHint = outcome.hint; attempt--; continue;` —
+  the answer becomes the retry hint, the attempt counter is decremented before the loop's
+  increment, and the loop `continue`s, so this round doesn't count against the step's retry
+  budget (same no-burn idiom as `sessionExpired` and auth-park failures). The build proceeds
+  with the answer as context.
+- **Unanswerable → HALT carrying question** — if `/remediate` returns a `halt` outcome
+  (category: `architectural-clarity`, `product-scope`, or `unanswerable`), the conductor writes
+  `.pipeline/HALT` with the original question preserved verbatim, either inline
+  (`effectiveQuestion + '\n\n' + outcome.detail`) at the first call site or via the
+  `writeStallHalt(this.projectRoot, stallQuestion, detail)` helper (`engine/task-progress.ts`) at
+  the second — both paths keep the question as the first line a human sees.
+- **Fail-safe (unconditional)** — if the remediation dispatch throws, returns `none`
+  (malformed/stale `.pipeline/remediation.json` or all dispositions dropped by validation), or a
+  misrouted `route` targets something other than `build`, or the `remediationRounds` budget is
+  already exhausted before dispatch, the conductor writes `.pipeline/HALT` **carrying the
+  question verbatim** via the same inline-or-`writeStallHalt` paths and halts. Under no path may
+  the question be lost.
+- **Budget** — stall remediations share the existing `remediationRounds` counter capped at
+  `MAX_KICKBACKS_PER_GATE` (`conductor.ts`, currently **2**) — the same counter also bounds
+  `/remediate` dispatches for blocking `prd_audit` gaps, so a run with both a build stall and a
+  prd-audit gap draws from one shared pool. Once exhausted, subsequent stalls degrade straight to
+  fail-safe HALT without a dispatch attempt.
+
+See `src/conductor/src/engine/task-progress.ts` (`readHaltMarkerContent`,
+`writeStallQuestionEvidence`, `writeStallHalt`, `clearHaltMarker`), `engine/artifacts.ts` (output
+contract for `build_stall` dispositions), and `src/conductor/README.md` → "Agentic remediation"
+above for the `/remediate` skill contract.
+
 **Daemon prd-audit fallback routing (gap-class aware).** In an interactive run a blocking
 `prd_audit` escalates to the recovery menu, where the human picks where to route. In a daemon
 run with no usable `/remediate` plan (or an exhausted remediation budget), the conductor
@@ -576,6 +621,50 @@ mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
 `src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
 `test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
 
+#### Attribution enforcement: inline build-work commits (#505)
+
+A Claude session driving a build step can commit or mutate files directly, bypassing
+the per-task subagent dispatch the pipeline uses to stamp a `Task: <id>` commit
+trailer. Inline build-work attribution enforcement adds two engine-owned gate
+surfaces (documented for orchestrators in `skills/pipeline/SKILL.md`, not a new
+orchestrator instruction):
+
+- **Surface A — commit-msg gate** (`git-hook-assets.ts` → `COMMIT_MSG_HOOK`). Rejects
+  an unattributed build-step commit: no `Task:` trailer while
+  `.pipeline/build-step-active` is present.
+- **Surface B — session mutation gate** (`session-hook-assets.ts` →
+  `MUTATION_GATE_HOOK`). A `PreToolUse` hook wired to `Edit|Write|NotebookEdit|Bash`
+  that blocks a direct mutation (or a `git commit` invocation) issued in the
+  orchestrator session — outside a stamped subagent dispatch — while a build step is
+  active.
+
+Both surfaces gate on the same predicate: `attribution_enforcement_cutover` (project
+config), read via `isAttributionEnforcementActive` / `isEnforcementConfigured`
+(`src/engine/attribution-enforcement.ts`, `src/engine/config.ts`). Absent or a future
+instant → enforcement inactive, both hooks pass through unchanged (pre-feature
+behavior). A past ISO-8601 instant → enforcement active for build steps dispatched
+after that instant. The value is read once at daemon/conductor start — **changing it
+requires an engine restart** to take effect.
+
+**Exemption matrix (both surfaces short-circuit before rejecting):**
+
+1. **Merge commits** — `MERGE_HEAD` present; a merge commit legitimately lacks a
+   `Task:` trailer.
+2. **Amend of a pre-enforcement commit** — `COMMIT_SOURCE`/invoking-command detection
+   (`--amend`) abstains rather than restamping or rejecting an old commit.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
+   intentional evidence-only commit is accepted; an empty commit with neither a
+   `Task:` trailer nor a resolvable `Evidence:` trailer is rejected.
+
+Rebase replay and `CONDUCT_ENGINE_COMMIT=1` (engine bookkeeping commits) are
+additional commit-msg-gate-only abstentions. An unparseable hook payload fails open
+(exit 0) on both surfaces, matching the #494 degradation rule.
+
+See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
+`src/engine/session-hook-assets.ts`, `test/engine/attribution-enforcement.test.ts`,
+`adr-2026-07-10-session-hook-task-stamping.md`, and
+`adr-2026-07-10-inline-work-attribution-enforcement.md`.
+
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
 PR #109 made the durable `.pipeline/HALT` marker authoritative at discovery, so a parked
@@ -619,7 +708,11 @@ things on top of that, without a parallel dispatch path:
   `prd_audit`) re-verifies against the **advanced base** rather than the stale one. If the
   rebase re-conflicts on the new base, the feature re-parks via 9.0's existing HALT path
   (bounded by the same last-rekick SHA); residual gaps route through the normal gate loop /
-  `/remediate`, not the re-kick code.
+  `/remediate`, not the re-kick code. **Shared-helper invariant (#436):** the pre-loop path
+  (`resumeRebaseFirst`) and the in-loop path (`runRebaseStep`) both call the same
+  `recordRebaseStepCompletion` helper on a satisfied rebase, so `state.rebase` is stamped
+  consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
+  the rebase step silently unmarked.
 
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
@@ -1423,6 +1516,86 @@ subscriber serializes them generically.
 The contract is additive — new event types may be introduced without breaking existing
 subscribers. Subscribers receive only events they register for via `emitter.on(type, ...)`.
 
+### Intra-step build progress & stall events (adr-2026-07-10-intra-step-build-progress-events)
+
+Between `step_started` and `step_completed` for the `build` step, `BuildProgressWatcher`
+(`engine/build-progress-watcher.ts`) polls a tolerant snapshot of build state and emits
+change-driven progress/stall events on the same `ConductorEventEmitter` bus every other
+event travels — no new transport, no new subscriber-registration mechanism.
+
+#### Events (`types/events.ts`)
+
+- **`build_progress`** — `{ step, resolved, total, currentTaskId?, currentTaskName?,
+  commitCount?, noEvidenceAttempts?, featureSlug? }`. Emitted only when something
+  changed: a resolved/total delta, a new current task, a new commit on `HEAD` with no
+  task delta, or a bare `noEvidenceAttempts` bump. An unchanged tick emits nothing.
+  `commitCount` is populated via `git rev-list --count <old>..<new>` when `HEAD` moved
+  (best-effort — omitted if that probe fails).
+- **`build_no_progress`** — `{ step, quietMinutes, resolved, total, currentTaskId?,
+  lastCommitAt?, featureSlug? }`. A quiet-episode warning once `quiet_minutes` elapse
+  with no observed task-status change. Distinct from `build_stall` (a stronger, terminal
+  signal).
+- **`build_stall`** — `{ step, reason: 'no_task_progress' | 'halt_marker',
+  resolvedBefore, resolvedAfter }`.
+
+#### `readSnapshot` / watcher tolerance
+
+`readSnapshot(projectRoot)` and the watcher's internal tick both read
+`.pipeline/task-status.json` (via `normalizeTasks`, tolerating both the `{tasks: [...]}`
+shape and the legacy id-keyed map), `.pipeline/task-evidence.json` (via
+`readNoEvidenceAttempts`), and `git rev-parse HEAD` in `projectRoot`. Every source is
+best-effort: a missing/corrupt task-status file yields the "no data" snapshot (or, on the
+watcher's polling hot path, skips the tick entirely) rather than throwing; a failed git
+probe simply omits `head`. Callers never see these reads throw.
+
+#### Watcher lifecycle
+
+Constructed once per build-step attempt with `{ projectRoot, events, step, featureSlug?,
+config? }`; `start()` begins polling on `poll_seconds` (timer `.unref()`'d so it never
+keeps the process alive on its own), `stop()` — idempotent, safe even if `start()` was
+never called — tears it down. The conductor wires `start()`/`stop()` around the build
+step's await in a `try/finally` so a watcher can never leak past step completion or
+failure.
+
+#### Config (`build_progress:` key, `types/config.ts` `BuildProgressConfig`)
+
+```yaml
+build_progress:
+  poll_seconds: 30       # default: 30
+  quiet_minutes: 15      # default: 15
+  heartbeat_minutes: 5   # default: 5
+  enabled: true          # default: true
+```
+
+Resolved via `resolveBuildProgressConfig()` (`engine/config.ts`) — every field is
+independently defaulted, so a partial block never silently zeroes out an unspecified
+knob. `enabled: false` is a full escape hatch: the watcher's `start()` becomes a no-op.
+Validation is fail-closed (malformed values are rejected at config load, not at watcher
+construction).
+
+#### Per-subscriber rendering
+
+- **daemon.log** (`daemon-cli.ts`) — `build_progress` renders as a cyan `▶` heartbeat
+  (`step resolved/total — task · slug`); `build_no_progress` as a yellow `⚠` quiet-episode
+  line; `build_stall` as a red `✋` stall line with the reason and before/after counts.
+- **TTY dashboard** (`ui/create-renderer.ts`) — analogous progress/no-progress/stall lines
+  rendered into the live region, distinct glyphs (`⠿`/`⚠`/`⛔`) and colors per kind.
+- **OTel exporter** (`engine/otel/span-manager.ts` — `onBuildProgress`,
+  `onBuildNoProgress`, `onBuildStall`) — each event is recorded as a span event
+  (`addEvent`) on the currently active step span, with the event's fields as span
+  attributes. A no-op (single warning, no throw) when no span is available for the step —
+  `otel-visualizer.ts` registers all three kinds alongside the existing gate-loop events.
+- **Event persister** (`engine/event-persister.ts`) — all three kinds are added to the
+  persisted-kind allowlist and written to `.pipeline/events.jsonl` like every other
+  conductor event, with a subscriber-list drift guard so a future new kind can't silently
+  bypass persistence.
+- **UI subscriber fan-out** (`ui/subscriber.ts`) — all three kinds are forwarded to every
+  registered `ui_renderer` plugin, not just the default terminal one.
+
+Tests: `test/build-progress-watcher.test.ts`, `test/build-progress-events.test.ts`,
+`test/build-progress-config.test.ts`, `test/conductor-build-progress.test.ts`,
+`test/acceptance/emit-intra-step-build-progress-and-stall-as-events.acceptance.test.ts`.
+
 ### OpenTelemetry exporter (ADR-014)
 
 The conductor ships an optional OTel observability layer. When the `otel:` block is present
@@ -1545,6 +1718,33 @@ testable and safe to automate.
 `engine/daemon-backlog.ts` (wiring in `maybeFastForward`), test coverage in
 `test/engine/leak-triage.test.ts`.
 
+### Setup-failure triage
+
+When `bin/setup` fails during daemon worktree prepare, the daemon runs a bounded
+two-stage deterministic recovery instead of leaving the wedge for an agent to
+untangle blind:
+
+1. **Stage 1 — quarantine + retry:** if the working tree has uncommitted changes,
+   they are preserved to a quarantine branch (`wip/setup-quarantine-<slug>`) via
+   `git add -A` + commit, the tree is reset hard to clean HEAD, and `bin/setup`
+   is re-run exactly once. Success proceeds to build; failure advances to stage 2.
+2. **Stage 2 — bounded fix-session:** exactly one fresh fix-session is dispatched
+   with the setup stderr tail and an explicit success contract (`bin/setup` exits 0
+   AND the tree is clean). The engine verifies the contract mechanically — never
+   trusts the agent's self-report. Success proceeds to build; failure produces a
+   diagnostic HALT naming the error tail, the quarantine ref, and the contract
+   outcome.
+
+The `.pipeline/QUARANTINE` sentinel surfaces the preserved ref + paths to the
+resuming build agent so WIP can be recovered deliberately via
+`git show wip/setup-quarantine-<slug>`. This is daemon-only (no change to
+interactive `/conduct`) and zero-cost on the happy path (setup exit 0 ⇒ no triage).
+
+**Modules:** `engine/setup-triage.ts` (triage core, dependency-injected),
+`worktree-prepare.ts` (`SetupFailureError` classification), `daemon-runner.ts`
+(wiring at the prepare seam), `step-runners.ts` (fix-session dispatch + contract
+verification). See `.docs/decisions/adr-2026-07-09-setup-failure-triage.md`.
+
 ### Write-fence sandbox for self-host builds
 
 When a self-host daemon build runs against a throwaway sandbox `CLAUDE_CONFIG_DIR`
@@ -1648,6 +1848,91 @@ Assets include shebang (`#!/bin/bash`), error handling, and a version header for
 `engine/task-cli.ts` (task start/done logic), test coverage in `test/engine/git-hooks-attribution.test.ts`,
 `test/integration/git-hooks-attribution.test.ts`.
 
+### Session-hook task stamping at subagent dispatch (#477)
+
+Git-trailer attribution (above) proves a task's commits are load-bearing, but it only fires at
+commit time. This mechanism stamps task state a layer earlier — at the moment the daemon actually
+**dispatches** a subagent — so `in_progress`/in-flight state is engine-mechanical, not dependent on
+the dispatching agent remembering to invoke `conduct-ts task start|done` itself.
+
+#### Mechanism
+
+`prepareWorktree` (`worktree-prepare.ts`) provisions two additional steps beyond the git-hook wiring
+above, in this order: `writeGitHooksAndWire` → `writeSessionHooks` → `wireSessionHookSettings` →
+`runProjectSetup`.
+
+- **`writeSessionHooks`** writes two bash scripts, embedded as engine assets in
+  `engine/session-hook-assets.ts` (mirroring `git-hook-assets.ts`: bash + inline `node -e` only, zero
+  `dist/`/`conduct-ts` references — the #403 class of staleness bug), to
+  `.pipeline/session-hooks/pre-dispatch.sh` and `.pipeline/session-hooks/post-dispatch.sh` (mode
+  `0755`, overwritten on every provisioning pass so they stay in sync with the engine version).
+- **`wireSessionHookSettings`** merges hook wiring into the worktree's `.claude/settings.local.json`:
+  `hooks.PreToolUse` and `hooks.PostToolUse`, each with `matcher: "Task|Agent"` and a `command`
+  pointing at the absolute path of the corresponding script. The merge replaces only entries whose
+  command contains `session-hooks/` (so re-provisioning is idempotent and never duplicates entries)
+  and leaves every unrelated key untouched. A missing file is treated as `{}`; a file that exists but
+  fails to parse is renamed aside to `<path>.bak-<timestamp>` (never silently discarded) before a
+  fresh settings object is written. This step is fail-open end-to-end — any error is logged and
+  swallowed, never thrown, since hook-wiring failure must not block worktree provisioning.
+
+Both steps run unconditionally on every `prepareWorktree` call, alongside (not instead of) the
+existing git-hook wiring — the two mechanisms are complementary layers (dispatch-time stamp vs.
+commit-time trailer), not alternatives.
+
+#### Hook behavior
+
+**`pre-dispatch.sh` (`PreToolUse`, fires before a subagent runs):** reads the hook payload JSON from
+stdin (bounded read), parses **line 1 only** of `tool_input.prompt` against the exact grammar
+`Task: <id>` | `Task: none`.
+
+- `Task: none` → exit 0, pass-through, no state change.
+- `Task: <id>` where `<id>` matches a row in `.pipeline/task-status.json` → flips that row to
+  `in_progress` (temp-file + rename, atomic — replicates `runTaskStart`, `task-cli.ts`) and writes
+  `.pipeline/current-task`. If a *different* id was already stamped (overlap), that stamp is removed
+  as part of the same pass before the new one is written.
+- Unparseable payload (e.g. malformed JSON) → **fail-open**: exit 0, no state change. This mirrors
+  #452's abstain-on-unreadable-signal path.
+- Payload parses but line 1 is invalid — unknown id, no marker at all, wrong format (`Task:7`,
+  `task: 7`), or two ids on one line (`Task: 7 and Task: 8`) — → **fail-closed**: exit 2 (blocks the
+  dispatch), no state change, stderr names the problem (offending text plus, for unknown ids, the
+  valid id list). Only line 1 is ever inspected; a `Task:`-shaped token elsewhere in the prompt body
+  (e.g. commit-trailer authoring instructions) has no effect.
+
+**`post-dispatch.sh` (`PostToolUse`, fires after the subagent returns):** removes
+`.pipeline/current-task` iff its content still matches the id that was stamped for this dispatch.
+It never writes `completed` — task completion is derived solely from the evidence gate
+(`engine/artifacts.ts`, #456/#463), never from session-hook state.
+
+#### Contract with dispatch templates
+
+Every dispatch template's prompt (skills that use the `Agent`/`Task` tool to launch a subagent) MUST
+open with exactly one of `Task: <id>` or `Task: none` as its literal first line — this is what the
+hook parses. `skills/pipeline/SKILL.md`'s per-task DISPATCH step (implementation work) uses
+`Task: <id>`; non-implementation dispatch templates (evaluator/`code-review`, `/simplify`,
+micro-retro, memory-checkpoint) use `Task: none`. Getting this wrong is a fail-closed dispatch block,
+not a silent drift — the machinery, not prompt discipline, enforces the contract (see the harness's
+"Design Principles": deterministic enforcement over prompt discipline).
+
+#### `settings.local.json` ownership
+
+`.claude/settings.local.json` inside a feature worktree is **untracked and engine-managed**. The
+daemon writes/merges it on every `prepareWorktree` pass; it is never committed, never treated as
+project config, and a hand-edit made inside a build worktree will be overwritten (merged, not
+appended) by the next provisioning pass, since hook entries are matched and replaced by the
+`session-hooks/` path in their `command`.
+
+#### Fixtures and tests
+
+Hook behavior is exercised by invoking the emitted bash scripts directly with real captured
+headless dispatch payloads on stdin (`test/fixtures/session-hook-payloads/`, captured from a
+2026-07-10 spike — not synthetic shapes). Unit coverage lives in
+`test/engine/session-hook-assets.test.ts` and `test/engine/session-hook-behavior.test.ts`; chained
+integration coverage (provisioning → wiring → hook execution) follows the
+`git-hooks-attribution.test.ts` pattern in `test/integration/`.
+
+**Modules:** `engine/session-hook-assets.ts` (hook script bodies), `engine/worktree-prepare.ts`
+(`writeSessionHooks`, `wireSessionHookSettings`), test coverage as above.
+
 ### Task Status (engine-owned)
 
 The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
@@ -1668,6 +1953,39 @@ no other component modifies it.
 (or the older `#<id>` form for backward compatibility). The conductor reads this to
 correlate commits with tasks and to verify no intermediate work was dropped during rebase
 or conflict resolution (FR-9).
+
+**Evidence range derivation ladder (`getEvidenceRange`, `engine/autoheal.ts`, #456):**
+Before scanning commits for trailer/content-hash evidence, the engine must pick a lower
+bound for the range. It never falls back to repo genesis (`root-commit..HEAD`) or a
+hardcoded branch name — that made evidence ranges balloon on long-lived repos and drift
+if the default branch was renamed. Instead it walks a 4-rung ladder, taking the first
+rung that resolves:
+1. A reachable explicit `anchor` (the plan's seed SHA) is used as the lower bound directly.
+2. Otherwise, `git merge-base --fork-point origin/<default> HEAD` — the branch point,
+   including reflog-expired commits where fork-point still has evidence.
+3. Otherwise, a plain `git merge-base origin/<default> HEAD`.
+4. Otherwise, fail closed: zero commits plus a logged anomaly, never a silent guess.
+
+`origin/<default>` is itself derived — never hardcoded `origin/main` — via
+`originDefaultBranch` (reading `refs/remotes/origin/HEAD`), falling back to probing
+`origin/main` then `origin/master` if origin/HEAD is unset. All ladder failures are
+logged as anomalies/warnings but never thrown; the gate always gets a `done: false`
+verdict with a reason instead of an unhandled exception.
+
+**Completion currency — evidence stamps only, no grandfather (#463):** The build gate
+(`engine/artifacts.ts`, the H6/H7/H8 block) accepts exactly one form of proof that a
+task is done: an `evidenceStamps` entry in `.pipeline/task-evidence.json`, written by
+`deriveCompletion`'s own git-trailer/content-hash scan and independently re-derived on
+every gate evaluation. `task-status.json` rows are never trusted as-is — they're
+overwritten from the derived evidence before the verdict is decided, so a wiped or
+hand-edited status file can't fake completion and can't block it either. Earlier
+revisions of this gate additionally accepted a `migrationGrandfather` entry — a one-time
+stamp `task-seed.ts` wrote for terminal rows that already existed before the evidence
+gate was introduced, so pre-cutover work wouldn't be forced to backfill evidence it
+never had. That escape hatch is retired: `task-seed.ts` no longer writes new
+`migrationGrandfather` entries, and the gate no longer consults the field at all — a
+grandfathered id with no real evidence stamp is unresolved, full stop. This closes the
+gap where a forged or stale grandfather entry could pass the gate with zero git evidence.
 
 **Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
 operator can see how completion state evolved across a multi-attempt build.
@@ -1733,7 +2051,7 @@ with per-gap dispositions.
 - **`halt: 'architectural-clarity'` or `halt: 'product-scope'`** — genuinely human categories;
   the conductor HALTs and opens a draft PR for triage
 
-**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (default 3), so a
+**Bounds:** Remediation rounds are bounded by `MAX_KICKBACKS_PER_GATE` (currently 2), so a
 cycle that's not converging HALTs eventually. Daemon prd_audit also has its own
 self-healing fallback: if every blocking row is `impl-gap` (code), the conductor auto-kicks
 back to `build` up to N times before giving up.
@@ -2071,7 +2389,8 @@ The daemon can reorder eligible features by GitHub issue priority labels, honori
 human-driven prioritization without changing the eligibility/deduplication logic.
 
 **Priority bands and label vocabulary:**
-- `priority: high` — highest-priority band (no-issue status escalated)
+- `priority: critical` — complete breakage / very severe degradation; dispatched first among issue-linked work
+- `priority: high` — highest routine band
 - `priority: medium` — standard priority band
 - `priority: low` — lower-priority band
 - Unlabeled — chronological fallback order
@@ -2145,6 +2464,27 @@ work it depends on.
   attempt increment) — and the walk continues to the next-oldest entry. The first `unblocked`
   entry found is claimed (oldest-unblocked-wins), even if older blocked entries were skipped
   over.
+- **Priority-banded claim ordering (`resolveClaimBands`, `PRIORITY_BAND_RANK` in
+  `backlog-priority.ts`).** When a band resolver is wired in, `claimUnblocked` first drains
+  **every** pending entry off the queue (via its own atomic `claim()`), then sorts the held
+  entries by priority band **before** evaluating any dependency verdict: `no-issue` (no
+  `sourceRef`) → `critical` → `high` → `medium` → `low` → `unlabeled`. The sort key is band
+  rank only; entries tied on band fall back to `originalIndex` — the drain order the queue
+  produced from its own `receivedAt__id` filename sort — so same-band entries stay strictly
+  oldest-first relative to each other (`Array.prototype.sort`'s ES2019+ stability guarantee
+  makes this deterministic across runs). Labels are read from GitHub **at claim time**, one
+  batched call per claim (never cached across claims), so a relabel between claims is honored
+  on the very next claim. Dependency verdicts are then evaluated in the resulting band order —
+  the walk still short-circuits on the first `unblocked` entry, defers the rest, and reports
+  `all-blocked` if none is unblocked — and every held entry not claimed is released back to the
+  queue in the `finally` block regardless of outcome. **Fail-open to FIFO on GitHub outage:** if
+  the band resolver throws (`gh` API error, auth failure, etc.), the sort step is skipped
+  entirely — `claimUnblocked` logs exactly one warning (`priority label resolution failed;
+  falling back to drain order`) and proceeds with the entries in plain oldest-first drain order.
+  A resolver failure never fails the claim itself. When no band resolver is injected at all, the
+  original oldest-first claim-then-evaluate-inline loop runs unchanged (byte-for-byte FIFO,
+  today's pre-banding behavior). The claimed envelope's JSON shape is unchanged:
+  `{kind, text, source, sourceRef}`.
 - **All-blocked outcome, distinct from empty.** If the walk exhausts the queue without finding
   an unblocked entry, the outcome is `{ kind: 'all-blocked', entries }` — listing every deferred
   entry and its verdict — rather than `{ kind: 'empty' }`. This lets an operator tell "nothing to
@@ -2186,6 +2526,72 @@ engineer-planned features (store ∩ authored-keys ledger). Registry/store paths
 `$AI_CONDUCTOR_REGISTRY` / `$AI_CONDUCTOR_ENGINEER_DIR`. Acceptance scenarios live in
 `test/acceptance/engineer.test.ts`.
 
+### Daemon build-auth: isolating daemon builds from operator OAuth (Tasks 5-17, TR-1..TR-4)
+
+Self-host daemon builds authenticate to Claude independently of the operator's own
+`.credentials.json` OAuth session, so a daemon build can never read, wait on, or exhaust the
+operator's interactive login. Configured under `harness_self_host.build_auth` in
+`.ai-conductor/config.yml` (`types/config.ts`, validated in `engine/config.ts`, resolved by
+`resolveSelfHostConfig` in `engine/resolved-config.ts`):
+
+```yaml
+harness_self_host:
+  build_auth:
+    mode: daemon-token        # "daemon-token" (default) | "api-key"
+    token_path: ~/.ai-conductor/build-auth   # daemon-token mode only; ~ expands to $HOME
+```
+
+**Modes:**
+
+- **`daemon-token` (default).** The daemon reads a token file at `token_path` (default
+  `~/.ai-conductor/build-auth`, resolved by `getDefaultBuildAuthTokenPath()` in
+  `resolved-config.ts`) that is entirely separate from the operator's `.credentials.json`. Mint
+  it once with:
+
+  ```bash
+  claude setup-token
+  chmod 600 ~/.ai-conductor/build-auth
+  ```
+
+  (`DAEMON_BUILD_TOKEN_MINT_COMMAND` in `self-host/daemon-build-token.ts` is the single source of
+  truth for this command string, reused by both the HALT message and the CHANGELOG migration
+  block.) On each sandboxed build dispatch the conductor reads the token
+  (`readDaemonBuildToken`) and injects it as `CLAUDE_CODE_OAUTH_TOKEN` into the sandboxed step's
+  environment only — the operator's own `CLAUDE_CODE_OAUTH_TOKEN` (if any) is restored in a
+  `finally` block afterward (`conductor.ts`, around the sandboxed `stepRunner.run` call).
+- **`api-key`.** The build authenticates via a pre-existing `ANTHROPIC_API_KEY` in the daemon
+  process's environment. The daemon-token preflight and the operator-credentials preflight are
+  both skipped in this mode — no token file is required.
+
+**Fail-closed pre-flight (`self-host/build-auth-preflight.ts`, Task 6).** Before a self-host build
+provisions its sandbox, `preflightBuildAuthCheck` runs in `daemon-token` mode only:
+
+- Token file present and non-empty → proceeds normally.
+- Token file missing, empty/whitespace-only, or unreadable (e.g. `chmod 000`) → writes
+  `.pipeline/HALT` (only if one doesn't already exist, so retries don't clobber an existing
+  reason) with the mint command, the resolved token path, and the `harness_self_host.build_auth`
+  config keys to set. The check runs **before** any sandbox is provisioned and never consumes the
+  step's retry budget.
+
+**Backward compatibility.** An absent `harness_self_host.build_auth` block (or one that isn't
+explicitly `daemon-token`/`api-key`) leaves the pre-#5-17 behavior unchanged: the conductor falls
+back to the operator-credentials preflight (`preflightCredentialsCheck`, which watches
+`~/.claude/.credentials.json` expiry) — see the park-and-poll section below. Once `build_auth.mode`
+is explicitly set to `daemon-token` or `api-key`, the operator-credentials preflight is skipped
+entirely (Task 11) — the two auth paths are mutually exclusive per build.
+
+**Auth-failure park in daemon-token mode (Task 11, TR-4).** If a step reports an auth failure
+mid-build, the daemon-token mode parks and polls the token file's mtime/content for a refresh
+(`createDaemonTokenContentClassifier` + `waitForCredentialsChange`), the same park-and-poll
+mechanism the operator-credentials path uses (see below), bounded by
+`auth_park_timeout_minutes`. In `api-key` mode there is no token file to watch, so an auth
+failure HALTs immediately with a reason naming `ANTHROPIC_API_KEY` and instructions to re-queue
+the feature after fixing it — parking never happens in `api-key` mode.
+
+**Migration.** See the `CHANGELOG.md` `[Unreleased]` migration block for the exact commands to
+mint a token and wire it into an existing project's config without clobbering a token that's
+already present.
+
 ### Sandbox auth-expiry park-and-poll (self-host daemon builds)
 
 Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
@@ -2226,11 +2632,9 @@ When credentials are detected as expired or auth failure occurs, the conductor i
   `claude login`).
 - **Checks freshness** — when mtime changes, re-reads the credentials and checks `expiresAt`:
   - Still expired → keeps polling
-  - Fresh (unexpired) → proceeds to **refresh sandbox**
-- **Refreshes sandbox** — calls `refreshSandboxCredentials()` (`src/conductor/src/engine/self-host/sandbox-build-env.ts`),
-  which **copies** the operator's newly-refreshed `.credentials.json` into the sandbox `CLAUDE_CONFIG_DIR`
-  (never symlinks, maintaining isolation; see TR-6). The next attempt re-invokes the step with the
-  new credentials.
+  - Fresh (unexpired) → proceeds to **resume the build**
+- **Resume build with fresh auth** (Task 11) — the sandboxed build re-reads the daemon's live `CLAUDE_CODE_OAUTH_TOKEN`
+  env var, obtaining fresh credentials without needing to copy them into the sandbox.
 - **Timeout** — configurable via `auth_park_timeout_minutes` (default **60 minutes**; `0` or negative =
   opt-out, HALT immediately). When timeout elapses without a successful refresh, the conductor
   `writeHaltMarker()` with a reason naming the credentials path + observed `expiresAt` (or "unparseable").
@@ -2264,8 +2668,7 @@ Park-and-poll HALTs follow the standard HALT remediation (no new process — see
 | `engine/self-host/operator-credentials.ts` | Reader (`readOperatorCredentialsState`, fail-open classification), wait primitive (`waitForCredentialsChange` with injected clock/sleep for testability) |
 | `execution/claude-provider.ts` | Classifier (`AUTH_FAILURE_RE`, `authFailure` flag on invoke result) |
 | `engine/step-runners.ts` | Thread `authFailure` through `StepRunResult` |
-| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), resume credentials re-copy, timeout branch → HALT with credentials reason |
-| `engine/self-host/sandbox-build-env.ts` | `refreshSandboxCredentials` export (copy-based, not symlink) |
+| `engine/conductor.ts` | Pre-flight check (before sandbox provision), per-step retry-loop branch (auth failure → park), timeout branch → HALT with credentials reason |
 | `engine/resolved-config.ts` | `auth_park_timeout_minutes` config field + validation (0/negative = opt-out) |
 
 See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-04-auth-failure-park-and-poll.md` for the full design.
