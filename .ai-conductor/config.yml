@@ -35,3 +35,12 @@ harness_self_host:
 # → lock release → same-tmux-session respawn. Default-inert engine-side; armed
 # here. Read at daemon startup; restart once to apply.
 auto_restart_on_stale_engine: true
+
+# Inline-work attribution enforcement cutover (#505, PR #509). On/after this
+# instant, active build steps enforce attribution fail-closed: commit-msg
+# rejects unattributed content commits (incl. --no-verify via the session
+# Bash gate), the session mutation gate blocks unstamped file mutations, and
+# zero-work sessions are kicked back. Before the instant (or with the key
+# absent) the hooks stamp but never block — the observed 4/5 canary state.
+# Read at daemon startup; restart the daemon to apply.
+attribution_enforcement_cutover: "2026-07-11T08:30:00Z"
