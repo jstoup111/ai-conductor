@@ -281,6 +281,13 @@ export interface StepRunnerOptions {
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
+  /**
+   * Track whether the session-created marker was found when we first checked it.
+   * Used by ensurePipelineDir() to distinguish mid-run (marker was found once)
+   * from first-provision (marker was never found).
+   * This is set at line 353 when the initialization check runs, and never changes.
+   */
+  private wasSessionMarkerFoundOnInit = false;
   private featureDesc: string;
   private totalSteps: number;
   private pipelineDir: string | null;
@@ -351,6 +358,7 @@ export class DefaultStepRunner implements StepRunner {
     // Lazy-init: check marker file on first run
     if (!this.sessionStartedInitialized && this.pipelineDir) {
       this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
+      this.wasSessionMarkerFoundOnInit = this.sessionStarted;
       this.sessionStartedInitialized = true;
     }
 
@@ -423,6 +431,9 @@ export class DefaultStepRunner implements StepRunner {
         await this.ensurePipelineDir();
         await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
         await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+        // After successful first marker write, we know a session has been established.
+        // Mark that for future mid-run detection.
+        this.wasSessionMarkerFoundOnInit = true;
       }
 
       return { success: true };
@@ -499,6 +510,9 @@ export class DefaultStepRunner implements StepRunner {
         await this.ensurePipelineDir();
         await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
         await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+        // After successful first marker write, we know a session has been established.
+        // Mark that for future mid-run detection.
+        this.wasSessionMarkerFoundOnInit = true;
       }
       return { success: true, output: result.output };
     }
@@ -844,39 +858,50 @@ export class DefaultStepRunner implements StepRunner {
   /**
    * Ensure the .pipeline directory exists before marker writes.
    * Handles mid-run wipes gracefully: if the directory was deleted, it will be
-   * recreated (and a warning is logged). Other errors (EACCES, etc.) are rethrown.
+   * recreated (and a WARNING is logged for observability). Other errors (EACCES, etc.)
+   * are rethrown.
+   *
+   * Mid-run detection: Use wasSessionMarkerFoundOnInit, which is set at the first
+   * lazy-init check (line ~355). If that check found the session-created marker,
+   * wasSessionMarkerFoundOnInit = true, indicating a prior session. On subsequent
+   * runs, if the directory is missing, it's a mid-run wipe and we warn.
    *
    * If the directory already exists, this is a no-op.
-   * If this is the first creation (sessionStarted is false), no warning is logged.
    */
   private async ensurePipelineDir(): Promise<void> {
     if (!this.pipelineDir) return;
 
+    // Check if directory exists BEFORE trying to create it.
+    // This allows us to detect a mid-run wipe vs. first-provision.
+    const dirExists = await this.fileExists(this.pipelineDir);
+
+    // If directory is absent AND we found a session-created marker on the initial check,
+    // then this is a mid-run wipe. Warn with greppable text.
+    // If wasSessionMarkerFoundOnInit is false, we're in first-provision (no prior session).
+    if (!dirExists && this.wasSessionMarkerFoundOnInit) {
+      console.warn(
+        'WARNING: .pipeline root was missing mid-run and had to be recreated ' +
+        '(the directory was likely deleted by concurrent cleanup or an unscoped deleter)',
+      );
+    }
+
+    // Create the directory with recursive flag. Since we already checked existence,
+    // this handles both the missing case (creates it) and the present case (no-op).
     try {
       await mkdir(this.pipelineDir, { recursive: true });
     } catch (error) {
-      // ENOENT (directory doesn't exist) should not happen with recursive: true,
-      // but handle it gracefully if it does — just silently swallow.
+      // Only allow ENOENT to pass through silently (recursive mkdir shouldn't throw it,
+      // but if it does, the directory wasn't creatable anyway). Re-throw any other errors
+      // (EACCES, EPERM, etc.) because those are real failures we must surface.
       if (error instanceof Error && 'code' in error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === 'ENOENT') {
-          // Silently handle ENOENT: recursive mkdir shouldn't hit this, but
-          // if it does, the directory simply didn't exist and now we tried to create it.
+          // Silently allow — the directory still couldn't be created, but we already warned
           return;
         }
       }
-      // For EACCES, EPERM, or other errors, log a warning and rethrow.
-      // We must not hide permission errors or other real failures.
-      if (error instanceof Error) {
-        if ('code' in error && this.sessionStarted) {
-          // Mid-run recreation (directory was wiped) — log warning
-          console.warn(`[warn] .pipeline directory recreated mid-run (was deleted): ${error.message}`);
-        }
-      }
-      // If it's not ENOENT, rethrow the error
-      if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
-        throw error;
-      }
+      // Non-ENOENT errors must not be swallowed (fail-closed gate).
+      throw error;
     }
   }
 
