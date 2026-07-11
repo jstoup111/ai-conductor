@@ -2986,6 +2986,111 @@ describe('engine/conductor', () => {
     expect(stepsRun[0]).toBe('manual_test');
     expect(stepsRun).not.toContain('finish');
   });
+  it('stale status overrides satisfied verdict on resume (Story 3, negative path a)', async () => {
+    // Story 3 negative path (a): A step whose state is `stale` (cascade-staled by an
+    // earlier kickback) but whose stale verdict file still says `satisfied:true` must be
+    // treated as unsatisfied. Stale overrides verdict (same gateSatisfied rule the loop
+    // tail uses), so the clamp selects the stale step, not skipping past it.
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: all steps before build done, build is marked 'stale' (not 'done'),
+    // rebase also done. last_step is finish (prior run completed).
+    // The 'stale' status indicates build was cascade-staled by an earlier kickback.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      seed[s.name] = 'done';
+    }
+    seed.build = 'stale';  // Key: step is marked stale, not done.
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write verdict for build with satisfied:true (the old verdict before stale).
+    // Despite the verdict saying satisfied, the stale state should override it.
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'manual_test', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: first step is build (the stale step), even though its verdict says satisfied.
+    // Stale overrides satisfied, so the clamp selects build.
+    expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
+  it('verdicts before regionStart are ignored by resume clamp (Story 3, negative path b)', async () => {
+    // Story 3 negative path (b): Kickback verdicts exist only for steps BEFORE the
+    // derived regionStart (the first kickback target). The clamp must ignore them —
+    // only loop-region gates (at or after regionStart) participate in the clamp.
+
+    // Seed state: all steps done including finish. rebase also done.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      seed[s.name] = 'done';
+    }
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    // Write satisfied verdicts for all loop-region gates (build, build_review, manual_test, etc.).
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'manual_test', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    // Write an UNSATISFIED verdict for a pre-loop step (explore).
+    // The clamp should ignore this because explore is before regionStart.
+    await writeVerdict(dir, 'explore', { satisfied: false, checkedAt: 1 });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+    });
+
+    await conductor.run();
+
+    // Assert: first step is finish (from state logic), not explore (the pre-regionStart
+    // unsatisfied verdict is ignored by the clamp).
+    expect(stepsRun[0]).toBe('finish');
+    expect(stepsRun).not.toContain('explore');
+  });
+
+
 
   it('emits step_failed event with correct payload on failure', async () => {
     // Always-failing 2nd step. maxRetries=1 so we escalate after one try.
