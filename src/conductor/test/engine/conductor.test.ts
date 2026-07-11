@@ -50,6 +50,7 @@ import { createHash } from 'crypto';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
+import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -2442,6 +2443,55 @@ describe('engine/conductor', () => {
     expect(stepsRun[0]).toBe('stories');
     expect(stepsRun).not.toContain('worktree');
     expect(stepsRun).not.toContain('explore');
+  });
+
+  it('daemon-path resume with verdict clamp: step_started names build, never finish before gate flips (Story 1: #532, GREEN after Task 2)', async () => {
+    // Regression pin: This test already passes after Task 2's verdict-aware resume clamp fix.
+    // Set up the #532 fixture (three unsatisfied kickback verdicts + build:'failed'/rebase:'done' state).
+    // The daemon-path flow is: rekick pre-loop rebase NOOP → recordRebaseStepCompletion
+    // stamps rebase:'done' → run({resume:true}).
+    // The resumed run must start at the earliest unsatisfied gate (build), not at the last
+    // step stored in state (finish). No 'finish' should dispatch before the build gate verdict
+    // flips satisfied. See .docs/stories/rekick-resume-runs-finish-while-the-build-gate-ver.md §1.
+
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      seed[s.name] = 'done';
+    }
+    seed.build = 'failed';
+    seed.rebase = 'done';
+    seed.last_step = 'finish';
+    await writeState(statePath, seed as ConductState);
+
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    const runner: StepRunner = {
+      run: async () => ({ success: true }),
+    };
+    const started: StepName[] = [];
+    events.on('step_started', (e: { step: StepName }) => started.push(e.step));
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      resume: true,
+      daemon: true,
+    });
+
+    await conductor.run();
+
+    expect(started[0]).toBe('build');
+    expect(started.indexOf('finish')).toBe(-1);
   });
 
   it('emits step_failed event with correct payload on failure', async () => {
