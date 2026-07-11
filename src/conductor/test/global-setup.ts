@@ -1,5 +1,5 @@
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
-import { snapshotDaemonSessions, reapLeakedDaemonSessions } from './tmux-leak-guard.js';
+import { snapshotDaemonSessions, reapLeakedDaemonSessions, type ReapResult } from './tmux-leak-guard.js';
 
 /**
  * Global vitest setup/teardown: detect .pipeline leaks during test runs.
@@ -19,11 +19,50 @@ import { snapshotDaemonSessions, reapLeakedDaemonSessions } from './tmux-leak-gu
  *
  * Once verified, this guard is active for all future test runs.
  */
+/**
+ * Decide the teardown outcome from a reap result (#437, TR-1 + TR-2).
+ *
+ * Killed leaks are corroborated (baseline succeeded, new session, tmpdir-
+ * rooted pane cwd) — the run FAILS, naming the sessions and pointing at
+ * #377 so the spawning path gets fixed.
+ *
+ * Indeterminate sessions could NOT be corroborated (snapshot failure or a
+ * non-tmpdir pane cwd) — they are left running and reported via
+ * `console.error` as a warning, but do NOT fail the run: a transient
+ * snapshot failure must not take down the production daemon session or the
+ * whole suite (TR-1).
+ *
+ * Exported for direct unit testing of the throw-vs-warn decision, separate
+ * from the real tmux/vitest wiring.
+ */
+export function applyTeardownDecision(
+  result: ReapResult,
+  logger: (message: string) => void = console.error
+): void {
+  const { killed, indeterminate } = result;
+
+  if (indeterminate.length > 0) {
+    logger(
+      `tmux daemon-session(s) appeared during the run but could not be corroborated ` +
+        `as leaks (baseline snapshot failure or non-tmpdir pane cwd) — left running, ` +
+        `investigate manually: ${indeterminate.join('; ')}`
+    );
+  }
+
+  if (killed.length > 0) {
+    throw new Error(
+      `tmux daemon-session leak during test run (killed at teardown, but the ` +
+        `spawning path must be fixed — see #377): ${killed.join('; ')}`
+    );
+  }
+}
+
 export default async function setup() {
   const beforeState = await snapshotPipeline(process.cwd());
   // Tmux leak guard (#377): snapshot the operator's pre-existing cc-daemon-*
   // sessions so only sessions CREATED during this run count as leaks.
-  const daemonSessionsBefore = snapshotDaemonSessions();
+  const daemonSnapshot = snapshotDaemonSessions();
+  globalThis.__tmuxSnapshot = daemonSnapshot;
 
   // Return the async teardown function
   return async () => {
@@ -41,19 +80,12 @@ export default async function setup() {
     // is a kill-switch escape — a REAL daemon idle-polling a (likely deleted)
     // fixture repo. Kill it, then fail the run naming it; the pane cwd's
     // fixture prefix (loop-test-, intake-life-, …) attributes the leaking file.
-    const { killed, indeterminate } = reapLeakedDaemonSessions(daemonSessionsBefore);
-    if (killed.length > 0) {
-      throw new Error(
-        `tmux daemon-session leak during test run (killed at teardown, but the ` +
-          `spawning path must be fixed — see #377): ${killed.join('; ')}`
-      );
-    }
-    if (indeterminate.length > 0) {
-      throw new Error(
-        `tmux daemon-session(s) appeared during the run but could not be corroborated ` +
-          `as leaks (baseline snapshot failure or non-tmpdir pane cwd) — left running, ` +
-          `investigate manually: ${indeterminate.join('; ')}`
-      );
-    }
+    const result = reapLeakedDaemonSessions(globalThis.__tmuxSnapshot ?? daemonSnapshot);
+    applyTeardownDecision(result);
   };
+}
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __tmuxSnapshot: ReturnType<typeof snapshotDaemonSessions> | undefined;
 }
