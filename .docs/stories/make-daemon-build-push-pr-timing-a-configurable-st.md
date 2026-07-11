@@ -182,8 +182,13 @@ the terminal artifact is the same reviewable PR regardless of mode.
   current `/finish` path creates the PR exactly as today and the build completes — the
   mode never leaves a build PR-less.
 - Given `markReadyForReview` fails (gh error), when finish runs, then the failure is
-  surfaced in the finish output (not swallowed), `pr_url` is still recorded, and the PR is
-  left draft for the operator to flip manually — the build still completes.
+  surfaced in the finish output (not swallowed) and `pr_url` is still recorded.
+  **End-state SUPERSEDED (2026-07-11, conflict-check, operator-approved):** the finish
+  completion gate now fails while the recorded PR is still a draft when gh reads succeed
+  (ship-readiness, #439); bounded retries drive the engine's order-gated repair to flip
+  it ready, and retry exhaustion halts. Only a broad gh outage (reads also failing)
+  falls back to fail-open pass-with-draft. See
+  `adr-2026-07-11-finish-step-engine-completion-machinery.md` D3.
 
 ### Done When
 - [ ] Finish-step auto-mode prompt (or engine-native pre-step) handles mark-ready when an
