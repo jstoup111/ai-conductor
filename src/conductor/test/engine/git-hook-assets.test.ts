@@ -328,4 +328,99 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.stderr).toMatch(/Task:/);
     });
   });
+
+  describe('Surface A exemptions: evidence/engine/inactive (#505 Task 7)', () => {
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
+      await writeFile(join(repoDir, name), body, 'utf-8');
+      await git('add', name);
+      return git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-surface-a-exempt2-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('lands an empty commit with a resolvable Evidence: satisfied-by trailer and no Task: trailer', async () => {
+      await writeMarker();
+      const sha = (await git('rev-parse', 'HEAD')).stdout;
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        `feat: evidence-only, no task trailer\n\nEvidence: satisfied-by ${sha}`,
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('rejects an empty commit with the marker present, no Task: trailer, and no Evidence: satisfied-by trailer', async () => {
+      await writeMarker();
+      const res = await git('commit', '--allow-empty', '-m', 'feat: empty and unattributed');
+      expect(res.code).not.toBe(0);
+    });
+
+    it('lands a non-empty, trailer-less commit when CONDUCT_ENGINE_COMMIT=1 and the marker is present', async () => {
+      await writeMarker();
+      await writeFile(join(repoDir, 'engine.txt'), 'engine', 'utf-8');
+      await git('add', 'engine.txt');
+      let code = 0;
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', repoDir, 'commit', '-m', 'chore: engine bookkeeping commit'],
+          { env: { ...process.env, CONDUCT_ENGINE_COMMIT: '1' } },
+        );
+      } catch (err) {
+        const e = err as { code?: number };
+        code = e.code ?? 1;
+      }
+      expect(code).toBe(0);
+      const res = await git('log', '-1', '--format=%s');
+      expect(res.stdout).toBe('chore: engine bookkeeping commit');
+    });
+
+    it('lands a trailer-less content commit when the marker is entirely absent (enforcement inactive)', async () => {
+      const res = await commitFile('inactive.txt', 'inactive', 'feat: enforcement inactive, no trailer');
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects an unknown Task: id regardless of marker state (pre-feature behavior unchanged)', async () => {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(repoDir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('unknown.txt', 'unknown', 'feat: bad id\n\nTask: 999');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/not found in task-status\.json/);
+    });
+  });
 });
