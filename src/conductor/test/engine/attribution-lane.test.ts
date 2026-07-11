@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { GitRunner } from '../../src/engine/rebase.js';
 import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.js';
 
 // ── Fresh-session verifier dispatch (Task 7) ──────────────────────────────
@@ -12,6 +13,19 @@ import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.j
 // the main conductor session. It follows the same one-shot pattern as
 // runBuildReview: fresh uuid, resume: false, walked through the model fallback
 // ladder. Dispatch creates the session with proper step ID and CWD configuration.
+
+/**
+ * Create a mocked git runner for testing without a real git repo.
+ */
+function createMockedGitRunner(
+  headSha = 'abc1234567890def1234567890def1234567890',
+): GitRunner {
+  return vi.fn().mockResolvedValue({
+    exitCode: 0,
+    stdout: headSha,
+    stderr: '',
+  }) as unknown as GitRunner;
+}
 
 describe('dispatchAttributionVerifier', () => {
   let dir: string;
@@ -59,6 +73,8 @@ Add tests for sweep.
       planPath,
       residueIds: ['1', '2'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(true);
@@ -84,6 +100,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
@@ -107,6 +124,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: featureWorktreeDir,
+      gitRunner: createMockedGitRunner(),
     });
 
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
@@ -137,6 +155,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
       config,
     });
 
@@ -159,6 +178,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1', '2'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
@@ -181,6 +201,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
@@ -201,6 +222,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(true);
@@ -222,6 +244,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(false);
@@ -243,6 +266,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(false);
@@ -263,6 +287,7 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(false);
@@ -293,11 +318,314 @@ Add tests for sweep.
       planPath,
       residueIds: ['1'],
       featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
       config,
     });
 
     expect(result.success).toBe(false);
     // Output should indicate multiple models were tried
     expect(result.output).toMatch(/model fallback ladder exhausted/i);
+  });
+});
+
+// ── Verdict memoization by (HEAD, residue) (Task 8) ──────────────────────────
+//
+// Memoizes (HEAD commit, sorted residue task IDs) to avoid re-running the
+// verifier on the same code state. Memo key is computed from HEAD SHA and
+// sorted residue IDs; result is cached at .pipeline/attribution-memo.json.
+// Same (HEAD, residue) → no dispatch, reused result. HEAD change or residue
+// change → fresh dispatch. Unreachable memo HEAD → fresh dispatch (treated as
+// cache miss).
+
+describe('Verdict memoization', () => {
+  let dir: string;
+  let planPath: string;
+  let pipelineDir: string;
+  let memoPath: string;
+
+  /**
+   * Create a mocked git runner for testing without a real git repo.
+   */
+  function createMockedGitRunner(
+    headSha = 'abc1234567890def1234567890def1234567890',
+  ): GitRunner {
+    return vi.fn().mockResolvedValue({
+      exitCode: 0,
+      stdout: headSha,
+      stderr: '',
+    }) as unknown as GitRunner;
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-memo-'));
+    pipelineDir = join(dir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    memoPath = join(pipelineDir, 'attribution-memo.json');
+    planPath = join(dir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Plan
+
+## Task 1
+Implement the sweep feature.
+
+**Files:** src/sweep.ts
+
+## Task 2
+Add tests for sweep.
+
+**Files:** test/sweep.test.ts
+`,
+      'utf-8',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('same (HEAD, sorted residue) reuses cached result without dispatch', async () => {
+    const invoke = vi.fn();
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // First call: should dispatch and cache
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'first verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    const firstResult = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['2', '1'], // Order will be sorted
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    expect(firstResult.success).toBe(true);
+    expect(invoke).toHaveBeenCalledOnce();
+
+    // Second call with same (HEAD, sorted residue): should reuse cached result
+    const secondResult = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1', '2'], // Different order, but sorts to same
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    // Should not invoke again; result comes from memo
+    expect(invoke).toHaveBeenCalledOnce(); // Still just once
+    expect(secondResult.success).toBe(true);
+    // Result should match the cached one
+    expect(secondResult.output).toContain('first verdict');
+  });
+
+  it('HEAD change triggers fresh dispatch', async () => {
+    const invoke = vi.fn();
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'first verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    // First dispatch with HEAD=abc...
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner('abc1234567890def1234567890def1234567890'),
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+
+    // Simulate HEAD change by using a different HEAD SHA
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'second verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    const secondResult = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner('def4567890abc1234567890def1234567890abc'),
+    });
+
+    // Should invoke again because HEAD changed
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(secondResult.output).toContain('second verdict');
+  });
+
+  it('residue change triggers fresh dispatch', async () => {
+    const invoke = vi.fn();
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'first verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    // First dispatch with residueIds = ['1']
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+
+    // Second dispatch with different residueIds
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'second verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    const result = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1', '2'], // Different residue
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    // Should invoke again because residue changed
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result.output).toContain('second verdict');
+  });
+
+  it('unreachable memo HEAD triggers fresh dispatch', async () => {
+    const invoke = vi.fn();
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    // Manually create a memo with an unreachable HEAD (fake SHA)
+    const fakeMemo = {
+      key: 'deadbeef1234567890abcdef1234567890abcdef:1,2', // Fake HEAD SHA
+      result: 'stale verdict',
+    };
+    await writeFile(memoPath, JSON.stringify(fakeMemo), 'utf-8');
+
+    // Dispatch should recognize memo key mismatch and re-dispatch
+    invoke.mockResolvedValueOnce({
+      success: true,
+      output: 'fresh verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+
+    const result = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1', '2'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner('abc1234567890def1234567890def1234567890'),
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(result.output).toContain('fresh verdict');
+  });
+
+  it('persists memo at .pipeline/attribution-memo.json', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: 'test verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1', '2'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    // Memo file should exist
+    const memoContent = await readFile(memoPath, 'utf-8');
+    const memo = JSON.parse(memoContent);
+
+    // Memo should have key and result
+    expect(memo).toHaveProperty('key');
+    expect(memo).toHaveProperty('result');
+    expect(memo.result).toContain('test verdict');
+    // Key format: <HEAD>:<sorted-residue-ids>
+    expect(memo.key).toMatch(/^[a-f0-9]+:.*/);
+  });
+
+  it('memo key includes HEAD and sorted residue IDs', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: 'test verdict',
+      exitCode: 0,
+      authFailure: false,
+      modelUnavailable: false,
+    });
+    const provider: LLMProvider = {
+      invoke,
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['3', '1', '2'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+    });
+
+    const memoContent = await readFile(memoPath, 'utf-8');
+    const memo = JSON.parse(memoContent);
+
+    // Key should have format: <HEAD>:<sorted-ids>
+    // Residues should be sorted: 1,2,3
+    expect(memo.key).toMatch(/:1,2,3$/);
   });
 });
