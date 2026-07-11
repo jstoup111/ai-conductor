@@ -47,6 +47,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Attribution abstain-or-loud hardening (#519, #501).** Pre-dispatch bookkeeping
+  failures now abstain loudly (with stderr diagnostics named to stderr) instead of
+  silently leaving a stale `current-task` that misattributes every later commit.
+  Three improvements: (1) pre-dispatch script abandons its four silent `process.exit(0)`
+  paths (status file unreadable, parse failure, wrong shape, temp-write failure) in favor
+  of best-effort cleanup + diagnostic + exit 0; (2) `prepare-commit-msg` no longer falls
+  back to scanning `task-status.json` for a unique `in_progress` row (uses single source
+  of truth `.pipeline/current-task` or abstains); (3) `commit-msg` validates `Task:`
+  trailers against real seeded task ids from the array rows instead of array indices,
+  tolerating numeric-string id mismatch (#501).
 - Rekick resume no longer dispatches steps past an unsatisfied on-disk gate
   verdict — the resume entry clamps backward to the earliest unsatisfied
   loop-region gate (#532).
