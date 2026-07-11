@@ -1,0 +1,14 @@
+{
+  "session_id": "9dce55c0-9c1c-4a2e-8f6d-1f0e8a5c7b3d",
+  "transcript_path": "/home/jamesstoup/.claude/projects/-home-jamesstoup-code-james-stoup-agents/9dce55c0-9c1c-4a2e-8f6d-1f0e8a5c7b3d.jsonl",
+  "cwd": "/home/jamesstoup/code/james-stoup-agents",
+  "prompt_id": "prompt_9dce55c0_001",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Launch general-purpose subagent",
+    "prompt": "Task: 9 — reply with the single word done"
+  },
+  "tool_use_id": "toolu_01TwCfzueVmjBibMnYBA6tQn"
+}

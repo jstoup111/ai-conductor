@@ -44,8 +44,19 @@ Default to **Standard** unless the user specifies otherwise.
 
 ### Per-Task Execution
 
-Before dispatching the subagent, the conductor runs `conduct-ts task start <id>` to mark
-the task as `in_progress`. Claude orchestrates the task through these steps:
+Task stamping is engine machinery, not an orchestrator instruction. A Claude-session
+PreToolUse hook, installed into the build worktree at provisioning time (see
+`adr-2026-07-10-session-hook-task-stamping.md`), inspects **line 1 only** of every
+subagent dispatch prompt. `Task: <id>` (id = bare plan header id, e.g. `Task: 9`, never
+`task-9`) flips that row to `in_progress` in `.pipeline/task-status.json` and writes
+`.pipeline/current-task`; `Task: none` passes through untouched. A missing or malformed
+line-1 marker, or an id not present in `task-status.json`, is BLOCKED (hook exit 2) with
+instructive stderr — fix the dispatch prompt's first line and redispatch. If a different
+task's stamp is already present (overlap), the hook still flips the new row but clears
+the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
+never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
+subagent return iff its content still matches that dispatch's id. Claude orchestrates
+the task through these steps:
 
 ```
 PLAN VALIDATION (at pipeline start):
@@ -56,15 +67,18 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. UPDATE STATUS — Run `conduct-ts task start <id>` to flip task status to `in_progress`
-                   BEFORE dispatching the subagent. If the task_id is not found in
-                   .pipeline/current-task after this command, it signals a configuration
-                   issue (halted by the forward-progress check). Crash recovery: if a
-                   session restarts mid-task, manually reset the task back to `pending`
-                   in .pipeline/task-status.json (same approach as before).
+0. DISPATCH MARKER — Before dispatching, ensure the subagent prompt's FIRST LINE will be
+                   `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
+                   the contract the session hook enforces mechanically (see above) — you do not
+                   run any CLI command for this step. If the hook blocks the dispatch (exit 2,
+                   stderr names the fix), correct the prompt's line 1 and redispatch; if
+                   `.pipeline/current-task` doesn't show the expected id after a successful
+                   dispatch, treat it as a configuration issue (forward-progress check will halt).
+                   Crash recovery: if a session restarts mid-task, manually reset the task back to
+                   `pending` in .pipeline/task-status.json (same approach as before).
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
-                  Dispatch template injects Task: <id> in the prompt — <id> is the bare PLAN header id (e.g. 9, not task-9).
+                  Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
                   if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
@@ -72,8 +86,13 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The engine derives completion from this trailer; the orchestrator
                   never writes `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. DONE         — After the subagent's commit lands on the branch, run `conduct-ts task done <id>` to mark
-                  the task complete. The CLI updates .pipeline/task-status.json and .pipeline/current-task.
+6. DONE         — After the subagent's commit lands on the branch, the PostToolUse session hook
+                  (same matcher as step 0/2) removes `.pipeline/current-task` once the subagent
+                  returns, iff its content still matches this dispatch's id — no CLI invocation
+                  needed. It never writes `completed`; completion is derived solely from the
+                  commit's `Task: <id>` trailer verified in step 5. If state ever needs manual
+                  correction (e.g. after a crash), `conduct-ts task start/done` remain available
+                  as operator/recovery commands, but are not part of the normal per-task flow.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
@@ -117,11 +136,14 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
-**Task status tracking:** The CLI (`conduct-ts task start/done`) and the conductor (`bin/conduct`)
-manage `.pipeline/task-status.json` automatically. You (the orchestrator) do NOT hand-edit this file —
-the engine owns it. Before dispatch, you instruct the conductor to run `conduct-ts task start <id>`.
-After the subagent's commit lands, you run `conduct-ts task done <id>`. The CLI updates the JSON;
-you report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
+**Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
+session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
+`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
+hooks stamp `in_progress` on dispatch and clear `.pipeline/current-task` on return, keyed off the
+dispatch prompt's line-1 `Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
+CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
+step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
+conductor's logging and audit trail.
 
 **Subagent context scoping:** The subagent receives ONLY:
 - The task description and acceptance criteria (from the plan)
@@ -189,7 +211,9 @@ on top of the just-completed TDD agent's API usage.
 
 At batch boundaries, dispatch an evaluator agent (see the model table below for the right
 model per tier and batch position) with **fresh, scoped context** (no shared state with the
-generator). Provide the evaluator with:
+generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
+session hook (see Per-Task Execution) enforces this marker on every Agent-tool dispatch,
+evaluator included; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
@@ -316,8 +340,8 @@ as a halt — **not** as a successful exit. Before exiting, you MUST:
 
 1. Write `.pipeline/halt-user-input-required` with a one-line summary of the
    next action (e.g. `"user requested exit; 1 regression in test_X pending fix"`).
-2. If a task is currently in-flight (marked `in_progress` by `conduct-ts task start`),
-   reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
+2. If a task is currently in-flight (marked `in_progress` by the session hook's dispatch
+   stamp), reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
    build gate will re-enter the task on resume rather than treating it as
    completed (crash-recovery pattern: manually edit the JSON if a session
    restarts mid-task).
@@ -403,7 +427,9 @@ At natural batch boundaries (after completing a group of related tasks):
 
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
-- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code)
+- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code).
+  If dispatched via the Agent tool, the `/simplify` dispatch prompt's first line MUST be
+  `Task: none` (session-hook marker contract, see Per-Task Execution).
 - Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
@@ -415,13 +441,13 @@ At natural batch boundaries (after completing a group of related tasks):
 
 ### Micro-Retros (Per-Phase)
 
-At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity.
+At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched via the Agent tool, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Memory Checkpoint (Per-Batch)
 
 **GATE: Every batch must persist at least one `.memory/` entry before proceeding.**
 
-Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write.
+Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched via the Agent tool, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Progress Log
 

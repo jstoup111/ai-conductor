@@ -1,7 +1,8 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
+import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from './session-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -66,7 +67,181 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
+  await writeSessionHooks(worktreePath, log);
+  await wireSessionHookSettings(worktreePath, log);
+  await excludeEngineArtifacts(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log);
+}
+
+/**
+ * Ensure the engine's own provisioned artifacts (`.claude/` for the session
+ * hook settings) are invisible to git via the worktree's `info/exclude`.
+ * Without this, a freshly-prepared worktree reads as dirty (`?? .claude/`) to
+ * any porcelain-based consumer — most critically the setup-triage tree
+ * classifier, which would mis-classify a clean tree as dirty and engage
+ * quarantine machinery on the engine's own bookkeeping.
+ *
+ * Idempotent (skips entries already present) and fail-open like its siblings:
+ * an exclusion failure never blocks worktree setup.
+ */
+async function excludeEngineArtifacts(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const { stdout } = await execa(
+      'git',
+      ['-C', worktreePath, 'rev-parse', '--git-path', 'info/exclude'],
+      { all: true },
+    );
+    const rel = stdout.trim();
+    const excludePath = rel.startsWith('/') ? rel : join(worktreePath, rel);
+
+    let existing = '';
+    try {
+      existing = await readFile(excludePath, 'utf-8');
+    } catch {
+      // No exclude file yet — start fresh.
+    }
+    const lines = new Set(existing.split('\n').map((l) => l.trim()));
+    const wanted = ['.claude/'];
+    const missing = wanted.filter((w) => !lines.has(w));
+    if (missing.length === 0) {
+      return;
+    }
+    await mkdir(join(excludePath, '..'), { recursive: true });
+    const sep = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';
+    await writeFile(excludePath, `${existing}${sep}${missing.join('\n')}\n`, 'utf-8');
+    log?.(`git exclude: engine artifacts excluded (${missing.join(', ')})`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`git exclude: skipped (${msg})`);
+  }
+}
+
+/**
+ * Merge the session-lifecycle hook entries (pre-dispatch / post-dispatch) into
+ * the worktree's `.claude/settings.local.json`, preserving any unrelated
+ * settings already present. `.claude/settings.local.json` is untracked, so
+ * this is safe to write directly.
+ *
+ * Merge-preserve semantics: replace only the hook entries whose command
+ * points into `.pipeline/session-hooks/` (identified by matcher + command
+ * substring), leaving every other key and hook entry untouched. Re-running
+ * this is idempotent — a second pass replaces the same entries rather than
+ * duplicating them.
+ *
+ * Fail-open: logs and continues on any error, never throwing — provisioning
+ * failures here must never block worktree setup.
+ */
+async function wireSessionHookSettings(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const claudeDir = join(worktreePath, '.claude');
+    await mkdir(claudeDir, { recursive: true });
+    const settingsPath = join(claudeDir, 'settings.local.json');
+
+    let settings: Record<string, unknown> = {};
+    try {
+      const raw = await readFile(settingsPath, 'utf-8');
+      settings = JSON.parse(raw);
+    } catch (parseErr) {
+      // No file yet is fine — start fresh silently. A file that exists but
+      // fails to parse is corrupt: back it up rather than discarding it
+      // silently, then continue with a fresh, valid settings object.
+      let existed = true;
+      try {
+        await access(settingsPath);
+      } catch {
+        existed = false;
+      }
+      if (existed) {
+        const backupPath = `${settingsPath}.bak-${Date.now()}`;
+        await rename(settingsPath, backupPath);
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        log?.(
+          `session hook settings: settings.local.json was corrupt/malformed (${msg}) — backed up to ${backupPath}`,
+        );
+      }
+      settings = {};
+    }
+
+    if (!settings.hooks || typeof settings.hooks !== 'object') {
+      settings.hooks = {};
+    }
+    const hooks = settings.hooks as Record<string, unknown>;
+
+    const preDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
+    const postDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'post-dispatch.sh');
+
+    hooks.PreToolUse = replaceSessionHookEntry(
+      hooks.PreToolUse,
+      'session-hooks/',
+      { matcher: 'Task|Agent', hooks: [{ type: 'command', command: preDispatchPath }] },
+    );
+    hooks.PostToolUse = replaceSessionHookEntry(
+      hooks.PostToolUse,
+      'session-hooks/',
+      { matcher: 'Task|Agent', hooks: [{ type: 'command', command: postDispatchPath }] },
+    );
+
+    await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    log?.('session hook settings: wired into .claude/settings.local.json');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`session hook settings: skipped (${msg})`);
+  }
+}
+
+/**
+ * Return a copy of `existing` (a hooks array, or anything else on a fresh /
+ * malformed file) with any entry whose command contains `marker` removed,
+ * then `entry` appended. Non-matching entries (e.g. an operator's own hooks)
+ * are preserved untouched.
+ */
+function replaceSessionHookEntry(
+  existing: unknown,
+  marker: string,
+  entry: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const arr = Array.isArray(existing) ? (existing as Record<string, unknown>[]) : [];
+  const kept = arr.filter((e) => {
+    const entryHooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+    return !entryHooks?.some((h) => typeof h.command === 'string' && h.command.includes(marker));
+  });
+  kept.push(entry);
+  return kept;
+}
+
+/**
+ * Write the session-lifecycle hook scripts (pre-dispatch.sh, post-dispatch.sh)
+ * to .pipeline/session-hooks/ and make them executable. Fail-open: logs and
+ * continues on any error, never throwing — provisioning failures here must
+ * never block worktree setup.
+ */
+async function writeSessionHooks(
+  worktreePath: string,
+  log?: (msg: string) => void,
+): Promise<void> {
+  try {
+    const hooksDir = join(worktreePath, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+
+    const preDispatchPath = join(hooksDir, 'pre-dispatch.sh');
+    await writeFile(preDispatchPath, PRE_DISPATCH_HOOK, 'utf-8');
+    await chmod(preDispatchPath, 0o755);
+
+    const postDispatchPath = join(hooksDir, 'post-dispatch.sh');
+    await writeFile(postDispatchPath, POST_DISPATCH_HOOK, 'utf-8');
+    await chmod(postDispatchPath, 0o755);
+
+    log?.('session hooks: written to .pipeline/session-hooks/');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log?.(`session hooks: skipped (${msg})`);
+  }
 }
 
 /**
