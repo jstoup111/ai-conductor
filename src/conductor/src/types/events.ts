@@ -206,6 +206,19 @@ export type ConductorEvent =
       slug: string;
       reason: string;
     }
+  // ── #505 TS-15: zero-work-product detection ──
+  | {
+      /**
+       * A build step completed with zero attributable work: either nothing
+       * was dispatched, or dispatched work produced no new commits. Emitted
+       * only when enforcement is active, no halt marker is present, and the
+       * task list is still incomplete — Task 16 owns the kickback response.
+       */
+      type: 'zero_work_product';
+      step: StepName;
+      dispatchCount: number;
+      headSha: string | null;
+    }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */

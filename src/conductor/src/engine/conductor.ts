@@ -29,7 +29,13 @@ import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { resolveBuildProgressConfig } from './config.js';
-import { isEnforcementConfigured, writeBuildStepMarker, removeBuildStepMarker } from './attribution-enforcement.js';
+import {
+  isEnforcementConfigured,
+  writeBuildStepMarker,
+  removeBuildStepMarker,
+  detectZeroWorkProduct,
+  readDispatchCount,
+} from './attribution-enforcement.js';
 import {
   readState,
   writeState,
@@ -1502,6 +1508,11 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+        // #505 TS-15: HEAD sha captured at build-step entry, compared against
+        // HEAD at step exit to detect a zero-work-product session (dispatched
+        // work that produced no new commits, or nothing dispatched at all).
+        const headShaBeforeBuild: string | null =
+          step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -1866,6 +1877,28 @@ export class Conductor {
               // retry will ever resolve.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
               if (step.name === 'build') {
+                // #505 TS-15: zero-work-product detection. Runs before the
+                // stall circuit breaker below — a zero-work session is a
+                // distinct signal (kickback candidate, Task 16) from a
+                // stalled-but-dispatched session, though both can share the
+                // same halt-marker/completion gating.
+                const headShaAfterBuild = await currentCommitSha(this.projectRoot);
+                const dispatchCountThisStep = await readDispatchCount(this.projectRoot);
+                const isZeroWork = await detectZeroWorkProduct({
+                  projectRoot: this.projectRoot,
+                  config: this.config,
+                  headBefore: headShaBeforeBuild,
+                  headAfter: headShaAfterBuild,
+                });
+                if (isZeroWork) {
+                  await this.events.emit({
+                    type: 'zero_work_product',
+                    step: step.name,
+                    dispatchCount: dispatchCountThisStep,
+                    headSha: headShaAfterBuild,
+                  });
+                }
+
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
                 const markerSet = await haltMarkerExists(this.projectRoot);
                 if (markerSet) {

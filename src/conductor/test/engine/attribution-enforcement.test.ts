@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -8,6 +8,7 @@ import {
   markerPath,
   writeBuildStepMarker,
   removeBuildStepMarker,
+  detectZeroWorkProduct,
 } from '../../src/engine/attribution-enforcement.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -230,5 +231,119 @@ describe('conductor build-step marker lifecycle', () => {
 
     expect(sawMarkerDuringBuild).toBe(false);
     expect(existsSync(markerPath(dir))).toBe(false);
+  });
+});
+
+// #505 TS-15: zero-work-product detection. A build step that dispatched
+// nothing (or dispatched work that produced no new commits) is a kickback
+// candidate — distinct from a halted session (remediation owns that) and
+// from a fully-complete plan (never zero-work, regardless of HEAD movement).
+describe('detectZeroWorkProduct', () => {
+  let root: string;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'zero-work-detect-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeIncompleteTaskStatus(): void {
+    mkdirSync(join(root, '.pipeline'), { recursive: true });
+    writeFileSync(
+      join(root, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf8',
+    );
+  }
+
+  function writeCompleteTaskStatus(): void {
+    mkdirSync(join(root, '.pipeline'), { recursive: true });
+    writeFileSync(
+      join(root, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+      'utf8',
+    );
+  }
+
+  function writeDispatchCount(lines: number): void {
+    mkdirSync(join(root, '.pipeline'), { recursive: true });
+    writeFileSync(join(root, '.pipeline', 'dispatch-count'), 'x\n'.repeat(lines), 'utf8');
+  }
+
+  function writeHaltMarker(): void {
+    mkdirSync(join(root, '.pipeline'), { recursive: true });
+    writeFileSync(join(root, '.pipeline', 'halt-user-input-required'), 'stalled\n', 'utf8');
+  }
+
+  it('detects zero dispatches + unchanged HEAD + incomplete tasks + no halt marker + enforcement active', async () => {
+    writeIncompleteTaskStatus();
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: PAST_CUTOVER,
+      headBefore: 'sha-a',
+      headAfter: 'sha-a',
+    });
+    expect(detected).toBe(true);
+  });
+
+  it('does NOT detect when the halt marker is present', async () => {
+    writeIncompleteTaskStatus();
+    writeHaltMarker();
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: PAST_CUTOVER,
+      headBefore: 'sha-a',
+      headAfter: 'sha-a',
+    });
+    expect(detected).toBe(false);
+  });
+
+  it('detects when dispatches happened but zero commits (HEAD unchanged)', async () => {
+    writeIncompleteTaskStatus();
+    writeDispatchCount(3);
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: PAST_CUTOVER,
+      headBefore: 'sha-a',
+      headAfter: 'sha-a',
+    });
+    expect(detected).toBe(true);
+  });
+
+  it('does NOT detect when dispatches happened and HEAD moved (real work)', async () => {
+    writeIncompleteTaskStatus();
+    writeDispatchCount(3);
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: PAST_CUTOVER,
+      headBefore: 'sha-a',
+      headAfter: 'sha-b',
+    });
+    expect(detected).toBe(false);
+  });
+
+  it('does NOT detect when all tasks are already complete', async () => {
+    writeCompleteTaskStatus();
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: PAST_CUTOVER,
+      headBefore: 'sha-a',
+      headAfter: 'sha-a',
+    });
+    expect(detected).toBe(false);
+  });
+
+  it('does NOT detect when enforcement is not active (cutover absent)', async () => {
+    writeIncompleteTaskStatus();
+    const detected = await detectZeroWorkProduct({
+      projectRoot: root,
+      config: {} as HarnessConfig,
+      headBefore: 'sha-a',
+      headAfter: 'sha-a',
+    });
+    expect(detected).toBe(false);
   });
 });
