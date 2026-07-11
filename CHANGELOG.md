@@ -124,6 +124,9 @@ their skill symlinks refreshed or `/intake` resolves as an unknown command:
 
 ### Fixed
 
+- tmux-leak-guard fails closed — a failed suite-start snapshot disables
+  reaping and every kill requires a tmpdir-rooted pane cwd (#437).
+
 - `bin/install` never hard-fails on missing dependencies. Every optional phase
   (permissions/hooks configuration, dependency bootstrap, conductor config,
   viewer/renderer selection) is now failure-isolated — a missing python3, npm,
