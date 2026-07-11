@@ -3986,29 +3986,41 @@ export class Conductor {
     state: ConductState,
     steps: StepDefinition[] = ALL_STEPS,
   ): number {
-    // If feature is already complete, treat as new feature (start from 0)
-    if (state.feature_status === 'complete') {
-      return 0;
-    }
-
-    // First, look for an in_progress step
-    for (let i = 0; i < steps.length; i++) {
-      if (getStepStatus(state, steps[i].name) === 'in_progress') {
-        return i;
-      }
-    }
-
-    // Otherwise, find the first pending step after the last done step
-    let lastDoneIndex = -1;
-    for (let i = 0; i < steps.length; i++) {
-      if (getStepStatus(state, steps[i].name) === 'done') {
-        lastDoneIndex = i;
-      }
-    }
-
-    return lastDoneIndex + 1;
+    return findResumeIndex(state, steps);
   }
 
+}
+
+/**
+ * Calculate the index in steps where resume should start, based on the current state.
+ * Used for parity testing and direct resume-index calculation without gate verdict clamping.
+ * Returns the index of the first pending step after the last done step, or 0 if feature is complete.
+ */
+export function findResumeIndex(
+  state: ConductState,
+  steps: StepDefinition[] = ALL_STEPS,
+): number {
+  // If feature is already complete, treat as new feature (start from 0)
+  if (state.feature_status === 'complete') {
+    return 0;
+  }
+
+  // First, look for an in_progress step
+  for (let i = 0; i < steps.length; i++) {
+    if (getStepStatus(state, steps[i].name) === 'in_progress') {
+      return i;
+    }
+  }
+
+  // Otherwise, find the first pending step after the last done step
+  let lastDoneIndex = -1;
+  for (let i = 0; i < steps.length; i++) {
+    if (getStepStatus(state, steps[i].name) === 'done') {
+      lastDoneIndex = i;
+    }
+  }
+
+  return lastDoneIndex + 1;
 }
 
 /**

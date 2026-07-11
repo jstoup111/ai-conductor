@@ -587,16 +587,16 @@ describe('engine/conductor', () => {
 
     it('daemon resume: all-satisfied fast-forward — resume at finish, parity with findResumeIndex (Story 4 happy path)', async () => {
       // Story 4 happy path: BUILD/SHIP progress with all verdicts satisfied.
-      // Set up state with all steps done and write SATISFIED verdicts for all gates.
-      // Resume must start at finish (the next pending step) and equal findResumeIndex's output.
-      // This pins parity: findResumeIndex (raw, unclamped) matches the actual resume entry point
-      // when all gates are satisfied.
+      // Set up state with all steps before finish marked 'done' (finish is pending).
+      // Write SATISFIED verdicts for all gates. Resume must start at finish and
+      // equal findResumeIndex's output (parity assertion: no clamping needed).
       const seed = (await readState(statePath)).ok
         ? (await readState(statePath)).value
         : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
-      // Mark all steps up to and including finish as 'done'
+      // Mark all steps up to (but not including) finish as 'done'
       for (const s of ALL_STEPS) {
+        if (s.name === 'finish') break;
         (seed as Record<string, unknown>)[s.name] = 'done';
       }
       await writeState(statePath, seed);
@@ -618,11 +618,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Assert: resume starts at finish (the first pending step after all done steps)
+      // Assert: resume starts at finish (the first pending step after the last done step)
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
 
       // Parity assertion: the resume entry index equals findResumeIndex's raw output
-      // With all steps marked done, findResumeIndex should return finish's index
+      // With all gates satisfied, no clamping occurs, so resume entry == findResumeIndex
       const expectedIndex = findResumeIndex(seed);
       const finishIndex = ALL_STEPS.findIndex((s) => s.name === 'finish');
       expect(expectedIndex).toBe(finishIndex);
