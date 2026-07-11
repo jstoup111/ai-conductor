@@ -399,6 +399,14 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   API the feature must use, "must run offline", a mandated datastore) MAY be named as requirements
   under Dependencies / Non-Functional Requirements — those are product reality, not a leaked
   internal mechanism. Technical-track features have no PRD (acceptance criteria live in stories).
+- **Intake states WHAT and outcomes — DECIDE owns HOW.** Intake issues state the
+  **problem** (Observed evidence), its **Impact**, and **Desired outcomes** (stated
+  observably). They must NOT prescribe the implementation. Solution ideas are welcome
+  ONLY under an explicitly-labeled **Hypotheses** section (the filer's guesses) —
+  DECIDE treats hypotheses as one candidate among alternatives, never as requirements.
+  **Covers agents filing intake issues via `gh issue create`** on the operator's behalf:
+  issue templates auto-apply only on web/mobile, but agents must follow the same
+  Observed / Impact / Desired outcome / Hypotheses shape.
 - Plans assume zero-context executor — all detail included
 - Negative path stories are mandatory, not optional
 - No implementation plan without clean conflict-check
