@@ -16,6 +16,7 @@ import {
   POST_DISPATCH_HOOK,
   MUTATION_GATE_HOOK,
 } from '../../src/engine/session-hook-assets.js';
+import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -423,6 +424,226 @@ describe('engine/worktree-prepare', () => {
         .split('\n')
         .some((line) => / M .*settings\.local\.json/.test(line));
       expect(trackedModifiedLocalSettings).toBe(false);
+    });
+  });
+
+  // Task 11: Re-provisioning replaces stale hook copies with hardened versions
+  // and preserves settings merge invariant.
+  describe('re-provisioning stale hooks (Task 11)', () => {
+    let repoRoot: string;
+    let worktreeDir: string;
+
+    async function git(cwd: string, ...args: string[]): Promise<{ stdout: string; code: number }> {
+      try {
+        const { stdout } = await execFileAsync('git', ['-C', cwd, ...args]);
+        return { stdout: stdout.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string };
+        return { stdout: (e.stdout ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    beforeEach(async () => {
+      repoRoot = await mkdtemp(join(tmpdir(), 'wt-reprov-repo-'));
+      await git(repoRoot, 'init', '-b', 'main');
+      await git(repoRoot, 'config', 'user.email', 'test@example.com');
+      await git(repoRoot, 'config', 'user.name', 'Test');
+      await writeFile(join(repoRoot, 'README.md'), '# scratch\n', 'utf-8');
+      await git(repoRoot, 'add', '.');
+      await git(repoRoot, 'commit', '-m', 'chore: initial commit');
+
+      worktreeDir = join(tmpdir(), `wt-reprov-wt-${Math.random().toString(36).slice(2)}`);
+      await git(repoRoot, 'worktree', 'add', worktreeDir, '-b', 'feature');
+    });
+
+    afterEach(async () => {
+      await git(repoRoot, 'worktree', 'remove', '--force', worktreeDir).catch(() => undefined);
+      await rm(worktreeDir, { recursive: true, force: true });
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    it('overwrites stale pre-dispatch.sh with hardened version containing abstain prefix', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+
+      // Write stale pre-dispatch without abstain hardening
+      const stalePreDispatch = '#!/bin/bash\necho "old version"\nexit 0\n';
+      await writeFile(join(hooksDir, 'pre-dispatch.sh'), stalePreDispatch, 'utf-8');
+
+      await prepareWorktree(worktreeDir);
+
+      const content = await readFile(join(hooksDir, 'pre-dispatch.sh'), 'utf-8');
+      expect(content).not.toBe(stalePreDispatch);
+      expect(content).toBe(PRE_DISPATCH_HOOK);
+      // Assert hardened marker is present: abstain diagnostic prefix
+      expect(content).toContain('pre-dispatch-hook: abstain');
+    });
+
+    it('overwrites stale prepare-commit-msg without fallback scan, preserving stamp-first path', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'git-hooks');
+      await mkdir(hooksDir, { recursive: true });
+
+      // Write stale prepare-commit-msg with fallback in_progress scan
+      const stalePrepareCommitMsg = [
+        '#!/bin/bash',
+        'set -e',
+        '# Old version with fallback scan',
+        'if [[ -f "$TASK_STATUS_FILE" ]]; then',
+        '  node -e \'',
+        '    const inProgressRows = data.tasks.filter(t => t.status === "in_progress");',
+        '  \'',
+        'fi',
+        'exit 0'
+      ].join('\n');
+      await writeFile(join(hooksDir, 'prepare-commit-msg'), stalePrepareCommitMsg, 'utf-8');
+
+      await prepareWorktree(worktreeDir);
+
+      const content = await readFile(join(hooksDir, 'prepare-commit-msg'), 'utf-8');
+      expect(content).not.toBe(stalePrepareCommitMsg);
+      expect(content).toBe(PREPARE_COMMIT_MSG_HOOK);
+      // Assert hardened version: NO in_progress fallback scan
+      expect(content).not.toContain('in_progress');
+    });
+
+    it('overwrites stale commit-msg using real id extraction instead of Object.keys', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'git-hooks');
+      await mkdir(hooksDir, { recursive: true });
+
+      // Write stale commit-msg using Object.keys over tasks
+      const staleCommitMsg = [
+        '#!/bin/bash',
+        'set -e',
+        'ID_EXISTS=$(node -e \'',
+        '  const data = JSON.parse(fs.readFileSync("$TASK_STATUS_FILE", "utf-8"));',
+        '  const ids = Object.keys(data.tasks || {});',
+        '  console.log(ids.includes("$TASK_TRAILER") ? "yes" : "no");',
+        '\' 2>/dev/null || echo "no")',
+        'exit 0'
+      ].join('\n');
+      await writeFile(join(hooksDir, 'commit-msg'), staleCommitMsg, 'utf-8');
+
+      await prepareWorktree(worktreeDir);
+
+      const content = await readFile(join(hooksDir, 'commit-msg'), 'utf-8');
+      expect(content).not.toBe(staleCommitMsg);
+      expect(content).toBe(COMMIT_MSG_HOOK);
+      // Assert hardened version: real id extraction via .map() not Object.keys
+      expect(content).toContain('.map(t => String(t && t.id))');
+      expect(content).not.toContain('Object.keys');
+    });
+
+    it('preserves exactly one entry per hook in settings after re-provisioning (no duplicates)', async () => {
+      const settingsPath = join(worktreeDir, '.claude', 'settings.local.json');
+
+      // Provision once
+      await prepareWorktree(worktreeDir);
+      const first = await readFile(settingsPath, 'utf-8');
+      const firstSettings = JSON.parse(first);
+
+      // Count pre-dispatch entries
+      const preDispatchCount1 = (firstSettings.hooks.PreToolUse as Record<string, unknown>[]).filter(
+        (e) => {
+          const hooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+          return hooks?.some((h) => typeof h.command === 'string' && h.command.includes('pre-dispatch.sh'));
+        }
+      ).length;
+
+      // Provision again (re-provision stale hooks)
+      await prepareWorktree(worktreeDir);
+      const second = await readFile(settingsPath, 'utf-8');
+      const secondSettings = JSON.parse(second);
+
+      // Count should still be exactly 1, not duplicated
+      const preDispatchCount2 = (secondSettings.hooks.PreToolUse as Record<string, unknown>[]).filter(
+        (e) => {
+          const hooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+          return hooks?.some((h) => typeof h.command === 'string' && h.command.includes('pre-dispatch.sh'));
+        }
+      ).length;
+
+      expect(preDispatchCount1).toBe(1);
+      expect(preDispatchCount2).toBe(1);
+      // Settings should be unchanged (idempotent)
+      expect(second).toBe(first);
+    });
+
+    it('preserves unrelated user entries in .claude/settings.local.json across re-provisioning', async () => {
+      const claudeDir = join(worktreeDir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      const settingsPath = join(claudeDir, 'settings.local.json');
+
+      const userSettings = {
+        permissions: { allow: ['Bash(ls:*)', 'Bash(grep:*)'] },
+        customKey: 'should-survive',
+        nested: { data: 'preserve-me' }
+      };
+      await writeFile(settingsPath, JSON.stringify(userSettings), 'utf-8');
+
+      // Provision (adds hook entries)
+      await prepareWorktree(worktreeDir);
+
+      const content = await readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+
+      // User-provided keys survive
+      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)', 'Bash(grep:*)'] });
+      expect(settings.customKey).toBe('should-survive');
+      expect(settings.nested).toEqual({ data: 'preserve-me' });
+
+      // Re-provision: user keys still survive
+      await prepareWorktree(worktreeDir);
+      const content2 = await readFile(settingsPath, 'utf-8');
+      const settings2 = JSON.parse(content2);
+
+      expect(settings2.permissions).toEqual({ allow: ['Bash(ls:*)', 'Bash(grep:*)'] });
+      expect(settings2.customKey).toBe('should-survive');
+      expect(settings2.nested).toEqual({ data: 'preserve-me' });
+    });
+
+    it('stays fail-open when session hook asset write fails: logs skip, provisioning succeeds', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+
+      // Write old stale hooks that should be replaced
+      await writeFile(join(hooksDir, 'pre-dispatch.sh'), 'stale', 'utf-8');
+
+      // Make directory read-only to force write failure
+      await chmod(hooksDir, 0o500);
+
+      const lines: string[] = [];
+      await expect(prepareWorktree(worktreeDir, (m) => lines.push(m))).resolves.toBeUndefined();
+
+      await chmod(hooksDir, 0o700).catch(() => undefined);
+
+      // Should have logged the skip, not thrown
+      expect(lines.some((l) => /session hooks/i.test(l) && /skip/i.test(l))).toBe(true);
+      // Provisioning should still succeed
+      const env = await readFile(join(worktreeDir, '.env'), 'utf-8');
+      expect(env).toContain(NAMESPACE_VAR);
+    });
+
+    it('overwrites both git hooks with hardened versions on re-provisioning', async () => {
+      const hooksDir = join(worktreeDir, '.pipeline', 'git-hooks');
+      await mkdir(hooksDir, { recursive: true });
+
+      // Write stale versions of both git hooks
+      const stalePrepareCommitMsg = '#!/bin/bash\necho "stale prepare-commit-msg"\nexit 0\n';
+      const staleCommitMsg = '#!/bin/bash\necho "stale commit-msg"\nexit 0\n';
+      await writeFile(join(hooksDir, 'prepare-commit-msg'), stalePrepareCommitMsg, 'utf-8');
+      await writeFile(join(hooksDir, 'commit-msg'), staleCommitMsg, 'utf-8');
+
+      // Provision
+      await prepareWorktree(worktreeDir);
+
+      // Both hooks are overwritten
+      const prepareContent = await readFile(join(hooksDir, 'prepare-commit-msg'), 'utf-8');
+      const commitContent = await readFile(join(hooksDir, 'commit-msg'), 'utf-8');
+
+      expect(prepareContent).not.toBe(stalePrepareCommitMsg);
+      expect(commitContent).not.toBe(staleCommitMsg);
+      expect(prepareContent).toBe(PREPARE_COMMIT_MSG_HOOK);
+      expect(commitContent).toBe(COMMIT_MSG_HOOK);
     });
   });
 
