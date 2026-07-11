@@ -9,10 +9,14 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
 import {
   listDaemonSessions,
   reapLeakedDaemonSessions,
   killDaemonSession,
+  snapshotDaemonSessions,
+  isTmpdirRooted,
   type TmuxRunner,
 } from '../tmux-leak-guard.js';
 import {
@@ -20,6 +24,28 @@ import {
   newDetachedSession,
   hasSession,
 } from '../../src/engine/daemon-tmux.js';
+
+describe('isTmpdirRooted (#437) — TR-2 tmpdir cwd corroboration', () => {
+  it('is true for os.tmpdir() itself', () => {
+    expect(isTmpdirRooted(os.tmpdir())).toBe(true);
+  });
+
+  it('is true for subdirs under os.tmpdir()', () => {
+    expect(isTmpdirRooted(path.join(os.tmpdir(), 'loop-test-abc'))).toBe(true);
+  });
+
+  it('is false for an unrelated absolute path', () => {
+    expect(isTmpdirRooted('/home/user/code/repo')).toBe(false);
+  });
+
+  it('is false for the "(unknown)" sentinel', () => {
+    expect(isTmpdirRooted('(unknown)')).toBe(false);
+  });
+
+  it('is false for prefix trickery like `${tmpdir}-evil/x` (separator-aware)', () => {
+    expect(isTmpdirRooted(`${os.tmpdir()}-evil/x`)).toBe(false);
+  });
+});
 
 describe('tmux-leak-guard (#377) — TmuxRunner seam (#437)', () => {
   it('listDaemonSessions invokes the injected runner with exact argv and honors its result', () => {
@@ -53,6 +79,62 @@ describe('tmux-leak-guard (#377) — TmuxRunner seam (#437)', () => {
     // spy capturing what each runner actually returns.
     expect(listDaemonSessions(spawnErrorRunner)).toEqual([]);
     expect(listDaemonSessions(exitCodeRunner)).toEqual([]);
+  });
+});
+
+describe('snapshotDaemonSessions (#437) — success vs genuine-empty classification', () => {
+  it('exit 0 with two cc-daemon-* names ⇒ sessions populated, failed: false', () => {
+    const runner: TmuxRunner = () => ({
+      code: 0,
+      stdout: 'cc-daemon-foo\ncc-daemon-bar\n',
+      stderr: '',
+    });
+
+    expect(snapshotDaemonSessions(runner)).toEqual({
+      sessions: ['cc-daemon-foo', 'cc-daemon-bar'],
+      failed: false,
+    });
+  });
+
+  it('exit 1 with "no server running" stderr ⇒ genuine empty, failed: false', () => {
+    const runner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: 'no server running on /tmp/tmux-1000/default',
+    });
+
+    expect(snapshotDaemonSessions(runner)).toEqual({ sessions: [], failed: false });
+  });
+
+  it('exit 1 with older "error connecting to … (No such file or directory)" stderr ⇒ genuine empty, failed: false', () => {
+    const runner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: 'error connecting to /tmp/tmux-1000/default (No such file or directory)',
+    });
+
+    expect(snapshotDaemonSessions(runner)).toEqual({ sessions: [], failed: false });
+  });
+
+  it('any other non-zero exit ⇒ failed: true', () => {
+    const runner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: "can't find session",
+    });
+
+    expect(snapshotDaemonSessions(runner)).toEqual({ sessions: [], failed: true });
+  });
+
+  it('spawn error ⇒ failed: true', () => {
+    const runner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: '',
+      spawnError: true,
+    });
+
+    expect(snapshotDaemonSessions(runner)).toEqual({ sessions: [], failed: true });
   });
 });
 
