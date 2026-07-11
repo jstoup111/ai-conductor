@@ -3380,6 +3380,144 @@ so `test/engine/self-host/wiring.test.ts` drives the wired path with spies and a
 activates as one unit (and none of it for a non-self-build). The normal-repo path is byte-for-byte
 unchanged behind the single `selfHost` flag.
 
+### Issue Close on Production Observation (#492)
+
+Watched fixes can be marked to defer issue auto-close until production observation, replacing the
+legacy "close on merge" workflow. A marker file (`.docs/observation/<plan-stem>.md`) declares
+whether a fix should auto-close on merge (close-on-merge: legacy behavior) or wait for daemon
+observation (watched: new behavior). On finish, the PR reference keyword is injected accordingly:
+`Closes` (close-on-merge, GitHub auto-closes) or `Refs` (watched, no auto-close). For watched fixes,
+the daemon enrolls them in an observation registry and watches daemon logs post-merge, closing the
+issue on first observation or flagging as unobserved (`observation:no-show` label) if the window expires.
+
+#### Marker File Format (`.docs/observation/<plan-stem>.md`)
+
+The marker file is optional; absent or unreadable markers default to close-on-merge (legacy).
+
+**Watched declaration:**
+```markdown
+---
+Signature: <substring|/regex/>
+Surface: daemon-log
+Window-days: 14
+---
+```
+
+- **Signature** — substring (literal match) or `/regex/` (regex pattern) to search for in daemon logs.
+- **Surface** — always `daemon-log` (future surfaces: metrics, span attributes, etc.).
+- **Window-days** — observation window in days (e.g., 14 for 2 weeks).
+
+**Close-on-merge declaration (legacy):**
+```markdown
+---
+Kind: close-on-merge
+Rationale: Brief explanation of why observation is not needed.
+---
+```
+
+#### Lifecycle
+
+**Ship-time (PR merge):**
+- The finish step reads the marker file (best-effort; missing/corrupt → close-on-merge fallback).
+- If watched, the fix is enrolled in `.daemon/observation-watch.jsonl` with metadata: `v`, `sourceRef`
+  (GitHub issue number), `prUrl`, `slug`, `signature`, `isRegex`, `windowDays`, `enrolledAt`.
+- The issue reference keyword is set: `Closes` (close-on-merge) or `Refs` (watched).
+- PR is merged.
+
+**Awaiting-merge state (first 5 minutes, 5-minute poll throttle):**
+- Daemon polls the PR status via `gh` until merged or closed unmerged.
+- On merge, `mergedAt` timestamp is recorded in the registry entry.
+- On close-unmerged, the entry is pruned from the registry.
+
+**Watching state (60-second scan throttle):**
+- Daemon scans daemon logs (`.daemon/daemon.log` and `.daemon/daemon.log.1` rotated logs) for the
+  signature match (substring or regex).
+- Only counts matches timestamped **after** `mergedAt`.
+- Log lines must have an ISO-8601 timestamp prefix to be parsed.
+- On **first match**, closes the issue with a comment quoting the matched line and removes the
+  entry from the registry.
+- On **window expiry with no match**, posts a no-show comment to the issue, applies the
+  `observation:no-show` label, and removes the entry from the registry.
+
+#### Registry File (`.daemon/observation-watch.jsonl`)
+
+JSONL format (one JSON object per line). Each entry follows the v1 schema:
+
+```json
+{
+  "v": 1,
+  "sourceRef": "owner/repo#123",
+  "prUrl": "https://github.com/owner/repo/pull/42",
+  "slug": "feature-name",
+  "signature": "observation marker text",
+  "isRegex": false,
+  "windowDays": 14,
+  "enrolledAt": "2026-07-11T10:30:00Z",
+  "lastPollAt": "2026-07-11T10:35:00Z",
+  "mergedAt": "2026-07-11T10:35:42Z",
+  "lastScanAt": "2026-07-11T10:36:00Z"
+}
+```
+
+**I/O contract:**
+- Tolerant reads: malformed lines are skipped with a warning; unknown schema versions (`v > 1`) are
+  ignored (future-proofing).
+- Concurrency-safe rewrites: before appending new enrollments, the entire file is re-read and merged
+  to handle concurrent writes from parallel workers.
+
+#### Daemon Log Scanning
+
+The daemon scans two log files:
+- `.daemon/daemon.log` (current log)
+- `.daemon/daemon.log.1` (rotated log, if present)
+
+Each line is parsed for an ISO-8601 timestamp prefix (e.g., `2026-07-11T10:35:42.123Z`). Lines
+without a parseable timestamp prefix are ignored. For each entry in the watch registry, the daemon:
+
+1. Looks for all lines in both logs matching the signature (literal substring or regex pattern).
+2. Filters to lines with `timestamp >= mergedAt` to exclude pre-merge noise.
+3. On first match, stops searching and enqueues a close action.
+4. On window expiry (current time >= `enrolledAt + windowDays`), enqueues a no-show action.
+
+#### Edge Cases & Grandfathering
+
+**Legacy fixes without observation marker:**
+- Default to close-on-merge (GitHub auto-close via `Closes`).
+
+**Corrupt marker file:**
+- Log a warning and fall back to close-on-merge.
+
+**Missing sourceRef or prUrl:**
+- Silently skip injection (the fix is still referenced, but the issue is not auto-closed by the
+  daemon).
+
+**Enroll failures:**
+- Logged but do not affect PR injection. A failure to enroll a watched fix should not break the
+  finish workflow.
+
+**Timestamp parsing issues:**
+- Lines without parseable timestamp prefixes are skipped; no lines are matched.
+
+**Regex compile errors:**
+- Log a warning and treat the entry as non-matching (no error thrown during log scanning).
+
+#### Implementation Modules
+
+| Module | Responsibility |
+|--------|----------------|
+| `engine/observation-marker.ts` | Marker file parser and schema validation; returns `{ kind: 'watched', signature, surface, windowDays }` or `{ kind: 'close-on-merge', rationale }` |
+| `engine/observation-watch-registry.ts` | JSONL registry read/write, merge on concurrent writes, tolerant parsing |
+| `engine/observation-sweep.ts` | Log scanning loop: timestamp parsing, signature matching (literal + regex), window expiry check, issue close/label actions |
+| `engine/finish-record-cli.ts` | Marker keyword injection (`Closes` or `Refs`) based on marker kind |
+| `daemon-runner.ts` | Wiring the observation sweep into the daemon's main loop |
+| `engine/github-observation.ts` | GitHub API calls for issue close and label application (via `runGh` seam) |
+
+**Tests:**
+- `test/engine/observation-marker.test.ts` — marker parsing + validation
+- `test/engine/observation-watch-registry.test.ts` — registry I/O + concurrency
+- `test/engine/observation-sweep.test.ts` — log scanning + timestamp parsing + regex
+- `test/acceptance/observation-sweep.acceptance.test.ts` — end-to-end watched-fix lifecycle
+
 ## Testing pattern
 
 - **Unit tests** live next to the module under test (e.g. `test/engine/autoheal.test.ts`

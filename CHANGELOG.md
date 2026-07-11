@@ -537,6 +537,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   verdicts feed into `pendingRetryHints` (the next build try names exactly the missing
   tasks). See `adr-2026-07-11-semantic-attribution-verification-lane.md`, README.md,
   and `src/conductor/README.md`.
+- **Observation-driven issue close for watched fixes (#492).** Fixes can now be marked with
+  `.docs/observation/<plan-stem>.md` to defer auto-close until production observation. The marker
+  declares either `Kind: close-on-merge` (GitHub auto-closes on merge, legacy behavior) or watched
+  mode with `Signature` (substring or regex), `Surface: daemon-log`, and `Window-days`. Ship-time
+  uses `Closes` keyword (close-on-merge) or `Refs` keyword (watched, no GitHub auto-close). The daemon
+  watches logs post-merge, scanning for the signature in `.daemon/daemon.log` and `.daemon/daemon.log.1`
+  with ISO-8601 timestamp filtering (only lines after merge). On first observation, closes the issue
+  with a comment quoting the matched line. On window expiry with no match, applies `observation:no-show`
+  label and posts a no-show comment. Registry stored as `.daemon/observation-watch.jsonl` (JSONL,
+  tolerant parsing, concurrency-safe rewrites). See `src/conductor/README.md` for full lifecycle
+  documentation.
 
 - **Attribution enforcement gate surfaces (commit-msg + mutation gate) for inline
   build-work attribution (#505).** Two engine-owned hook surfaces, gated behind
