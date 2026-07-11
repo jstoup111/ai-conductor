@@ -1897,6 +1897,13 @@ export class Conductor {
                     dispatchCount: dispatchCountThisStep,
                     headSha: headShaAfterBuild,
                   });
+                  // #505 TS-16: corrective preamble for the next dispatch —
+                  // prepended (not replacing) so the completion-gate reason
+                  // from buildRetryHint above still reaches Claude too.
+                  retryHint =
+                    `Previous attempt made zero progress (no work was dispatched, or ` +
+                    `dispatched work produced no commits). Provide a single focused ` +
+                    `task and description. ${retryHint ?? ''}`.trim();
                 }
 
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
@@ -1914,12 +1921,19 @@ export class Conductor {
                 // reach the park threshold), reset when progress is detected.
                 if (this.taskEvidence) {
                   if (resolvedTasksAfter > resolvedTasksBefore) {
-                    // Progress detected — reset counter
+                    // Progress detected — reset counter and its reason tags
                     this.taskEvidence.noEvidenceAttempts = 0;
+                    this.taskEvidence.noEvidenceReasons = [];
                     await this.taskEvidence.write();
                   } else {
-                    // No-evidence miss — increment the durable counter
+                    // No-evidence miss — increment the durable counter. #505
+                    // TS-16: tag the miss with `zero_work_product` when the
+                    // detector above fired, so the ledger records WHY this
+                    // attempt didn't count, not just that it didn't.
                     this.taskEvidence.noEvidenceAttempts++;
+                    if (isZeroWork) {
+                      this.taskEvidence.noEvidenceReasons.push('zero_work_product');
+                    }
                     await this.taskEvidence.write();
                   }
                 }
@@ -2182,6 +2196,7 @@ export class Conductor {
                     // now passes, reset the counter since progress was made.
                     if (this.taskEvidence) {
                       this.taskEvidence.noEvidenceAttempts = 0;
+                      this.taskEvidence.noEvidenceReasons = [];
                       await this.taskEvidence.write();
                     }
                   }

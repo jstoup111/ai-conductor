@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TaskEvidence, createTaskEvidence } from '../../src/engine/task-evidence.js';
+import {
+  TaskEvidence,
+  createTaskEvidence,
+  incrementNoEvidenceAttempts,
+  resetNoEvidenceAttempts,
+  NO_EVIDENCE_REASON_DESCRIPTIONS,
+} from '../../src/engine/task-evidence.js';
 
 describe('task-evidence', () => {
   let dir: string;
@@ -207,6 +213,72 @@ describe('task-evidence', () => {
 
       evidence.noEvidenceAttempts += 1;
       expect(evidence.noEvidenceAttempts).toBe(6);
+    });
+  });
+
+  // #505 TS-16: zero-work kickback — noEvidenceReasons tags accrue alongside
+  // the noEvidenceAttempts counter so the ledger records WHY a miss happened,
+  // not just that it did.
+  describe('noEvidenceReasons', () => {
+    it('defaults to an empty array', async () => {
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.noEvidenceReasons).toEqual([]);
+    });
+
+    it('round-trips through write/read', async () => {
+      const evidence1 = await createTaskEvidence(dir);
+      evidence1.noEvidenceAttempts = 1;
+      evidence1.noEvidenceReasons.push('zero_work_product');
+      await evidence1.write();
+
+      const evidence2 = await createTaskEvidence(dir);
+      expect(evidence2.noEvidenceReasons).toEqual(['zero_work_product']);
+    });
+
+    it('reads old sidecars missing noEvidenceReasons as an empty array', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {},
+          noEvidenceAttempts: 2,
+          migrationGrandfather: [],
+        }),
+      );
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.noEvidenceAttempts).toBe(2);
+      expect(evidence.noEvidenceReasons).toEqual([]);
+    });
+
+    it('incrementNoEvidenceAttempts appends the given reason', async () => {
+      const count = await incrementNoEvidenceAttempts(dir, 'zero_work_product');
+      expect(count).toBe(1);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.noEvidenceReasons).toEqual(['zero_work_product']);
+    });
+
+    it('incrementNoEvidenceAttempts without a reason leaves reasons untouched', async () => {
+      await incrementNoEvidenceAttempts(dir);
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.noEvidenceReasons).toEqual([]);
+    });
+
+    it('resetNoEvidenceAttempts clears both the counter and the reasons', async () => {
+      await incrementNoEvidenceAttempts(dir, 'zero_work_product');
+      await resetNoEvidenceAttempts(dir);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.noEvidenceAttempts).toBe(0);
+      expect(evidence.noEvidenceReasons).toEqual([]);
+    });
+
+    it('has a resolvable, descriptive entry for zero_work_product', () => {
+      const description = NO_EVIDENCE_REASON_DESCRIPTIONS.zero_work_product;
+      expect(description).toBeTruthy();
+      expect(typeof description).toBe('string');
+      expect(description.length).toBeGreaterThan(10);
     });
   });
 

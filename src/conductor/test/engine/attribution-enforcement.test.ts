@@ -1,5 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'fs';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -19,6 +19,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 
 // #505 TS-2: enforcement predicate + marker file helpers. The marker file is
 // the session-hook-visible signal that inline build work is in flight so
@@ -345,5 +346,138 @@ describe('detectZeroWorkProduct', () => {
       headAfter: 'sha-a',
     });
     expect(detected).toBe(false);
+  });
+});
+
+// #505 TS-16: zero-work kickback. Task 15 detects and emits the
+// `zero_work_product` event; this responds to it — durable ledger reason,
+// corrective retry preamble on the NEXT dispatch, and no interference with
+// the existing auto-park threshold or Task 12's durable no-evidence counter.
+describe('zero-work kickback (#505 TS-16)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'zero-work-kickback-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function writeIncompleteTaskStatus(): void {
+    mkdirSync(join(dir, '.pipeline'), { recursive: true });
+    writeFileSync(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf8',
+    );
+  }
+
+  function writeCompleteTaskStatus(): void {
+    mkdirSync(join(dir, '.pipeline'), { recursive: true });
+    writeFileSync(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+      'utf8',
+    );
+  }
+
+  /**
+   * Pre-seed conduct-state.json so every step BEFORE `build` is already
+   * `done` — findResumeIndex then resumes straight at `build`, so
+   * `verifyArtifacts: true` only ever gates the build step in this test
+   * (earlier steps' artifact globs are irrelevant to Task 16).
+   */
+  async function seedStateAtBuild(): Promise<void> {
+    const buildIdx = ALL_STEPS.findIndex((s) => s.name === 'build');
+    const state: Record<string, string> = {};
+    for (let i = 0; i < buildIdx; i++) {
+      state[ALL_STEPS[i].name] = 'done';
+    }
+    await writeFile(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  }
+
+  it('increments noEvidenceAttempts with reason zero_work_product and injects a corrective preamble on the next dispatch', async () => {
+    writeIncompleteTaskStatus();
+    await seedStateAtBuild();
+
+    let buildCalls = 0;
+    let secondCallRetryReason: string | undefined;
+    const runner: StepRunner = {
+      run: async (step: StepName, _state, opts): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildCalls++;
+          if (buildCalls === 1) {
+            // First attempt: dispatched nothing, no commits — the
+            // detector's exact zero-work condition. Leave task-status
+            // incomplete so the completion gate misses.
+          } else {
+            secondCallRetryReason = opts?.retryReason;
+            // Second attempt resolves the task so the retry loop can exit
+            // cleanly instead of exhausting max_retries.
+            writeCompleteTaskStatus();
+          }
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      verifyArtifacts: true,
+    });
+
+    await conductor.run();
+
+    expect(buildCalls).toBeGreaterThanOrEqual(2);
+    expect(secondCallRetryReason).toMatch(/zero progress/i);
+
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const evidence = await createTaskEvidence(dir);
+    expect(evidence.noEvidenceAttempts).toBeGreaterThan(0);
+    expect(evidence.noEvidenceReasons).toContain('zero_work_product');
+  });
+
+  it('does not tag noEvidenceReasons with zero_work_product for an ordinary (non-zero-work) completion-gate miss', async () => {
+    // Incomplete task-status.json, but enforcement is NOT active (no
+    // cutover configured) — detectZeroWorkProduct short-circuits to false,
+    // so the miss is an ordinary one, never tagged.
+    writeIncompleteTaskStatus();
+    await seedStateAtBuild();
+
+    let buildCalls = 0;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildCalls++;
+          if (buildCalls >= 2) writeCompleteTaskStatus();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      // no config — enforcement not configured
+      verifyArtifacts: true,
+    });
+
+    await conductor.run();
+
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const evidence = await createTaskEvidence(dir);
+    expect(evidence.noEvidenceReasons).not.toContain('zero_work_product');
   });
 });
