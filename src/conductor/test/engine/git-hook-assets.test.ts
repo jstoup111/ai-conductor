@@ -250,4 +250,82 @@ describe('git-hook-assets — embedding hook scripts', () => {
       }
     });
   });
+
+  describe('Surface A exemptions: merge, amend, rebase (#505 Task 6)', () => {
+    let repoDir: string;
+
+    async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args]);
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeMarker(): Promise<void> {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'build-step-active'), `${new Date().toISOString()}\n`, 'utf-8');
+    }
+
+    async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
+      await writeFile(join(repoDir, name), body, 'utf-8');
+      await git('add', name);
+      return git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-surface-a-exempt-'));
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'chore: initial commit');
+      await prepareWorktree(repoDir);
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it('lands a merge commit trailer-less even with the marker present', async () => {
+      // Create a diverging branch so the merge is non-fast-forward and
+      // produces a real merge commit with MERGE_HEAD set during commit.
+      await git('checkout', '-b', 'feature');
+      await commitFile('feature.txt', 'feature', 'feat: feature work\n\nTask: 1');
+      await git('checkout', 'main');
+      await commitFile('main.txt', 'main', 'feat: main work\n\nTask: 1');
+      await writeMarker();
+      const res = await git('merge', '--no-ff', 'feature', '-m', 'merge: combine feature into main');
+      expect(res.code).toBe(0);
+    });
+
+    it('lands an amend of a pre-enforcement commit trailer-less', async () => {
+      // Commit made before the marker existed (pre-enforcement), no trailer.
+      await commitFile('pre.txt', 'pre', 'feat: pre-enforcement change');
+      // Enforcement activates afterward.
+      await writeMarker();
+      const res = await git('commit', '--amend', '-m', 'feat: pre-enforcement change (reworded)');
+      expect(res.code).toBe(0);
+    });
+
+    it('lands trailer-less commits replayed during a rebase', async () => {
+      await git('checkout', '-b', 'feature');
+      await commitFile('rebase-me.txt', 'content', 'feat: to be rebased');
+      await git('checkout', 'main');
+      await commitFile('main2.txt', 'main2', 'feat: main advances\n\nTask: 1');
+      await writeMarker();
+      const res = await git('rebase', 'main', 'feature');
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects a non-merge, non-amend, non-rebase commit without a trailer when the marker is present', async () => {
+      await writeMarker();
+      const res = await commitFile('plain.txt', 'plain', 'feat: plain unattributed change');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toMatch(/Task:/);
+    });
+  });
 });
