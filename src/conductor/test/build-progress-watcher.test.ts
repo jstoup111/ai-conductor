@@ -90,12 +90,12 @@ describe('readSnapshot', () => {
   });
 
   it('includes head when the project root is a real git repo with a commit', async () => {
-    await execa('git', ['init'], { cwd: dir });
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await writeFile(join(dir, 'README.md'), 'hello');
     await execa('git', ['add', '.'], { cwd: dir });
-    await execa('git', ['commit', '-m', 'init'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
     await writeStatus({ tasks: [] });
 
     const snapshot = await readSnapshot(dir);
@@ -197,13 +197,13 @@ describe('BuildProgressWatcher change-driven emission', () => {
   });
 
   it('emits build_progress with commitCount when a new HEAD commit lands with no task delta', async () => {
-    await execa('git', ['init'], { cwd: dir });
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await writeTasks(5, 21);
     await writeFile(join(dir, 'README.md'), 'hello');
     await execa('git', ['add', '.'], { cwd: dir });
-    await execa('git', ['commit', '-m', 'init'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
 
     const watcher = new BuildProgressWatcher({
       projectRoot: dir,

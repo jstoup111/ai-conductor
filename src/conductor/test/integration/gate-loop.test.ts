@@ -1528,7 +1528,7 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
 
   beforeEach(async () => {
     repoDir = await mkdtemp(join(tmpdir(), 'gate-preverify-'));
-    await git('init', '-q');
+    await git('init', '-q', '-b', 'main');
     await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
     await mkdir(join(repoDir, '.pipeline'), { recursive: true });
   });
