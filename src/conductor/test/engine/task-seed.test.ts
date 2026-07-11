@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fsPromises from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
-import { seedTaskStatus } from '../../src/engine/task-seed.js';
+import { seedTaskStatus, clearStaleMarker } from '../../src/engine/task-seed.js';
 import { deriveCompletion, applyDerivedCompletion } from '../../src/engine/autoheal.js';
+import { markerPath, writeBuildStepMarker } from '../../src/engine/attribution-enforcement.js';
 
 describe('task-seed', () => {
   let dir: string;
@@ -750,6 +752,37 @@ Content
 
       // Seed should succeed regardless of stamp file state
       await expect(seedTaskStatus(dir, planPath)).resolves.not.toThrow();
+    });
+  });
+
+  describe('clearStaleMarker (Task 4, #505: stale marker cleared at every step entry)', () => {
+    it('removes a stale build-step-active marker when it exists (non-build step)', async () => {
+      writeBuildStepMarker(dir);
+      expect(existsSync(markerPath(dir))).toBe(true);
+
+      clearStaleMarker(dir);
+
+      expect(existsSync(markerPath(dir))).toBe(false);
+    });
+
+    it('clears a stale marker then allows a fresh re-write for a build step (no error)', async () => {
+      // Simulate a crash-left-behind marker from a prior session.
+      writeBuildStepMarker(dir);
+      expect(existsSync(markerPath(dir))).toBe(true);
+
+      // Step entry: defensive clear.
+      expect(() => clearStaleMarker(dir)).not.toThrow();
+      expect(existsSync(markerPath(dir))).toBe(false);
+
+      // Build step re-writes it fresh immediately after — should not error.
+      expect(() => writeBuildStepMarker(dir)).not.toThrow();
+      expect(existsSync(markerPath(dir))).toBe(true);
+    });
+
+    it('does not throw when the marker is absent', async () => {
+      expect(existsSync(markerPath(dir))).toBe(false);
+      expect(() => clearStaleMarker(dir)).not.toThrow();
+      expect(existsSync(markerPath(dir))).toBe(false);
     });
   });
 
