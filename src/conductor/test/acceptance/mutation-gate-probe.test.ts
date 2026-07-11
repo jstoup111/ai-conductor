@@ -110,16 +110,21 @@ describe.skipIf(!shouldRun)(
     it(
       'an unstamped session attempting to Write is blocked, the block message is observed, and the file is never created',
       async () => {
+        // stream-json flushes events incrementally, so the deny is observable
+        // even though the blocked model retries until the timeout kills the
+        // session (-p buffers plain output until completion, which never comes).
         const result = await execa(
           'claude',
           [
             '-p',
             `Immediately call the Write tool to create the file ${markedFile} with the content "probe". Do not ask for confirmation.`,
-            '--print',
+            '--output-format',
+            'stream-json',
+            '--verbose',
             '--allowedTools',
             'Write',
           ],
-          { cwd: repoRoot, reject: false, timeout: 60_000 },
+          { cwd: repoRoot, reject: false, timeout: 60_000, stdin: 'ignore' },
         );
 
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
