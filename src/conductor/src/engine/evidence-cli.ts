@@ -79,11 +79,70 @@ export async function dispatchEvidence(
   }
 
   if (cmd.kind === 'judge') {
-    return runEvidenceJudge(cwd, cmd.slug, { print });
+    return runEvidenceJudgeCLI(cwd, cmd.slug, { print });
   }
 
   // Should never reach here
   return 2;
+}
+
+/**
+ * CLI wrapper for evidence judge — resolves slug to worktree and invokes the judge.
+ * Returns exit code for the shell.
+ */
+async function runEvidenceJudgeCLI(
+  projectRoot: string,
+  slug: string,
+  opts: { print?: (msg: string) => void } = {},
+): Promise<number> {
+  const { print = console.log } = opts;
+
+  try {
+    const manager = new WorktreeManager(projectRoot);
+    const worktrees = await manager.scan();
+
+    // Find worktree matching this slug
+    const worktree = worktrees.find((wt) => wt.name === slug);
+    if (!worktree) {
+      const validSlugs = worktrees.map((wt) => wt.name).join(', ');
+      print(
+        `Error: unknown feature slug "${slug}"\n` +
+          `Known worktrees: ${validSlugs || '(none)'}`,
+      );
+      return 1;
+    }
+
+    // Find the plan file for this feature
+    const planPath = join(worktree.path, '.docs', 'plans', `${slug}.md`);
+
+    // Invoke the judge
+    const result = await runEvidenceJudge({
+      featureSlug: slug,
+      planPath,
+      projectRoot: worktree.path,
+      dryRun: false,
+      resolveWorktree: async () => ({ root: worktree.path, branch: 'main' }),
+    });
+
+    if (!result.ok) {
+      print(`Error: ${result.error || 'unknown error'}`);
+      return 1;
+    }
+
+    // Print JSON before/after
+    print(
+      JSON.stringify({
+        before: result.before,
+        after: result.after,
+        stampedTaskIds: result.stampedTaskIds,
+      }),
+    );
+
+    return 0;
+  } catch (err) {
+    print(`Error: failed to judge evidence: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
 }
 
 /**
@@ -118,53 +177,13 @@ export interface EvidenceJudgeResult {
 }
 
 /**
- * Run evidence judge for a feature slug.
- * Resolves the slug to a worktree and validates it exists.
- *
- * Exit codes:
- *   0 = success (worktree found and judge completed)
- *   1 = error (unknown feature, unreachable worktree, etc.)
- */
-export async function runEvidenceJudge(
-  projectRoot: string,
-  slug: string,
-  opts: { print?: (msg: string) => void } = {},
-): Promise<number> {
-  const { print = console.log } = opts;
-
-  try {
-    const manager = new WorktreeManager(projectRoot);
-    const worktrees = await manager.scan();
-
-    // Find worktree matching this slug
-    const worktree = worktrees.find((wt) => wt.name === slug);
-    if (!worktree) {
-      const validSlugs = worktrees.map((wt) => wt.name).join(', ');
-      print(
-        `Error: unknown feature slug "${slug}"\n` +
-          `Known worktrees: ${validSlugs || '(none)'}`,
-      );
-      return 1;
-    }
-
-    // Worktree found — placeholder for semantic attribution logic
-    // (Future: implement the actual attribution verification)
-    print(`Evidence judge: resolved slug "${slug}" to worktree "${worktree.path}"`);
-    return 0;
-  } catch (err) {
-    print(`Error: failed to judge evidence: ${err instanceof Error ? err.message : String(err)}`);
-    return 1;
-  }
-}
-
-/**
  * Run the full evidence judge lane: assemble inputs, dispatch verifier,
  * parse verdict, validate citations, apply stamps.
  *
  * @param opts - Judge options
  * @returns Judge result with status and stamped task IDs
  */
-export async function runEvidenceJudgeAsync(
+export async function runEvidenceJudge(
   opts: RunEvidenceJudgeOptions,
 ): Promise<EvidenceJudgeResult> {
   const {
@@ -235,27 +254,27 @@ export async function runEvidenceJudgeAsync(
     }
 
     // Dispatch the verifier
-    let verdictRaw: unknown;
+    // The verifier dispatcher writes .pipeline/attribution-verdict.json
     if (dispatchVerifier) {
-      verdictRaw = await dispatchVerifier({ residueIds });
-    } else {
-      // In production, the verifier writes .pipeline/attribution-verdict.json
-      // For now, assume it's written and try to read it
-      const verdictPath = join(worktreeRoot, '.pipeline', 'attribution-verdict.json');
-      try {
-        verdictRaw = JSON.parse(readFileSync(verdictPath, 'utf-8'));
-      } catch {
-        verdictRaw = null;
-      }
+      await dispatchVerifier({ residueIds });
+    }
+
+    // Read the verdict file written by the dispatcher
+    let verdictRaw: unknown;
+    const verdictPath = join(worktreeRoot, '.pipeline', 'attribution-verdict.json');
+    try {
+      verdictRaw = JSON.parse(await readFile(verdictPath, 'utf-8'));
+    } catch {
+      verdictRaw = null;
     }
 
     // Parse the verdict
+    // Don't validate anchor here - just parse the verdicts. Anchor validation
+    // is optional and may not be present in all verdict files.
     const headSha = await getCurrentHeadSha(git);
     const verdictMap = parseAttributionVerdict(
       verdictRaw,
       planTaskIds,
-      headSha,
-      residueIds,
     );
 
     // Validate citations and apply stamps

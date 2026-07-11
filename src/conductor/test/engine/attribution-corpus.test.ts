@@ -20,7 +20,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
-import { deriveCompletion, applyDerivedCompletion } from '../../src/engine/autoheal.js';
+import { deriveCompletion, applyDerivedCompletion, listCommitsWithTrailers } from '../../src/engine/autoheal.js';
+import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 describe('#417 escape: id-grammar variant (malformed task-07)', () => {
   let dir: string;
@@ -107,7 +108,10 @@ Update the implementation layer.
     await commitFile('src/impl.ts', 'export function impl() {}', commitMsg);
 
     // Run the mechanical gate: deriveCompletion + applyDerivedCompletion
-    const derived = await deriveCompletion(dir, planPath);
+    // Explicitly pass commits to avoid evidence range resolution issues
+    const commits = await listCommitsWithTrailers(dir);
+    const evidence = await createTaskEvidence(dir);
+    const derived = await deriveCompletion(dir, planPath, '', commits, evidence);
     await applyDerivedCompletion(dir, derived);
 
     // RED baseline: Task 7 should remain unresolved/pending
@@ -119,9 +123,7 @@ Update the implementation layer.
     expect(task7After).toBeDefined();
     expect(task7After.status).toBe('pending');
 
-    // Also verify that derived completion doesn't claim task 7 is completed.
-    // Debug output to see what the actual value is
-    console.log('Derived completion result for task 7:', JSON.stringify(derived['7'], null, 2));
+    // Also verify that derived completion doesn't claim task 7 is completed
     expect(derived['7']).toBeDefined();
     expect(derived['7'].completed).toBe(false);
   });
