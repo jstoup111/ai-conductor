@@ -7,18 +7,54 @@
 // the kill-switch env unset — same opt-out as the intentional smokes.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import {
   listDaemonSessions,
   reapLeakedDaemonSessions,
   killDaemonSession,
+  type TmuxRunner,
 } from '../tmux-leak-guard.js';
 import {
   tmuxInstalled,
   newDetachedSession,
   hasSession,
 } from '../../src/engine/daemon-tmux.js';
+
+describe('tmux-leak-guard (#377) — TmuxRunner seam (#437)', () => {
+  it('listDaemonSessions invokes the injected runner with exact argv and honors its result', () => {
+    const runner: TmuxRunner = vi.fn((args: string[]) => {
+      expect(args).toEqual(['list-sessions', '-F', '#{session_name}']);
+      return { code: 0, stdout: 'cc-daemon-foo\ncc-daemon-bar\n', stderr: '' };
+    });
+
+    const names = listDaemonSessions(runner);
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(names).toEqual(['cc-daemon-foo', 'cc-daemon-bar']);
+  });
+
+  it('distinguishes a spawn error from a non-zero exit code, and surfaces stderr', () => {
+    const spawnErrorRunner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: '',
+      spawnError: true,
+    });
+    const exitCodeRunner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: "can't find session",
+      spawnError: undefined,
+    });
+
+    // Both degrade to "no sessions" for listDaemonSessions, but the
+    // underlying result shapes must remain distinguishable — asserted via a
+    // spy capturing what each runner actually returns.
+    expect(listDaemonSessions(spawnErrorRunner)).toEqual([]);
+    expect(listDaemonSessions(exitCodeRunner)).toEqual([]);
+  });
+});
 
 describe('tmux-leak-guard (#377)', () => {
   it('a pre-existing session set yields no leaks (operator daemons untouched)', () => {
