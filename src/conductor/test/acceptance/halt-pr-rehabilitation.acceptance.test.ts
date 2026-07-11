@@ -266,4 +266,71 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
       false,
     );
   });
+
+  // Story "Ship-time trailer is conditional on the declaration"
+  // (.docs/stories/issues-close-on-first-production-observation-of-th.md):
+  // the SECOND injection call site (halt-PR rehabilitation) must resolve the
+  // same declaration-aware keyword as the daemon-cli post-run step covered in
+  // test/acceptance/observed-close-ship-time-trailer.acceptance.test.ts — a
+  // watched fix's halt PR must never be silently restored to merge-close on
+  // this recovery path (conflict resolution 2026-07-10).
+  it('halt-born draft PR with a watched observation declaration: ready-flip + label clear + "Refs" (never "Closes") exactly once', async () => {
+    const rehabilitateHaltPr = await loadRehabilitateHaltPr();
+    const { gh, calls, getBody } = makeGhFake({
+      title: HALT_TITLE,
+      labels: ['needs-remediation'],
+      isDraft: true,
+      body: 'This PR was opened automatically after an irrecoverable daemon HALT.',
+    });
+
+    const outcome = await (
+      rehabilitateHaltPr as unknown as (deps: Record<string, unknown>) => Promise<string>
+    )({
+      gh,
+      cwd: '/repo',
+      prUrl: PR_URL,
+      sourceRef: SOURCE_REF,
+      declaration: {
+        kind: 'watched',
+        signature: '▶ build 0/',
+        isRegex: false,
+        windowDays: 14,
+        surface: 'daemon-log',
+      },
+    });
+
+    expect(outcome).toBe('rehabilitated');
+    expect(calls).toContainEqual(['pr', 'ready', PR_URL]);
+
+    const refsMatches = getBody().match(/Refs\s+owner\/repo#42/gi) ?? [];
+    expect(refsMatches).toHaveLength(1);
+    const closesMatches = getBody().match(/Closes\s+owner\/repo#42/gi) ?? [];
+    expect(closesMatches).toHaveLength(0);
+  });
+
+  it('halt-born draft PR with a close-on-merge (or absent) declaration: ensures "Closes" exactly as today', async () => {
+    const rehabilitateHaltPr = await loadRehabilitateHaltPr();
+    const { gh, calls, getBody } = makeGhFake({
+      title: HALT_TITLE,
+      labels: ['needs-remediation'],
+      isDraft: true,
+      body: 'This PR was opened automatically after an irrecoverable daemon HALT.',
+    });
+
+    const outcome = await (
+      rehabilitateHaltPr as unknown as (deps: Record<string, unknown>) => Promise<string>
+    )({
+      gh,
+      cwd: '/repo',
+      prUrl: PR_URL,
+      sourceRef: SOURCE_REF,
+      declaration: { kind: 'close-on-merge', rationale: 'no observable log signature' },
+    });
+
+    expect(outcome).toBe('rehabilitated');
+    expect(calls).toContainEqual(['pr', 'ready', PR_URL]);
+
+    const closesMatches = getBody().match(/Closes\s+owner\/repo#42/gi) ?? [];
+    expect(closesMatches).toHaveLength(1);
+  });
 });
