@@ -2494,6 +2494,114 @@ describe('engine/conductor', () => {
     expect(started.indexOf('finish')).toBe(-1);
   });
 
+  it('resume tolerates corrupt build.json verdict — does not throw and starts at build (#532)', async () => {
+    // Story 1 negative path: corrupt verdict → absent → state fallback.
+    // Set up the #532 fixture state, but corrupt the build.json verdict.
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: everything up to and including finish done, build marked failed.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') {
+        seed[s.name] = 'failed';
+      } else if (s.name === 'finish') {
+        seed[s.name] = 'done';
+      } else if (s.name !== 'build') {
+        seed[s.name] = 'done';
+      }
+    }
+    seed.last_step = 'finish';
+    seed.rebase = 'done';
+    await writeState(statePath, seed as ConductState);
+
+    // Write valid verdicts for some gates, then corrupt the build.json.
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    // Corrupt the build.json by overwriting with unparseable JSON.
+    await writeFile(join(dir, '.pipeline', 'gates', 'build.json'), '{oops', 'utf-8');
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Resume with corrupt verdict. The clamp should treat the corrupt verdict as absent
+    // and fall back to state-based logic: build is 'failed' (unsatisfied).
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+    });
+
+    // Assert: conductor.run() does not throw.
+    await expect(conductor.run()).resolves.not.toThrow();
+
+    // Assert: first step is build, not finish (clamp applies using state-only fallback).
+    expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
+  it('resume tolerates missing .pipeline/gates directory — does not throw and starts at build (#532)', async () => {
+    // Story 1 negative path: missing gates directory → all verdicts absent → state fallback.
+    // Set up the #532 fixture state, but remove the entire gates directory.
+    const kickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed code/test paths: src/engine/foo.ts',
+    };
+
+    // Seed state: everything up to and including finish done, build marked failed.
+    const seed: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') {
+        seed[s.name] = 'failed';
+      } else if (s.name === 'finish') {
+        seed[s.name] = 'done';
+      } else if (s.name !== 'build') {
+        seed[s.name] = 'done';
+      }
+    }
+    seed.last_step = 'finish';
+    seed.rebase = 'done';
+    await writeState(statePath, seed as ConductState);
+
+    // Write verdicts initially (to ensure directory structure), then delete the directory.
+    await writeVerdict(dir, 'build', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
+    await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+
+    // Delete the entire gates directory to simulate missing verdicts.
+    await rm(join(dir, '.pipeline', 'gates'), { recursive: true, force: true });
+
+    const stepsRun: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        stepsRun.push(step);
+        return { success: true };
+      },
+    };
+
+    // Resume with missing gates directory. The clamp should treat all verdicts as absent
+    // and fall back to state-based logic: build is 'failed' (unsatisfied).
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+    });
+
+    // Assert: conductor.run() does not throw.
+    await expect(conductor.run()).resolves.not.toThrow();
+
+    // Assert: first step is build, not finish (clamp applies using state-only fallback).
+    expect(stepsRun[0]).toBe('build');
+    expect(stepsRun).not.toContain('finish');
+  });
+
   it('emits step_failed event with correct payload on failure', async () => {
     // Always-failing 2nd step. maxRetries=1 so we escalate after one try.
     let callCount = 0;
