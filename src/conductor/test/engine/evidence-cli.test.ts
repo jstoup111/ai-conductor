@@ -288,3 +288,156 @@ describe('runEvidenceJudge — full-resolution recovery tail (Task 21)', () => {
     }
   });
 });
+
+// ─── 8. Task 25 negative acceptance: refusal via the CLI invoker ────────────
+//
+// Mirrors attribution-corpus.test.ts's gate-lane negatives through the OTHER
+// invoker (`conduct-ts evidence judge` / runEvidenceJudge): an unimplemented
+// task (#492 shape, diff removed) must stay unresolved, and a forged
+// `Evidence: satisfied-by`-style citation to an unreachable SHA must stamp
+// nothing — the CLI's dispatchVerifier seam is the only place a verdict can
+// enter, and runEvidenceJudge's own citation validation refuses a bad SHA
+// exactly as the gate lane does.
+
+describe('runEvidenceJudge — negative acceptance (Task 25)', () => {
+  it('task with no diff at all (unimplemented residue) stays unresolved: verifier reports unsatisfied, nothing is stamped', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { mkdtemp, readFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-judge-residue-'));
+    try {
+      // Real git repo so `git rev-parse HEAD` and citation validation work.
+      await execa('git', ['init', '-b', 'main'], { cwd: tmpDir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: tmpDir });
+      await writeFile(join(tmpDir, 'README.md'), '# Test\n');
+      await execa('git', ['add', 'README.md'], { cwd: tmpDir });
+      await execa('git', ['commit', '-m', 'chore: init'], { cwd: tmpDir });
+
+      const docsDir = join(tmpDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+      const planPath = join(docsDir, 'residue-feature.md');
+      // Two tasks; task 2's declared file is never committed anywhere —
+      // the #492 "diff removed" shape.
+      await writeFile(
+        planPath,
+        '### Task 1\n\n**Files:** `src/f1.ts`\n\n### Task 2\n\n**Files:** `src/f2.ts`\n',
+      );
+
+      // Task 1 is genuinely implemented and trailered.
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(join(tmpDir, 'src/f1.ts'), 'export const f1 = 1;\n');
+      await execa('git', ['add', 'src/f1.ts'], { cwd: tmpDir });
+      await execa('git', ['commit', '-m', 'feat: task 1 work\n\nTask: 1\n'], { cwd: tmpDir });
+
+      let dispatchedResidueIds: string[] = [];
+      const result = await runEvidenceJudge({
+        featureSlug: 'residue-feature',
+        planPath,
+        projectRoot: tmpDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: tmpDir, branch: 'main' }),
+        dispatchVerifier: async ({ residueIds }) => {
+          dispatchedResidueIds = residueIds;
+          // Honest verifier: task 2 has no diff to cite anywhere, so it
+          // reports unsatisfied/no citations rather than forging one.
+          const verdict = {
+            schema: 1,
+            anchor: { head: '', residue: residueIds },
+            results: residueIds.map((id) => ({
+              taskId: id,
+              verdict: 'unsatisfied',
+              citations: [],
+            })),
+          };
+          await writeFile(
+            join(tmpDir, '.pipeline', 'attribution-verdict.json'),
+            JSON.stringify(verdict, null, 2),
+            'utf-8',
+          );
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(dispatchedResidueIds).toContain('2');
+      expect(result.stampedTaskIds ?? []).not.toContain('2');
+      expect(result.remaining ?? []).toContain('2');
+
+      // Sidecar asserted: no stamp for task 2 through the CLI invoker.
+      const evidenceRaw = await readFile(join(tmpDir, '.pipeline', 'task-evidence.json'), 'utf-8');
+      const evidenceParsed = JSON.parse(evidenceRaw);
+      expect(evidenceParsed.evidenceStamps['2']).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('forged citation to an unreachable SHA via the CLI invoker stamps nothing', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, rm, readFile } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-judge-forged-'));
+    try {
+      await execa('git', ['init', '-b', 'main'], { cwd: tmpDir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpDir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: tmpDir });
+      await writeFile(join(tmpDir, 'README.md'), '# Test\n');
+      await execa('git', ['add', 'README.md'], { cwd: tmpDir });
+      await execa('git', ['commit', '-m', 'chore: init'], { cwd: tmpDir });
+
+      const docsDir = join(tmpDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+      const planPath = join(docsDir, 'forged-feature.md');
+      await writeFile(planPath, '### Task 1\n\n**Files:** `src/f1.ts`\n');
+
+      // Forge a well-formed but entirely unreachable SHA — never an object
+      // in this repo's git object database.
+      const forgedSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+      const result = await runEvidenceJudge({
+        featureSlug: 'forged-feature',
+        planPath,
+        projectRoot: tmpDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: tmpDir, branch: 'main' }),
+        dispatchVerifier: async ({ residueIds }) => {
+          // Malicious/buggy verifier forges a citation to a SHA that does
+          // not exist anywhere in the repo.
+          const verdict = {
+            schema: 1,
+            anchor: { head: '', residue: residueIds },
+            results: residueIds.map((id) => ({
+              taskId: id,
+              verdict: 'satisfied',
+              citations: [{ sha: forgedSha, rationale: 'forged citation to an unreachable sha' }],
+            })),
+          };
+          await writeFile(
+            join(tmpDir, '.pipeline', 'attribution-verdict.json'),
+            JSON.stringify(verdict, null, 2),
+            'utf-8',
+          );
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      // Citation validation refuses the unreachable sha — nothing stamped.
+      expect(result.stampedTaskIds ?? []).toEqual([]);
+      expect(result.remaining ?? []).toContain('1');
+
+      const evidenceRaw = await readFile(join(tmpDir, '.pipeline', 'task-evidence.json'), 'utf-8');
+      const evidenceParsed = JSON.parse(evidenceRaw);
+      expect(evidenceParsed.evidenceStamps['1']).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
