@@ -708,7 +708,11 @@ things on top of that, without a parallel dispatch path:
   `prd_audit`) re-verifies against the **advanced base** rather than the stale one. If the
   rebase re-conflicts on the new base, the feature re-parks via 9.0's existing HALT path
   (bounded by the same last-rekick SHA); residual gaps route through the normal gate loop /
-  `/remediate`, not the re-kick code.
+  `/remediate`, not the re-kick code. **Shared-helper invariant (#436):** the pre-loop path
+  (`resumeRebaseFirst`) and the in-loop path (`runRebaseStep`) both call the same
+  `recordRebaseStepCompletion` helper on a satisfied rebase, so `state.rebase` is stamped
+  consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
+  the rebase step silently unmarked.
 
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
