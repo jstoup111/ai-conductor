@@ -1917,9 +1917,25 @@ export class Conductor {
                     isZeroWorkProduct: false, // Already checked above
                     git: (args) => git(args),
                     dispatchVerifier: async (inputs) => {
-                      // TODO (Task 12 GREEN): integrate with actual verifier dispatch
-                      // For now, this is a no-op stub for RED phase tests
-                      return { success: false };
+                      try {
+                        if (this.stepRunner.dispatchVerifier) {
+                          const result = await this.stepRunner.dispatchVerifier({
+                            residueIds: inputs.residueIds,
+                            planPath,
+                            projectRoot: this.projectRoot,
+                          });
+                          return {
+                            success: result.success,
+                            output: result.output ?? '',
+                          };
+                        }
+                        return { success: false, output: 'dispatchVerifier not available' };
+                      } catch (err) {
+                        return {
+                          success: false,
+                          output: String(err),
+                        };
+                      }
                     },
                   });
 
