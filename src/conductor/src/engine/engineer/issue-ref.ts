@@ -13,11 +13,27 @@
 //
 // All gh access is injected; nothing here touches the network in tests.
 
+import type { ObservationDeclaration } from '../observation-marker.js';
+
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
 /** GitHub linking keyword. `Closes` auto-closes on merge; `Refs` only links. */
 export type IssueRefKeyword = 'Closes' | 'Refs';
+
+/**
+ * Resolve the GitHub linking keyword based on the observation declaration.
+ *
+ * - undefined or close-on-merge declaration → 'Closes' (GitHub auto-closes on merge)
+ * - watched declaration → 'Refs' (link only; close is handled by observation)
+ */
+export function resolveIssueRefKeyword(declaration?: ObservationDeclaration): IssueRefKeyword {
+  if (!declaration) return 'Closes';
+  if (declaration.kind === 'close-on-merge') return 'Closes';
+  if (declaration.kind === 'watched') return 'Refs';
+  // Never reached but satisfies TypeScript exhaustiveness check
+  return 'Closes';
+}
 
 /**
  * Parse `owner/repo#123` into its repo + issue-number parts, or null if malformed.
@@ -144,11 +160,17 @@ export interface CloseIssueOnMergeDeps {
   /** Slug for log context. */
   slug?: string;
   log?: (msg: string) => void;
+  /** Observation declaration to resolve the issue-ref keyword (Closes vs Refs). */
+  declaration?: ObservationDeclaration;
 }
 
 /**
- * After the daemon builds an intake-originated feature, add `Closes owner/repo#N`
- * to the implementation PR so GitHub auto-closes the issue when the PR merges.
+ * After the daemon builds an intake-originated feature, add issue-reference keyword
+ * (either `Closes` or `Refs`) to the implementation PR based on the observation declaration.
+ *
+ * Keyword resolution:
+ *   - undefined or close-on-merge → 'Closes' (GitHub auto-closes on merge)
+ *   - watched → 'Refs' (link only; close handled by observation)
  *
  * Gated and non-fatal:
  *   - no `sourceRef` (hand-authored spec)      → 'no-source-ref' (no gh call)
@@ -164,14 +186,15 @@ export async function closeIssueOnImplementationMerge(
   if (!deps.prUrl) {
     log(
       `issue-link: ${deps.slug ?? '(feature)'} carries sourceRef ${deps.sourceRef} but no ` +
-        `implementation PR was recorded (build halted?) — skipping Closes injection`,
+        `implementation PR was recorded (build halted?) — skipping issue-reference injection`,
     );
     return 'no-pr-url';
   }
+  const keyword = resolveIssueRefKeyword(deps.declaration);
   await injectIssueRef({
     gh: deps.gh,
     prUrl: deps.prUrl,
-    keyword: 'Closes',
+    keyword,
     sourceRef: deps.sourceRef,
     cwd: deps.cwd,
     log: deps.log,
