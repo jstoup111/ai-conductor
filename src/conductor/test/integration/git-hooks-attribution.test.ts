@@ -157,6 +157,14 @@ describe('integration/git-hooks-attribution', () => {
       const msg = await lastCommitMessage();
       expect(msg).not.toMatch(/^Task: /m);
     });
+
+    it('abstains when there are no staged changes (message-only commit)', async () => {
+      await writeCurrentTask('7');
+      const res = await git('commit', '--allow-empty', '-m', 'feat: no staged changes');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).not.toMatch(/^Task: /m);
+    });
   });
 
   // --- Story 5: commit-msg rejects bad attribution at commit time ---
