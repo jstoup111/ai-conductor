@@ -92,16 +92,16 @@ describe('integration/git-hooks-attribution', () => {
       expect(msg).not.toMatch(/^Task: 7$/m);
     });
 
-    it('falls back to the sole in_progress row when current-task is absent', async () => {
+    it('abstains when current-task is absent, even with a sole in_progress row', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'in_progress' },
         { id: '3', status: 'pending' },
       ]);
-      const res = await commitFile('c.txt', 'c', 'feat: fallback stamp');
+      const res = await commitFile('c.txt', 'c', 'feat: no stamp, only one in_progress');
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
-      expect(msg).toMatch(/^Task: 2$/m);
+      expect(msg).not.toMatch(/^Task: /m);
     });
 
     it('abstains when zero rows are in_progress and current-task is absent', async () => {
