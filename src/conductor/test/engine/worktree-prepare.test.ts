@@ -11,7 +11,11 @@ import {
   NAMESPACE_VAR,
   SetupFailureError,
 } from '../../src/engine/worktree-prepare.js';
-import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from '../../src/engine/session-hook-assets.js';
+import {
+  PRE_DISPATCH_HOOK,
+  POST_DISPATCH_HOOK,
+  MUTATION_GATE_HOOK,
+} from '../../src/engine/session-hook-assets.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -419,6 +423,140 @@ describe('engine/worktree-prepare', () => {
         .split('\n')
         .some((line) => / M .*settings\.local\.json/.test(line));
       expect(trackedModifiedLocalSettings).toBe(false);
+    });
+  });
+
+  // Task 14 (#505 Surface B): the mutation-gate hook asset is wired at
+  // worktree provisioning alongside the pre/post-dispatch hooks.
+  describe('mutation-gate hook wiring (Task 14)', () => {
+    const settingsPath = (worktreeDir: string) =>
+      join(worktreeDir, '.claude', 'settings.local.json');
+
+    function findEntry(
+      arr: unknown[] | undefined,
+      matcher: string,
+      substr: string,
+    ): Record<string, unknown> | undefined {
+      return (arr as Record<string, unknown>[] | undefined)?.find((e) => {
+        const hooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+        return (
+          (e as { matcher?: string }).matcher === matcher &&
+          hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr))
+        );
+      });
+    }
+
+    it('writes mutation-gate.sh executable with the exported asset content', async () => {
+      await prepareWorktree(dir);
+
+      const mutationGatePath = join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh');
+      const content = await readFile(mutationGatePath, 'utf-8');
+      expect(content).toBe(MUTATION_GATE_HOOK);
+      const s = await stat(mutationGatePath);
+      expect(s.mode & 0o777).toBe(0o755);
+    });
+
+    it('overwrites a stale pre-existing mutation-gate.sh file', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(join(hooksDir, 'mutation-gate.sh'), 'stale content', 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const content = await readFile(join(hooksDir, 'mutation-gate.sh'), 'utf-8');
+      expect(content).toBe(MUTATION_GATE_HOOK);
+    });
+
+    it('adds an Edit|Write|NotebookEdit PreToolUse matcher entry pointing at mutation-gate.sh', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      const entry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh');
+      expect(entry).toBeDefined();
+      const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
+      expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+    });
+
+    it('adds a Bash PreToolUse matcher entry pointing at mutation-gate.sh', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      const entry = findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh');
+      expect(entry).toBeDefined();
+      const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
+      expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+    });
+
+    it('preserves the pre-existing Task|Agent dispatch matcher entries alongside the new mutation-gate entries', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      expect(findEntry(settings.hooks.PreToolUse, 'Task|Agent', 'pre-dispatch.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PostToolUse, 'Task|Agent', 'post-dispatch.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh')).toBeDefined();
+    });
+
+    it('preserves unrelated pre-existing consumer hook entries when wiring the mutation gate', async () => {
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      const consumerEntry = {
+        matcher: 'SomeOtherTool',
+        hooks: [{ type: 'command', command: '/consumer/own-hook.sh' }],
+      };
+      const preExisting = {
+        permissions: { allow: ['Bash(ls:*)'] },
+        hooks: { PreToolUse: [consumerEntry] },
+      };
+      await writeFile(settingsPath(dir), JSON.stringify(preExisting), 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
+      expect(findEntry(settings.hooks.PreToolUse, 'SomeOtherTool', 'own-hook.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh')).toBeDefined();
+      expect(findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh')).toBeDefined();
+    });
+
+    it('is idempotent across repeated provisioning runs: no duplicate mutation-gate entries', async () => {
+      await prepareWorktree(dir);
+      const first = await readFile(settingsPath(dir), 'utf-8');
+
+      await prepareWorktree(dir);
+      const second = await readFile(settingsPath(dir), 'utf-8');
+
+      expect(second).toBe(first);
+
+      const settings = JSON.parse(second);
+      const preToolUse = settings.hooks.PreToolUse as Record<string, unknown>[];
+      const editMatches = preToolUse.filter(
+        (e) => (e as { matcher?: string }).matcher === 'Edit|Write|NotebookEdit',
+      );
+      const bashMatches = preToolUse.filter((e) => (e as { matcher?: string }).matcher === 'Bash');
+      expect(editMatches).toHaveLength(1);
+      expect(bashMatches).toHaveLength(1);
+    });
+
+    it('is fail-open when the mutation-gate hook-file write fails: logs a skip, provisioning still succeeds', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      const lines: string[] = [];
+      await expect(prepareWorktree(dir, (m) => lines.push(m))).resolves.toBeUndefined();
+
+      await chmod(hooksDir, 0o700).catch(() => undefined);
+
+      expect(lines.some((l) => /session hooks/i.test(l) && /skip/i.test(l))).toBe(true);
     });
   });
 });

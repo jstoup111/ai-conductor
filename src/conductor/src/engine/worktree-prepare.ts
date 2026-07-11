@@ -2,7 +2,7 @@ import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
-import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from './session-hook-assets.js';
+import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK, MUTATION_GATE_HOOK } from './session-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -120,8 +120,9 @@ async function excludeEngineArtifacts(
 }
 
 /**
- * Merge the session-lifecycle hook entries (pre-dispatch / post-dispatch) into
- * the worktree's `.claude/settings.local.json`, preserving any unrelated
+ * Merge the session-lifecycle hook entries (pre-dispatch / post-dispatch /
+ * mutation-gate) into the worktree's `.claude/settings.local.json`, preserving
+ * any unrelated
  * settings already present. `.claude/settings.local.json` is untracked, so
  * this is safe to write directly.
  *
@@ -175,16 +176,31 @@ async function wireSessionHookSettings(
 
     const preDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
     const postDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'post-dispatch.sh');
+    const mutationGatePath = join(worktreePath, '.pipeline', 'session-hooks', 'mutation-gate.sh');
 
     hooks.PreToolUse = replaceSessionHookEntry(
       hooks.PreToolUse,
-      'session-hooks/',
+      'pre-dispatch.sh',
       { matcher: 'Task|Agent', hooks: [{ type: 'command', command: preDispatchPath }] },
     );
     hooks.PostToolUse = replaceSessionHookEntry(
       hooks.PostToolUse,
-      'session-hooks/',
+      'post-dispatch.sh',
       { matcher: 'Task|Agent', hooks: [{ type: 'command', command: postDispatchPath }] },
+    );
+    // Mutation gate (#505 Surface B): two matcher entries sharing one script,
+    // both on PreToolUse. Matched by matcher identity (not just command
+    // substring) so adding/replacing one never evicts the other — both
+    // entries' commands point at the same mutation-gate.sh.
+    hooks.PreToolUse = replaceSessionHookEntry(
+      hooks.PreToolUse,
+      'mutation-gate.sh',
+      { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: mutationGatePath }] },
+    );
+    hooks.PreToolUse = replaceSessionHookEntry(
+      hooks.PreToolUse,
+      'mutation-gate.sh',
+      { matcher: 'Bash', hooks: [{ type: 'command', command: mutationGatePath }] },
     );
 
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
@@ -197,9 +213,14 @@ async function wireSessionHookSettings(
 
 /**
  * Return a copy of `existing` (a hooks array, or anything else on a fresh /
- * malformed file) with any entry whose command contains `marker` removed,
- * then `entry` appended. Non-matching entries (e.g. an operator's own hooks)
- * are preserved untouched.
+ * malformed file) with any entry that has the *same matcher* AND a command
+ * containing `marker` removed, then `entry` appended. Matching on matcher +
+ * marker together (not marker alone) means several engine-owned entries can
+ * share one hook script (e.g. the mutation-gate hook is wired under both an
+ * `Edit|Write|NotebookEdit` and a `Bash` matcher) without one replace call
+ * evicting the other's entry. Non-matching entries (e.g. an operator's own
+ * hooks, or another engine entry with a different matcher) are preserved
+ * untouched.
  */
 function replaceSessionHookEntry(
   existing: unknown,
@@ -207,7 +228,10 @@ function replaceSessionHookEntry(
   entry: Record<string, unknown>,
 ): Record<string, unknown>[] {
   const arr = Array.isArray(existing) ? (existing as Record<string, unknown>[]) : [];
+  const entryMatcher = (entry as { matcher?: unknown }).matcher;
   const kept = arr.filter((e) => {
+    const eMatcher = (e as { matcher?: unknown }).matcher;
+    if (eMatcher !== entryMatcher) return true;
     const entryHooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
     return !entryHooks?.some((h) => typeof h.command === 'string' && h.command.includes(marker));
   });
@@ -216,10 +240,10 @@ function replaceSessionHookEntry(
 }
 
 /**
- * Write the session-lifecycle hook scripts (pre-dispatch.sh, post-dispatch.sh)
- * to .pipeline/session-hooks/ and make them executable. Fail-open: logs and
- * continues on any error, never throwing — provisioning failures here must
- * never block worktree setup.
+ * Write the session-lifecycle hook scripts (pre-dispatch.sh, post-dispatch.sh,
+ * mutation-gate.sh) to .pipeline/session-hooks/ and make them executable.
+ * Fail-open: logs and continues on any error, never throwing — provisioning
+ * failures here must never block worktree setup.
  */
 async function writeSessionHooks(
   worktreePath: string,
@@ -236,6 +260,10 @@ async function writeSessionHooks(
     const postDispatchPath = join(hooksDir, 'post-dispatch.sh');
     await writeFile(postDispatchPath, POST_DISPATCH_HOOK, 'utf-8');
     await chmod(postDispatchPath, 0o755);
+
+    const mutationGatePath = join(hooksDir, 'mutation-gate.sh');
+    await writeFile(mutationGatePath, MUTATION_GATE_HOOK, 'utf-8');
+    await chmod(mutationGatePath, 0o755);
 
     log?.('session hooks: written to .pipeline/session-hooks/');
   } catch (err) {
