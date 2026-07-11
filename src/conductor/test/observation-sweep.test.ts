@@ -299,6 +299,359 @@ describe('observation-sweep', () => {
     });
   });
 
+  describe('watching state machine', () => {
+    let mod: Record<string, unknown>;
+    let sweepObservationWatch: any;
+    let tempDir: string;
+
+    beforeEach(async () => {
+      mod = await load();
+      sweepObservationWatch = requireFn(mod, 'sweepObservationWatch');
+
+      // Create a temp directory for the registry
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      tempDir = path.join(os.tmpdir(), `obs-watching-test-${Date.now()}-${Math.random()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      // Clean up temp directory
+      const fs = await import('fs/promises');
+      try {
+        await fs.rm(tempDir, { recursive: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+
+    it('watching: first post-merge observation closes the issue with quoted line', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const mergedAt = now - 30000;
+
+      // Setup: entry in watching state (mergedAt set), no lastScanAt yet
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-fixed',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write fake daemon.log with matching observation
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+2026-07-11T10:10:00Z [daemon] continuing
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner
+      const fakeGh = vi.fn(async (args) => {
+        if (args[0] === 'issue' && args[1] === 'close') {
+          // Verify the comment argument
+          const commentIdx = args.indexOf('--comment');
+          expect(commentIdx).toBeGreaterThan(-1);
+          const comment = args[commentIdx + 1];
+          expect(comment).toContain('test-fixed: bug is fixed now');
+          expect(comment).toContain('Observation:');
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - gh close was called
+      expect(fakeGh).toHaveBeenCalledWith(
+        expect.arrayContaining(['issue', 'close']),
+        expect.any(Object),
+      );
+
+      // - Entry is pruned (removed from survivors)
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+
+      // - Success logged
+      expect(logs.some((l) => l.includes('closed') || l.includes('observe'))).toBe(true);
+    });
+
+    it('watching: close failure retries on next tick', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const mergedAt = now - 30000;
+
+      // Setup: entry in watching state
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-fixed',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write fake daemon.log with matching observation
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner that throws
+      const fakeGh = vi.fn(async () => {
+        throw new Error('Failed to close issue');
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - Error is logged
+      expect(logs.some((l) => l.includes('close failed') || l.includes('error'))).toBe(true);
+
+      // - Entry survives in survivors unchanged
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(1);
+
+      const survivor = JSON.parse(lines[0]);
+      expect(survivor.sourceRef).toBe('#42');
+      expect(survivor.mergedAt).toBe(mergedAt);
+      // lastScanAt should be updated for throttle
+      expect(survivor.lastScanAt).toBeGreaterThanOrEqual(now);
+    });
+
+    it('watching: already-closed issue doesn\'t error, entry is pruned', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const mergedAt = now - 30000;
+
+      // Setup: entry in watching state
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-fixed',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write fake daemon.log with matching observation
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner that throws "already closed" error
+      const fakeGh = vi.fn(async () => {
+        const err = new Error('This issue is already closed');
+        (err as any).code = 422;
+        throw err;
+      });
+
+      const logs: string[] = [];
+      const mockLogger = (msg: string) => logs.push(msg);
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir, log: mockLogger });
+
+      // Expected:
+      // - No loud error message (just debug)
+      expect(logs.some((l) => l.includes('already closed'))).toBe(true);
+
+      // - Entry is pruned anyway (expected race condition)
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+    });
+
+    it('watching: respects 60-second scan throttle', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const mergedAt = now - 300000;
+
+      // Setup: entry with lastScanAt = now - 45 seconds (under 60s throttle)
+      const recentScanEntry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-fixed',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt,
+        lastScanAt: now - 45 * 1000,
+      };
+
+      // Setup: another entry due for scan (lastScanAt > 60s ago)
+      const dueScanEntry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#43',
+        prUrl: 'https://github.com/owner/repo/pull/124',
+        slug: 'fix-bug-2',
+        signature: 'test-fixed-2',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt: now - 300000,
+        lastScanAt: now - 70 * 1000,
+      };
+
+      // Write entries to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(recentScanEntry) + '\n' + JSON.stringify(dueScanEntry) + '\n',
+      );
+
+      // Write fake daemon.log with matching observations
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed
+2026-07-11T10:10:00Z [daemon] test-fixed-2: another bug is fixed
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner
+      const fakeGh = vi.fn(async () => {
+        return { stdout: '' };
+      });
+
+      // Call sweep
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir });
+
+      // Expected:
+      // - Only dueScanEntry should be closed (gh called once)
+      expect(fakeGh).toHaveBeenCalledTimes(1);
+
+      // - recentScanEntry survives unchanged
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      const entries = lines.map((l) => JSON.parse(l));
+
+      const unchanged = entries.find((e) => e.sourceRef === '#42');
+      expect(unchanged).toBeDefined();
+      expect(unchanged.lastScanAt).toBe(now - 45 * 1000); // Unchanged
+    });
+
+    it('watching: scan throttle is reset after close', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      const now = Date.now();
+      const mergedAt = now - 30000;
+
+      // Setup: entry in watching state
+      const entry: ObservationEntry = {
+        v: 1,
+        sourceRef: '#42',
+        prUrl: 'https://github.com/owner/repo/pull/123',
+        slug: 'fix-bug',
+        signature: 'test-fixed',
+        isRegex: false,
+        windowDays: 14,
+        enrolledAt: now - 100000,
+        mergedAt,
+      };
+
+      // Write entry to registry
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        JSON.stringify(entry) + '\n',
+      );
+
+      // Write fake daemon.log with matching observation
+      const logDir = path.join(tempDir, '.daemon');
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting
+2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+`;
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Mock gh runner
+      const fakeGh = vi.fn(async () => {
+        return { stdout: '' };
+      });
+
+      // Call sweep (entry is closed and removed from registry)
+      await sweepObservationWatch(tempDir, { gh: fakeGh, logDir });
+
+      // Expected:
+      // - Entry is removed (pruned)
+      const content = await fs.readFile(
+        path.join(tempDir, '.daemon/observation-watch.jsonl'),
+        'utf-8',
+      );
+      const lines = content.split('\n').filter(Boolean);
+      expect(lines.length).toBe(0);
+    });
+  });
+
   describe('log-scan matcher', () => {
     let mod: Record<string, unknown>;
     let findObservation: any;
