@@ -279,3 +279,256 @@ describe('selectAuditSample — deterministic spot-audit sampler', () => {
     });
   });
 });
+
+// #505 TS-15: Post-green spot-audit dispatch — fire-and-forget verifier
+// invocation after build gate verdict is written.
+//
+// Pattern: reuse dispatchAttributionVerifier from Task 7, sample tasks
+// from evidence using Task 14 sampler, and dispatch without blocking on
+// audit result. On empty sample, return immediately. On audit session
+// failure/timeout/unparseable verdict, leave build outcome untouched
+// (fail-open for audit, fail-closed for gate).
+
+describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
+  describe('RED: task contract and fire-and-forget semantics', () => {
+    it('returns immediately without dispatch when sample is empty', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+
+      const stamps = new Map<string, EvidenceStamp>([
+        ['task-1', { sha: 'abc123', form: 'semantic-verified' }],
+        ['task-2', { sha: 'def456', form: 'semantic-verified' }],
+      ]);
+      const evidence = createMockEvidence(stamps);
+
+      const dispatchCalls: unknown[] = [];
+      const mockDispatch = async () => {
+        dispatchCalls.push({});
+        return { success: true, output: '{}' };
+      };
+
+      const result = await runSpotAudit({
+        evidence,
+        featureSlug: 'test-feature',
+        auditSamplePct: 50, // Would sample from eligible set
+        projectDir: '/tmp/project',
+        featureWorktreePath: '/tmp/feature',
+        gateVerdictPath: '/tmp/.pipeline/gates/build.json',
+        dispatch: mockDispatch as any,
+      });
+
+      // No dispatch when sample is empty (all tasks semantic-verified)
+      expect(dispatchCalls).toHaveLength(0);
+      expect(result.dispatched).toBe(false);
+    });
+
+    it('dispatches audit verifier only after gate verdict file exists', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'audit-dispatch-'));
+
+      try {
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const dispatchCalls: Array<{ residueIds: string[] }> = [];
+        const mockDispatch = async (opts: any) => {
+          dispatchCalls.push(opts);
+          return { success: true, output: '{}' };
+        };
+
+        // Dispatch should fail or skip when verdict doesn't exist
+        const result = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: mockDispatch as any,
+        });
+
+        expect(dispatchCalls).toHaveLength(0);
+
+        // Now write the verdict
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const result2 = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: mockDispatch as any,
+        });
+
+        // After verdict exists, should dispatch
+        expect(dispatchCalls.length).toBeGreaterThan(0);
+        expect(result2.dispatched).toBe(true);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('audit failure does not modify build outcome', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'audit-failure-'));
+
+      try {
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const buildOutcomePath = join(tmpDir, '.pipeline/attribution-enforce.json');
+
+        // Write initial build outcome
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+        const initialOutcome = { agree: [] };
+        await writeFile(buildOutcomePath, JSON.stringify(initialOutcome), 'utf-8');
+
+        const mockFailingDispatch = async () => {
+          throw new Error('Dispatch failed');
+        };
+
+        const result = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: mockFailingDispatch as any,
+        });
+
+        // Dispatch was initiated but failed (fire-and-forget, so we don't wait for result)
+        // The key point is that build outcome should remain unchanged
+        expect(result.dispatched).toBe(true); // Dispatch was started
+
+        // Build outcome should remain unchanged (errors don't modify it)
+        const outcomeAfter = JSON.parse(await readFile(buildOutcomePath, 'utf-8'));
+        expect(outcomeAfter).toEqual(initialOutcome);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('passes sampled task set to verifier as residueIds', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'audit-residue-'));
+
+      try {
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+          ['task-2', { sha: 'def456', form: 'commit' }],
+          ['task-3', { sha: 'ghi789', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const dispatchCalls: Array<{ residueIds: string[] }> = [];
+
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const mockDispatch = async (opts: any) => {
+          dispatchCalls.push({ residueIds: opts.residueIds });
+          return { success: true, output: '{}' };
+        };
+
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: mockDispatch as any,
+        });
+
+        expect(dispatchCalls).toHaveLength(1);
+        const sentResidueIds = dispatchCalls[0].residueIds;
+        expect(sentResidueIds).toBeTruthy();
+        expect(Array.isArray(sentResidueIds)).toBe(true);
+        expect(sentResidueIds.length).toBeGreaterThan(0);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('fire-and-forget: does not wait for audit completion', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'audit-fire-forget-'));
+
+      try {
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        let dispatchStarted = false;
+        let dispatchCompleted = false;
+
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const slowDispatch = async () => {
+          dispatchStarted = true;
+          // Simulate slow dispatch
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          dispatchCompleted = true;
+          return { success: true, output: '{}' };
+        };
+
+        const startTime = Date.now();
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: slowDispatch as any,
+        });
+        const elapsed = Date.now() - startTime;
+
+        // Dispatch should have started
+        expect(dispatchStarted).toBe(true);
+        // But runSpotAudit should return quickly without waiting
+        expect(elapsed).toBeLessThan(50); // Much less than 100ms
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
