@@ -1,4 +1,4 @@
-import { writeFile, access, readFile } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -420,6 +420,7 @@ export class DefaultStepRunner implements StepRunner {
 
       // Persist marker and session ID after first success
       if (this.pipelineDir) {
+        await this.ensurePipelineDir();
         await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
         await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
       }
@@ -495,6 +496,7 @@ export class DefaultStepRunner implements StepRunner {
     if (result.success) {
       this.sessionStarted = true;
       if (this.pipelineDir) {
+        await this.ensurePipelineDir();
         await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
         await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
       }
@@ -520,6 +522,7 @@ export class DefaultStepRunner implements StepRunner {
     this.sessionStarted = false;
     this.sessionStartedInitialized = true;
     if (this.pipelineDir) {
+      await this.ensurePipelineDir();
       const { unlink } = await import('node:fs/promises');
       await unlink(join(this.pipelineDir, 'session-created')).catch(() => {
         // Marker didn't exist — nothing to clear.
@@ -835,6 +838,45 @@ export class DefaultStepRunner implements StepRunner {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Ensure the .pipeline directory exists before marker writes.
+   * Handles mid-run wipes gracefully: if the directory was deleted, it will be
+   * recreated (and a warning is logged). Other errors (EACCES, etc.) are rethrown.
+   *
+   * If the directory already exists, this is a no-op.
+   * If this is the first creation (sessionStarted is false), no warning is logged.
+   */
+  private async ensurePipelineDir(): Promise<void> {
+    if (!this.pipelineDir) return;
+
+    try {
+      await mkdir(this.pipelineDir, { recursive: true });
+    } catch (error) {
+      // ENOENT (directory doesn't exist) should not happen with recursive: true,
+      // but handle it gracefully if it does — just silently swallow.
+      if (error instanceof Error && 'code' in error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          // Silently handle ENOENT: recursive mkdir shouldn't hit this, but
+          // if it does, the directory simply didn't exist and now we tried to create it.
+          return;
+        }
+      }
+      // For EACCES, EPERM, or other errors, log a warning and rethrow.
+      // We must not hide permission errors or other real failures.
+      if (error instanceof Error) {
+        if ('code' in error && this.sessionStarted) {
+          // Mid-run recreation (directory was wiped) — log warning
+          console.warn(`[warn] .pipeline directory recreated mid-run (was deleted): ${error.message}`);
+        }
+      }
+      // If it's not ENOENT, rethrow the error
+      if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) {
+        throw error;
+      }
     }
   }
 
