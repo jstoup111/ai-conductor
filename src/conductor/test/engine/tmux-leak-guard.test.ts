@@ -24,6 +24,7 @@ import {
   newDetachedSession,
   hasSession,
 } from '../../src/engine/daemon-tmux.js';
+import { applyTeardownDecision } from '../global-setup.js';
 
 describe('isTmpdirRooted (#437) — TR-2 tmpdir cwd corroboration', () => {
   it('is true for os.tmpdir() itself', () => {
@@ -286,6 +287,48 @@ describe('reapLeakedDaemonSessions (#437) — teardown-time listing failure degr
 
     const result = reapLeakedDaemonSessions(snapshot, runner);
     expect(result).toEqual({ killed: [], indeterminate: [] });
+  });
+});
+
+describe('applyTeardownDecision (#437) — global-setup wiring: warn-only indeterminate, fail-run only on kills', () => {
+  it('killed non-empty ⇒ throws an error naming the sessions and pointing at #377', () => {
+    const result = { killed: ['cc-daemon-leak (pane cwd: /tmp/leak-fixture)'], indeterminate: [] };
+
+    expect(() => applyTeardownDecision(result, () => {})).toThrow(/cc-daemon-leak/);
+    expect(() => applyTeardownDecision(result, () => {})).toThrow(/#377/);
+  });
+
+  it('killed empty + indeterminate non-empty ⇒ does not throw, warns naming sessions and reason', () => {
+    const result = {
+      killed: [],
+      indeterminate: ['cc-daemon-repo (pane cwd: /home/user/code/repo)'],
+    };
+    const messages: string[] = [];
+
+    expect(() => applyTeardownDecision(result, (msg) => messages.push(msg))).not.toThrow();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('cc-daemon-repo');
+    expect(messages[0]).toMatch(/could not be corroborated|snapshot failure|non-tmpdir/);
+  });
+
+  it('both empty ⇒ silent success, no throw and no log', () => {
+    const messages: string[] = [];
+    expect(() =>
+      applyTeardownDecision({ killed: [], indeterminate: [] }, (msg) => messages.push(msg))
+    ).not.toThrow();
+    expect(messages).toHaveLength(0);
+  });
+
+  it('killed non-empty AND indeterminate non-empty ⇒ warns for indeterminate but still throws for killed', () => {
+    const result = {
+      killed: ['cc-daemon-leak (pane cwd: /tmp/leak-fixture)'],
+      indeterminate: ['cc-daemon-repo (pane cwd: /home/user/code/repo)'],
+    };
+    const messages: string[] = [];
+
+    expect(() => applyTeardownDecision(result, (msg) => messages.push(msg))).toThrow(/cc-daemon-leak/);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('cc-daemon-repo');
   });
 });
 
