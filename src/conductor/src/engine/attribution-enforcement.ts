@@ -23,6 +23,16 @@ export function isEnforcementConfigured(config: HarnessConfig, now: Date = new D
 }
 
 /**
+ * Resolve the audit sample percentage from config. Returns the configured value
+ * if present and valid, or the default (10) if absent. The config parsing
+ * already validates and clamps this value at load time, so this function
+ * is safe to call without additional validation.
+ */
+export function resolveAttributionAuditSamplePct(config: HarnessConfig): number {
+  return config.attribution_audit_sample_pct ?? 10;
+}
+
+/**
  * Path to the build-step-active marker file, relative to `root`.
  * Pure function — does not touch the filesystem.
  */

@@ -3,6 +3,25 @@ import { join } from 'node:path';
 import * as crypto from 'node:crypto';
 
 /**
+ * Stamp structure supporting semantic verification (Task 10).
+ * Extends minimal {sha, form} with optional audit fields for judged provenance.
+ * See adr-2026-07-11-attribution-verdict-interface § "Evidence stamp".
+ *
+ * - sha: primary cited SHA (required)
+ * - form: stamp form identifier (required) — e.g. 'commit', 'trailer', 'evidence:satisfied-by', 'semantic-verified'
+ * - citedShas: optional, full citation set (split attribution case)
+ * - verdictAnchor: optional, which verdict (HEAD sha) produced this stamp (audit trail)
+ * - testEvidence: optional, verifier-reported test result {command, exit, summary?}
+ */
+export interface EvidenceStamp {
+  sha: string;
+  form: string;
+  citedShas?: string[];
+  verdictAnchor?: string;
+  testEvidence?: { command: string; exit: number; summary?: string };
+}
+
+/**
  * Durable engine-only state for task evidence tracking.
  *
  * Stored in `.pipeline/task-evidence.json` (gitignored by default).
@@ -10,7 +29,7 @@ import * as crypto from 'node:crypto';
  * and writes atomically via temp-file + rename.
  *
  * Tracks:
- * - evidenceStamps: Map<taskId, {sha, form}> — evidence for engine-owned task status
+ * - evidenceStamps: Map<taskId, EvidenceStamp> — evidence for engine-owned task status
  * - noEvidenceAttempts: number — count of no-evidence attempt retries
  * - noEvidenceReasons: string[] — reason tags accrued alongside noEvidenceAttempts
  *   (e.g. `zero_work_product` — #505 TS-16). Append-only per miss; cleared
@@ -18,7 +37,7 @@ import * as crypto from 'node:crypto';
  * - migrationGrandfather: Set<string> — task IDs grandfathered during migration
  */
 export interface TaskEvidence {
-  evidenceStamps: Map<string, { sha: string; form: string }>;
+  evidenceStamps: Map<string, EvidenceStamp>;
   noEvidenceAttempts: number;
   noEvidenceReasons: string[];
   migrationGrandfather: Set<string>;
@@ -36,7 +55,7 @@ export const NO_EVIDENCE_REASON_DESCRIPTIONS: Record<string, string> = {
 };
 
 interface SerializedEvidenceData {
-  evidenceStamps: Record<string, { sha: string; form: string }>;
+  evidenceStamps: Record<string, EvidenceStamp>;
   noEvidenceAttempts: number;
   noEvidenceReasons?: string[];
   migrationGrandfather: string[];
@@ -138,6 +157,61 @@ function createInstance(
   };
 
   return instance;
+}
+
+/**
+ * Write judged stamps to the sidecar for semantically-verified tasks (Task 10).
+ *
+ * PURPOSE:
+ * Records validated verdicts from the attribution verifier as evidence stamps
+ * with form='semantic-verified' and rich audit metadata (citedShas, verdictAnchor,
+ * testEvidence). Pre-existing stamps are never modified; new stamps are merged.
+ * Refused tasks (validation failures or abstentions) are omitted from output.
+ *
+ * CONTRACT:
+ * - validated: array of {taskId, sha, citedShas, verdictAnchor, testEvidence}
+ * - refused: array of task IDs that did not get stamps (validation failures)
+ * - Output: new stamps are written; pre-existing entries remain byte-identical
+ * - All optional fields serialize/deserialize correctly (round-trip safe)
+ *
+ * @param projectRoot The project root (contains .pipeline/)
+ * @param validated Array of validated task entries, each gets a semantic-verified stamp
+ * @param refused Array of task IDs that were refused (not stamped)
+ */
+export async function writeJudgedStamps(
+  projectRoot: string,
+  validated: Array<{
+    taskId: string;
+    sha: string;
+    citedShas: string[];
+    verdictAnchor: string;
+    testEvidence: { command: string; exit: number; summary?: string };
+  }>,
+  refused: string[],
+): Promise<void> {
+  const evidence = await createTaskEvidence(projectRoot);
+
+  // Normalize task IDs to strings (Decision 7b from lane ADR)
+  const normalizedValidated = validated.map((v) => ({
+    ...v,
+    taskId: String(v.taskId),
+  }));
+
+  // Add new stamps for validated tasks
+  for (const task of normalizedValidated) {
+    evidence.evidenceStamps.set(task.taskId, {
+      sha: task.sha,
+      form: 'semantic-verified',
+      citedShas: task.citedShas,
+      verdictAnchor: task.verdictAnchor,
+      testEvidence: task.testEvidence,
+    });
+  }
+
+  // Refused tasks are explicitly NOT added to the sidecar
+  // (they remain unresolved, to be retried or manually addressed)
+
+  await evidence.write();
 }
 
 /**

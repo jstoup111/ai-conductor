@@ -9,8 +9,10 @@ import {
   writeBuildStepMarker,
   removeBuildStepMarker,
   detectZeroWorkProduct,
+  resolveAttributionAuditSamplePct,
 } from '../../src/engine/attribution-enforcement.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { validateConfig } from '../../src/engine/config.js';
 
 // execa is consumed transitively (WorktreeManager); never fork real git.
 vi.mock('execa', () => ({ execa: vi.fn() }));
@@ -346,6 +348,111 @@ describe('detectZeroWorkProduct', () => {
       headAfter: 'sha-a',
     });
     expect(detected).toBe(false);
+  });
+});
+
+// Task 11: Config keys with clamped parsing — attribution_judge_cutover +
+// attribution_audit_sample_pct. Parsing validates the cutover as ISO-8601,
+// clamps pct to [0, 100] with startup warning on out-of-range, and defaults
+// pct to 10 when absent. Both absent → inert (byte-identical to today).
+describe('attribution judge cutover + audit sample pct config parsing (Task 11)', () => {
+  it('parses attribution_judge_cutover from config as ISO-8601', () => {
+    const config = validateConfig({
+      attribution_judge_cutover: '2026-07-15T12:00:00Z',
+    });
+    expect(config.ok).toBe(true);
+    if (config.ok) {
+      expect(config.config.attribution_judge_cutover).toBe('2026-07-15T12:00:00Z');
+    }
+  });
+
+  it('rejects attribution_judge_cutover with non-string value', () => {
+    const config = validateConfig({
+      attribution_judge_cutover: 123,
+    });
+    expect(config.ok).toBe(false);
+    if (!config.ok) {
+      expect(config.error.message).toMatch(/attribution_judge_cutover.*ISO-8601/i);
+    }
+  });
+
+  it('rejects attribution_judge_cutover with unparseable date', () => {
+    const config = validateConfig({
+      attribution_judge_cutover: 'not-a-date',
+    });
+    expect(config.ok).toBe(false);
+    if (!config.ok) {
+      expect(config.error.message).toMatch(/attribution_judge_cutover.*parseable date/i);
+    }
+  });
+
+  it('parses attribution_audit_sample_pct from config as integer', () => {
+    const config = validateConfig({
+      attribution_audit_sample_pct: 50,
+    });
+    expect(config.ok).toBe(true);
+    if (config.ok) {
+      expect(config.config.attribution_audit_sample_pct).toBe(50);
+    }
+  });
+
+  it('clamps attribution_audit_sample_pct to [0, 100]', () => {
+    const configHigh = validateConfig({
+      attribution_audit_sample_pct: 150,
+    });
+    expect(configHigh.ok).toBe(true);
+    if (configHigh.ok) {
+      expect(configHigh.config.attribution_audit_sample_pct).toBe(100);
+      expect(configHigh.warnings.length).toBeGreaterThan(0);
+      expect(configHigh.warnings[0]).toMatch(/attribution_audit_sample_pct.*clamped.*100/i);
+    }
+
+    const configLow = validateConfig({
+      attribution_audit_sample_pct: -5,
+    });
+    expect(configLow.ok).toBe(true);
+    if (configLow.ok) {
+      expect(configLow.config.attribution_audit_sample_pct).toBe(0);
+      expect(configLow.warnings.length).toBeGreaterThan(0);
+      expect(configLow.warnings[0]).toMatch(/attribution_audit_sample_pct.*clamped.*0/i);
+    }
+  });
+
+  it('rejects attribution_audit_sample_pct with non-number value', () => {
+    const config = validateConfig({
+      attribution_audit_sample_pct: 'not-a-number',
+    });
+    expect(config.ok).toBe(false);
+    if (!config.ok) {
+      expect(config.error.message).toMatch(/attribution_audit_sample_pct.*number/i);
+    }
+  });
+
+  it('defaults attribution_audit_sample_pct to 10 when absent', () => {
+    const config = validateConfig({});
+    expect(config.ok).toBe(true);
+    if (config.ok) {
+      expect(config.config.attribution_audit_sample_pct).toBe(10);
+    }
+  });
+
+  it('allows both keys to be absent (inert defaults)', () => {
+    const config = validateConfig({});
+    expect(config.ok).toBe(true);
+    if (config.ok) {
+      expect(config.config.attribution_judge_cutover).toBeUndefined();
+      expect(config.config.attribution_audit_sample_pct).toBe(10);
+    }
+  });
+
+  it('resolveAttributionAuditSamplePct returns config value when set', () => {
+    const pct = resolveAttributionAuditSamplePct({ attribution_audit_sample_pct: 75 } as HarnessConfig);
+    expect(pct).toBe(75);
+  });
+
+  it('resolveAttributionAuditSamplePct returns 10 when absent', () => {
+    const pct = resolveAttributionAuditSamplePct({} as HarnessConfig);
+    expect(pct).toBe(10);
   });
 });
 

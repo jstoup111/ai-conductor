@@ -8,6 +8,7 @@ import {
   incrementNoEvidenceAttempts,
   resetNoEvidenceAttempts,
   NO_EVIDENCE_REASON_DESCRIPTIONS,
+  writeJudgedStamps,
 } from '../../src/engine/task-evidence.js';
 
 describe('task-evidence', () => {
@@ -292,6 +293,233 @@ describe('task-evidence', () => {
       expect(evidence.migrationGrandfather.has('old-task-2')).toBe(true);
       expect(evidence.migrationGrandfather.has('old-task-3')).toBe(false);
       expect(evidence.migrationGrandfather.size).toBe(2);
+    });
+  });
+
+  describe('writeJudgedStamps', () => {
+    it('validated tasks get stamps with form=semantic-verified and required fields', async () => {
+      const evidence = await createTaskEvidence(dir);
+      evidence.evidenceStamps.set('old-task', { sha: 'aaa111', form: 'commit' });
+
+      const validated = [
+        {
+          taskId: '7',
+          sha: 'abc123def456',
+          citedShas: ['abc123def456'],
+          verdictAnchor: 'head999',
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+        {
+          taskId: '9',
+          sha: 'def456abc123',
+          citedShas: ['def456abc123', 'fedd200'],
+          verdictAnchor: 'head999',
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ];
+
+      await writeJudgedStamps(dir, validated, []);
+
+      const written = await createTaskEvidence(dir);
+      expect(written.evidenceStamps.size).toBe(3); // old-task + 7 + 9
+      expect(written.evidenceStamps.get('7')).toEqual({
+        sha: 'abc123def456',
+        form: 'semantic-verified',
+        citedShas: ['abc123def456'],
+        verdictAnchor: 'head999',
+        testEvidence: { command: 'npm test', exit: 0 },
+      });
+      expect(written.evidenceStamps.get('9')).toEqual({
+        sha: 'def456abc123',
+        form: 'semantic-verified',
+        citedShas: ['def456abc123', 'fedd200'],
+        verdictAnchor: 'head999',
+        testEvidence: { command: 'npm test', exit: 0 },
+      });
+    });
+
+    it('pre-existing stamp entries remain byte-identical after write', async () => {
+      // Create a sidecar with a pre-existing stamp
+      const sidecarDir = join(dir, '.pipeline');
+      await mkdir(sidecarDir, { recursive: true });
+      const originalContent = {
+        evidenceStamps: {
+          'task-1': { sha: 'existing-sha', form: 'trailer' },
+          'task-2': { sha: 'another-sha', form: 'evidence:satisfied-by', foo: 'bar' }, // extra field
+        },
+        noEvidenceAttempts: 2,
+        noEvidenceReasons: ['zero_work_product'],
+        migrationGrandfather: ['old-task'],
+      };
+      await writeFile(
+        join(sidecarDir, 'task-evidence.json'),
+        JSON.stringify(originalContent, null, 2) + '\n',
+        'utf-8',
+      );
+
+      // Write judged stamps
+      const validated = [
+        {
+          taskId: '10',
+          sha: 'newsha111',
+          citedShas: ['newsha111'],
+          verdictAnchor: 'headabc',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+      await writeJudgedStamps(dir, validated, []);
+
+      // Read back and verify
+      const sidecarPath = join(sidecarDir, 'task-evidence.json');
+      const content = await readFile(sidecarPath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      // Pre-existing stamps should be exactly as they were
+      expect(parsed.evidenceStamps['task-1']).toEqual({
+        sha: 'existing-sha',
+        form: 'trailer',
+      });
+      // The extra field should NOT have been preserved in task-2
+      // (since we round-trip through the interface)
+      expect(parsed.evidenceStamps['task-2']).toEqual({
+        sha: 'another-sha',
+        form: 'evidence:satisfied-by',
+      });
+      // New stamp added
+      expect(parsed.evidenceStamps['10']).toEqual({
+        sha: 'newsha111',
+        form: 'semantic-verified',
+        citedShas: ['newsha111'],
+        verdictAnchor: 'headabc',
+        testEvidence: { command: 'test', exit: 0 },
+      });
+      // Metadata untouched
+      expect(parsed.noEvidenceAttempts).toBe(2);
+      expect(parsed.noEvidenceReasons).toEqual(['zero_work_product']);
+    });
+
+    it('refused tasks absent from sidecar', async () => {
+      const evidence = await createTaskEvidence(dir);
+      evidence.evidenceStamps.set('completed-7', { sha: 'sha777', form: 'commit' });
+
+      const validated = [
+        {
+          taskId: '8',
+          sha: 'valid-sha',
+          citedShas: ['valid-sha'],
+          verdictAnchor: 'head999',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+      const refused = ['9', '10']; // these should NOT get stamps
+
+      await writeJudgedStamps(dir, validated, refused);
+
+      const written = await createTaskEvidence(dir);
+      expect(written.evidenceStamps.size).toBe(2); // completed-7 + 8
+      expect(written.evidenceStamps.has('8')).toBe(true);
+      expect(written.evidenceStamps.has('9')).toBe(false);
+      expect(written.evidenceStamps.has('10')).toBe(false);
+      expect(written.evidenceStamps.has('completed-7')).toBe(true);
+    });
+
+    it('optional fields serialize correctly on write and deserialize on read', async () => {
+      // Write with all optional fields present
+      const validated = [
+        {
+          taskId: '5',
+          sha: 'full-sha-40-chars-long-' + 'x'.repeat(16),
+          citedShas: ['ssha1', 'ssha2'],
+          verdictAnchor: 'anchor-sha',
+          testEvidence: { command: 'vitest run', exit: 0, summary: '12 passed' },
+        },
+      ];
+
+      await writeJudgedStamps(dir, validated, []);
+
+      // Read the file as JSON and verify structure
+      const sidecarPath = join(dir, '.pipeline/task-evidence.json');
+      const rawJson = await readFile(sidecarPath, 'utf-8');
+      const parsed = JSON.parse(rawJson);
+
+      expect(parsed.evidenceStamps['5']).toMatchObject({
+        sha: expect.any(String),
+        form: 'semantic-verified',
+        citedShas: expect.arrayContaining(['ssha1', 'ssha2']),
+        verdictAnchor: 'anchor-sha',
+        testEvidence: { command: 'vitest run', exit: 0, summary: '12 passed' },
+      });
+
+      // Round-trip: read back via createTaskEvidence
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.evidenceStamps.get('5')).toEqual({
+        sha: validated[0].sha,
+        form: 'semantic-verified',
+        citedShas: ['ssha1', 'ssha2'],
+        verdictAnchor: 'anchor-sha',
+        testEvidence: { command: 'vitest run', exit: 0, summary: '12 passed' },
+      });
+    });
+
+    it('handles multiple validated tasks and merges with existing stamps', async () => {
+      const evidence = await createTaskEvidence(dir);
+      evidence.evidenceStamps.set('pre-existing-1', { sha: 'presha1', form: 'commit' });
+      evidence.noEvidenceAttempts = 1;
+
+      const validated = [
+        {
+          taskId: '11',
+          sha: 'sha-11-aaaa',
+          citedShas: ['sha-11-aaaa'],
+          verdictAnchor: 'head-batch-1',
+          testEvidence: { command: 'test 11', exit: 0 },
+        },
+        {
+          taskId: '12',
+          sha: 'sha-12-bbbb',
+          citedShas: ['sha-12-bbbb'],
+          verdictAnchor: 'head-batch-1',
+          testEvidence: { command: 'test 12', exit: 0 },
+        },
+      ];
+
+      await writeJudgedStamps(dir, validated, []);
+
+      const written = await createTaskEvidence(dir);
+      expect(written.evidenceStamps.size).toBe(3); // pre-existing-1 + 11 + 12
+      expect(written.evidenceStamps.get('11')).toBeDefined();
+      expect(written.evidenceStamps.get('12')).toBeDefined();
+      expect(written.evidenceStamps.get('pre-existing-1')).toBeDefined();
+      // Metadata should be preserved
+      expect(written.noEvidenceAttempts).toBe(1);
+    });
+
+    it('split attribution: multiple tasks citing overlapping SHAs', async () => {
+      const validated = [
+        {
+          taskId: '3',
+          sha: 'shared-sha-100',
+          citedShas: ['shared-sha-100', 'other-sha-1'],
+          verdictAnchor: 'head-split',
+          testEvidence: { command: 'test 3', exit: 0 },
+        },
+        {
+          taskId: '4',
+          sha: 'shared-sha-100', // same SHA, different task
+          citedShas: ['shared-sha-100', 'other-sha-2'],
+          verdictAnchor: 'head-split',
+          testEvidence: { command: 'test 4', exit: 0 },
+        },
+      ];
+
+      await writeJudgedStamps(dir, validated, []);
+
+      const written = await createTaskEvidence(dir);
+      expect(written.evidenceStamps.get('3')?.citedShas).toContain('shared-sha-100');
+      expect(written.evidenceStamps.get('4')?.citedShas).toContain('shared-sha-100');
+      // But each task's citedShas list is independent
+      expect(written.evidenceStamps.get('3')?.citedShas).toEqual(['shared-sha-100', 'other-sha-1']);
+      expect(written.evidenceStamps.get('4')?.citedShas).toEqual(['shared-sha-100', 'other-sha-2']);
     });
   });
 });
