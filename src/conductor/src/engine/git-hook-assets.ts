@@ -175,7 +175,7 @@ export const COMMIT_MSG_HOOK = [
   '      const fs = require(\'fs\');',
   '      try {',
   '        const data = JSON.parse(fs.readFileSync(\'$TASK_STATUS_FILE\', \'utf-8\'));',
-  '        const ids = (data.tasks || []).map(t => t.id);',
+  '        const ids = (Array.isArray(data.tasks) ? data.tasks : []).map(t => String(t && t.id));',
   '        console.log(ids.includes(\'$TASK_TRAILER\') ? \'yes\' : \'no\');',
   '      } catch {',
   '        console.log(\'no\');',

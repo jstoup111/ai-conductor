@@ -175,6 +175,35 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).toBe(0);
     });
 
+    it('accepts Task: 16 when ids 1..16 are seeded (not rejected by array index bug)', async () => {
+      await seedTaskStatus(Array.from({ length: 16 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
+      const res = await commitFile('h_extended.txt', 'content', 'feat: last id in 16-task set\n\nTask: 16');
+      expect(res.code).toBe(0);
+    });
+
+    it('accepts Task: 7 in a mid-range position', async () => {
+      const res = await commitFile('h_midrange.txt', 'content', 'feat: mid-range id\n\nTask: 7');
+      expect(res.code).toBe(0);
+    });
+
+    it('accepts Task: 3 with numeric-id fixture (numeric id, not string index)', async () => {
+      // Fixture with numeric IDs (not stringified), e.g. from seed tooling
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: 1, name: 'task 1', status: 'pending' },
+            { id: 2, name: 'task 2', status: 'pending' },
+            { id: 3, name: 'task 3', status: 'pending' },
+          ],
+        }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('h_numeric.txt', 'content', 'feat: numeric id fixture\n\nTask: 3');
+      expect(res.code).toBe(0);
+    });
+
     it('rejects an unknown Task: id', async () => {
       const res = await commitFile('i.txt', 'i', 'feat: bad id\n\nTask: 99');
       expect(res.code).not.toBe(0);
