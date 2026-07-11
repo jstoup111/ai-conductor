@@ -298,4 +298,158 @@ describe('observation-sweep', () => {
       expect(fakeGh).toHaveBeenCalledTimes(10);
     });
   });
+
+  describe('log-scan matcher', () => {
+    let mod: Record<string, unknown>;
+    let findObservation: any;
+    let tempDir: string;
+
+    beforeEach(async () => {
+      mod = await load();
+      findObservation = requireFn(mod, 'findObservation');
+
+      // Create a temp directory for the logs
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      tempDir = path.join(os.tmpdir(), `obs-log-test-${Date.now()}-${Math.random()}`);
+      await fs.mkdir(tempDir, { recursive: true });
+      await fs.mkdir(path.join(tempDir, '.daemon'), { recursive: true });
+    });
+
+    afterEach(async () => {
+      // Clean up temp directory
+      const fs = await import('fs/promises');
+      try {
+        await fs.rm(tempDir, { recursive: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+    });
+
+    it('log-scan: substring signature matches in daemon.log', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Setup: fixture daemon.log with lines
+      const logDir = path.join(tempDir, '.daemon');
+      const beforeTime = new Date('2026-07-11T09:59:00Z').getTime();
+      const afterTime = new Date('2026-07-11T10:05:00Z').getTime();
+
+      const logContent = `2026-07-11T10:00:00Z [daemon] some error occurred
+2026-07-11T10:05:00Z [daemon] test-substring: fixed
+2026-07-11T10:10:00Z [daemon] other info
+`;
+
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Call: findObservation with substring signature
+      const result = await findObservation(logDir, 'test-substring', false, beforeTime);
+
+      // Expected: returns match object with matched line and timestamp
+      expect(result).not.toBeNull();
+      expect(result.line).toContain('test-substring: fixed');
+      expect(result.timestamp).toBe(afterTime);
+    });
+
+    it('log-scan: regex signature matches in daemon.log', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Setup: fixture log with line matching pattern
+      const logDir = path.join(tempDir, '.daemon');
+      const beforeTime = new Date('2026-07-11T09:59:00Z').getTime();
+      const errorTime = new Date('2026-07-11T10:05:00Z').getTime();
+
+      const logContent = `2026-07-11T10:00:00Z [daemon] starting service
+2026-07-11T10:05:00Z [daemon] error detected timeout
+2026-07-11T10:10:00Z [daemon] recovery
+`;
+
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Call: findObservation with regex signature
+      const result = await findObservation(logDir, 'error.*timeout', true, beforeTime);
+
+      // Expected: returns match
+      expect(result).not.toBeNull();
+      expect(result.line).toContain('error detected timeout');
+      expect(result.timestamp).toBe(errorTime);
+    });
+
+    it('log-scan: match timestamped before mergedAt does NOT count', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Setup: log with matching line timestamped before mergedAt
+      const logDir = path.join(tempDir, '.daemon');
+      const mergedAt = new Date('2026-07-11T10:00:00Z').getTime();
+
+      const logContent = `2026-07-11T09:50:00Z [daemon] test-substring: fixed before
+2026-07-11T10:05:00Z [daemon] other content
+`;
+
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Call: findObservation with after filter
+      const result = await findObservation(logDir, 'test-substring', false, mergedAt);
+
+      // Expected: returns null (no match found after mergedAt)
+      expect(result).toBeNull();
+    });
+
+    it('log-scan: finds match in rotated daemon.log.1', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Setup: daemon.log.1 contains the only matching line
+      const logDir = path.join(tempDir, '.daemon');
+      const beforeTime = new Date('2026-07-11T09:59:00Z').getTime();
+      const matchTime = new Date('2026-07-11T10:05:00Z').getTime();
+
+      const currentLog = `2026-07-11T10:10:00Z [daemon] unrelated
+2026-07-11T10:15:00Z [daemon] more unrelated
+`;
+
+      const rotatedLog = `2026-07-11T10:00:00Z [daemon] some error occurred
+2026-07-11T10:05:00Z [daemon] test-substring: fixed
+`;
+
+      await fs.writeFile(path.join(logDir, 'daemon.log'), currentLog);
+      await fs.writeFile(path.join(logDir, 'daemon.log.1'), rotatedLog);
+
+      // Call: findObservation
+      const result = await findObservation(logDir, 'test-substring', false, beforeTime);
+
+      // Expected: finds and returns the match from daemon.log.1
+      expect(result).not.toBeNull();
+      expect(result.line).toContain('test-substring: fixed');
+      expect(result.timestamp).toBe(matchTime);
+    });
+
+    it('log-scan: ignores lines without leading ISO timestamp', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+
+      // Setup: log with un-timestamped lines
+      const logDir = path.join(tempDir, '.daemon');
+      const beforeTime = new Date('2026-07-11T09:59:00Z').getTime();
+      const matchTime = new Date('2026-07-11T10:05:00Z').getTime();
+
+      const logContent = `This line has no timestamp and contains test-substring
+2026-07-11T10:05:00Z [daemon] test-substring: fixed
+Another line without timestamp test-substring
+`;
+
+      await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
+
+      // Call: findObservation
+      const result = await findObservation(logDir, 'test-substring', false, beforeTime);
+
+      // Expected: un-timestamped lines are skipped, only the timestamped match is found
+      expect(result).not.toBeNull();
+      expect(result.timestamp).toBe(matchTime);
+      expect(result.line).toContain('[daemon] test-substring: fixed');
+    });
+  });
 });
