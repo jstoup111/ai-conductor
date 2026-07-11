@@ -35,6 +35,15 @@ export interface WatchedDeclaration {
 }
 
 /**
+ * Close-on-merge declaration: the marker specifies that an issue should close on merge.
+ */
+export interface CloseOnMergeDeclaration {
+  kind: 'close-on-merge';
+  /** Justification for why closing on merge is safe. */
+  rationale: string;
+}
+
+/**
  * Parse error: the marker is malformed or contains invalid data.
  */
 export interface ParseError {
@@ -45,15 +54,23 @@ export interface ParseError {
 /**
  * Result type for parsing: either a valid declaration or a typed error.
  */
-export type ParseResult = WatchedDeclaration | ParseError;
+export type ObservationDeclaration = WatchedDeclaration | CloseOnMergeDeclaration;
+export type ParseResult = ObservationDeclaration | ParseError;
 
 /**
  * Parse `.docs/observation/<plan-stem>.md` marker content into a typed declaration.
  *
+ * Supports two marker kinds:
+ *
+ * **Watched mode (default or Kind: watched):**
  * Requires:
  * - `Signature:` line with either a substring or /regex/ pattern
  * - `Surface:` line with value `daemon-log` (only v1 surface)
  * - `Window-days:` line with a positive integer
+ *
+ * **Close-on-merge mode (Kind: close-on-merge):**
+ * Requires:
+ * - `Rationale:` line with justification for safe merge-time closure
  *
  * For regex signatures (delimited by `/`), validates that the regex compiles
  * and stores the pattern without the delimiters.
@@ -75,6 +92,40 @@ export function parseObservationMarker(content: string): ParseResult {
     }
   }
 
+  // Detect marker kind: close-on-merge or watched (default)
+  const kind = fields['Kind'];
+  if (kind === 'close-on-merge') {
+    return parseCloseOnMerge(fields);
+  }
+
+  // Default to watched mode
+  return parseWatched(fields);
+}
+
+/**
+ * Parse a close-on-merge marker.
+ * Requires: Rationale field
+ */
+function parseCloseOnMerge(fields: Record<string, string>): ParseResult {
+  const rationale = fields['Rationale'];
+  if (!rationale) {
+    return {
+      kind: 'parse_error',
+      message: 'Missing required field: Rationale',
+    };
+  }
+
+  return {
+    kind: 'close-on-merge',
+    rationale,
+  };
+}
+
+/**
+ * Parse a watched marker.
+ * Requires: Signature, Surface, Window-days
+ */
+function parseWatched(fields: Record<string, string>): ParseResult {
   // Validate and extract Signature
   const signatureRaw = fields['Signature'];
   if (!signatureRaw) {
