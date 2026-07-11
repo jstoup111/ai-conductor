@@ -12,7 +12,7 @@
 // re-encode the pidfile path or write anything.
 
 import { stat } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
 import { tailDaemonLog, followDaemonLog, daemonLogPath } from './daemon-log.js';
@@ -21,6 +21,7 @@ import { isPaused, readPauseMetadata } from './pause-marker.js';
 import { readRestartPending, type RestartIntent } from './restart-marker.js';
 import { isEngineVersionId } from './engine-store.js';
 import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock } from './gated-snapshot.js';
+import { summarizeAccuracyLedger } from './attribution-audit.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
  * isn't a recognized version id (legacy record, dev/unpublished run, etc.). */
@@ -360,6 +361,21 @@ async function renderGatedSection(repoPath: string, out: (line: string) => void,
 }
 
 /**
+ * Render the rolling attribution agreement rate (Task 18, Story 9) for one
+ * repo, reading `.daemon/attribution-accuracy.jsonl` via
+ * `summarizeAccuracyLedger`. Absent/empty ledger ⇒ nothing is printed — never
+ * fabricate a 100% agreement rate when there is no evidence to compute one
+ * from.
+ */
+async function renderAgreementLine(repoPath: string, out: (line: string) => void): Promise<void> {
+  const ledgerPath = join(repoPath, '.daemon', 'attribution-accuracy.jsonl');
+  const summary = await summarizeAccuracyLedger(ledgerPath);
+  if (summary === null) return;
+  const pct = (summary.agreementRate * 100).toFixed(1);
+  out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
+}
+
+/**
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
  */
@@ -392,6 +408,7 @@ export async function runDaemonStatus(
     // attempt the snapshot read for them (AC: "path-missing repo skips the read").
     if (row.liveness !== 'path-missing') {
       await renderGatedSection(record.path, out, clock);
+      await renderAgreementLine(record.path, out);
     }
   }
   return { code: 0, rows };

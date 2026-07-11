@@ -517,6 +517,63 @@ describe('engine/daemon-observe-cli', () => {
         execSpy.mockRestore();
       });
     });
+
+    describe('attribution agreement rate (Task 18, Story 9)', () => {
+      async function writeLedger(repo: string, lines: unknown[]): Promise<void> {
+        const daemonDir = join(repo, '.daemon');
+        await mkdir(daemonDir, { recursive: true });
+        const body = lines.map((l) => (typeof l === 'string' ? l : JSON.stringify(l))).join('\n') + '\n';
+        await writeFile(join(daemonDir, 'attribution-accuracy.jsonl'), body, 'utf8');
+      }
+
+      it('prints the rolling agreement rate and sample count when the ledger has entries', async () => {
+        const repo = join(root, 'repo-ledger');
+        await mkdir(repo, { recursive: true });
+        await writeLedger(repo, [
+          { ts: 1, feature: 'f', taskId: 't1', fastLaneForm: 'commit', fastLaneSha: 'a', auditVerdict: 'satisfied', agree: true },
+          { ts: 2, feature: 'f', taskId: 't2', fastLaneForm: 'commit', fastLaneSha: 'b', auditVerdict: 'unsatisfied', agree: false },
+          { ts: 3, feature: 'f', taskId: 't3', fastLaneForm: 'commit', fastLaneSha: 'c', auditVerdict: 'satisfied', agree: true },
+        ]);
+        const registryPath = await registry([record('repo-ledger', repo)]);
+
+        const out: string[] = [];
+        const { code } = await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(code).toBe(0);
+        const output = out.join('\n');
+        expect(output).toMatch(/agreement/i);
+        // 2 of 3 agree => 66.7%
+        expect(output).toMatch(/66\.7%/);
+        expect(output).toMatch(/n=3/);
+      });
+
+      it('omits the agreement line when the ledger is absent (no fake 100%)', async () => {
+        const repo = join(root, 'repo-no-ledger');
+        await mkdir(repo, { recursive: true });
+        const registryPath = await registry([record('repo-no-ledger', repo)]);
+
+        const out: string[] = [];
+        const { code } = await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(code).toBe(0);
+        const output = out.join('\n');
+        expect(output).not.toMatch(/agreement/i);
+        expect(output).not.toContain('100%');
+      });
+
+      it('omits the agreement line when the ledger file exists but is empty', async () => {
+        const repo = join(root, 'repo-empty-ledger');
+        await mkdir(join(repo, '.daemon'), { recursive: true });
+        await writeFile(join(repo, '.daemon', 'attribution-accuracy.jsonl'), '', 'utf8');
+        const registryPath = await registry([record('repo-empty-ledger', repo)]);
+
+        const out: string[] = [];
+        const { code } = await runDaemonStatus({ registryPath, out: (l) => out.push(l) });
+
+        expect(code).toBe(0);
+        expect(out.join('\n')).not.toMatch(/agreement/i);
+      });
+    });
   });
 
   describe('runDaemonLogs', () => {
