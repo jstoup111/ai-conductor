@@ -332,6 +332,36 @@ describe('applyTeardownDecision (#437) — global-setup wiring: warn-only indete
   });
 });
 
+describe('report message prefixes (#437 TR-3) — killed vs indeterminate are textually distinct', () => {
+  it('killed and indeterminate messages use distinct, greppable, non-overlapping prefixes', () => {
+    const killedResult = { killed: ['cc-daemon-leak (pane cwd: /tmp/leak-fixture)'], indeterminate: [] };
+    const indeterminateResult = {
+      killed: [],
+      indeterminate: ['cc-daemon-repo (pane cwd: /home/user/code/repo)'],
+    };
+
+    let killedMessage = '';
+    try {
+      applyTeardownDecision(killedResult, () => {});
+    } catch (err) {
+      killedMessage = (err as Error).message;
+    }
+
+    let indeterminateMessage = '';
+    applyTeardownDecision(indeterminateResult, (msg) => {
+      indeterminateMessage = msg;
+    });
+
+    const killedPrefix = 'tmux-leak-guard: KILLED leaked session';
+    const indeterminatePrefix = 'tmux-leak-guard: NOT killed (fail-closed):';
+
+    expect(killedMessage.startsWith(killedPrefix)).toBe(true);
+    expect(indeterminateMessage.startsWith(indeterminatePrefix)).toBe(true);
+    expect(indeterminatePrefix.includes(killedPrefix)).toBe(false);
+    expect(killedPrefix.includes(indeterminatePrefix)).toBe(false);
+  });
+});
+
 describe('tmux-leak-guard (#377)', () => {
   it('a pre-existing session set yields no leaks (operator daemons untouched)', () => {
     const before = snapshotDaemonSessions();
