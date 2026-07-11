@@ -620,6 +620,71 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     });
   });
 
+  describe('abstain loudly when the atomic status write fails', () => {
+    it('removes the stamp and emits diagnostic when write/rename fails on read-only dir', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
+      const pipelineDir = join(tempDir, '.pipeline');
+      mkdirSync(pipelineDir, { recursive: true });
+
+      // Stamp file exists with id "1"
+      const currentTaskPath = join(pipelineDir, 'current-task');
+      writeFileSync(currentTaskPath, '1', 'utf-8');
+
+      // Healthy status file with ids 1..3
+      const statusPath = join(pipelineDir, 'task-status.json');
+      writeFileSync(
+        statusPath,
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+          ],
+        }),
+        'utf-8',
+      );
+
+      const hookPath = join(tempDir, 'pre-dispatch-hook.sh');
+      writeFileSync(hookPath, PRE_DISPATCH_HOOK, { mode: 0o755 });
+
+      const payload = loadPreDispatchPayload('pre-dispatch-task-id.json', {
+        prompt: 'Task: 2',
+      });
+
+      // Make .pipeline read-only so write/rename fails
+      const fs = require('node:fs');
+      fs.chmodSync(pipelineDir, 0o555);
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        const result = spawnSync('bash', [hookPath], {
+          input: JSON.stringify(payload),
+          cwd: tempDir,
+          encoding: 'utf-8',
+        });
+        exitCode = result.status ?? 0;
+        stderr = result.stderr ?? '';
+      } catch (err) {
+        const execErr = err as { status?: number; stderr?: Buffer };
+        exitCode = execErr.status ?? 1;
+        stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
+      } finally {
+        // Restore permissions in teardown so rmSync can clean up
+        fs.chmodSync(pipelineDir, 0o755);
+      }
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain('pre-dispatch-hook: abstain —');
+      expect(stderr).toContain('dispatch Task: 2');
+      // Stamp should be removed, or if removal fails on the read-only dir,
+      // the diagnostic should report the removal failure
+      if (existsSync(currentTaskPath)) {
+        expect(stderr).toContain('stamp removal also failed');
+      }
+    });
+  });
+
   describe('fail-open on unparseable payloads', () => {
     function seedTempDirWithStatus(): { pipelineDir: string; statusPath: string; seededStatus: string } {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
