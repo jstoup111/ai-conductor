@@ -10,6 +10,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- `/architecture-review --as-built` now performs a **production reachability
+  sweep**: every primitive the feature's diff introduces (exports, hook
+  scripts, config keys, ADR-promised events/log lines) must cite one
+  production caller (`file:line`) from a real entry point. No caller ⇒
+  BLOCKED as an "unreachable rung" (green-but-unwired guard, #462 stopgap);
+  statically-reachable-but-unobserved behavior is recorded as `UNEXERCISED`
+  with its observation signature for the close-on-observation flow (#492).
+  Skill-level enforcement now; engine machinery remains #462's follow-up.
+
+
 ### Added
 
 - **New `/intake` skill — assisted authoring of intake issues (#490 companion).**

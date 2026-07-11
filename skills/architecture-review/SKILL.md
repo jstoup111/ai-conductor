@@ -317,8 +317,25 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
   are not gated against (per §7b).
 - Compare the as-shipped code to those approved decisions: were new patterns introduced without an
   ADR? Are domain boundaries respected in the actual code? Do diagrams still match reality?
+- **Production reachability sweep (green-but-unwired guard, #462).** For each primitive this
+  feature's diff introduces or materially changes — exported functions/modules, hook scripts,
+  config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
+  production entry point (`conduct-ts` CLI dispatch, the daemon loop, hook/settings provisioning,
+  a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
+  primitive's own module do not count as callers.
+  - **No production caller exists** → this is a **BLOCKED** violation ("unreachable rung"), same
+    severity as an ADR violation: shipped-tested-green code nothing invokes is not shipped
+    behavior. Name the primitive and what was searched.
+  - **Statically reachable but not yet observed running** (e.g. a new log line no production log
+    shows yet) → record it under Drift Notes as `UNEXERCISED: <primitive> — signature: <the
+    greppable line/event that will prove it live>`. Not blocking; it hands the observation
+    signature to the close-on-observation flow (#492).
+  - Precedents this exists to catch: #392's orphaned `onHaltWritten`, #460's two unwired
+    schedulers, #510's never-engaged evidence anchor — all shipped through this gate before it
+    checked reachability.
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
-  pass. This is a code-vs-approved-design pattern match, deliberately cheap.
+  pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
+  deliberately cheap.
 
 **Verdict:**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
@@ -352,8 +369,10 @@ review remain in `.docs/decisions/`):
 **APPROVED ADRs checked:** [list]
 **Verdict:** APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED
 
+## Production Reachability (every new/changed primitive → its production caller, file:line;
+## UNEXERCISED entries carry their observation signature)
 ## Drift Notes (if any)
-## Blocking Violations (if BLOCKED — which APPROVED ADR, where the code violates it, file:line)
+## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
 ```
 
