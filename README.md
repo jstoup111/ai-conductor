@@ -691,9 +691,9 @@ Impact, or Desired outcome sections — those belong in Hypotheses *only*, and e
 advisory, not binding.
 
 **References:**
-- [Intake idea issue template](`.github/ISSUE_TEMPLATE/intake.yml`) — The template that enforces
+- [Intake idea issue template](.github/ISSUE_TEMPLATE/intake.yml) — The template that enforces
   this shape when filing issues on the web or via `gh issue create`.
-- [HARNESS.md Key Conventions](HARNESS.md#behavioral-rules) — "Intake states WHAT and outcomes — DECIDE owns HOW"
+- [HARNESS.md Key Conventions](HARNESS.md#key-conventions) — "Intake states WHAT and outcomes — DECIDE owns HOW"
   documents this rule in detail.
 
 ## Choosing a Conductor
