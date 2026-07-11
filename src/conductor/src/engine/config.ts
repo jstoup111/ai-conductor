@@ -711,6 +711,21 @@ export function isAttributionEnforcementActive(
   return Date.parse(cutover) <= now.getTime();
 }
 
+/**
+ * Whether semantic attribution judge cutover is active right now (Task 12).
+ * Mirrors the enforcement cutover shape: absent cutover means judge is off;
+ * cutover in the past (relative to `now`) turns it on; cutover in the future
+ * keeps it off until that instant passes. The config value is validated at
+ * load time, so this function trusts a defined input to parse cleanly.
+ */
+export function isAttributionJudgeCutoverActive(
+  cutover: string | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (cutover === undefined) return false;
+  return Date.parse(cutover) <= now.getTime();
+}
+
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
 const SELF_HOST_GATE_KEYS = [
   'skill_relink_preflight',

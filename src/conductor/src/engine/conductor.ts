@@ -28,7 +28,7 @@ import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { resolveBuildProgressConfig } from './config.js';
+import { resolveBuildProgressConfig, isAttributionJudgeCutoverActive } from './config.js';
 import {
   isEnforcementConfigured,
   writeBuildStepMarker,
@@ -36,6 +36,7 @@ import {
   detectZeroWorkProduct,
   readDispatchCount,
 } from './attribution-enforcement.js';
+import { runAttributionLane, type AttributionLaneResult } from './attribution-lane.js';
 import {
   readState,
   writeState,
@@ -1817,6 +1818,7 @@ export class Conductor {
             // — the retry never has to fire. Runs fresh on every gate
             // evaluation (no once-per-session guard) to ensure derivation
             // uses current git state and fresh task counts (H7).
+            let derivedCompletion: any = null;
             if (
               !completion.done &&
               step.name === 'build'
@@ -1830,10 +1832,16 @@ export class Conductor {
                 ? join(this.projectRoot, activePlanPath)
                 : (await this.completionCtx(state)).planPath;
 
-              const heal = derivePlanPath
+              const result = derivePlanPath
                 ? await deriveCompletion(this.projectRoot, derivePlanPath)
-                    .then((derived) => applyDerivedCompletion(this.projectRoot, derived))
-                    .catch(() => ({ healed: [], skipped: [] }))
+                    .catch(() => null)
+                : null;
+
+              // Task 12: Capture the derived result for lane dispatch
+              derivedCompletion = result;
+
+              const heal = result
+                ? await applyDerivedCompletion(this.projectRoot, result)
                 : { healed: [], skipped: [] };
               await this.events.emit({
                 type: 'auto_heal',
@@ -1847,6 +1855,69 @@ export class Conductor {
                   step.name,
                   await this.completionCtx(state),
                 );
+              }
+
+              // Task 12: Attribution lane integration. Runs after auto-heal
+              // completes, before gate-miss handling. Extracts residue from
+              // derived result, checks cutover armed, detects zero-work, and
+              // dispatches the verifier. If the lane stamps tasks, those stamps
+              // take effect on the NEXT derivation cycle (same evaluation loop —
+              // no explicit re-derive here, as the lane runs inside the auto-heal
+              // block which already re-checks completion once healing fires).
+              if (
+                derivedCompletion !== null &&
+                isAttributionJudgeCutoverActive(this.config.attribution_judge_cutover)
+              ) {
+                // Extract residue: task IDs where completion is not achieved
+                const residueIds = Object.keys(derivedCompletion).filter(
+                  (id) => !derivedCompletion[id]?.completed && derivedCompletion[id]?.status !== 'skipped',
+                );
+
+                // Check zero-work once per gate evaluation to skip lane if needed
+                const headShaAfterBuild = await currentCommitSha(this.projectRoot);
+                const isZeroWork = await detectZeroWorkProduct({
+                  projectRoot: this.projectRoot,
+                  config: this.config,
+                  headBefore: headShaBeforeBuild,
+                  headAfter: headShaAfterBuild,
+                });
+
+                // Dispatch the lane if there's residue and cutover is armed
+                const planPathOrNull = (await this.completionCtx(state)).planPath;
+                if (
+                  residueIds.length > 0 &&
+                  planPathOrNull &&
+                  headShaAfterBuild &&
+                  !isZeroWork
+                ) {
+                  const planPath: string = planPathOrNull;
+                  const headSha: string = headShaAfterBuild;
+                  const git = makeGitRunner(this.projectRoot);
+                  const laneResult: AttributionLaneResult = await runAttributionLane({
+                    projectRoot: this.projectRoot,
+                    planPath,
+                    residueIds,
+                    headSha,
+                    cutoverArmed: true, // Already gated by isAttributionJudgeCutoverActive above
+                    isZeroWorkProduct: false, // Already checked above
+                    git: (args) => git(args),
+                    dispatchVerifier: async (inputs) => {
+                      // TODO (Task 12 GREEN): integrate with actual verifier dispatch
+                      // For now, this is a no-op stub for RED phase tests
+                      return { success: false };
+                    },
+                  });
+
+                  // Task 12: Counter reset. If the lane dispatched and stamped
+                  // tasks, those stamps are now in task-evidence.json. On the
+                  // NEXT evaluation cycle (next auto-heal or gate check), the
+                  // lane's stamps will cause residue to shrink. The existing
+                  // progress-detection logic (line 1932: resolvedTasksAfter >
+                  // resolvedTasksBefore) will then reset the counter. This run
+                  // does not re-derive to check stamps immediately — the lane's
+                  // stamps take effect on the next gate evaluation (same attempt
+                  // loop, next iteration of the while loop at line 1766).
+                }
               }
             }
 
