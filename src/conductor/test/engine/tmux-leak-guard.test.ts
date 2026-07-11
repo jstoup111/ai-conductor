@@ -172,6 +172,74 @@ describe('reapLeakedDaemonSessions (#437) — two-signal kill decision', () => {
     expect(killCalls).toHaveLength(1);
     expect(killCalls[0]).toEqual(['kill-session', '-t', '=cc-daemon-b']);
   });
+
+  it('failed baseline ⇒ zero kills, everything indeterminate (#437 TR-1)', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        // Live sessions: a repo-cwd daemon (looks legit) AND a tmpdir-cwd
+        // leak (would normally be killed) — but the baseline snapshot
+        // itself failed, so neither can be trusted as "new".
+        return { code: 0, stdout: 'cc-daemon-repo\ncc-daemon-leak\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        const target = args[3];
+        if (target === '=cc-daemon-repo:') {
+          return { code: 0, stdout: '/home/user/code/james-stoup-agents\n', stderr: '' };
+        }
+        return { code: 0, stdout: `${os.tmpdir()}/leak-fixture\n`, stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const snapshot = { sessions: [], failed: true };
+
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+
+    expect(result.killed).toEqual([]);
+    expect(result.indeterminate).toHaveLength(2);
+    expect(result.indeterminate.some((l) => l.includes('cc-daemon-repo'))).toBe(true);
+    expect(result.indeterminate.some((l) => l.includes('cc-daemon-leak'))).toBe(true);
+
+    const killCalls = calls.filter((a) => a[0] === 'kill-session');
+    expect(killCalls).toHaveLength(0);
+  });
+});
+
+describe('reapLeakedDaemonSessions (#437) — teardown-time listing failure degrades to silent no-kill', () => {
+  it('successful baseline but teardown-time listing fails ⇒ empty result, no kill attempted', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 1, stdout: '', stderr: "can't find session" };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const snapshot = { sessions: ['cc-daemon-a'], failed: false };
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+
+    expect(result).toEqual({ killed: [], indeterminate: [] });
+    expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+    expect(calls.some((a) => a[0] === 'display-message')).toBe(false);
+  });
+
+  it('ENOENT-class runner at snapshot AND teardown ⇒ empty result (tmux not installed, silent no-op)', () => {
+    const runner: TmuxRunner = () => ({
+      code: 1,
+      stdout: '',
+      stderr: '',
+      spawnError: true,
+    });
+
+    const snapshot = snapshotDaemonSessions(runner);
+    expect(snapshot).toEqual({ sessions: [], failed: true });
+
+    const result = reapLeakedDaemonSessions(snapshot, runner);
+    expect(result).toEqual({ killed: [], indeterminate: [] });
+  });
 });
 
 describe('tmux-leak-guard (#377)', () => {
