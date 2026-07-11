@@ -174,3 +174,30 @@ happens only inside sessions/commits when the machinery is verifiably installed.
 - [ ] A real-session probe test (per #477 recipe) for the mutation gate ships WITH the
       feature (injected-runner argv tests alone are insufficient — real-binary smoke).
 - [ ] Migration block in CHANGELOG for the hook-wiring surface.
+
+## Amendment (2026-07-11, operator-approved): payload-independent fail-closed write surface
+
+The real-binary probe (Task 17) surfaced two host-behavior defects in the as-specced
+Surface B design, and the shipped implementation diverges from the clause above
+("an unparseable hook payload passes through") **deliberately, for the write surface only**:
+
+1. **Bounded reads everywhere.** A host that holds hook stdin open made the unbounded
+   `head -c` read hang the entire session (observed: `claude -p` timeout, exit 124).
+   All session-hook stdin reads are bounded (`timeout 3`).
+2. **Write surface fails CLOSED without a payload.** With the bounded read, an
+   undelivered payload previously fell through fail-open — an unstamped session's
+   `Write` succeeded (observed live; the gate was bypassable by host stdin behavior).
+   The settings wiring now passes the matcher surface as an argv flag
+   (`mutation-gate.sh write` / `mutation-gate.sh bash`): the matcher itself proves a
+   file mutation, so the write surface blocks on marker-present + stamp-absent with
+   **no payload dependence**. The bash surface keeps the payload-dependent,
+   fail-open-on-unparseable contract (blocking all unstamped Bash would break test
+   and inspection commands).
+
+The prior fail-open clause is superseded for Edit|Write|NotebookEdit invocations and
+preserved verbatim for Bash. Rationale: a gate whose enforcement depends on the host's
+stdin plumbing is prompt-discipline's sibling — enforcement must not have an
+environmental bypass. Verified by the Task-17 probe (block + message observed via
+stream-json; stamped path passes; 3/3 against the real binary).
+
+Status: APPROVED (amendment operator-approved 2026-07-11)
