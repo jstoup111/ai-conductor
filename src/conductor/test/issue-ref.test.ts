@@ -208,5 +208,81 @@ describe('issue-ref', () => {
       expect(outcome).toBe('attempted');
       expect(enroll).toHaveBeenCalled();
     });
+
+    it('Test 8: closeIssueOnImplementationMerge skips injection when no sourceRef', async () => {
+      const mod = await load();
+      const closeIssueOnImplementationMerge = requireFn(mod, 'closeIssueOnImplementationMerge');
+
+      const enrollCalls: unknown[] = [];
+      const enroll = vi.fn(async (entry: unknown) => {
+        enrollCalls.push(entry);
+      });
+
+      const ghCalls: unknown[] = [];
+      const gh = vi.fn(async (args: string[], opts: { cwd: string }) => {
+        ghCalls.push({ args, opts });
+        return { stdout: '' };
+      });
+
+      const declaration = {
+        kind: 'watched' as const,
+        signature: 'fix-observed',
+        isRegex: false,
+        windowDays: 14,
+        surface: 'daemon-log' as const,
+      };
+
+      const outcome = await closeIssueOnImplementationMerge({
+        gh,
+        sourceRef: undefined,
+        prUrl: 'https://github.com/org/repo/pull/123',
+        cwd: '/repo',
+        slug: 'test-feature',
+        declaration,
+        enroll,
+      });
+
+      expect(outcome).toBe('no-source-ref');
+      expect(enrollCalls).toHaveLength(0);
+      expect(ghCalls).toHaveLength(0);
+    });
+
+    it('Test 9: closeIssueOnImplementationMerge skips injection when no prUrl', async () => {
+      const mod = await load();
+      const closeIssueOnImplementationMerge = requireFn(mod, 'closeIssueOnImplementationMerge');
+
+      const enrollCalls: unknown[] = [];
+      const enroll = vi.fn(async (entry: unknown) => {
+        enrollCalls.push(entry);
+      });
+
+      const ghCalls: unknown[] = [];
+      const gh = vi.fn(async (args: string[], opts: { cwd: string }) => {
+        ghCalls.push({ args, opts });
+        return { stdout: '' };
+      });
+
+      const declaration = {
+        kind: 'watched' as const,
+        signature: 'fix-observed',
+        isRegex: false,
+        windowDays: 14,
+        surface: 'daemon-log' as const,
+      };
+
+      const outcome = await closeIssueOnImplementationMerge({
+        gh,
+        sourceRef: '#42',
+        prUrl: undefined,
+        cwd: '/repo',
+        slug: 'test-feature',
+        declaration,
+        enroll,
+      });
+
+      expect(outcome).toBe('no-pr-url');
+      expect(enrollCalls).toHaveLength(0);
+      expect(ghCalls).toHaveLength(0);
+    });
   });
 });
