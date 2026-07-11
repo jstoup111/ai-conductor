@@ -1203,12 +1203,24 @@ export class Conductor {
       startIndex = this.findResumeIndex(state, steps);
     }
 
-    // Save state on SIGINT before exit
-    const sigintHandler = async () => {
+    // Save state on SIGINT/SIGTERM/SIGHUP before exit
+    // Exit codes follow Unix convention: 128 + signal number
+    const signalHandlerBase = async (signal: NodeJS.Signals) => {
       await writeState(this.stateFilePath, state);
-      process.exit(130); // 128 + SIGINT(2) — standard Unix convention
+      const exitCodes: Record<string, number> = {
+        SIGINT: 130,   // 128 + 2
+        SIGTERM: 143,  // 128 + 15
+        SIGHUP: 129,   // 128 + 1
+      };
+      process.exit(exitCodes[signal] ?? 1);
     };
+    const sigintHandler = () => signalHandlerBase('SIGINT');
+    const sighupHandler = () => signalHandlerBase('SIGHUP');
     process.on('SIGINT', sigintHandler);
+    process.on('SIGHUP', sighupHandler);
+    // SIGTERM is owned by the interactive-scoped `sigterm` handler below
+    // (Task 22: daemon mode delegates SIGTERM to the daemon-level handler);
+    // signalHandlerBase keeps its SIGTERM row for the exit-code convention.
 
     // Mutable reference for the current rate-limit wait AbortController, used by
     // SIGTERM handler to abort in-flight wait when signal is received.
@@ -3188,6 +3200,7 @@ export class Conductor {
     } finally {
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
+      process.off('SIGHUP', sighupHandler);
 
       // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
       // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown

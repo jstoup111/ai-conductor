@@ -1354,7 +1354,8 @@ export const GATE_ONLY_PREDICATES: Partial<
  * Graph` section or per-task `**Dependencies:**` lines. Required so `build` can
  * order tasks topologically. Exported for daemon backlog eligibility.
  */
-export function planHasDependencyTree(planText: string): boolean {
+export function planHasDependencyTree(planText: string | null | undefined): boolean {
+  if (!planText) return false;
   return (
     /^##\s+task\s+dependency\s+graph/im.test(planText) ||
     /\*\*dependencies:\*\*/i.test(planText)

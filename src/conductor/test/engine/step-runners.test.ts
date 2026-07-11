@@ -514,6 +514,101 @@ describe('DefaultStepRunner', () => {
       // Last call (21st step, callCount=20 at that point) should use 3x cooldown
       expect(sleepSpy).toHaveBeenLastCalledWith(15000); // 3x * 5s
     });
+
+    it('pins cooldown multiplier at callCount == 9 (still 1x)', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 10 steps: step 1 has no cooldown, steps 2-10 have cooldown
+      // When step 10 runs, callCount == 9 (last value of 1x tier)
+      for (let i = 0; i < 10; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // 9 sleep calls (steps 2-10)
+      expect(sleepSpy).toHaveBeenCalledTimes(9);
+      // 10th step (callCount=9) should still use 1x multiplier
+      expect(sleepSpy).toHaveBeenLastCalledWith(10000); // 1x base
+    });
+
+    it('pins cooldown multiplier at callCount == 10 (escalates to 2x)', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 11 steps: when step 11 runs, callCount == 10 (first value of 2x tier)
+      for (let i = 0; i < 11; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // 10 sleep calls (steps 2-11)
+      expect(sleepSpy).toHaveBeenCalledTimes(10);
+      // 11th step (callCount=10) should use 2x multiplier
+      expect(sleepSpy).toHaveBeenLastCalledWith(20000); // 2x base
+    });
+
+    it('pins cooldown multiplier at callCount == 19 (still 2x)', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 20 steps: when step 20 runs, callCount == 19 (last value of 2x tier)
+      for (let i = 0; i < 20; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // 19 sleep calls (steps 2-20)
+      expect(sleepSpy).toHaveBeenCalledTimes(19);
+      // 20th step (callCount=19) should still use 2x multiplier
+      expect(sleepSpy).toHaveBeenLastCalledWith(20000); // 2x base
+    });
+
+    it('pins cooldown multiplier at callCount == 20 (escalates to 3x)', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 10,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 21 steps: when step 21 runs, callCount == 20 (first value of 3x tier)
+      for (let i = 0; i < 21; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // 20 sleep calls (steps 2-21)
+      expect(sleepSpy).toHaveBeenCalledTimes(20);
+      // 21st step (callCount=20) should use 3x multiplier
+      expect(sleepSpy).toHaveBeenLastCalledWith(30000); // 3x base
+    });
+
+    it('cooldown disabled (stepCooldown == 0) → no sleep regardless of call count', async () => {
+      const sleepSpy = vi.fn().mockResolvedValue(undefined);
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        stepCooldown: 0,
+        sleepFn: sleepSpy,
+      });
+
+      // Run 21 steps to exercise all boundary crossings.
+      // With stepCooldown: 0, sleep should never be called regardless.
+      for (let i = 0; i < 21; i++) {
+        await runner.run('worktree', emptyState);
+      }
+
+      // No sleep calls at all when cooldown is disabled
+      expect(sleepSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('complexity assessment', () => {

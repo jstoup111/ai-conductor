@@ -3126,6 +3126,85 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
+  it('saves state on SIGHUP before exit', async () => {
+    let sighupHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGHUP') {
+        sighupHandler = handler as () => void;
+      }
+      return process;
+    }) as typeof process.on);
+
+    // The SIGHUP handler calls process.exit(129); stub it so the real exit
+    // doesn't surface as an unhandled rejection that fails the vitest run.
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation((() => undefined) as never);
+
+    // Create a runner that triggers SIGHUP on the 3rd step
+    let stepCount = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        stepCount++;
+        if (stepCount === 3) {
+          // Trigger SIGHUP while we're "running" step 3
+          if (sighupHandler) sighupHandler();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // SIGHUP handler should have been registered
+    expect(processOnSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
+
+    // State should have been saved (handler calls writeState) and the
+    // handler exits with 129 (128 + SIGHUP)
+    expect(exitSpy).toHaveBeenCalledWith(129);
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+
+    processOnSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  it('de-registers signal handlers on normal exit', async () => {
+    const processOnSpy = vi.spyOn(process, 'on').mockReturnValue(process);
+    const processOffSpy = vi.spyOn(process, 'off').mockReturnValue(process);
+
+    const runner: StepRunner = {
+      run: async () => {
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+    await conductor.run();
+
+    // Signal handlers should have been de-registered on normal exit
+    expect(processOffSpy).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+    expect(processOffSpy).toHaveBeenCalledWith('SIGTERM', expect.any(Function));
+    expect(processOffSpy).toHaveBeenCalledWith('SIGHUP', expect.any(Function));
+
+    // Verify that in the finally block, signal handlers were de-registered
+    // There may be other process.off calls in early return paths, so we check
+    // that the finally block calls are present (last 3 calls should be them)
+    const allCalls = processOffSpy.mock.calls;
+    const lastThreeCalls = allCalls.slice(-3);
+
+    expect(lastThreeCalls.some(call => call[0] === 'SIGINT')).toBe(true);
+    expect(lastThreeCalls.some(call => call[0] === 'SIGTERM')).toBe(true);
+    expect(lastThreeCalls.some(call => call[0] === 'SIGHUP')).toBe(true);
+
+    processOnSpy.mockRestore();
+    processOffSpy.mockRestore();
+  });
+
   it('no SIGTERM listener leak after sequential conductor runs', async () => {
     const exitSpy = vi
       .spyOn(process, 'exit')
@@ -6403,6 +6482,54 @@ describe('build-step stall circuit breaker', () => {
     expect(runner.runInteractive).toHaveBeenCalledWith('build');
     expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
+
+  it('skips the interactive stall handoff in auto mode', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done — and it never changes
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn(async () => {
+        // The "interactive session" is a no-op for the test; it simulates the
+        // user dropping in and /quitting without doing additional work.
+      }),
+    };
+
+    const stallEvents: Array<{ reason: string; before: number; after: number }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') {
+        stallEvents.push({
+          reason: e.reason,
+          before: e.resolvedBefore,
+          after: e.resolvedAfter,
+        });
+      }
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+      mode: 'auto', // Key: auto-mode should skip interactive stall handoff
+    });
+
+    await conductor.run();
+
+    // build_stall event is still emitted in auto mode
+    expect(stallEvents).toHaveLength(1);
+    expect(stallEvents[0].reason).toBe('no_task_progress');
+    expect(stallEvents[0].before).toBe(2);
+    expect(stallEvents[0].after).toBe(2);
+
+    // But runInteractive should NOT have been called in auto mode
+    expect(runner.runInteractive).not.toHaveBeenCalled();
+  });
+
 });
 
 // Task 14: Engine records the active plan path

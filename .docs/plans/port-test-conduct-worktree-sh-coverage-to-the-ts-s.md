@@ -1,5 +1,11 @@
 # Implementation Plan: Port test_conduct_worktree.sh coverage to the TS suite
 
+## Parity Finding: Pre-worktree setup commit-scope
+
+The bash `bin/conduct` includes a `run_worktree_setup()` function (verified in test_conduct_worktree.sh lines 541-559) that commits project-level files (`.docs/decisions/` and `.memory/`) after creating a worktree. The TS conductor does NOT have an equivalent setup commit step — worktrees are created but project-level artifacts are not staged and committed at worktree creation time. This is a documented parity gap (Feature request: implement pre-worktree setup commit in TS conductor). Task 14 closes against this finding rather than writing a test.
+
+---
+
 **Date:** 2026-07-04
 **Track:** technical (no PRD)
 **Complexity:** Small (`.docs/complexity/port-test-conduct-worktree-sh-coverage-to-the-ts-s.md`)
