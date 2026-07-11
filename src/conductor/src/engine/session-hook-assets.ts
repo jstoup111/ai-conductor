@@ -244,3 +244,108 @@ export const POST_DISPATCH_HOOK = [
   '',
   'exit 0',
 ].join('\n');
+
+/**
+ * PreToolUse mutation gate (Surface B of #505 inline build-work attribution
+ * enforcement). Wired with matcher `Edit|Write|NotebookEdit|Bash`. Blocks
+ * unstamped mutation attempts while a build step is active:
+ *
+ * - `.pipeline/build-step-active` marker ABSENT → enforcement inactive,
+ *   pass through (exit 0) regardless of tool or stamp.
+ * - Marker present + `.pipeline/current-task` absent/empty + tool is
+ *   Edit/Write/NotebookEdit → exit 2 with the ADR redirect message.
+ * - Marker present + stamp present → pass through (exit 0); the mutation is
+ *   happening inside a stamped Agent dispatch.
+ * - Bash: a minimal `git commit` invocation scan blocks unstamped commit
+ *   attempts (precedent: hooks/claude/block-destructive-git.sh quote-span
+ *   scanning). Tasks 11-12 tighten this to invocation-position matching and
+ *   add the mention-only/negative rows; this is intentionally a coarse first
+ *   pass here.
+ * - Unparseable payload → fail-open (exit 0), matching the #494 degradation
+ *   rule and the PRE/POST dispatch hooks' behavior above.
+ */
+export const MUTATION_GATE_HOOK = [
+  '#!/bin/bash',
+  'set -e',
+  '',
+  '# Bound stdin read to 1MiB to avoid hanging or OOMing on a runaway payload',
+  'PAYLOAD="$(head -c 1048576)"',
+  '',
+  'MARKER_PATH=".pipeline/build-step-active"',
+  'STAMP_PATH=".pipeline/current-task"',
+  '',
+  '# Enforcement inactive (no build step in flight, or cutover not reached) —',
+  '# pass through without even looking at the payload.',
+  'if [ ! -f "$MARKER_PATH" ]; then',
+  '  exit 0',
+  'fi',
+  '',
+  '# Extract tool_name and (for Bash) tool_input.command via a bounded node',
+  '# JSON parse, joined with a tab so bash can split it in one read. A',
+  '# malformed/unparseable payload yields an empty PARSED, which falls',
+  '# through to the fail-open branch below.',
+  'PARSED="$(printf \'%s\' "$PAYLOAD" | node -e \'',
+  'let data = "";',
+  'process.stdin.on("data", (chunk) => { data += chunk; });',
+  'process.stdin.on("end", () => {',
+  '  try {',
+  '    const payload = JSON.parse(data);',
+  '    const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";',
+  '    const command = payload && payload.tool_input && typeof payload.tool_input.command === "string" ? payload.tool_input.command : "";',
+  '    process.stdout.write(toolName + "\\t" + command.replace(/\\n/g, " "));',
+  '  } catch (err) {',
+  '    // Malformed/unparseable payload — fail open: emit a diagnostic on',
+  '    // stderr and nothing on stdout, so the caller falls through to the',
+  '    // fail-open branch (exit 0) rather than blocking the mutation.',
+  '    process.stderr.write(',
+  '      "mutation-gate-hook: unparseable payload, passing through: " + String(err && err.message) + "\\n"',
+  '    );',
+  '  }',
+  '});',
+  '\' || true)"',
+  '',
+  '# Fail-open: an empty PARSED means the payload was unparseable — no signal',
+  '# to gate on, so pass through quietly rather than blocking the mutation.',
+  'if [ -z "$PARSED" ]; then',
+  '  exit 0',
+  'fi',
+  '',
+  'TOOL_NAME="${PARSED%%$\'\\t\'*}"',
+  'COMMAND="${PARSED#*$\'\\t\'}"',
+  '',
+  '# Stamp check: an absent OR whitespace-only stamp file counts as "no',
+  '# dispatch in flight" — trimmed so a stray blank line never counts as a',
+  '# valid stamp.',
+  'STAMP=""',
+  'if [ -f "$STAMP_PATH" ]; then',
+  '  STAMP="$(tr -d "[:space:]" < "$STAMP_PATH")"',
+  'fi',
+  '',
+  'REDIRECT_MSG="implementation happens inside a stamped Agent dispatch — dispatch with \\"Task: <id>\\" line 1, or use \\"Task: none\\" for non-implementation work"',
+  '',
+  'case "$TOOL_NAME" in',
+  '  Edit|Write|NotebookEdit)',
+  '    if [ -z "$STAMP" ]; then',
+  '      echo "$REDIRECT_MSG" >&2',
+  '      exit 2',
+  '    fi',
+  '    exit 0',
+  '    ;;',
+  '  Bash)',
+  '    if [ -z "$STAMP" ]; then',
+  '      # Scannable copy: drop quoted spans so a mention inside a commit',
+  '      # message/echo/grep pattern is not a false positive (coarse first',
+  '      # pass — Tasks 11-12 tighten this to invocation-position matching).',
+  '      SCAN=$(printf \'%s\' "$COMMAND" | sed -E "s/\'[^\']*\'//g; s/\\"[^\\"]*\\"//g")',
+  '      if echo "$SCAN" | grep -qE \'git\\s+commit\\b\'; then',
+  '        echo "$REDIRECT_MSG" >&2',
+  '        exit 2',
+  '      fi',
+  '    fi',
+  '    exit 0',
+  '    ;;',
+  '  *)',
+  '    exit 0',
+  '    ;;',
+  'esac',
+].join('\n');
