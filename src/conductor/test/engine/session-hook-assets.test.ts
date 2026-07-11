@@ -188,6 +188,58 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(0);
   });
 
+  it('blocks an unstamped `git commit --no-verify` Bash invocation when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m "wip"' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+  });
+
+  it('blocks an unstamped chained `git commit` Bash invocation when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: 'cd a && git commit -m "wip"' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+  });
+
+  it('passes through a stamped `git commit --no-verify` Bash invocation when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      stamp: '7',
+      payload: { tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m "wip"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through a stamped chained `git commit` Bash invocation when the marker is present', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      stamp: '7',
+      payload: { tool_name: 'Bash', tool_input: { command: 'cd a && git commit -m "wip"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped `git commit --no-verify` Bash invocation when the marker is absent', () => {
+    const result = runMutationGateHook({
+      marker: false,
+      payload: { tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m "wip"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped chained `git commit` Bash invocation when the marker is absent', () => {
+    const result = runMutationGateHook({
+      marker: false,
+      payload: { tool_name: 'Bash', tool_input: { command: 'cd a && git commit -m "wip"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
   it('passes through an unstamped `git status` Bash invocation when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
