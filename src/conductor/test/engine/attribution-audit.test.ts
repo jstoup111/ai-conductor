@@ -1452,5 +1452,467 @@ describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
         await rm(tmpDir, { recursive: true, force: true });
       }
     });
+
+    it('reads and parses verdict file, writes ledger records for each definitively-judged sampled task', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-parsing-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const verdictPath = join(tmpDir, '.pipeline/attribution-verdict.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await import('node:fs/promises').then((m) =>
+          Promise.all([
+            m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.pipeline'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.daemon'), { recursive: true }),
+          ]),
+        );
+
+        // Write gate verdict
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence with 3 tasks
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+          ['task-2', { sha: 'def456', form: 'trailer' }],
+          ['task-3', { sha: 'ghi789', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Create dispatcher that writes the attribution verdict file
+        const dispatcherWritingVerdict = async (opts: { residueIds: string[] }) => {
+          // Simulate verifier writing the verdict file
+          const verdict = {
+            schema: 1,
+            anchor: { head: 'current-head', residue: opts.residueIds },
+            results: [
+              {
+                taskId: 'task-1',
+                verdict: 'satisfied',
+                citations: [{ sha: 'commit-1', rationale: 'implements task' }],
+                testEvidence: { command: 'npm test', exit: 0 },
+              },
+              {
+                taskId: 'task-2',
+                verdict: 'unsatisfied',
+                reason: 'diff does not satisfy task',
+              },
+              {
+                taskId: 'task-3',
+                verdict: 'no-verdict',
+                reason: 'insufficient evidence',
+              },
+            ],
+          };
+          await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+          return { success: true, output: '{}' };
+        };
+
+        // Run spot audit with ledgerPath and no emitter
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          ledgerPath,
+          dispatch: dispatcherWritingVerdict,
+        });
+
+        // Wait for fire-and-forget processing
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Verify ledger was written with records — only definitive verdicts.
+        // A no-verdict abstention is a lost sample (ADR: "a verifier failure or
+        // timeout loses one sample") and must fabricate no agree row.
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n').filter((l) => l.length > 0);
+        expect(lines).toHaveLength(2);
+
+        // Verify each record has correct structure and values
+        const records = lines.map((line) => JSON.parse(line));
+
+        // Task-1 should have satisfied verdict and agree=true
+        const task1Record = records.find((r) => r.taskId === 'task-1');
+        expect(task1Record).toBeDefined();
+        expect(task1Record.auditVerdict).toBe('satisfied');
+        expect(task1Record.agree).toBe(true);
+        expect(task1Record.fastLaneForm).toBe('commit');
+        expect(task1Record.fastLaneSha).toBe('abc123');
+        expect(task1Record.feature).toBe('test-feature');
+
+        // Task-2 should have unsatisfied verdict and agree=false
+        const task2Record = records.find((r) => r.taskId === 'task-2');
+        expect(task2Record).toBeDefined();
+        expect(task2Record.auditVerdict).toBe('unsatisfied');
+        expect(task2Record.agree).toBe(false);
+        expect(task2Record.fastLaneForm).toBe('trailer');
+        expect(task2Record.fastLaneSha).toBe('def456');
+
+        // Task-3 abstained (no-verdict): no fabricated row, no divergence
+        const task3Record = records.find((r) => r.taskId === 'task-3');
+        expect(task3Record).toBeUndefined();
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('emits attribution_divergence event when agree=false', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-divergence-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const verdictPath = join(tmpDir, '.pipeline/attribution-verdict.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await import('node:fs/promises').then((m) =>
+          Promise.all([
+            m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.pipeline'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.daemon'), { recursive: true }),
+          ]),
+        );
+
+        // Write gate verdict
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence with 2 tasks
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+          ['task-2', { sha: 'def456', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Track emitted events
+        const emittedEvents: Array<{ feature: string; taskId: string }> = [];
+        const mockEmitter = {
+          emit: (type: string, event: unknown) => {
+            if (type === 'attribution_divergence') {
+              emittedEvents.push(event as any);
+            }
+          },
+        };
+
+        // Create dispatcher that writes verdict with both satisfied and unsatisfied
+        const dispatcherWithDivergence = async (opts: { residueIds: string[] }) => {
+          const verdict = {
+            schema: 1,
+            anchor: { head: 'current-head', residue: opts.residueIds },
+            results: [
+              {
+                taskId: 'task-1',
+                verdict: 'satisfied',
+                citations: [{ sha: 'commit-1', rationale: 'implements task' }],
+                testEvidence: { command: 'npm test', exit: 0 },
+              },
+              {
+                taskId: 'task-2',
+                verdict: 'unsatisfied',
+                reason: 'diff does not satisfy task',
+              },
+            ],
+          };
+          await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+          return { success: true, output: '{}' };
+        };
+
+        // Run spot audit with emitter
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          ledgerPath,
+          emitter: mockEmitter,
+          dispatch: dispatcherWithDivergence,
+        });
+
+        // Wait for fire-and-forget processing
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Verify divergence event was emitted only for task-2 (agree=false)
+        expect(emittedEvents).toHaveLength(1);
+        expect(emittedEvents[0].feature).toBe('test-feature');
+        expect(emittedEvents[0].taskId).toBe('task-2');
+
+        // Verify ledger still has both records
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n').filter((l) => l.length > 0);
+        expect(lines).toHaveLength(2);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('defaults ledger path to <projectDir>/.daemon/attribution-accuracy.jsonl when ledgerPath is omitted', async () => {
+      // Regression: the conductor call site passes no ledgerPath — the audit
+      // must still land records in the repo-local ledger (ADR item 3).
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-default-ledger-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const verdictPath = join(tmpDir, '.pipeline/attribution-verdict.json');
+        await mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true });
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const dispatcherWritingVerdict = async (opts: { residueIds: string[] }) => {
+          const verdict = {
+            schema: 1,
+            anchor: { head: 'current-head', residue: opts.residueIds },
+            results: [
+              {
+                taskId: 'task-1',
+                verdict: 'unsatisfied',
+                reason: 'diff does not satisfy task',
+              },
+            ],
+          };
+          await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+          return { success: true, output: '{}' };
+        };
+
+        // No ledgerPath passed — mirrors the production conductor call site.
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: dispatcherWritingVerdict,
+        });
+
+        // Wait for fire-and-forget processing
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const defaultLedgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        const content = await readFile(defaultLedgerPath, 'utf-8');
+        const lines = content.trim().split('\n').filter((l) => l.length > 0);
+        expect(lines).toHaveLength(1);
+        const record = JSON.parse(lines[0]);
+        expect(record.taskId).toBe('task-1');
+        expect(record.auditVerdict).toBe('unsatisfied');
+        expect(record.agree).toBe(false);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('no-verdict abstention appends no row and emits no divergence event', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-abstention-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const verdictPath = join(tmpDir, '.pipeline/attribution-verdict.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true });
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        const emittedEvents: unknown[] = [];
+        const mockEmitter = {
+          emit: (type: string, event: unknown) => {
+            if (type === 'attribution_divergence') {
+              emittedEvents.push(event);
+            }
+          },
+        };
+
+        const dispatcherAbstaining = async (opts: { residueIds: string[] }) => {
+          const verdict = {
+            schema: 1,
+            anchor: { head: 'current-head', residue: opts.residueIds },
+            results: [
+              { taskId: 'task-1', verdict: 'no-verdict', reason: 'insufficient evidence' },
+            ],
+          };
+          await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+          return { success: true, output: '{}' };
+        };
+
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          ledgerPath,
+          emitter: mockEmitter,
+          dispatch: dispatcherAbstaining,
+        });
+
+        // Wait for fire-and-forget processing
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // No divergence event for an abstention — it is a lost sample
+        expect(emittedEvents).toHaveLength(0);
+
+        // No ledger row fabricated
+        try {
+          await import('node:fs/promises').then((m) => m.readFile(ledgerPath, 'utf-8'));
+          expect(true).toBe(false); // Unexpected — ledger should not exist
+        } catch (err) {
+          expect((err as any).code).toBe('ENOENT');
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('handles missing verdict file gracefully without throwing', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-missing-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await import('node:fs/promises').then((m) => m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }));
+
+        // Write gate verdict
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Create dispatcher that does NOT write verdict file
+        const dispatcherNoVerdict = async () => {
+          // Dispatch succeeds but no verdict file is written
+          return { success: true, output: '{}' };
+        };
+
+        // This should not throw despite missing verdict file
+        await expect(
+          runSpotAudit({
+            evidence,
+            featureSlug: 'test-feature',
+            auditSamplePct: 100,
+            projectDir: tmpDir,
+            featureWorktreePath: tmpDir,
+            gateVerdictPath,
+            ledgerPath,
+            dispatch: dispatcherNoVerdict,
+          }),
+        ).resolves.toEqual({ dispatched: true });
+
+        // Wait a bit
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Ledger should not exist (or be empty) since verdict wasn't available
+        try {
+          await import('node:fs/promises').then((m) => m.readFile(ledgerPath, 'utf-8'));
+          // If we got here, file exists, which is unexpected
+          expect(true).toBe(false);
+        } catch (err) {
+          // Expected — file shouldn't exist
+          expect((err as any).code).toBe('ENOENT');
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('handles unparseable verdict JSON gracefully', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'verdict-malformed-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const verdictPath = join(tmpDir, '.pipeline/attribution-verdict.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await import('node:fs/promises').then((m) =>
+          Promise.all([
+            m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.pipeline'), { recursive: true }),
+            m.mkdir(join(tmpDir, '.daemon'), { recursive: true }),
+          ]),
+        );
+
+        // Write gate verdict
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Create dispatcher that writes malformed JSON
+        const dispatcherMalformedVerdict = async () => {
+          await writeFile(verdictPath, 'not valid json {', 'utf-8');
+          return { success: true, output: '{}' };
+        };
+
+        // This should not throw despite malformed JSON
+        await expect(
+          runSpotAudit({
+            evidence,
+            featureSlug: 'test-feature',
+            auditSamplePct: 100,
+            projectDir: tmpDir,
+            featureWorktreePath: tmpDir,
+            gateVerdictPath,
+            ledgerPath,
+            dispatch: dispatcherMalformedVerdict,
+          }),
+        ).resolves.toEqual({ dispatched: true });
+
+        // Wait a bit
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Ledger should not exist since JSON parsing failed
+        try {
+          await import('node:fs/promises').then((m) => m.readFile(ledgerPath, 'utf-8'));
+          expect(true).toBe(false); // Unexpected
+        } catch (err) {
+          // Expected
+          expect((err as any).code).toBe('ENOENT');
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 });
