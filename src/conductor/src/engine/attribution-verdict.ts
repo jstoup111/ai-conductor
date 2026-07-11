@@ -49,13 +49,21 @@ export interface AttributionVerdict {
  * Whitewash guard: `satisfied` verdicts without non-empty citations or without
  * valid testEvidence (exit: 0) are coerced to `no-verdict`.
  *
+ * Anchor validation: If currentHead and/or plannedResidueIds are supplied, validates
+ * that anchor.head matches currentHead and anchor.residue matches planned residue set.
+ * If any validation check fails, returns all-no-verdict map (fail-closed).
+ *
  * @param raw - parsed or unparsed attribution verdict (unknown)
  * @param planTaskIds - task IDs from the plan (will be normalized)
+ * @param currentHead - optional current HEAD to validate against anchor.head
+ * @param plannedResidueIds - optional planned residue IDs to validate against anchor.residue
  * @returns Map<taskId, verdict> with entries for all planTaskIds
  */
 export function parseAttributionVerdict(
   raw: unknown,
-  planTaskIds: string[]
+  planTaskIds: string[],
+  currentHead?: string,
+  plannedResidueIds?: string[]
 ): Map<string, Verdict> {
   const result = new Map<string, Verdict>();
 
@@ -79,6 +87,14 @@ export function parseAttributionVerdict(
   // Check schema version (must be exactly 1).
   if (obj.schema !== 1) {
     return result;
+  }
+
+  // Anchor validation: if currentHead or plannedResidueIds are supplied, validate anchor.
+  // If validation fails, return all-no-verdict (fail-closed).
+  if (currentHead !== undefined || plannedResidueIds !== undefined) {
+    if (!isAnchorValid(obj, currentHead, plannedResidueIds)) {
+      return result; // Return all no-verdict map
+    }
   }
 
   // Validate results is an array.
@@ -112,6 +128,64 @@ export function parseAttributionVerdict(
   }
 
   return result;
+}
+
+/**
+ * Validate anchor against supplied currentHead and plannedResidueIds.
+ * Returns true if anchor is valid, false if missing, incomplete, or mismatched.
+ * Note: Both currentHead and plannedResidueIds must be provided together for validation;
+ * providing only one is considered an incomplete validation request (fail-closed).
+ */
+function isAnchorValid(
+  obj: Record<string, unknown>,
+  currentHead?: string,
+  plannedResidueIds?: string[]
+): boolean {
+  // Anchor must exist and be an object.
+  const anchor = obj.anchor;
+  if (!anchor || typeof anchor !== 'object') {
+    return false;
+  }
+
+  const anchorObj = anchor as Record<string, unknown>;
+
+  // Both validation parameters must be provided together, or neither.
+  const hasCurrentHead = currentHead !== undefined;
+  const hasPlannedResidueIds = plannedResidueIds !== undefined;
+
+  if (hasCurrentHead !== hasPlannedResidueIds) {
+    // One provided but not the other - incomplete validation (fail-closed)
+    return false;
+  }
+
+  // If currentHead is supplied, anchor.head must match it exactly.
+  if (hasCurrentHead) {
+    if (anchorObj.head !== currentHead) {
+      return false;
+    }
+  }
+
+  // If plannedResidueIds is supplied, anchor.residue must match the set.
+  if (hasPlannedResidueIds) {
+    // anchor.residue must be an array.
+    if (!Array.isArray(anchorObj.residue)) {
+      return false;
+    }
+
+    // Normalize both sets and compare.
+    const anchorResidueSet = new Set((anchorObj.residue as unknown[]).map((id) => String(id)));
+    const plannedResidueSet = new Set(plannedResidueIds);
+
+    // Check if sets are equal: same size and all planned IDs are in anchor.
+    if (
+      anchorResidueSet.size !== plannedResidueSet.size ||
+      ![...plannedResidueSet].every((id) => anchorResidueSet.has(id))
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
