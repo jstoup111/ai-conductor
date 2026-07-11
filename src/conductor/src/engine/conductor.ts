@@ -92,7 +92,7 @@ import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-aut
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
-import { selectNextGate } from './selector.js';
+import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -1201,6 +1201,40 @@ export class Conductor {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
       startIndex = this.findResumeIndex(state, steps);
+
+      // Clamp startIndex backward to honor on-disk gate verdicts.
+      // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
+      try {
+        const verdicts = await readAllVerdicts(this.projectRoot);
+        const topo = deriveGateTopology(steps);
+        const earliestGateIdx = earliestUnsatisfiedGateIndex({
+          steps,
+          state,
+          verdicts,
+          regionStart: topo.regionStart,
+        });
+
+        // Clamp backward (min) only — never move startIndex forward.
+        // If earliestGateIdx is valid and precedes the candidate, use it.
+        if (earliestGateIdx >= 0 && earliestGateIdx < startIndex) {
+          startIndex = earliestGateIdx;
+        }
+
+        // Reset unsatisfied gates to 'pending' so the main loop doesn't skip them.
+        // When a gate's verdict says unsatisfied but state says 'done',
+        // we must reset it so the loop re-runs it.
+        for (const step of steps) {
+          if (verdicts[step.name] && verdicts[step.name].satisfied === false) {
+            const status = getStepStatus(state, step.name);
+            if (status === 'done') {
+              (state as Record<string, unknown>)[step.name] = 'pending';
+            }
+          }
+        }
+      } catch (err) {
+        // Verdict reading errors (missing file, parse failures) are non-fatal.
+        // Fall through to the candidate startIndex derived from state alone.
+      }
     }
 
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
@@ -3317,10 +3351,24 @@ export class Conductor {
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
   ): Promise<number | null | 'halt'> {
-    // The gate-driven tail only engages when completion is verified against
-    // artifacts. Without verifyArtifacts the conductor trusts the runner and
-    // stays fully linear (unchanged behavior).
-    if (!this.verifyArtifacts) return null;
+    // The gate-driven tail engages when completion is verified against
+    // artifacts (verifyArtifacts=true). Additionally, it activates when
+    // resuming with pre-existing unsatisfied gate verdicts, even if
+    // verifyArtifacts=false — this ensures verdict-driven routing steers
+    // the loop correctly.
+    if (!this.verifyArtifacts) {
+      // Check if there are any pre-existing unsatisfied verdicts
+      const verdicts = await readAllVerdicts(this.projectRoot);
+      let hasUnsatisfied = false;
+      for (const v of Object.values(verdicts)) {
+        if (v && v.satisfied === false) {
+          hasUnsatisfied = true;
+          break;
+        }
+      }
+      if (!hasUnsatisfied) return null;
+      // Fall through: verdict-driven routing enabled due to unsatisfied verdicts
+    }
 
     const topo = deriveGateTopology(steps);
 
