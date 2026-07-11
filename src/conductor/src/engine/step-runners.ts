@@ -52,6 +52,8 @@ const STEP_PROMPTS: Record<StepName, string> = {
   finish: '/finish',
   // Conditional SHIP sub-routine: plans remediation for a blocking audit.
   remediate: '/remediate',
+  // Out-of-band verification step: semantic attribution verification.
+  attribution_verify: '/attribution-verify',
 };
 
 // Autonomous steps run in Claude's `-p` (print) mode with

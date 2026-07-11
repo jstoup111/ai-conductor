@@ -85,6 +85,9 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   finish: [],
   // Conductor reads .pipeline/remediation.json directly to route; not a gate artifact.
   remediate: [],
+  // Attribution verification is an out-of-band audit step; verdict is computed,
+  // not a committed file artifact.
+  attribution_verify: [],
 };
 
 /**

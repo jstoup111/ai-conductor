@@ -46,6 +46,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   rebase: 'fable',
   finish: 'haiku',
   remediate: 'fable',
+  attribution_verify: 'opus',
 };
 
 export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
@@ -71,6 +72,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   rebase: 'max',
   finish: 'low',
   remediate: 'high',
+  attribution_verify: 'high',
 };
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
@@ -96,6 +98,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   rebase: 1,
   finish: 1,
   remediate: 3,
+  attribution_verify: 3,
 };
 
 export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
@@ -121,6 +124,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   rebase: 'auto',
   finish: 'auto',
   remediate: 'auto',       // conductor routes deterministically from remediation.json
+  attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
 
 /**
