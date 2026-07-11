@@ -52,4 +52,78 @@ Window-days: 30`;
       surface: 'daemon-log',
     });
   });
+
+  it('parses close-on-merge marker', async () => {
+    const mod = await load();
+    const parseObservationMarker = requireFn(mod, 'parseObservationMarker');
+
+    const content = `Kind: close-on-merge
+Rationale: This fix resolves the underlying issue; closing on merge is safe.`;
+
+    const result = await parseObservationMarker(content);
+
+    expect(result).toEqual({
+      kind: 'close-on-merge',
+      rationale: 'This fix resolves the underlying issue; closing on merge is safe.',
+    });
+  });
+
+  it('rejects marker missing Signature in watched mode', async () => {
+    const mod = await load();
+    const parseObservationMarker = requireFn(mod, 'parseObservationMarker');
+
+    const content = `Surface: daemon-log
+Window-days: 14`;
+
+    const result = await parseObservationMarker(content);
+
+    expect(result).toEqual({
+      kind: 'parse_error',
+      message: expect.stringContaining('Signature'),
+    });
+  });
+
+  it('rejects marker with invalid regex', async () => {
+    const mod = await load();
+    const parseObservationMarker = requireFn(mod, 'parseObservationMarker');
+
+    const content = `Signature: /[invalid/
+Surface: daemon-log
+Window-days: 14`;
+
+    const result = await parseObservationMarker(content);
+
+    expect(result.kind).toBe('parse_error');
+    expect((result as any).message).toMatch(/regex|Invalid/i);
+  });
+
+  it('rejects close-on-merge missing rationale', async () => {
+    const mod = await load();
+    const parseObservationMarker = requireFn(mod, 'parseObservationMarker');
+
+    const content = `Kind: close-on-merge`;
+
+    const result = await parseObservationMarker(content);
+
+    expect(result).toEqual({
+      kind: 'parse_error',
+      message: expect.stringContaining('Rationale'),
+    });
+  });
+
+  it('rejects invalid Window-days value', async () => {
+    const mod = await load();
+    const parseObservationMarker = requireFn(mod, 'parseObservationMarker');
+
+    const content = `Signature: test
+Surface: daemon-log
+Window-days: not-a-number`;
+
+    const result = await parseObservationMarker(content);
+
+    expect(result).toEqual({
+      kind: 'parse_error',
+      message: expect.stringContaining('Window-days'),
+    });
+  });
 });
