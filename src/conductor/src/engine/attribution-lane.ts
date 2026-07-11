@@ -14,7 +14,8 @@
  * invoked independently from dispatch orchestration.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { ModelAvailability } from './model-availability.js';
@@ -62,6 +63,82 @@ export interface VerifierDispatchResult {
 }
 
 /**
+ * Attribution result memo: caches (HEAD, residue) -> verdict mapping.
+ * Keyed by <HEAD>:<sorted-residue-ids> to detect cache staleness.
+ */
+interface AttributionMemo {
+  key: string;
+  result: string;
+}
+
+/**
+ * Compute memoization key from current HEAD and sorted residue IDs.
+ * Key format: <HEAD>:<sorted-residue-ids>
+ *
+ * @param headSha - Current HEAD commit SHA (first 40 chars)
+ * @param residueIds - Task IDs to sort and join
+ * @returns Memoization key
+ */
+function computeMemoKey(headSha: string, residueIds: string[]): string {
+  const sorted = [...residueIds].sort();
+  return `${headSha}:${sorted.join(',')}`;
+}
+
+/**
+ * Get current HEAD commit SHA from git repository.
+ *
+ * @param git - Git runner instance
+ * @returns HEAD SHA (full 40-char)
+ */
+async function getCurrentHeadSha(git: GitRunner): Promise<string> {
+  const result = await git(['rev-parse', 'HEAD']);
+  if (result.exitCode !== 0) {
+    throw new Error(`git rev-parse HEAD failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+/**
+ * Read memoized attribution result if it exists and key matches.
+ * Returns undefined if memo doesn't exist, key doesn't match, or read fails.
+ *
+ * @param memoPath - Path to memo file
+ * @param expectedKey - Expected memoization key
+ * @returns Memoized result or undefined
+ */
+async function readMemo(memoPath: string, expectedKey: string): Promise<string | undefined> {
+  try {
+    const content = await readFile(memoPath, 'utf-8');
+    const memo: AttributionMemo = JSON.parse(content);
+    if (memo.key === expectedKey) {
+      return memo.result;
+    }
+  } catch {
+    // File doesn't exist, is invalid JSON, or read fails — treat as cache miss
+  }
+  return undefined;
+}
+
+/**
+ * Persist attribution result to memo file.
+ * Creates .pipeline directory if needed.
+ *
+ * @param memoPath - Path to memo file
+ * @param key - Memoization key
+ * @param result - Verifier output
+ */
+async function writeMemo(memoPath: string, key: string, result: string): Promise<void> {
+  const pipelineDir = dirname(memoPath);
+  try {
+    await mkdir(pipelineDir, { recursive: true });
+    const memo: AttributionMemo = { key, result };
+    await writeFile(memoPath, JSON.stringify(memo), 'utf-8');
+  } catch {
+    // Memo write failure is not critical; silently continue
+  }
+}
+
+/**
  * Dispatch the attribution verifier in a fresh session.
  *
  * Assembles residue tasks and candidate commits, builds the verifier prompt,
@@ -97,6 +174,25 @@ export async function dispatchAttributionVerifier(
 
   // Set up the git runner for candidate collection.
   const git = injectedGit ?? makeGitRunner(projectDir);
+
+  // Get current HEAD SHA for memoization key computation.
+  let headSha: string;
+  try {
+    headSha = await getCurrentHeadSha(git);
+  } catch (err) {
+    return {
+      success: false,
+      output: `Failed to get HEAD SHA: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  // Compute memoization key and check for cached result.
+  const memoKey = computeMemoKey(headSha, residueIds);
+  const memoPath = join(projectDir, '.pipeline', 'attribution-memo.json');
+  const cachedResult = await readMemo(memoPath, memoKey);
+  if (cachedResult !== undefined) {
+    return { success: true, output: cachedResult };
+  }
 
   // Collect candidate commits (uncited, non-empty, non-bookkeeping).
   let candidates;
@@ -180,6 +276,8 @@ export async function dispatchAttributionVerifier(
     return { success: false, output: result.output, sessionExpired: true };
   }
   if (result.success) {
+    // Dispatch succeeded; persist result to memo for future reuse.
+    await writeMemo(memoPath, memoKey, result.output);
     return { success: true, output: result.output };
   }
 
