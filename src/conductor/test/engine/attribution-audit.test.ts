@@ -1024,4 +1024,433 @@ describe('runSpotAudit — post-green non-blocking spot audit dispatch', () => {
       }
     });
   });
+
+  describe('GREEN: regression tests for runSpotAudit call-site', () => {
+    it('runSpotAudit dispatches audit verifier and ledger receives records when sample_pct > 0', async () => {
+      const { runSpotAudit, appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-dispatch-'));
+
+      try {
+        // Set up conductor state with build gate about to pass green
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true });
+        await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Use sample_pct = 100 to ensure all eligible tasks are sampled
+        // (regression test focuses on dispatch happening, not on hash distribution)
+        const auditSamplePct = 100;
+
+        // Create evidence with eligible tasks (non-semantic-verified)
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+          ['task-2', { sha: 'def456', form: 'trailer' }],
+          ['task-3', { sha: 'ghi789', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Track dispatcher invocations
+        const dispatchInvocations: Array<{ residueIds: string[] }> = [];
+
+        // Create fixture dispatcher that simulates the real verifier behavior
+        // by writing to the accuracy ledger
+        const fixtureDispatcher = async (opts: { residueIds: string[] }) => {
+          dispatchInvocations.push(opts);
+
+          // Simulate what the real verifier would do: append accuracy records
+          for (const taskId of opts.residueIds) {
+            const record = {
+              ts: Date.now(),
+              feature: 'test-feature',
+              taskId,
+              fastLaneForm: 'commit',
+              fastLaneSha: 'abc123',
+              auditVerdict: 'satisfied' as const,
+              agree: true,
+            };
+            await appendAccuracyLedger(ledgerPath, record);
+          }
+
+          return { success: true, output: '{}' };
+        };
+
+        // Execute runSpotAudit with the fixture dispatcher
+        const result = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: fixtureDispatcher,
+        });
+
+        // Verify dispatch was called
+        expect(result.dispatched).toBe(true);
+        expect(dispatchInvocations).toHaveLength(1);
+
+        // Verify dispatcher was called with correct residueIds
+        const residueIds = dispatchInvocations[0].residueIds;
+        expect(residueIds).toBeTruthy();
+        expect(Array.isArray(residueIds)).toBe(true);
+        expect(residueIds.length).toBe(3); // All 3 tasks should be sampled with pct=100
+
+        // Wait for fire-and-forget dispatch to complete
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Verify `.daemon/attribution-accuracy.jsonl` received appended records
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n');
+        expect(lines).toHaveLength(3); // One record per sampled task
+
+        // Verify each line is valid JSON with required fields
+        for (const line of lines) {
+          const record = JSON.parse(line);
+          expect(record).toHaveProperty('ts');
+          expect(record).toHaveProperty('feature');
+          expect(record).toHaveProperty('taskId');
+          expect(record).toHaveProperty('fastLaneForm');
+          expect(record).toHaveProperty('fastLaneSha');
+          expect(record).toHaveProperty('auditVerdict');
+          expect(record).toHaveProperty('agree');
+          expect(record.feature).toBe('test-feature');
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('dispatcher failure does NOT fail or re-open build (fire-and-forget contract)', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-fire-forget-'));
+
+      try {
+        // Set up conductor state with build gate passing
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const buildOutcomePath = join(tmpDir, '.pipeline/attribution-enforce.json');
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Simulate an existing build outcome
+        const initialOutcome = { agree: ['task-1', 'task-2'], disagree: [] };
+        await writeFile(buildOutcomePath, JSON.stringify(initialOutcome), 'utf-8');
+
+        // Create evidence with eligible tasks
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Fixture dispatcher that throws an error
+        const failingDispatcher = async () => {
+          throw new Error('Dispatcher failure - connection timeout');
+        };
+
+        // Execute runSpotAudit with failing dispatcher
+        const result = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: failingDispatcher as any,
+        });
+
+        // Verify dispatch was initiated (but errors are swallowed)
+        expect(result.dispatched).toBe(true);
+
+        // Give fire-and-forget error handler time to execute
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Verify build outcome remains unchanged (error didn't propagate)
+        const outcomeAfter = JSON.parse(await readFile(buildOutcomePath, 'utf-8'));
+        expect(outcomeAfter).toEqual(initialOutcome);
+
+        // Verify gate verdict is still satisfied
+        const verdictAfter = JSON.parse(await readFile(gateVerdictPath, 'utf-8'));
+        expect(verdictAfter.satisfied).toBe(true);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('no dispatch when sample_pct = 0', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-no-dispatch-'));
+
+      try {
+        // Set up conductor state with build gate passing
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence with eligible tasks
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+          ['task-2', { sha: 'def456', form: 'trailer' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Track dispatcher invocations
+        const dispatchCalls: unknown[] = [];
+        const mockDispatch = async () => {
+          dispatchCalls.push({});
+          return { success: true, output: '{}' };
+        };
+
+        // Execute runSpotAudit with sample_pct = 0 (audit disabled)
+        const result = await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 0,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: mockDispatch as any,
+        });
+
+        // Verify no dispatch when sample_pct = 0
+        expect(result.dispatched).toBe(false);
+        expect(dispatchCalls).toHaveLength(0);
+
+        // Wait a bit to ensure no fire-and-forget dispatch occurs
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(dispatchCalls).toHaveLength(0);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('sample_pct=0 gate-green pass does NOT append accuracy records', async () => {
+      const { runSpotAudit } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-no-records-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await import('node:fs/promises').then((m) =>
+          m.mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true }),
+        );
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Dispatcher that would try to write to ledger
+        const dispatchAttempt = async () => {
+          // This should never be called
+          throw new Error('Dispatcher should not be called when sample_pct=0');
+        };
+
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 0,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: dispatchAttempt as any,
+        });
+
+        // Verify no accuracy ledger was created
+        try {
+          await readFile(ledgerPath, 'utf-8');
+          // If we get here, the file exists (unexpected)
+          expect(false).toBe(true);
+        } catch (err) {
+          // Expected — file should not exist
+          expect((err as any).code).toBe('ENOENT');
+        }
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('deterministic sampling respects sample_pct with hash-based selection', async () => {
+      const { runSpotAudit, appendAccuracyLedger, selectAuditSample } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-deterministic-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true });
+        await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Create evidence with many eligible tasks
+        const taskIds = Array.from({ length: 20 }, (_, i) => `task-${i}`);
+        const stamps = new Map<string, EvidenceStamp>(
+          taskIds.map((id) => [id, { sha: `sha-${id}`, form: 'commit' }]),
+        );
+        const evidence = createMockEvidence(stamps);
+
+        // Pre-compute expected sample using the sampler (50% sample rate)
+        const expectedSample = selectAuditSample(evidence, 'test-feature', 50);
+        expect(expectedSample.length).toBeGreaterThan(0);
+        expect(expectedSample.length).toBeLessThan(taskIds.length);
+
+        const dispatchInvocations: Array<{ residueIds: string[] }> = [];
+
+        const fixtureDispatcher = async (opts: { residueIds: string[] }) => {
+          dispatchInvocations.push(opts);
+
+          for (const taskId of opts.residueIds) {
+            const record = {
+              ts: Date.now(),
+              feature: 'test-feature',
+              taskId,
+              fastLaneForm: 'commit',
+              fastLaneSha: `sha-${taskId}`,
+              auditVerdict: 'satisfied' as const,
+              agree: true,
+            };
+            await appendAccuracyLedger(ledgerPath, record);
+          }
+
+          return { success: true, output: '{}' };
+        };
+
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 50,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: fixtureDispatcher,
+        });
+
+        // Wait for dispatch
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Verify dispatcher received the expected sample
+        expect(dispatchInvocations).toHaveLength(1);
+        const actualSample = dispatchInvocations[0].residueIds.sort();
+        expect(actualSample.sort()).toEqual(expectedSample.sort());
+
+        // Verify ledger records match the dispatched sample
+        const content = await readFile(ledgerPath, 'utf-8');
+        const lines = content.trim().split('\n');
+        const recordedTaskIds = lines.map((line) => JSON.parse(line).taskId).sort();
+        expect(recordedTaskIds).toEqual(actualSample.sort());
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('accuracy ledger is appended-only (not overwritten) across multiple dispatches', async () => {
+      const { runSpotAudit, appendAccuracyLedger } = await import('../../src/engine/attribution-audit.js');
+      const { mkdtemp, writeFile, rm, readFile, mkdir } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+
+      const tmpDir = await mkdtemp(join(tmpdir(), 'regression-append-only-'));
+
+      try {
+        const gateVerdictPath = join(tmpDir, '.pipeline/gates/build.json');
+        const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
+        await mkdir(join(tmpDir, '.pipeline/gates'), { recursive: true });
+        await mkdir(join(tmpDir, '.daemon'), { recursive: true });
+        await writeFile(gateVerdictPath, JSON.stringify({ satisfied: true }), 'utf-8');
+
+        // Pre-populate ledger with an initial record
+        const initialRecord = {
+          ts: 1000,
+          feature: 'initial-feature',
+          taskId: 'task-0',
+          fastLaneForm: 'commit',
+          fastLaneSha: 'sha-0',
+          auditVerdict: 'satisfied' as const,
+          agree: true,
+        };
+        await appendAccuracyLedger(ledgerPath, initialRecord);
+
+        // Verify initial record is there
+        let content = await readFile(ledgerPath, 'utf-8');
+        let lines = content.trim().split('\n');
+        expect(lines).toHaveLength(1);
+        expect(JSON.parse(lines[0]).taskId).toBe('task-0');
+
+        // Create evidence for second dispatch
+        const stamps = new Map<string, EvidenceStamp>([
+          ['task-1', { sha: 'abc123', form: 'commit' }],
+        ]);
+        const evidence = createMockEvidence(stamps);
+
+        // Dispatcher that appends a second record
+        const dispatcherWithAppend = async (opts: { residueIds: string[] }) => {
+          for (const taskId of opts.residueIds) {
+            const record = {
+              ts: 2000,
+              feature: 'test-feature',
+              taskId,
+              fastLaneForm: 'commit',
+              fastLaneSha: 'sha-1',
+              auditVerdict: 'satisfied' as const,
+              agree: true,
+            };
+            await appendAccuracyLedger(ledgerPath, record);
+          }
+          return { success: true, output: '{}' };
+        };
+
+        await runSpotAudit({
+          evidence,
+          featureSlug: 'test-feature',
+          auditSamplePct: 100,
+          projectDir: tmpDir,
+          featureWorktreePath: tmpDir,
+          gateVerdictPath,
+          dispatch: dispatcherWithAppend,
+        });
+
+        // Wait for fire-and-forget dispatch
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        // Verify both records are present (not overwritten)
+        content = await readFile(ledgerPath, 'utf-8');
+        lines = content.trim().split('\n');
+        expect(lines.length).toBeGreaterThanOrEqual(2);
+
+        // Verify first record is still there
+        const firstRecord = JSON.parse(lines[0]);
+        expect(firstRecord.taskId).toBe('task-0');
+
+        // Verify new records were appended
+        const taskIds = lines.map((line) => JSON.parse(line).taskId);
+        expect(taskIds).toContain('task-0');
+        expect(taskIds).toContain('task-1');
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
 });

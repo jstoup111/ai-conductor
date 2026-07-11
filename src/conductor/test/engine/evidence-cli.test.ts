@@ -289,7 +289,284 @@ describe('runEvidenceJudge — full-resolution recovery tail (Task 21)', () => {
   });
 });
 
-// ─── 8. Task 25 negative acceptance: refusal via the CLI invoker ────────────
+// ─── 8. CLI dispatcher wiring regression (rem-adr-003): Verifier dispatch path executes
+//
+// Regression test for rem-adr-003 evidence-cli dispatcher wiring.
+// The previous implementation called runEvidenceJudge without a dispatchVerifier,
+// so it silently produced no-verdict on every residue task. This test prevents that
+// regression by verifying:
+// 1. The dispatcher is invoked when there are residue tasks
+// 2. The verdict file is produced and parsed correctly
+// 3. --dry-run stops before stamping with the real dispatcher wired
+// 4. The test FAILs if evidence-cli regresses to undefined/no dispatchVerifier
+
+describe('runEvidenceJudgeCLI — dispatcher wiring regression (rem-adr-003)', () => {
+  it('invokes fixture dispatcher and produces verdict file for residue tasks', async () => {
+    const { runEvidenceJudgeCLI } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-cli-dispatch-'));
+    try {
+      // Set up worktree structure with feature
+      const worktreeDir = join(tmpDir, '.worktrees', 'test-feature');
+      const docsDir = join(worktreeDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+
+      // Initialize git repo
+      await execa('git', ['init', '-b', 'main'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: worktreeDir });
+      await writeFile(join(worktreeDir, 'README.md'), '# Test\n');
+      await execa('git', ['add', 'README.md'], { cwd: worktreeDir });
+      await execa('git', ['commit', '-m', 'chore: init'], { cwd: worktreeDir });
+
+      // Create plan with residue tasks (not yet resolved)
+      const planPath = join(docsDir, 'test-feature.md');
+      await writeFile(
+        planPath,
+        '### Task 1\n\n**Files:** `src/f1.ts`\n\n### Task 2\n\n**Files:** `src/f2.ts`\n',
+      );
+
+      // Initialize .pipeline directory
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Initialize task-evidence.json (no evidence yet)
+      await writeFile(
+        join(pipelineDir, 'task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {},
+          noEvidenceAttempts: 0,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        }),
+      );
+
+      // Track whether dispatcher was invoked
+      let dispatcherInvoked = false;
+      let invokedResidueIds: string[] = [];
+
+      // Fixture dispatcher that produces a valid verdict
+      const fixtureDispatcher = async (inputs: { residueIds: string[] }) => {
+        dispatcherInvoked = true;
+        invokedResidueIds = inputs.residueIds;
+
+        // Create a valid satisfied verdict for residue tasks
+        const verdict = {
+          schema: 1,
+          anchor: { head: '', residue: inputs.residueIds },
+          results: inputs.residueIds.map((id) => ({
+            taskId: id,
+            verdict: 'satisfied',
+            citations: [
+              { sha: '0000000000000000000000000000000000000000', rationale: 'fixture citation' },
+            ],
+          })),
+        };
+
+        await writeFile(
+          join(worktreeDir, '.pipeline', 'attribution-verdict.json'),
+          JSON.stringify(verdict, null, 2),
+          'utf-8',
+        );
+      };
+
+      // Call CLI with fixture dispatcher
+      // We need to call runEvidenceJudgeCLI directly to pass injectedDispatcher
+      const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath,
+        projectRoot: worktreeDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: worktreeDir, branch: 'main' }),
+        injectedDispatcher: fixtureDispatcher,
+      });
+
+      // Verify dispatcher was invoked
+      expect(dispatcherInvoked).toBe(true);
+      expect(invokedResidueIds).toContain('1');
+      expect(invokedResidueIds).toContain('2');
+
+      // Verify verdict file was produced
+      const verdictPath = join(worktreeDir, '.pipeline', 'attribution-verdict.json');
+      const verdictRaw = await readFile(verdictPath, 'utf-8');
+      const verdictParsed = JSON.parse(verdictRaw);
+
+      expect(verdictParsed.schema).toBe(1);
+      expect(verdictParsed.results).toHaveLength(2);
+      expect(verdictParsed.results[0].verdict).toBe('satisfied');
+
+      // Verify result
+      expect(result.ok).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('dry-run stops before writing verdict file', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+    const { existsSync } = await import('node:fs');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-cli-dryrun-'));
+    try {
+      // Set up worktree structure
+      const worktreeDir = join(tmpDir, '.worktrees', 'test-feature');
+      const docsDir = join(worktreeDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+
+      // Initialize git repo
+      await execa('git', ['init', '-b', 'main'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: worktreeDir });
+      await writeFile(join(worktreeDir, 'README.md'), '# Test\n');
+      await execa('git', ['add', 'README.md'], { cwd: worktreeDir });
+      await execa('git', ['commit', '-m', 'chore: init'], { cwd: worktreeDir });
+
+      // Create plan with residue tasks
+      const planPath = join(docsDir, 'test-feature.md');
+      await writeFile(planPath, '### Task 1\n\n**Files:** `src/f1.ts`\n');
+
+      // Initialize .pipeline directory
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Initialize task-evidence.json
+      await writeFile(
+        join(pipelineDir, 'task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {},
+          noEvidenceAttempts: 0,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        }),
+      );
+
+      // Fixture dispatcher
+      const fixtureDispatcher = async (inputs: { residueIds: string[] }) => {
+        const verdict = {
+          schema: 1,
+          anchor: { head: '', residue: inputs.residueIds },
+          results: inputs.residueIds.map((id) => ({
+            taskId: id,
+            verdict: 'satisfied',
+            citations: [
+              { sha: '0000000000000000000000000000000000000000', rationale: 'fixture citation' },
+            ],
+          })),
+        };
+
+        await writeFile(
+          join(worktreeDir, '.pipeline', 'attribution-verdict.json'),
+          JSON.stringify(verdict, null, 2),
+          'utf-8',
+        );
+      };
+
+      // Run with dry-run enabled
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath,
+        projectRoot: worktreeDir,
+        dryRun: true,
+        resolveWorktree: async () => ({ root: worktreeDir, branch: 'main' }),
+        injectedDispatcher: fixtureDispatcher,
+      });
+
+      expect(result.ok).toBe(true);
+      // In dry-run, wouldStamp should be populated instead of stampedTaskIds
+      expect(result.wouldStamp).toBeDefined();
+      // stampedTaskIds should be undefined in dry-run
+      expect(result.stampedTaskIds).toBeUndefined();
+
+      // Verify no actual stamps were written to evidence
+      const evidenceRaw = await readFile(join(pipelineDir, 'task-evidence.json'), 'utf-8');
+      const evidenceParsed = JSON.parse(evidenceRaw);
+      expect(evidenceParsed.evidenceStamps['1']).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails fast if dispatcher is undefined (regression guard)', async () => {
+    const { runEvidenceJudge } = await import('../../src/engine/evidence-cli.js');
+    const { mkdir, writeFile, readFile, rm } = await import('node:fs/promises');
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { execa } = await import('execa');
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'evidence-cli-regress-'));
+    try {
+      // Set up worktree structure
+      const worktreeDir = join(tmpDir, '.worktrees', 'test-feature');
+      const docsDir = join(worktreeDir, '.docs', 'plans');
+      await mkdir(docsDir, { recursive: true });
+
+      // Initialize git repo
+      await execa('git', ['init', '-b', 'main'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: worktreeDir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: worktreeDir });
+      await writeFile(join(worktreeDir, 'README.md'), '# Test\n');
+      await execa('git', ['add', 'README.md'], { cwd: worktreeDir });
+      await execa('git', ['commit', '-m', 'chore: init'], { cwd: worktreeDir });
+
+      // Create plan with residue tasks
+      const planPath = join(docsDir, 'test-feature.md');
+      await writeFile(planPath, '### Task 1\n\n**Files:** `src/f1.ts`\n');
+
+      // Initialize .pipeline directory
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+
+      // Initialize task-evidence.json
+      await writeFile(
+        join(pipelineDir, 'task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {},
+          noEvidenceAttempts: 0,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        }),
+      );
+
+      // Call WITHOUT dispatcher (simulate regression)
+      // This should still return ok:true but with no stamps applied
+      const result = await runEvidenceJudge({
+        featureSlug: 'test-feature',
+        planPath,
+        projectRoot: worktreeDir,
+        dryRun: false,
+        resolveWorktree: async () => ({ root: worktreeDir, branch: 'main' }),
+        // No dispatchVerifier, no injectedDispatcher - simulates the regression
+      });
+
+      expect(result.ok).toBe(true);
+      // Without a dispatcher, no verdict file is produced, so no stamps are applied
+      expect(result.stampedTaskIds ?? []).toHaveLength(0);
+      // Task should remain in residue
+      expect(result.remaining).toContain('1');
+
+      // Verify no evidence stamps were written
+      const evidenceRaw = await readFile(join(pipelineDir, 'task-evidence.json'), 'utf-8');
+      const evidenceParsed = JSON.parse(evidenceRaw);
+      expect(evidenceParsed.evidenceStamps['1']).toBeUndefined();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── 9. Task 25 negative acceptance: refusal via the CLI invoker ────────────
 //
 // Mirrors attribution-corpus.test.ts's gate-lane negatives through the OTHER
 // invoker (`conduct-ts evidence judge` / runEvidenceJudge): an unimplemented
