@@ -5,7 +5,16 @@
 // pipeline boots, pure parsing (no I/O), returns dispatch type or null.
 
 import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { WorktreeManager } from './worktree.js';
+import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
+import { createTaskEvidence } from './task-evidence.js';
+import { parseAttributionVerdict } from './attribution-verdict.js';
+import { validateCitations } from './attribution-validate.js';
+import { markerPath } from './attribution-enforcement.js';
+import type { GitRunner } from './rebase.js';
+import { makeGitRunner } from './rebase.js';
+import { readFile } from 'node:fs/promises';
 
 export type EvidenceDispatch =
   | { kind: 'guide' }
@@ -78,6 +87,37 @@ export async function dispatchEvidence(
 }
 
 /**
+ * Options for running evidence judge.
+ */
+export interface RunEvidenceJudgeOptions {
+  /** Feature slug. */
+  featureSlug: string;
+  /** Path to the plan file. */
+  planPath: string;
+  /** Project root directory. */
+  projectRoot: string;
+  /** If true, don't write changes to task-evidence.json. */
+  dryRun?: boolean;
+  /** Resolver function to find worktree for feature slug. */
+  resolveWorktree: (slug: string) => Promise<{ root: string; branch: string } | null>;
+  /** Dispatcher to run the verifier (for testing). */
+  dispatchVerifier?: (inputs: { residueIds: string[] }) => Promise<unknown>;
+}
+
+/**
+ * Result of running evidence judge.
+ */
+export interface EvidenceJudgeResult {
+  ok: boolean;
+  stampedTaskIds?: string[];
+  wouldStamp?: string[];
+  remaining?: string[];
+  before?: number;
+  after?: number;
+  error?: string;
+}
+
+/**
  * Run evidence judge for a feature slug.
  * Resolves the slug to a worktree and validates it exists.
  *
@@ -115,4 +155,246 @@ export async function runEvidenceJudge(
     print(`Error: failed to judge evidence: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
+}
+
+/**
+ * Run the full evidence judge lane: assemble inputs, dispatch verifier,
+ * parse verdict, validate citations, apply stamps.
+ *
+ * @param opts - Judge options
+ * @returns Judge result with status and stamped task IDs
+ */
+export async function runEvidenceJudgeAsync(
+  opts: RunEvidenceJudgeOptions,
+): Promise<EvidenceJudgeResult> {
+  const {
+    featureSlug,
+    planPath,
+    projectRoot,
+    dryRun = false,
+    resolveWorktree,
+    dispatchVerifier,
+  } = opts;
+
+  try {
+    // Check for active build marker
+    const markerPathStr = markerPath(projectRoot);
+    if (existsSync(markerPathStr)) {
+      return {
+        ok: false,
+        error: 'Build step is active; cannot judge evidence while a build is in progress',
+      };
+    }
+
+    // Resolve worktree for this feature
+    const worktreeInfo = await resolveWorktree(featureSlug);
+    if (!worktreeInfo) {
+      return {
+        ok: false,
+        error: `Unknown feature slug: ${featureSlug}`,
+      };
+    }
+
+    const { root: worktreeRoot } = worktreeInfo;
+
+    // Read plan to extract task IDs
+    const planText = await readFile(planPath, 'utf-8');
+    const planTaskIds = extractTaskIdsFromPlan(planText);
+
+    // Get current evidence state (before)
+    const evidence = await createTaskEvidence(worktreeRoot);
+    const beforeResidueCount = planTaskIds.filter(
+      (id) => !evidence.evidenceStamps.has(id),
+    ).length;
+
+    // Set up git runner for the worktree
+    const git = makeGitRunner(worktreeRoot);
+
+    // Derive completion using existing autoheal infrastructure
+    const derived = await deriveCompletion(
+      worktreeRoot,
+      planPath,
+      evidence.evidenceStamps,
+      [],
+      evidence,
+    );
+
+    // Extract residue (unresolved task IDs)
+    const residueIds = planTaskIds.filter((id) => !derived[id]?.completed);
+
+    if (residueIds.length === 0) {
+      // No residue; all tasks already resolved
+      return {
+        ok: true,
+        stampedTaskIds: [],
+        wouldStamp: [],
+        remaining: [],
+        before: beforeResidueCount,
+        after: 0,
+      };
+    }
+
+    // Dispatch the verifier
+    let verdictRaw: unknown;
+    if (dispatchVerifier) {
+      verdictRaw = await dispatchVerifier({ residueIds });
+    } else {
+      // In production, the verifier writes .pipeline/attribution-verdict.json
+      // For now, assume it's written and try to read it
+      const verdictPath = join(worktreeRoot, '.pipeline', 'attribution-verdict.json');
+      try {
+        verdictRaw = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+      } catch {
+        verdictRaw = null;
+      }
+    }
+
+    // Parse the verdict
+    const headSha = await getCurrentHeadSha(git);
+    const verdictMap = parseAttributionVerdict(
+      verdictRaw,
+      planTaskIds,
+      headSha,
+      residueIds,
+    );
+
+    // Validate citations and apply stamps
+    const stampedTaskIds: string[] = [];
+    const wouldStampTaskIds: string[] = [];
+
+    for (const taskId of residueIds) {
+      const verdict = verdictMap.get(taskId);
+      if (verdict !== 'satisfied') {
+        continue; // Skip non-satisfied verdicts
+      }
+
+      // Get task paths from plan
+      const taskPaths = extractPathsForTaskFromPlan(planText, taskId);
+
+      // For now, assume verdict includes citations (from the dispatch)
+      const verdictResult = verdictRaw && typeof verdictRaw === 'object' && 'results' in verdictRaw
+        ? (verdictRaw as any).results?.find((r: any) => String(r.taskId) === taskId)
+        : null;
+
+      if (!verdictResult?.citations || verdictResult.citations.length === 0) {
+        continue; // No citations, skip
+      }
+
+      // Validate citations
+      const citationValidation = await validateCitations(
+        git,
+        { taskId, paths: taskPaths },
+        {
+          taskId,
+          verdict: 'satisfied',
+          citations: verdictResult.citations,
+        },
+        headSha,
+        new Set(),
+      );
+
+      if (!citationValidation.valid) {
+        continue; // Validation failed, skip
+      }
+
+      // Citation validation passed
+      wouldStampTaskIds.push(taskId);
+      if (!dryRun) {
+        // Apply stamp to evidence
+        evidence.evidenceStamps.set(taskId, {
+          sha: verdictResult.citations[0].sha,
+          form: 'semantic-verified',
+          citedShas: verdictResult.citations.map((c: any) => c.sha),
+          verdictAnchor: headSha,
+          testEvidence: verdictResult.testEvidence,
+        });
+        stampedTaskIds.push(taskId);
+      }
+    }
+
+    // Write evidence if not dry-run
+    if (!dryRun && stampedTaskIds.length > 0) {
+      await evidence.write();
+    }
+
+    // Re-derive to get final residue count
+    const derivedAfter = await deriveCompletion(
+      worktreeRoot,
+      planPath,
+      evidence.evidenceStamps,
+      [],
+      evidence,
+    );
+    const afterResidueCount = planTaskIds.filter((id) => !derivedAfter[id]?.completed).length;
+
+    const remainingTaskIds = planTaskIds.filter((id) => !derivedAfter[id]?.completed);
+
+    return {
+      ok: true,
+      stampedTaskIds: dryRun ? undefined : stampedTaskIds,
+      wouldStamp: dryRun ? wouldStampTaskIds : undefined,
+      remaining: remainingTaskIds.length > 0 ? remainingTaskIds : [],
+      before: beforeResidueCount,
+      after: afterResidueCount,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Failed to judge evidence: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Extract task IDs from plan Markdown.
+ * Looks for headings like "### Task 1", "### Task 7", etc.
+ */
+function extractTaskIdsFromPlan(planText: string): string[] {
+  const headingRegex = /^###\s+Task\s+(\d+|[\w-]+)/gm;
+  const ids: string[] = [];
+  let match;
+  while ((match = headingRegex.exec(planText)) !== null) {
+    ids.push(match[1]);
+  }
+  return ids;
+}
+
+/**
+ * Extract **Files:** paths for a specific task from plan Markdown.
+ */
+function extractPathsForTaskFromPlan(planText: string, taskId: string): Set<string> {
+  const paths = new Set<string>();
+  // Find the task section
+  const taskRegex = new RegExp(
+    `^###\\s+Task\\s+${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*?(?=^###|$)`,
+    'ms',
+  );
+  const taskMatch = taskRegex.exec(planText);
+  if (!taskMatch) return paths;
+
+  const taskSection = taskMatch[0];
+  // Extract **Files:** lines
+  const filesRegex = /\*\*Files:\*\*\s*(.+?)(?:\n|$)/g;
+  let filesMatch;
+  while ((filesMatch = filesRegex.exec(taskSection)) !== null) {
+    const filesStr = filesMatch[1];
+    // Split by comma and extract paths from backticks
+    const fileMatches = filesStr.match(/`([^`]+)`/g) || [];
+    for (const fileMatch of fileMatches) {
+      const path = fileMatch.slice(1, -1); // Remove backticks
+      paths.add(path);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Get current HEAD commit SHA from a git runner.
+ */
+async function getCurrentHeadSha(git: GitRunner): Promise<string> {
+  const result = await git(['rev-parse', 'HEAD']);
+  if (result.exitCode !== 0) {
+    throw new Error('Failed to get HEAD SHA');
+  }
+  return result.stdout.trim();
 }
