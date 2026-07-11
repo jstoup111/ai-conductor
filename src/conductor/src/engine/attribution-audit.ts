@@ -391,3 +391,64 @@ export async function recordAuditResultWithEvent(
     });
   }
 }
+
+/**
+ * Rolling agreement summary computed from the accuracy ledger.
+ */
+export interface AccuracyLedgerSummary {
+  /** Number of ledger records considered. */
+  sampleCount: number;
+  /** count(agree: true) / sampleCount, in [0, 1]. */
+  agreementRate: number;
+}
+
+/**
+ * DOMAIN: Ledger Summarizer (Task 18)
+ * ====================================
+ *
+ * Reads `.daemon/attribution-accuracy.jsonl` and computes a rolling agreement
+ * rate: count(agree: true) / total records. Returns `null` when the ledger is
+ * absent, empty, or contains zero parseable records — callers MUST omit the
+ * status line in that case rather than render a fabricated 100% (Story 9:
+ * "absent/empty ledger ⇒ line omitted, no fake 100%").
+ *
+ * Malformed individual lines are skipped (fail-open per line), not fatal to
+ * the summary — a single corrupt line must never hide the rest of the ledger.
+ *
+ * @param ledgerPath - Path to .daemon/attribution-accuracy.jsonl
+ * @returns summary, or null when there is nothing to summarize
+ *
+ * # Task 18: Daemon status agreement rate
+ * References: adr-2026-07-11-attribution-verdict-interface § "Accuracy ledger"
+ */
+export async function summarizeAccuracyLedger(ledgerPath: string): Promise<AccuracyLedgerSummary | null> {
+  const { readFile } = await import('node:fs/promises');
+
+  let content: string;
+  try {
+    content = await readFile(ledgerPath, 'utf-8');
+  } catch {
+    // Missing/unreadable ledger — nothing to summarize.
+    return null;
+  }
+
+  let total = 0;
+  let agreeCount = 0;
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as { agree?: unknown };
+      if (typeof parsed.agree !== 'boolean') continue;
+      total += 1;
+      if (parsed.agree) agreeCount += 1;
+    } catch {
+      // Skip malformed line; never let it abort the whole summary.
+      continue;
+    }
+  }
+
+  if (total === 0) return null;
+
+  return { sampleCount: total, agreementRate: agreeCount / total };
+}
