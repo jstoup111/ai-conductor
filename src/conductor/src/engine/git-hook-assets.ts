@@ -92,6 +92,13 @@ export const PREPARE_COMMIT_MSG_HOOK = [
  * Rejects empty commits lacking a resolvable Evidence: satisfied-by <sha>.
  * Warns (never blocks) on bundling and subject-vs-trailer mismatch.
  * Chains to $GIT_COMMON_DIR/hooks/commit-msg if it exists.
+ *
+ * Exemption matrix (all short-circuit before the marker-based rejection):
+ * merge commits, amend of a pre-enforcement commit, rebase replay,
+ * CONDUCT_ENGINE_COMMIT=1 (engine bookkeeping), and an empty commit carrying
+ * a resolvable Evidence: satisfied-by trailer. When the build-step-active
+ * marker is absent entirely, enforcement is inactive and unattributed
+ * content commits land unchanged (pre-feature behavior).
  */
 export const COMMIT_MSG_HOOK = [
   '#!/bin/bash',
@@ -123,10 +130,17 @@ export const COMMIT_MSG_HOOK = [
   '  exit 0',
   'fi',
   '',
-  '# Exemption: amend of a pre-enforcement commit. GIT_REFLOG_ACTION is set by',
-  '# git to "commit (amend)" for the duration of `git commit --amend`; the',
-  '# amended commit predates enforcement by definition (it already exists).',
+  '# Exemption: amend of a pre-enforcement commit. GIT_REFLOG_ACTION is not',
+  '# reliably set in this hook\'s environment across git versions or when -m is',
+  '# combined with --amend, so fall back to inspecting the invoking git',
+  '# process\'s own command line (our direct parent, always `git commit ...`)',
+  '# for the --amend flag; the amended commit predates enforcement by',
+  '# definition (it already exists).',
   'if [[ "${GIT_REFLOG_ACTION:-}" == "commit (amend)" ]]; then',
+  '  exit 0',
+  'fi',
+  'PARENT_GIT_CMD="$(ps -o args= -p "$PPID" 2>/dev/null || true)"',
+  'if [[ "$PARENT_GIT_CMD" == *"commit"*"--amend"* ]]; then',
   '  exit 0',
   'fi',
   '',
@@ -137,8 +151,24 @@ export const COMMIT_MSG_HOOK = [
   '  exit 0',
   'fi',
   '',
+  '# Exemption (#505 Task 7): engine-authored bookkeeping commits. The engine',
+  '# sets CONDUCT_ENGINE_COMMIT=1 in the environment for the duration of a',
+  '# commit it makes itself (not a dispatched agent); these are never subject',
+  '# to attribution enforcement.',
+  'if [[ "${CONDUCT_ENGINE_COMMIT:-}" == "1" ]]; then',
+  '  exit 0',
+  'fi',
+  '',
   'if [[ -f "$BUILD_STEP_MARKER" ]] && [[ -z "$TASK_TRAILER" ]]; then',
-  '  if ! git diff-index --cached --quiet HEAD 2>/dev/null; then',
+  '  if git diff-index --cached --quiet HEAD 2>/dev/null; then',
+  '    # Exemption (#505 Task 7): empty commit with a resolvable',
+  '    # Evidence: satisfied-by trailer — nothing is being smuggled in, and',
+  '    # the trailer proves the work is already accounted for elsewhere.',
+  '    if [[ -z "$EVIDENCE_TRAILER" ]] || ! git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
+  '      echo "commit-msg: rejected — unattributed empty build-step commit (no Task: trailer and no resolvable Evidence: satisfied-by)" >&2',
+  '      exit 1',
+  '    fi',
+  '  else',
   '    echo "commit-msg: rejected — unattributed build-step commit (no Task: trailer)" >&2',
   '    echo "commit-msg: this commit was made while a dispatched build step was active, but the message carries no Task: <id> trailer." >&2',
   '    echo "commit-msg: make this change from within a dispatched task — the session hooks stamp Task: <id> automatically — or add a Task: <id> trailer yourself before committing." >&2',
