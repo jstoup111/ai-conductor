@@ -256,6 +256,38 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(0);
   });
 
+  it('passes through an unstamped `grep \'git commit\' f` Bash invocation when the marker is present (mention, not invocation)', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: "grep 'git commit' f" } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped `echo "git commit"` Bash invocation when the marker is present (mention, not invocation)', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: 'echo "git commit"' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped `npx vitest run` Bash invocation when the marker is present (unrelated command)', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: 'npx vitest run' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through an unstamped `conduct-ts task start 3` Bash invocation when the marker is present (unrelated command)', () => {
+    const result = runMutationGateHook({
+      marker: true,
+      payload: { tool_name: 'Bash', tool_input: { command: 'conduct-ts task start 3' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
   it('fails open on an unparseable payload even when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
