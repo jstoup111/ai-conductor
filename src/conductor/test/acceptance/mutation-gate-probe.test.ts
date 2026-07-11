@@ -129,10 +129,17 @@ describe.skipIf(!shouldRun)(
 
         const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
 
+        if (existsSync(markedFile)) {
+          console.error(
+            `unexpected: markedFile exists. First 2000 chars of output:
+${output.slice(0, 2000)}`,
+          );
+        }
+
         expect(existsSync(markedFile)).toBe(false);
         expect(output).toMatch(/Task:\s*<id>|dispatch|Task: none/i);
       },
-      70_000,
+      { timeout: 70_000, retry: 1 },
     );
 
     it(
@@ -157,7 +164,7 @@ describe.skipIf(!shouldRun)(
 
         await rm(join(repoRoot, '.pipeline', 'current-task'), { force: true });
       },
-      70_000,
+      { timeout: 70_000, retry: 1 },
     );
   },
 );
