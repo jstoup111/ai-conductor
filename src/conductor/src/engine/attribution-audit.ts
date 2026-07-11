@@ -72,11 +72,12 @@
  */
 
 import * as crypto from 'node:crypto';
-import { access, mkdir } from 'node:fs/promises';
+import { access, mkdir, readFile } from 'node:fs/promises';
 import { openSync, writeSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { TaskEvidence, EvidenceStamp } from './task-evidence.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
+import { parseAttributionVerdict } from './attribution-verdict.js';
 
 /**
  * Accuracy ledger record for audit outcomes.
@@ -278,6 +279,10 @@ export interface SpotAuditDispatchOptions {
   gateVerdictPath: string;
   /** Dispatch function (from Task 7, dispatchAttributionVerifier) */
   dispatch: (opts: { residueIds: string[] }) => Promise<VerifierDispatchResult>;
+  /** Path to accuracy ledger file; defaults to <projectDir>/.daemon/attribution-accuracy.jsonl */
+  ledgerPath?: string;
+  /** Optional event emitter for attribution_divergence events */
+  emitter?: AttributionEventEmitter;
 }
 
 /**
@@ -313,7 +318,9 @@ export interface SpotAuditDispatchResult {
  * References: adr-2026-07-11-attribution-verdict-interface § "Spot-audit sampler"
  */
 export async function runSpotAudit(opts: SpotAuditDispatchOptions): Promise<SpotAuditDispatchResult> {
-  const { evidence, featureSlug, auditSamplePct, projectDir, featureWorktreePath, gateVerdictPath, dispatch } = opts;
+  const { evidence, featureSlug, auditSamplePct, projectDir, featureWorktreePath, gateVerdictPath, dispatch, emitter } = opts;
+  // Ledger is repo-local (ADR item 3); derive from projectDir unless overridden.
+  const ledgerPath = opts.ledgerPath ?? join(projectDir, '.daemon', 'attribution-accuracy.jsonl');
 
   // Check if gate verdict file exists — only dispatch if verdict is present
   try {
@@ -332,15 +339,76 @@ export async function runSpotAudit(opts: SpotAuditDispatchOptions): Promise<Spot
   }
 
   // Fire-and-forget: start dispatch without waiting for completion.
-  // Attach error handler to log failures but don't propagate them.
+  // Chain success handler to record audit results, with error handler for non-blocking failures.
   dispatch({ residueIds: sampleIds })
+    .then(async (result) => {
+      // Only process verdict when dispatch succeeds
+      if (!result.success) {
+        return;
+      }
+
+      // Read and parse the verifier-written verdict file
+      const verdictPath = join(featureWorktreePath, '.pipeline', 'attribution-verdict.json');
+      let rawVerdict: unknown;
+      try {
+        const content = await readFile(verdictPath, 'utf-8');
+        rawVerdict = JSON.parse(content);
+      } catch (err) {
+        // Verdict file missing or unparseable; abort record writing
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[attribution-audit] failed to read verdict file at ${verdictPath}: ${errorMsg}`);
+        return;
+      }
+
+      // Parse verdict using the fail-closed parser
+      const verdictMap = parseAttributionVerdict(rawVerdict, sampleIds);
+
+      // For each sampled taskId, build and record an AccuracyLedgerRecord
+      for (const taskId of sampleIds) {
+        // Get fast-lane evidence for this task
+        const stamp = evidence.evidenceStamps.get(taskId);
+        if (!stamp) {
+          // Task not in evidence; skip (should not happen for sampled tasks)
+          continue;
+        }
+
+        // Get audit verdict for this task
+        const auditVerdict = verdictMap.get(taskId) ?? 'no-verdict';
+
+        // An abstention is a lost sample (ADR: "a verifier failure or timeout
+        // loses one sample, never a build") — fabricate no agree row, emit no
+        // divergence for a verdict the judge never rendered.
+        if (auditVerdict === 'no-verdict') {
+          continue;
+        }
+
+        // Build the accuracy ledger record
+        const record: AccuracyLedgerRecord = {
+          ts: Date.now(),
+          feature: featureSlug,
+          taskId,
+          fastLaneForm: stamp.form,
+          fastLaneSha: stamp.sha,
+          auditVerdict,
+          agree: auditVerdict === 'satisfied',
+        };
+
+        // Attempt to record the result (fire-and-forget; errors are logged)
+        try {
+          await recordAuditResultWithEvent(ledgerPath, record, emitter);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          console.warn(`[attribution-audit] failed to record audit result for task ${taskId}: ${errorMsg}`);
+        }
+      }
+    })
     .catch((err) => {
-      // Log error for observability but don't block gate or modify outcome
+      // Log dispatch or processing error for observability but don't block gate
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[attribution-audit] spot-audit dispatch failed (non-blocking): ${errorMsg}`);
+      console.warn(`[attribution-audit] spot-audit processing failed (non-blocking): ${errorMsg}`);
     });
 
-  // Return immediately without waiting for dispatch to complete
+  // Return immediately without waiting for dispatch or record-writing to complete
   return { dispatched: true };
 }
 
