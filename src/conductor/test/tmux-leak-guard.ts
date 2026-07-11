@@ -117,20 +117,45 @@ export function killDaemonSession(name: string, runner: TmuxRunner = realTmuxRun
   tmux(['kill-session', '-t', `=${name}`], runner);
 }
 
+/** Result of a reap pass: sessions actually killed vs. sessions that could
+ * not be corroborated as leaks (reported but left alone — fail closed). */
+export type ReapResult = {
+  killed: string[];
+  indeterminate: string[];
+};
+
 /**
- * Diff live sessions against the suite-start snapshot; kill and describe
- * every leaked one. Returns the leak descriptions (empty = clean run).
+ * Diff live sessions against the suite-start snapshot; kill only sessions
+ * that clear BOTH corroborating signals (TR-2, #437):
+ *   1. The baseline snapshot itself succeeded (`snapshot.failed === false`)
+ *      — a failed baseline means we can't trust "not in before" as "new".
+ *   2. The session is not in the baseline's session list.
+ *   3. Its pane cwd resolves.
+ *   4. That pane cwd is rooted under os.tmpdir() (`isTmpdirRooted`).
+ * The pane cwd is evaluated BEFORE any kill. Anything not meeting all four
+ * criteria is reported via `indeterminate` and never killed.
  */
 export function reapLeakedDaemonSessions(
-  before: ReadonlySet<string>,
+  snapshot: SnapshotResult,
   runner: TmuxRunner = realTmuxRunner
-): string[] {
-  const leaks: string[] = [];
+): ReapResult {
+  const killed: string[] = [];
+  const indeterminate: string[] = [];
+  const before = new Set(snapshot.sessions);
+
   for (const name of listDaemonSessions(runner)) {
     if (before.has(name)) continue;
+
     const cwd = sessionPaneCwd(name, runner);
-    killDaemonSession(name, runner);
-    leaks.push(`${name} (pane cwd: ${cwd})`);
+    const canKill = !snapshot.failed && cwd !== '(unknown)' && isTmpdirRooted(cwd);
+
+    if (canKill) {
+      killDaemonSession(name, runner);
+      killed.push(`${name} (pane cwd: ${cwd})`);
+    } else {
+      indeterminate.push(`${name} (pane cwd: ${cwd})`);
+    }
   }
-  return leaks;
+
+  return { killed, indeterminate };
 }
