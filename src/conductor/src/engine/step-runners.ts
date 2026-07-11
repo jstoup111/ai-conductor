@@ -698,6 +698,41 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
+   * Dispatch a semantic attribution verifier session for spot-audit sampling.
+   * Runs in a fresh, isolated one-shot session (never resumes the main conductor session).
+   * Used by the conductor's build-gate post-green dispatch (Task 15).
+   *
+   * The verifier collects candidate commits, samples residue tasks, and produces
+   * an attribution verdict saved to `.pipeline/attribution-verdict.json`.
+   *
+   * Follows the same one-shot pattern as resolveSetupFailure: fresh uuid,
+   * `resume: false`, walked through the model fallback ladder.
+   */
+  async dispatchVerifier(opts: {
+    residueIds: string[];
+    planPath: string;
+    projectRoot: string;
+  }): Promise<{ success: boolean; output?: string }> {
+    const { dispatchAttributionVerifier } = await import('./attribution-lane.js');
+
+    try {
+      return await dispatchAttributionVerifier({
+        provider: this.provider,
+        projectDir: opts.projectRoot,
+        planPath: opts.planPath,
+        residueIds: opts.residueIds,
+        featureWorktreePath: opts.projectRoot,
+        config: this.config,
+      });
+    } catch (err) {
+      return {
+        success: false,
+        output: String(err),
+      };
+    }
+  }
+
+  /**
    * Dispatch the build_review grader: a fresh, isolated one-shot session
    * (never resumes the main conductor session), fed strictly the diff since
    * the default branch plus the plan body (assembleBuildReviewInputs /

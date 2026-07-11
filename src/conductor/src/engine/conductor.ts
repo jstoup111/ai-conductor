@@ -35,8 +35,10 @@ import {
   removeBuildStepMarker,
   detectZeroWorkProduct,
   readDispatchCount,
+  resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
-import { runAttributionLane, type AttributionLaneResult } from './attribution-lane.js';
+import { runAttributionLane, type AttributionLaneResult, dispatchAttributionVerifier } from './attribution-lane.js';
+import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
   writeState,
@@ -299,6 +301,19 @@ export interface StepRunner {
    * degrades gracefully to a conflict HALT.
    */
   resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
+  /**
+   * Dispatch a semantic attribution verifier session for spot-audit sampling.
+   * Called by the conductor's build-gate post-green dispatch (Task 15).
+   *
+   * The verifier runs in a fresh session with the provided residue task IDs,
+   * collects candidate commits, and produces an attribution verdict.
+   * This method is optional — runners may choose not to expose dispatch.
+   */
+  dispatchVerifier?(opts: {
+    residueIds: string[];
+    planPath: string;
+    projectRoot: string;
+  }): Promise<{ success: boolean; output?: string } | { success: false; output: string }>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
@@ -3333,6 +3348,59 @@ export class Conductor {
         satisfied: verdict.satisfied,
         reason: verdict.reason,
       });
+
+      // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
+      // Only dispatch after build gate is satisfied and sampling is enabled.
+      if (step.name === 'build' && verdict.satisfied) {
+        const auditSamplePct = resolveAttributionAuditSamplePct(this.config);
+        if (auditSamplePct > 0 && this.taskEvidence) {
+          const planCtx = await this.completionCtx(state);
+          const planPath = planCtx.planPath;
+
+          if (planPath) {
+            const gateVerdictPath = join(this.projectRoot, '.pipeline', 'gates', 'build.json');
+
+            // Fire-and-forget dispatch: start audit without blocking build progression.
+            // Errors during dispatch are caught and logged but never propagated.
+            void runSpotAudit({
+              evidence: this.taskEvidence,
+              featureSlug: state.feature_desc || 'unknown',
+              auditSamplePct,
+              projectDir: this.projectRoot,
+              featureWorktreePath: this.projectRoot,
+              gateVerdictPath,
+              dispatch: async (inputs): Promise<import('./attribution-lane.js').VerifierDispatchResult> => {
+                try {
+                  // Dispatch via stepRunner's dispatchVerifier if available,
+                  // otherwise gracefully fail (audit is observational only).
+                  if (this.stepRunner.dispatchVerifier) {
+                    const result = await this.stepRunner.dispatchVerifier({
+                      residueIds: inputs.residueIds,
+                      planPath,
+                      projectRoot: this.projectRoot,
+                    });
+                    return {
+                      success: result.success,
+                      output: result.output ?? '',
+                    };
+                  }
+                  // Dispatcher not available (safe for non-testing scenarios)
+                  return { success: false, output: 'dispatchVerifier not available' };
+                } catch (err) {
+                  // Dispatch error: return neutral result (audit is observational only)
+                  return {
+                    success: false,
+                    output: String(err),
+                  };
+                }
+              },
+            }).catch((err) => {
+              // Audit dispatch error is non-blocking. Log for observability.
+              console.debug('[attribution-audit] spot-audit dispatch failed (non-blocking):', err);
+            });
+          }
+        }
+      }
     }
 
     if (indexOf(step.name) < topo.firstLoopIndex) {
