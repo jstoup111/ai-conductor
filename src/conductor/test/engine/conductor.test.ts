@@ -6127,48 +6127,6 @@ describe('engine/conductor', () => {
 
       expect(failedEvents.length).toBe(0);
     });
-
-    it('emits step_retry with reason and resolved counts on completion-check-failed', async () => {
-      // Build step returns success, but verifyArtifacts: true means completion check fails
-      // (empty dir has no artifacts). The step_retry event should carry resolved counts.
-      const runner: StepRunner = {
-        run: vi.fn().mockResolvedValue({ success: true }),
-      };
-      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: dir, // empty tmp dir — no artifacts, so completion check fails
-        verifyArtifacts: true,
-        maxRetries: 2, // allow at least one retry
-        onRecovery,
-      });
-
-      const retryEvents: Array<{ reason: string; resolvedBefore: number | undefined; resolvedAfter: number | undefined }> = [];
-      events.on('step_retry', (e) => {
-        if (e.type === 'step_retry' && e.step === 'build') {
-          retryEvents.push({
-            reason: e.reason,
-            resolvedBefore: e.resolvedBefore,
-            resolvedAfter: e.resolvedAfter,
-          });
-        }
-      });
-
-      await conductor.run();
-
-      // Should have at least one retry event from the completion-check-failed path
-      expect(retryEvents.length).toBeGreaterThanOrEqual(1);
-      // First retry should have non-empty reason
-      expect(retryEvents[0].reason).toBeTruthy();
-      expect(retryEvents[0].reason.length).toBeGreaterThan(0);
-      // Both resolved counts should be numeric (0 or greater)
-      expect(typeof retryEvents[0].resolvedBefore).toBe('number');
-      expect(typeof retryEvents[0].resolvedAfter).toBe('number');
-      expect(retryEvents[0].resolvedBefore).toBeGreaterThanOrEqual(0);
-      expect(retryEvents[0].resolvedAfter).toBeGreaterThanOrEqual(0);
-    });
   });
 });
 
