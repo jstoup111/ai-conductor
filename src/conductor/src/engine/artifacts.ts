@@ -4,6 +4,7 @@ import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
+import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
@@ -355,6 +356,12 @@ export interface CompletionContext {
    * null if indeterminate. Injected by Conductor; returns undefined for non-git or legacy contexts.
    */
   isHeadPushed?: () => Promise<boolean | null>;
+  /**
+   * Injectable gh runner for presentation checks (finish predicate Phase 2).
+   * Used to verify the recorded PR's title is not stale (needs-remediation:).
+   * Absent → falls back to makeProductionGh() (fail-open for testing).
+   */
+  gh?: GhRunner;
   /**
    * Project root directory. Used by the build predicate to seed task-status and derive completion.
    */
@@ -1214,7 +1221,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // presentation. Fail-open on any gh error (readStaleHaltTitle returns
       // null): network unavailability never blocks a ship.
       try {
-        const staleTitle = await readStaleHaltTitle(makeProductionGh(), dir, prUrl);
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const staleTitle = await readStaleHaltTitle(ghRunner, dir, prUrl);
         if (staleTitle !== null) {
           return {
             done: false,

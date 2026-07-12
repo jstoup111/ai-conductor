@@ -4,10 +4,14 @@ import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
 
+// Import the real readStaleHaltTitle for use in spy implementation
+import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
+
 // Spy target for the finish predicate's Phase 2 presentation check
 // (readStaleHaltTitle, invoked with a gh runner). Mocked so tests can assert
 // it is never reached when a Phase 1 evidence condition (e.g. push
-// verification) already failed the gate.
+// verification) already failed the gate. Default behavior returns null (fail-open);
+// tests can override via mockImplementation to call the real implementation.
 const readStaleHaltTitleSpy = vi.fn(async () => null);
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
   readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
@@ -518,6 +522,82 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/push evidence check failed/i);
       expect(result.reason).toMatch(/corrupt repo/i);
+    });
+
+    it('Phase 2 presentation: fails when fakeGh returns a needs-remediation-titled PR (through-the-gate stale title check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a PR with a needs-remediation: title
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'needs-remediation: fix the build',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      // Configure the spy to use the fake gh runner and implement the real logic
+      readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, prUrl) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+          const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+          return title.startsWith('needs-remediation:') ? title : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltTitleSpy.mockClear();
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/needs-remediation:/);
+      expect(result.reason).toMatch(/rewrite the reused halt PR/i);
+    });
+
+    it('Phase 2 presentation: passes when fakeGh returns a clean ready PR (through-the-gate clean title check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a PR with a clean title (no needs-remediation prefix)
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      // Configure the spy to use the fake gh runner and implement the real logic
+      readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, prUrl) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+          const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+          return title.startsWith('needs-remediation:') ? title : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltTitleSpy.mockClear();
+      expect(result).toEqual({ done: true });
     });
   });
 
