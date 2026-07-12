@@ -46,7 +46,8 @@ describe('buildGraderPrompt', () => {
   it('instructs the grader to run the project test suite itself', () => {
     const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/run the project's test suite/i);
+    expect(prompt).toMatch(/scoped tests?/i);
+    expect(prompt).not.toMatch(/run the project's (full |entire )?test suite/i);
   });
 
   it('includes the diff and plan body', () => {

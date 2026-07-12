@@ -75,7 +75,7 @@ production call site of any security/correctness derivation, with real adversari
 
 2. Write the minimum code to pass the test
 3. Run the test — **watch it pass**
-4. Run the full test suite — ensure nothing else broke
+4. Run the affected/scoped test set (the task's own tests + the files this change touches) — the full suite runs at finish + CI, not per-cycle
 
 **Rules:**
 - Simplest code that passes. Not the "best" code — that's for refactoring.
@@ -115,7 +115,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **Hard gate — all conditions must be met:**
 
-1. Full test suite passes (not just the new test)
+1. Scoped affected-test set passes (the full suite runs at the feature's final verification / finish and at CI, not per-task)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.

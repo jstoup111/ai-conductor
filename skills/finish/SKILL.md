@@ -42,7 +42,7 @@ Do NOT trust:
 
 Run these commands and read the full output:
 
-1. **Full test suite** — Run it fresh. Read the output. Count passing/failing/pending.
+1. **Full test suite** — Run it fresh. Read the output. Count passing/failing/pending. This is the SINGLE in-pipeline full-suite checkpoint before push — it complements, and is not duplicated by, intermediate steps (which run scoped tests) or CI's authoritative `conductor` job.
 2. **Git status** — Check for uncommitted files, untracked files, unexpected changes.
 3. **Linting/type checking** — If the project has linters or type checkers, run them.
 
