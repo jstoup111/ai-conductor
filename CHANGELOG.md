@@ -198,6 +198,66 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
 
+### Added
+
+- **Finish-step order-gated in-step presentation repair (#499, ADR D1).** The finish gate's
+  presentation branch now relocates its repair operations (`rehabilitateHaltPr`) from the
+  daemon post-run tail into the step itself, invoked by the engine exactly once per
+  completion evaluation, **order-gated**: non-presentation conditions (valid `finish-choice`,
+  recorded `pr_url`, push evidence) are verified first; only when all hold does the engine
+  run the repair before evaluating presentation conditions (title, draft status). Consequences:
+  a finishing attempt that fails on recording or push evidence never clears the
+  `needs-remediation` label/body/draft state (redispatch and reconciliation signals stay
+  live); first-try ship is preserved; the daemon-cli post-run tail is removed (single
+  invocation site). See `adr-2026-07-11-finish-step-engine-completion-machinery.md`.
+- **Finish-gate `isDraft` ship-readiness check (#439).** The finish predicate now reads
+  `gh pr view` with `isDraft` and fails ship-readiness while the recorded PR is draft —
+  a guard against #439's false-draft-ship class. The check is **fail-open on gh errors**
+  (presentation is not worth blocking a ship); draft removal is handled by the D1 repair
+  and the D2 retitle-floor (via `ensureShipReady` in the order-gated repair).
+- **Deterministic retitle-floor for stale needs-remediation titles (ADR D2).** When the
+  finish gate's repair evaluates the recorded PR's title and finds it still starts with
+  `needs-remediation:`, the engine rewrites it to a functional floor: `feat: <feature_desc>`
+  (fallback: branch name). The skill's `/pr` prose rewrite runs earlier and is the quality
+  path; the floor only fires when the agent dropped the rewrite (prefix-gated), with any
+  later `/pr` pass able to improve it. Engine-authored prose stays rejected.
+- **Surgical finish-record retry (ADR D4).** When a completion miss is recording-only
+  (`finish-choice` absent/stale or `pr_url` missing) AND every other gate condition already
+  holds, the engine's retry dispatches a narrow prompt naming exactly the one
+  `conduct-ts finish-record` command with the computed absolute `--pipeline-dir`, not the
+  full ~10-minute finish skill re-walk. Retry budget still applies; refusal semantics of
+  adr-2026-07-07 remain intact.
+- **Injectable `GhRunner` seam in finish gate (#368).** The finish predicate's presentation
+  branch now takes an injected `GhRunner` (ctx-provided, defaulting to production at
+  composition root) replacing the hardcoded `makeProductionGh()`, making the branch
+  unit-testable with the established `fakeGh` pattern and closing the #368 test gap. Wired
+  via `Conductor.completionCtx()` → `CompletionContext.gh`.
+
+### Changed
+
+- **`finish/SKILL.md` and `pr/SKILL.md` now document engine behavior, not agent
+  instructions (#499, ADR D5).** Presentation items (undraft, unlabel, `Closes` injection,
+  draft flip) are rewritten as documentation of what the engine does (D1 in-step repair,
+  D2 retitle-floor, `ensureShipReady`), resolving the prior `finish/SKILL.md:373` vs
+  `pr/SKILL.md:220-223` contradiction in the engine's favor. The prose title/body rewrite
+  instruction remains an agent instruction (with the D2 floor as backstop). The
+  `finish-record` exit contract stays an agent instruction (adr-2026-07-07).
+- **Daemon-cli post-run tail rehabilitation removed (#499).** `daemon-cli.ts:784-800`'s
+  post-`conductor.run()` call to `rehabilitateHaltPr` is removed (D1 moves the call
+  in-step). Single invocation site for repair ensures no dual-path drift; the tail now
+  only handles the done-outcome validation logic.
+
+### Fixed
+
+- **#368 Injectable GhRunner seam for finish-gate presentation tests.** The finish gate's
+  hardcoded `makeProductionGh()` is replaced with an injectable `GhRunner`, enabling
+  zero-real-gh unit tests of the title and draft checks (the prior test gap on the
+  `readStaleHaltTitle` and `isDraft` paths).
+- **#439 Fail ship-readiness check while recorded PR is draft.** The finish gate now reads
+  `isDraft` from `gh pr view` and rejects ship-readiness if the recorded PR is still
+  draft; combined with the D1 repair's `ensureShipReady` call, this prevents false-draft
+  ships.
+
 ### Migration
 
 **Attribution judgment and audit config keys (schema change for new judge lane).**

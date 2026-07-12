@@ -291,11 +291,16 @@ conductor reads.
 **Option 2: Push & PR**
 - Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
   PR creation
-- **Halt-PR rehabilitation:** if the branch's existing PR is a reused halt PR
-  (title `needs-remediation:` or the `needs-remediation` label), `/pr` MUST
-  rewrite its title/body as for a fresh PR — the conductor's finish gate fails
-  while the recorded PR title still starts with `needs-remediation:`
-  (adr-2026-07-03-halt-pr-rehabilitation-at-finish)
+- **Engine Behavior — Halt-PR Rehabilitation:** After the agent creates or updates the PR,
+  the conductor automatically rehabilitates any reused halt PR:
+  - Removes the `needs-remediation` label (if present)
+  - Rewrites the title to remove `needs-remediation:` prefix (if present)
+  - Injects or updates the `Closes` reference to match the actual implementation
+  - Flips the PR from draft to ready (if it was drafted)
+  
+  This automation runs before the completion gate checks the PR state
+  (adr-2026-07-03-halt-pr-rehabilitation-at-finish), so the finish gate only
+  succeeds if the PR's final title does NOT start with `needs-remediation:`.
 
 #### STOP Gate: Verify Push + PR Before Recording Choice
 
@@ -368,9 +373,10 @@ After executing the chosen option:
 - [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
       completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
       `pr` without a recorded URL fails the gate
-- [ ] Reused halt-PR fully rehabilitated BEFORE completing: title/body rewritten from the
-      actual diff (no `needs-remediation:` prefix), `needs-remediation` label removed, draft
-      flag cleared (`gh pr ready`)
+- [ ] Reused halt-PR verified for engine rehabilitation: PR title does not start with
+      `needs-remediation:` and does not carry the `needs-remediation` label (engine
+      automatically removes/rewrites these after `/pr` completes; if title still contains
+      `needs-remediation:`, halt-PR rehabilitation failed — check conductor logs)
 - [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
       `refs/remotes/origin/<branch>` contains HEAD)
 - [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog former-head) before `--force-with-lease` (never pulled)

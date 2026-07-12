@@ -1,8 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+// Import the real readStaleHaltTitle for use in spy implementation
+import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
+
+// Spy target for the finish predicate's Phase 2 presentation check
+// (readStaleHaltTitle, invoked with a gh runner). Mocked so tests can assert
+// it is never reached when a Phase 1 evidence condition (e.g. push
+// verification) already failed the gate. Default behavior returns null (fail-open);
+// tests can override via mockImplementation to call the real implementation.
+const readStaleHaltTitleSpy = vi.fn(async () => null);
+vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
+  readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
+}));
+
 import {
   STEP_ARTIFACT_GLOBS,
   findArtifactFiles,
@@ -24,6 +38,7 @@ describe('engine/artifacts', () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
+    readStaleHaltTitleSpy.mockClear();
   });
 
   afterEach(async () => {
@@ -293,6 +308,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/pr_url/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when state.pr_url is set but finish-choice marker is missing', async () => {
@@ -303,12 +319,14 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when neither pr_url nor finish-choice exists', async () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
+      expect(result.missing).toBe('recording');
     });
 
     it('fails when finish-choice contains an unrecognized value', async () => {
@@ -316,6 +334,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/unrecognized/);
+      expect(result.missing).toBe('recording');
     });
 
     it('trims whitespace around the marker value', async () => {
@@ -334,6 +353,7 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
+      expect(result.missing).toBe('recording');
     });
 
     it('rejects finish-choice="keep" when running in daemon mode', async () => {
@@ -345,6 +365,7 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/keep/);
       expect(result.reason).toMatch(/daemon/i);
+      expect(result.missing).toBe('other');
     });
 
     it('rejects finish-choice="merge-local" when running in daemon mode', async () => {
@@ -436,6 +457,20 @@ describe('engine/artifacts', () => {
       expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
     });
 
+    it('two-phase ordering: does not invoke the presentation (gh) check when push evidence fails', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => false,
+      });
+      expect(result.done).toBe(false);
+      expect(readStaleHaltTitleSpy).not.toHaveBeenCalled();
+    });
+
     it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(
@@ -487,6 +522,362 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/push evidence check failed/i);
       expect(result.reason).toMatch(/corrupt repo/i);
+    });
+
+    it('Phase 2 presentation: fails when fakeGh returns a needs-remediation-titled PR (through-the-gate stale title check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a PR with a needs-remediation: title
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'needs-remediation: fix the build',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      // Configure the spy to use the fake gh runner and implement the real logic
+      readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, prUrl) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+          const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+          return title.startsWith('needs-remediation:') ? title : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltTitleSpy.mockClear();
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/needs-remediation:/);
+      expect(result.reason).toMatch(/rewrite the reused halt PR/i);
+    });
+
+    it('Phase 2 presentation: passes when fakeGh returns a clean ready PR (through-the-gate clean title check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a PR with a clean title (no needs-remediation prefix)
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      // Configure the spy to use the fake gh runner and implement the real logic
+      readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, prUrl) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+          const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+          return title.startsWith('needs-remediation:') ? title : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltTitleSpy.mockClear();
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Story 3: Phase 2 presentation (isDraft): fails when fakeGh returns isDraft=true with clean title (ship-readiness check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a draft PR with clean title (no needs-remediation prefix)
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: true,
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/draft/i);
+      expect(result.reason).toMatch(/ship-readiness/i);
+      expect(result.missing).toBe('other');
+    });
+
+    it('Story 3: Phase 2 presentation (isDraft): passes when fakeGh returns isDraft=false with clean title (ready to ship)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a ready (non-draft) PR with clean title
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: false,
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
+    it('Story 3: Phase 2 fail-open: passes when fakeGh throws during presentation check (gh error → logged warning)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that throws an error (network failure, auth error, etc.)
+      const fakeGh = async (args: string[]) => {
+        throw new Error('network error: connection refused');
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Story 3: Phase 2 fail-open: passes when fakeGh returns malformed JSON (unparseable → logged warning)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns invalid JSON
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: 'not valid json {',
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Story 3: Phase 1 short-circuit: fails at phase 1 when state lacks pr_url under choice="pr" (zero gh calls)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      // No .pipeline/conduct-state.json with pr_url — should fail in Phase 1
+      // and NEVER call the gh runner (short-circuit test)
+      const ghCallCount = { count: 0 };
+      const fakeGh = async (args: string[]) => {
+        ghCallCount.count++;
+        throw new Error('gh should not be called in this scenario');
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/pr_url/);
+      expect(result.missing).toBe('recording');
+      expect(ghCallCount.count).toBe(0); // Verify Phase 2 was never reached
+    });
+
+    describe('Task 8: order-gated repair invocation between phases', () => {
+      it('happy path: repair invoked exactly once after phase 1 passes, before phase 2 gh.prView', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const callLog: string[] = [];
+        const repairFinishPr = vi.fn(async () => {
+          callLog.push('repair');
+        });
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            callLog.push('gh-prView');
+          }
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: false,
+            }),
+          };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        });
+
+        expect(result).toEqual({ done: true });
+        expect(repairFinishPr).toHaveBeenCalledTimes(1);
+        expect(repairFinishPr).toHaveBeenCalledWith(prUrl);
+        // Verify repair was called before gh.prView (order check)
+        const repairIndex = callLog.indexOf('repair');
+        const ghIndex = callLog.indexOf('gh-prView');
+        expect(repairIndex).toBeLessThan(ghIndex);
+        expect(repairIndex).toBeGreaterThanOrEqual(0);
+      });
+
+      it('phase 1 miss: repair not invoked when pr_url missing', async () => {
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        // No .pipeline/conduct-state.json with pr_url
+
+        const repairFinishPr = vi.fn(async () => {
+          throw new Error('repair should not be called');
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          repairFinishPr,
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pr_url/);
+        expect(repairFinishPr).not.toHaveBeenCalled();
+      });
+
+      it('phase 1 miss: repair not invoked when push verification fails', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const repairFinishPr = vi.fn(async () => {
+          throw new Error('repair should not be called');
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => false,
+          repairFinishPr,
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/push|push evidence/i);
+        expect(repairFinishPr).not.toHaveBeenCalled();
+      });
+
+      it('repair throws: warning logged, predicate continues to phase 2', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const repairError = new Error('repair failed: network error');
+        const repairFinishPr = vi.fn(async () => {
+          throw repairError;
+        });
+
+        const logSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                title: 'Clean feature title',
+                isDraft: false,
+              }),
+            };
+          }
+          return { stdout: '{}' };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        });
+
+        expect(result).toEqual({ done: true });
+        expect(repairFinishPr).toHaveBeenCalledTimes(1);
+        expect(logSpy).toHaveBeenCalled();
+        const warningCall = logSpy.mock.calls.find((call) =>
+          String(call[0]).includes('repair'),
+        );
+        expect(warningCall).toBeDefined();
+
+        logSpy.mockRestore();
+      });
+
+      it('legacy mode: absent injectable, repair skipped, phase 2 runs as normal', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                title: 'Clean feature title',
+                isDraft: false,
+              }),
+            };
+          }
+          return { stdout: '{}' };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          // repairFinishPr is undefined (legacy)
+        });
+
+        expect(result).toEqual({ done: true });
+      });
     });
   });
 

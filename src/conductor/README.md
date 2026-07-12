@@ -998,6 +998,73 @@ refuses (exit 1, **no writes**) rather than recording anything it cannot prove:
 Implementation: `engine/finish-record-cli.ts` (`detectFinishRecordCommand`,
 `dispatchFinishRecord`); wired into the `conduct-ts` entrypoint in `src/index.ts`.
 
+#### Finish-step engine completion machinery (#499, ADR D1-D5)
+
+The finish gate employs several deterministic engine-side mechanisms to handle presentation
+repair, draft-readiness checks, and surgical retries — consolidating logic that previously
+ran late in the daemon post-run tail or remained untested. All checks are **fail-open on
+errors** (presentation issues do not block a ship):
+
+**D1: Order-gated in-step presentation repair**
+
+The finish predicate's completion evaluation is ordered: first, it verifies non-presentation
+conditions (valid `finish-choice`, recorded `pr_url`, push evidence via local git check);
+only when **all** conditions hold does the engine invoke `rehabilitateHaltPr` and the
+retitle-floor (D2), **then** evaluate presentation conditions (title, draft). Consequences:
+- A finish attempt that fails on recording or push evidence never clears the
+  `needs-remediation` label, body marker, or draft state — the redispatch arm (label-based,
+  adr-2026-07-05) and reconciliation sweep (body-marker-based) keep their signals live.
+- First-try ship is preserved: repair runs strictly before the presentation checks that
+  would otherwise fail the try.
+- The daemon-cli post-run tail's rehab call (`daemon-cli.ts:784-800`) is removed, making
+  repair have a single invocation site and preventing dual-path drift.
+
+**D2: Deterministic retitle-floor**
+
+When repair time evaluates the recorded PR's title and finds it still starts with
+`needs-remediation:`, the engine rewrites it to a functional floor: `feat: <feature_desc>`
+(fallback: branch name). The `/pr` skill's prose rewrite remains the quality path (runs
+earlier during the agent session), so the floor only fires — and its functional title
+ships, logged — when the agent dropped the rewrite (prefix-gated). Any later `/pr` pass
+improves it. Engine-authored prose is never the published presentation.
+
+**D3: `isDraft` ship-readiness check**
+
+The finish predicate now reads `gh pr view` with `isDraft` and rejects ship-readiness if
+the recorded PR is still draft (issue #439, the false-draft-ship class). This is a **PR
+readiness** check on the feature's own recorded PR, not a halt signal — it does not conflict
+with adr-2026-07-05's draft-alone rule; draft removal is handled by D1's repair and D2's
+retitle-floor (via `ensureShipReady` invoked in the order-gated repair).
+
+**D4: Surgical finish-record retry**
+
+When a completion miss is recording-only (`.pipeline/finish-choice` absent/stale or
+`pr_url` missing in state) AND every other gate condition already holds, the engine's
+retry dispatches a narrow prompt naming exactly the one `conduct-ts finish-record` command
+with the computed absolute `--pipeline-dir`, not the full ~10-minute finish skill re-walk.
+Retry budget still applies; the fail-closed refusal semantics of adr-2026-07-07 remain
+intact because the surgical prompt still ends in the same CLI, which refuses when evidence
+is missing.
+
+**D5: SKILLs document engine behavior**
+
+The `finish/SKILL.md` and `pr/SKILL.md` prose items around presentation (undraft, unlabel,
+`Closes` injection, draft flip) are rewritten as documentation of what the engine does
+(D1–D2 repair, D3 draft checks, `ensureShipReady`), resolving the prior contradiction
+between the two skills in the engine's favor. The agent-owned prose rewrite instruction
+remains in the skills (with the D2 floor as backstop). The `finish-record` exit contract
+stays an agent instruction.
+
+**Implementation:** `engine/artifacts.ts` (finish predicate and order-gated repair callback),
+`engine/halt-pr-rehabilitation.ts` (repair operations), `engine/conductor.ts`
+(completion context composition), `engine/step-runners.ts` (dispatch-time integration).
+See `adr-2026-07-11-finish-step-engine-completion-machinery.md` for full design rationale.
+
+**Testing obligations:**
+- Unit tests for the gate's title and draft checks with injected `GhRunner` (fakeGh pattern)
+- Wiring test asserting repair runs before presentation checks and daemon tail no longer does
+- Acceptance test for the surgical-retry prompt path with injected runner (PR #143 pattern)
+
 #### Judgement gate at the build → manual_test seam (`build_review`)
 
 `build_review` is an opt-in, objective non-human reviewer verdict that sits strictly between

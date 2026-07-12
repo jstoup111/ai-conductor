@@ -4,6 +4,7 @@ import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
+import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
@@ -308,6 +309,14 @@ export interface CompletionResult {
   done: boolean;
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
+  /**
+   * Machine-readable facet code for why `done` is false. 'recording' marks
+   * misses caused by the finish skill failing to record its outcome (missing/
+   * stale/invalid finish-choice marker, or missing pr_url for choice='pr');
+   * 'other' covers everything else. Undefined for backward compat (done:true,
+   * or predicates that don't classify).
+   */
+  missing?: 'recording' | 'other';
 }
 
 /**
@@ -348,6 +357,12 @@ export interface CompletionContext {
    */
   isHeadPushed?: () => Promise<boolean | null>;
   /**
+   * Injectable gh runner for presentation checks (finish predicate Phase 2).
+   * Used to verify the recorded PR's title is not stale (needs-remediation:).
+   * Absent → falls back to makeProductionGh() (fail-open for testing).
+   */
+  gh?: GhRunner;
+  /**
    * Project root directory. Used by the build predicate to seed task-status and derive completion.
    */
   projectRoot?: string;
@@ -356,6 +371,13 @@ export interface CompletionContext {
    * predicate to seed task-status and validate plan presence/emptiness.
    */
   planPath?: string;
+  /**
+   * Optional repair callback (Task 8, ADR D1 order-gate).
+   * Invoked after Phase 1 evidence checks pass and before Phase 2 presentation checks.
+   * If the injectable is absent, repair is skipped (backward compatible).
+   * If repair throws, a warning is logged and Phase 2 proceeds (warn-only, not fatal).
+   */
+  repairFinishPr?: (prUrl: string) => Promise<void>;
 }
 
 /**
@@ -1114,18 +1136,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} is missing — the finish skill must record the chosen outcome (pr | merge-local | keep | discard)`,
+        missing: 'recording',
       };
     }
     if (!(FINISH_CHOICE_VALUES as readonly string[]).includes(choice)) {
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} contains unrecognized value "${choice}" — expected one of ${FINISH_CHOICE_VALUES.join(', ')}`,
+        missing: 'recording',
       };
     }
     if (!(await fileIsFreshSinceSession(choicePath, ctx.sessionStartedAt))) {
       return {
         done: false,
         reason: `${FINISH_CHOICE_MARKER} is stale (mtime predates this session) — finish must re-run`,
+        missing: 'recording',
       };
     }
     // LEADING branch: Daemon mode non-convergence check.
@@ -1135,10 +1160,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `Daemon mode cannot converge on '${choice}': requires operator decision`,
+        missing: 'other',
       };
     }
+    // ---- Phase 1: evidence — all non-presentation conditions. Each miss
+    // returns immediately, before any presentation (gh) call is made. ----
+    let prUrl: string | undefined;
     if (choice === 'pr') {
-      let prUrl: string | undefined;
       try {
         const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
         const state = JSON.parse(raw) as { pr_url?: string };
@@ -1146,6 +1174,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
+            missing: 'recording',
           };
         }
         prUrl = state.pr_url;
@@ -1153,23 +1182,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
+          missing: 'recording',
         };
-      }
-      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
-      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
-      // `needs-remediation:` — the skill must rewrite the reused halt PR's
-      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
-      // null): network unavailability never blocks a ship.
-      try {
-        const staleTitle = await readStaleHaltTitle(makeProductionGh(), dir, prUrl);
-        if (staleTitle !== null) {
-          return {
-            done: false,
-            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
-          };
-        }
-      } catch {
-        // fail-open — presentation is not worth blocking a ship on gh failure
       }
 
       // adr-2026-07-06-daemon-false-ship-guard (Task 5+6): Evidence check for push
@@ -1184,21 +1198,82 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             return {
               done: false,
               reason: `Push evidence required: HEAD not found in refs/remotes/origin/<branch> — ${prUrl}`,
+              missing: 'other',
             };
           }
           if (pushed === null) {
             return {
               done: false,
               reason: `Push evidence indeterminate: cannot verify branch was pushed — ${prUrl}`,
+              missing: 'other',
             };
           }
-          // pushed === true: continue to done: true
+          // pushed === true: continue to Phase 2
         } catch (error) {
           return {
             done: false,
             reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+            missing: 'other',
           };
         }
+      }
+    }
+
+    // ---- Order-gate: repair invocation (Task 8, ADR D1) — runs after Phase 1
+    // passes, before Phase 2 presentation checks. Only when repairFinishPr injectable
+    // is present and we have a valid prUrl. Fail-open: repair errors are logged but
+    // do not block the gate (warn-only, not fatal).
+    if (choice === 'pr' && prUrl && ctx.repairFinishPr) {
+      try {
+        await ctx.repairFinishPr(prUrl);
+      } catch (error) {
+        console.warn(
+          `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing to Phase 2 (warn-only)`,
+        );
+      }
+    }
+
+    // ---- Phase 2: presentation — only reached once every Phase 1 evidence
+    // condition has been satisfied. ----
+    if (choice === 'pr' && prUrl) {
+      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
+      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
+      // `needs-remediation:` — the skill must rewrite the reused halt PR's
+      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
+      // null): network unavailability never blocks a ship.
+      try {
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const staleTitle = await readStaleHaltTitle(ghRunner, dir, prUrl);
+        if (staleTitle !== null) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
+      }
+
+      // Story 3: Ship-readiness gate — fail if the recorded PR is still in draft
+      // state. A draft PR is not ready to ship (even if it has a clean title and
+      // all evidence passed). The finish/pr skill must undraft the PR before
+      // completing. Fail-open on any gh error: network unavailability never blocks
+      // a ship.
+      try {
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const { stdout } = await ghRunner(['pr', 'view', prUrl, '--json', 'isDraft'], { cwd: dir });
+        const parsed = JSON.parse(stdout || '{}') as { isDraft?: unknown };
+        const isDraft = Boolean(parsed.isDraft);
+        if (isDraft) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} is still in draft state — not ready for ship (ship-readiness: requires PR to be marked ready before completing)`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
       }
     }
     return { done: true };

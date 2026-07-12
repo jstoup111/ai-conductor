@@ -139,6 +139,11 @@ import {
 } from './task-evidence.js';
 import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
 import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
+import {
+  rehabilitateHaltPr,
+  retitleFloor,
+  ensureShipReady,
+} from './halt-pr-rehabilitation.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -616,6 +621,57 @@ export class Conductor {
       planPath = undefined;
     }
 
+    // Resolve sourceRef from intake marker for repair callback
+    let sourceRef: string | undefined;
+    if (state.feature_desc && planPath) {
+      try {
+        const stem = planStem(planPath);
+        const intakeMarkerPath = join(this.projectRoot, `.docs/intake/${stem}.md`);
+        const intakeContent = await readFile(intakeMarkerPath, 'utf-8').catch(() => null);
+        sourceRef = parseIntakeSourceRef(intakeContent);
+      } catch {
+        // Intake marker read failed — sourceRef remains undefined (no-op in repair)
+        sourceRef = undefined;
+      }
+    }
+
+    // Compose the repair callback that applies the three repairs in order
+    const repairFinishPr = async (prUrl: string): Promise<void> => {
+      const gh = this.gh;
+      const cwd = this.projectRoot;
+      const branch = state.worktree_branch;
+      const featureDesc = state.feature_desc;
+
+      // Step 1: Rehabilitate halt PR (unlabel, title fix, close injection)
+      try {
+        await rehabilitateHaltPr({
+          gh,
+          cwd,
+          prUrl,
+          sourceRef,
+        });
+      } catch (err) {
+        // Warn-only: repair is best-effort, failures don't block further steps
+        console.warn(`[conductor-repair] rehabilitateHaltPr failed: ${err}`);
+      }
+
+      // Step 2: Retitle floor (fix stale needs-remediation: title)
+      try {
+        await retitleFloor(gh, cwd, prUrl, { featureDesc, branch });
+      } catch (err) {
+        // Warn-only
+        console.warn(`[conductor-repair] retitleFloor failed: ${err}`);
+      }
+
+      // Step 3: Ensure PR is ready (draft→ready flip)
+      try {
+        await ensureShipReady(gh, cwd, prUrl);
+      } catch (err) {
+        // Warn-only
+        console.warn(`[conductor-repair] ensureShipReady failed: ${err}`);
+      }
+    };
+
     return {
       sessionStartedAt: state.session_started_at,
       featureDesc: state.feature_desc,
@@ -633,6 +689,8 @@ export class Conductor {
       },
       projectRoot: this.projectRoot,
       planPath,
+      gh: this.gh,
+      repairFinishPr,
     };
   }
 
@@ -2011,7 +2069,12 @@ export class Conductor {
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
-              retryHint = buildRetryHint(step.name, completion.reason);
+              retryHint = buildRetryHint(
+                step.name,
+                completion.reason,
+                completion.missing,
+                join(this.projectRoot, '.pipeline'),
+              );
 
               // prd-audit short-circuit (daemon only): re-auditing unchanged code
               // yields the same verdict, so the default retries are pure waste
@@ -4063,9 +4126,35 @@ export function buildRemediationHint(
  * with a "tasks not completed" reason, redirect Claude to verify on disk
  * before rewriting and to update `.pipeline/task-status.json` when the
  * work is already there.
+ *
+ * Task 11 (ADR D4): when the completion miss is classified `missing:'recording'`
+ * (the finish skill did the real work but failed to record the outcome), the
+ * standard hint would send Claude back through the full `/finish` walk —
+ * needless churn when only `finish-record` needs to run. `pipelineDirArg`, when
+ * provided, is the absolute `--pipeline-dir` value (mirrors the auto-mode
+ * dispatch in step-runners.ts) so the narrow prompt points at the same
+ * worktree pipeline dir regardless of cwd.
  */
-export function buildRetryHint(step: StepName, reason: string | undefined): string {
+export function buildRetryHint(
+  step: StepName,
+  reason: string | undefined,
+  missing?: 'recording' | 'other',
+  pipelineDirArg?: string,
+): string {
   const r = reason ?? 'unknown';
+  if (step === 'finish' && missing === 'recording') {
+    const dirArg = pipelineDirArg ?? '.pipeline';
+    return (
+      `Previous attempt did not satisfy the completion check: ${r}. ` +
+      'The finish work itself appears done — only the outcome was not recorded. ' +
+      'Do NOT repeat the full /finish walk. Instead, determine the finish outcome ' +
+      '(pr | merge-local | keep | discard) from current repo state and run ONLY:\n' +
+      `  conduct-ts finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
+      'IMPORTANT: do NOT `cd` elsewhere before running it; use this exact `--pipeline-dir` value ' +
+      'regardless of the current working directory. The step is NOT complete until ' +
+      '`finish-record` exits 0.'
+    );
+  }
   if (step === 'build') {
     if (/tasks? not completed/i.test(r)) {
       return (

@@ -179,6 +179,39 @@ It's invoked by the daemon's auto-mode finish step (`src/conductor/src/engine/st
 and can also be run manually in place of hand-editing the marker. See
 `src/conductor/README.md` for full detail.
 
+**Finish-step engine completion machinery (#499, ADR D1-D5).** The finish step's
+presentation-branch gate now includes several deterministic engine-side mechanisms to repair
+stale PR state, verify draft-readiness, and handle surgical retries (all fail-open on errors):
+
+1. **Order-gated in-step presentation repair** — The completion predicate verifies
+   non-presentation conditions first (valid `finish-choice`, recorded `pr_url`, push
+   evidence), then invokes repair (`rehabilitateHaltPr`, undraft, unlabel, retitle, Closes
+   injection) **before** evaluating presentation conditions (title, draft). A finishing
+   attempt that fails on recording/push evidence never clears `needs-remediation` signals,
+   so redispatch and reconciliation keep working.
+
+2. **Deterministic retitle-floor** — If the recorded PR's title still starts with
+   `needs-remediation:`, the engine rewrites it to `feat: <feature_desc>` (fallback: branch
+   name). The `/pr` skill's prose rewrite is the quality path; the floor only fires when the
+   agent dropped the rewrite (prefix-gated), logged, and any later `/pr` pass improves it.
+
+3. **Draft-readiness check (`isDraft`)** — The finish predicate reads `gh pr view isDraft`
+   and rejects ship-readiness if the recorded PR is still draft (issue #439). Draft removal
+   is handled by the in-step repair's `ensureShipReady` call.
+
+4. **Surgical finish-record retry** — When recording is the only missing piece (`.finish-choice`
+   or `pr_url` absent/stale) and every other condition holds, the engine retries with a
+   narrow prompt naming just `conduct-ts finish-record --pipeline-dir <path>`, not the full
+   ~10-minute finish skill re-walk.
+
+5. **Engine behavior documentation** — `finish/SKILL.md` and `pr/SKILL.md` now document
+   the engine's presentation repairs (undraft, unlabel, Closes, draft flip) as executed
+   machinery, resolving the prior contradiction between the two skills. The agent-owned
+   prose rewrite instruction remains (with the retitle-floor as backstop).
+
+See `src/conductor/README.md` (§ Finish-step engine completion machinery) and
+`adr-2026-07-11-finish-step-engine-completion-machinery.md` for full design details.
+
 **Task attribution automation (`task start|done`)** — The pipeline now automates task progress tracking
 via `conduct-ts task` subcommands, which own the mechanics of updating `.pipeline/task-status.json`
 and git hook wiring. Instead of editing JSON by hand or relying on prompt discipline, the orchestrator

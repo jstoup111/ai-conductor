@@ -19,7 +19,7 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
-import { cleanupHaltPresentation } from './pr-labels.js';
+import { cleanupHaltPresentation, readHaltPresentation, setReady, defaultSleep } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -104,6 +104,62 @@ export async function rehabilitateHaltPr(
   return anyFailed ? 'partial' : 'rehabilitated';
 }
 
+export type RetitleFloorOutcome = 'not-halt-pr' | 'resolved';
+
+export interface RetitleFloorResult {
+  outcome: RetitleFloorOutcome;
+  title: string;
+}
+
+function branchToFeatureDesc(branch: string): string {
+  const withoutPrefix = branch.replace(/^[a-z]+\//i, '');
+  return withoutPrefix.replace(/[-_]+/g, ' ').trim() || branch;
+}
+
+/**
+ * Deterministic retitle floor (Task 6, adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+ *
+ * Guards against a stale `needs-remediation:` title surviving to a shipped
+ * PR by rewriting it to `feat: <featureDesc>` (or a branch-derived fallback
+ * when no featureDesc is supplied). A clean, non-halt title is left
+ * completely untouched — zero `gh pr edit` calls are issued — and the PR
+ * body is never part of this mutation. All gh failures are warn-only: they
+ * log and resolve rather than throw or block.
+ */
+export async function retitleFloor(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  opts: { featureDesc?: string; branch?: string } = {},
+  log: (msg: string) => void = () => {},
+): Promise<RetitleFloorResult> {
+  let currentTitle = '';
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title'], { cwd });
+    currentTitle = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+  } catch (err) {
+    log(`[halt-pr-rehab] retitle-floor gh pr view failed for ${prUrl} — skipping: ${err}`);
+    return { outcome: 'not-halt-pr', title: currentTitle };
+  }
+
+  if (!currentTitle.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX)) {
+    return { outcome: 'not-halt-pr', title: currentTitle };
+  }
+
+  const featureDesc =
+    opts.featureDesc?.trim() || (opts.branch ? branchToFeatureDesc(opts.branch) : '') || 'rehabilitated PR';
+  const newTitle = `feat: ${featureDesc}`;
+
+  try {
+    await gh(['pr', 'edit', prUrl, '--title', newTitle], { cwd });
+  } catch (err) {
+    log(`[halt-pr-rehab] retitle-floor gh pr edit failed for ${prUrl} — warn-only: ${err}`);
+    return { outcome: 'resolved', title: newTitle };
+  }
+
+  return { outcome: 'resolved', title: newTitle };
+}
+
 /**
  * Fail-open presentation read for the finish completion gate (Decision 3).
  * Returns the stale halt title when a SUCCESSFUL read shows the recorded PR
@@ -124,5 +180,69 @@ export async function readStaleHaltTitle(
   } catch (err) {
     log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
     return null;
+  }
+}
+
+export type EnsureShipReadyOutcome = 'no-op' | 'flipped-ready' | 'partial';
+
+/**
+ * Unconditional draft→ready flip for the recorded PR at finish time (Task 7).
+ *
+ * Distinct from {@link rehabilitateHaltPr}: no halt-signal classification, no
+ * unlabel, no retitle, no body-marker mutation — this is purely the ready-flip
+ * mechanic with a verify-after-write re-read, reusing the same bounded-retry
+ * shape as {@link cleanupHaltPresentation}'s label removal. A PR that is
+ * already ready is left completely untouched (zero `gh pr ready` calls).
+ *
+ * Never throws; all gh failures are warn-only and folded into the 'partial'
+ * outcome.
+ *
+ * @returns 'no-op' when the PR was already ready; 'flipped-ready' when the
+ *   flip was verified by re-read; 'partial' when the PR is still draft after
+ *   bounded retries, or the initial/verify read failed.
+ */
+export async function ensureShipReady(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<EnsureShipReadyOutcome> {
+  const logFn = log ?? (() => {});
+
+  try {
+    const before = await readHaltPresentation(gh, cwd, prUrl, logFn);
+    if (!before) {
+      logFn(`[halt-pr-rehab] ensureShipReady: could not read PR state for ${prUrl}`);
+      return 'partial';
+    }
+
+    if (!before.isDraft) {
+      return 'no-op';
+    }
+
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await setReady(gh, cwd, prUrl, logFn);
+
+      const after = await readHaltPresentation(gh, cwd, prUrl, logFn);
+      if (after && !after.isDraft) {
+        return 'flipped-ready';
+      }
+
+      if (attempt < maxAttempts) {
+        const backoffMs = attempt * 100;
+        logFn(
+          `[halt-pr-rehab] ensureShipReady(${prUrl}): still draft after attempt ${attempt}, retrying in ${backoffMs}ms`,
+        );
+        await sleep(backoffMs);
+      }
+    }
+
+    logFn(`[halt-pr-rehab] ensureShipReady(${prUrl}): still draft after ${maxAttempts} attempts — non-fatal`);
+    return 'partial';
+  } catch (err) {
+    logFn(`[halt-pr-rehab] ensureShipReady(${prUrl}) error: ${err}`);
+    return 'partial';
   }
 }
