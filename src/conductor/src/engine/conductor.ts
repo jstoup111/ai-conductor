@@ -1634,6 +1634,10 @@ export class Conductor {
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
         let stallQuestion: string | null = null;
+        // #505 TS: Capture resolved task counts before/after build retry for step_retry emit.
+        // These are function-scoped to preserve values across block boundaries.
+        let retryResolvedBefore: number | undefined;
+        let retryResolvedAfter: number | undefined;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -2131,6 +2135,9 @@ export class Conductor {
                 }
 
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+                // #505 TS: Capture retry task counts for step_retry emit (before resolvedTasksBefore is overwritten).
+                retryResolvedBefore = resolvedTasksBefore;
+                retryResolvedAfter = resolvedTasksAfter;
                 const markerSet = await haltMarkerExists(this.projectRoot);
                 if (markerSet) {
                   stalled = 'halt_marker';
@@ -2436,8 +2443,8 @@ export class Conductor {
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
-                  resolvedBefore: resolvedTasksBefore,
-                  resolvedAfter: resolvedTasksAfter,
+                  resolvedBefore: retryResolvedBefore,
+                  resolvedAfter: retryResolvedAfter,
                 });
                 continue;
               }
