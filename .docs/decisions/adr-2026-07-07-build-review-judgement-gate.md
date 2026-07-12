@@ -42,8 +42,9 @@ Insert a first-class loopGate step `build_review` between `build` and `manual_te
      stable during BUILD since the only sanctioned rebase is finish-time),
    - the approved plan (`.docs/plans/<stem>.md`) — required to judge scope; it is an
      operator-approved DECIDE artifact, not maker self-report, so it does not breach isolation,
-   - raw test output: the grader runs the project's test suite itself inside its session and
-     observes output firsthand (the maker cannot pre-massage what the grader sees).
+   - raw test output: the grader runs the diff's SCOPED tests (its own/changed test files) inside
+     its session and observes output firsthand — the full suite is CI's (and finish's) authoritative
+     job, per #588. (This narrows the v1 dial; the verdict predicate and rubric remain unchanged.)
    The maker session's transcript, summary, and `.pipeline/task-status.json` narrative are never
    passed. Session isolation is already unconditional (#325, `conductor.ts:1217-1233`).
 4. **Verdict artifact, fail-closed.** Grader writes `.pipeline/build-review.json`:
