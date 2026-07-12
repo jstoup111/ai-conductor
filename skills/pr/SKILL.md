@@ -164,9 +164,14 @@ after a sanctioned rebase — not a blocker.
 
 2. **Fallback — reflog proof:** If merge-base fails, check the reflog:
    ```
-   git reflog | grep "rebase: finish"
+   git reflog | grep -E "rebase \(finish\)"
    ```
-   If you see a "rebase: finish" entry, the branch was rebased as part of completion.
+   Note: git writes this reflog entry as `rebase (finish): returning to refs/heads/<branch>`
+   — parenthesized, no colon after "rebase" — never as `"rebase: finish"`. A literal grep for
+   `"rebase: finish"` never matches real git output and silently defeats this fallback proof
+   (jstoup111/ai-conductor#587); use the pattern above.
+
+   If you see a "rebase (finish):" entry, the branch was rebased as part of completion.
    The pre-rebase state exists in ORIG_HEAD and the reflog. This proves staleness.
 
 **Once proof is obtained, reconcile with force-with-lease:**
@@ -186,7 +191,7 @@ don't know about — you've already verified it only has pre-rebase ones.
 All three corrupt the rebase and prevent the PR branch from reflecting the intended state.
 
 **Failure handling:**
-- **Staleness proof failed:** If merge-base exits non-zero and no "rebase: finish" reflog
+- **Staleness proof failed:** If merge-base exits non-zero and no "rebase (finish):" reflog
   entry is found, foreign commits exist on `origin/<branch>`. Stop, report the failure,
   and do NOT push (manual resolution required).
 - **Lease failure:** If `--force-with-lease` fails with a rejection error, the remote

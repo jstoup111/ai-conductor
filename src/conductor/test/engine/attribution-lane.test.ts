@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
-import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.js';
+import { dispatchAttributionVerifier, runAttributionLane } from '../../src/engine/attribution-lane.js';
 
 // ── Fresh-session verifier dispatch (Task 7) ──────────────────────────────
 //
@@ -806,5 +806,80 @@ Implement task 3.
 
     // Invalidated verdicts should not produce retry hints
     expect(result.success).toBe(true);
+  });
+
+  // Story 5 (stale-anchor stays fail-closed) — in-cycle assertion.
+  //
+  // `dispatchAttributionVerifier` above only exercises the fresh-session
+  // dispatch path; the anchor-staleness guard itself lives inside
+  // `runAttributionLane` (attribution-lane.ts:419-429), which parses the
+  // verdict, coerces every result to `no-verdict` when `anchor.head` !=
+  // the current HEAD, and therefore passes an EMPTY `validated` array to
+  // `writeJudgedStamps`. This drives `runAttributionLane` directly (with a
+  // real temp `.pipeline` dir) so the guard is observed at the unit level:
+  // stampedTaskIds is empty and no evidence stamp lands on disk for the
+  // "satisfied"-labeled but stale-anchored verdict. Already covered
+  // end-to-end at the acceptance level in
+  // evidence-gate-validates-provenance-proxies-not-whe.acceptance.test.ts
+  // Section F ("a stale-anchor verdict ... invalidates the whole file").
+  it('stale anchor.head coerces all verdicts to no-verdict: empty validated, no stamps, gate does not advance', async () => {
+    const currentHeadSha = 'abc1234567890def1234567890def1234567890';
+    const staleAnchorHeadSha = '0'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: staleAnchorHeadSha, residue: ['1', '2'] }, // Stale — doesn't match currentHeadSha
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: 'abc123', rationale: 'looks satisfied but anchor is stale' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+        {
+          taskId: '2',
+          verdict: 'satisfied',
+          citations: [{ sha: 'def456', rationale: 'also looks satisfied but anchor is stale' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['1', '2'],
+      headSha: currentHeadSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    // Gate does not advance: no task is stamped from a stale-anchor verdict.
+    expect(result.stampedTaskIds).toEqual([]);
+
+    // No evidence stamp reaches the sidecar — writeJudgedStamps received an
+    // empty `validated` array (the guard coerced satisfied -> no-verdict
+    // before citation validation ever ran).
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    if (evidenceRaw !== null) {
+      const parsed = JSON.parse(evidenceRaw);
+      expect(parsed.evidenceStamps ?? {}).toEqual({});
+    }
   });
 });

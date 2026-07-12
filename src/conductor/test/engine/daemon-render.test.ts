@@ -42,6 +42,40 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders step_retry with reason and progress delta', () => {
+    const output = lines({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: '5/11 tasks pending/not completed: 3, 6',
+      resolvedBefore: 3,
+      resolvedAfter: 5,
+    });
+    expect(output).toHaveLength(1);
+    const line = output[0];
+    expect(line).toContain('build');
+    expect(line).toContain('2/3');
+    expect(line).toContain('5/11 tasks pending/not completed: 3, 6');
+    expect(line).toContain('3→5 tasks');
+  });
+
+  it('renders step_retry without progress delta and collapses multi-line reason', () => {
+    const output = lines({
+      type: 'step_retry',
+      step: 'test',
+      attempt: 1,
+      maxAttempts: 2,
+      reason: 'timeout\nexpected: 5s\nactual: 10s',
+    });
+    expect(output).toHaveLength(1);
+    const line = output[0];
+    expect(line).not.toContain('\n');
+    expect(line).toContain('test');
+    expect(line).toContain('1/2');
+    expect(line).not.toMatch(/\d→\d\s+tasks/);
+  });
+
   it('renders kickback with the ×N counter', () => {
     expect(
       lines({ type: 'kickback', from: 'build', to: 'plan', evidence: 'AC missing', count: 1 }),

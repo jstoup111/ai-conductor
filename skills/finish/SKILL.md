@@ -84,9 +84,14 @@ intended state, not a blocker.
 
 2. **Fallback — reflog proof:** If merge-base is unavailable or fails, check the reflog:
    ```
-   git reflog | grep "rebase: finish"
+   git reflog | grep -E "rebase \(finish\)"
    ```
-   If you see a "rebase: finish" entry, the daemon rebased this branch as part of
+   Note: git writes this reflog entry as `rebase (finish): returning to refs/heads/<branch>`
+   — parenthesized, no colon after "rebase" — never as `"rebase: finish"`. A literal grep for
+   `"rebase: finish"` never matches real git output and silently defeats this fallback proof
+   (jstoup111/ai-conductor#587); use the pattern above.
+
+   If you see a "rebase (finish):" entry, the daemon rebased this branch as part of
    completion. The pre-rebase state exists in ORIG_HEAD and the reflog. This proves
    staleness.
 
@@ -114,7 +119,7 @@ staleness proof and force-with-lease discipline must hold.
 **Failed Staleness Proof — Foreign Commits Detected**
 
 If the staleness proof fails — i.e., `git merge-base --is-ancestor origin/<branch> ORIG_HEAD`
-exits non-zero AND no reflog "rebase: finish" entry exists — then another writer has pushed
+exits non-zero AND no reflog "rebase (finish):" entry exists — then another writer has pushed
 real commits to `origin/<branch>` after your pre-rebase HEAD. This means `origin/<branch>`
 is NOT an ancestor of your work; it has diverged.
 
@@ -379,7 +384,7 @@ After executing the chosen option:
       `needs-remediation:`, halt-PR rehabilitation failed — check conductor logs)
 - [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
       `refs/remotes/origin/<branch>` contains HEAD)
-- [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog former-head) before `--force-with-lease` (never pulled)
+- [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog `rebase (finish):` entry) before `--force-with-lease` (never pulled)
 - [ ] On unproven staleness (foreign commits): stopped with no force of any kind
 - [ ] On lease failure: stopped with no plain `--force`, no pull, no `finish-choice`
 - [ ] All story acceptance criteria verified as covered

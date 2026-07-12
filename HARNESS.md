@@ -133,7 +133,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | architecture-review | fable | high | Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews. |
 | worktree-manager | haiku | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | sonnet | medium | Generating specs from acceptance criteria — templated work. |
-| pipeline | haiku | low | Dispatcher; intelligence is in per-task sub-sessions, so the dispatcher itself runs mechanically on the cheapest model. |
+| pipeline | sonnet | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku. |
 | build-review | opus | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review. |
 | manual-test | sonnet | medium | Structured validation against stories — pattern-following. |
 | prd-audit | opus | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
@@ -195,6 +195,9 @@ or a status line is waste.
 - Do NOT explain why a test failed before fixing it. Fix it, then report the status.
 - Do NOT summarize completed steps. The audit trail and progress.log handle that.
 - Do NOT introduce subagent dispatches. Dispatch silently.
+- Keep the work area concise. Emit only status lines and errors — no running commentary.
+- Do NOT explain what is happening unless it is either visible to the operator or actually
+  useful to them. No play-by-play of internal steps.
 - Between TDD phases, output ONLY the status line (PASS/FAIL + reason). No commentary.
 
 **Rules for subagents (generator, domain-reviewer, evaluator):**

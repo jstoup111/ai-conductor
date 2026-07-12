@@ -12,6 +12,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
+- Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
+
+### Changed
+
+- Bumped the default model for the `build` (pipeline) engine step from `haiku`
+  to `sonnet`. The build step launches the implementation session that authors
+  code through the TDD RED/DOMAIN/GREEN cycle — it is the real coding lane, not
+  a thin dispatcher, and Haiku stalled on real coding tasks (e.g. a multi-file
+  in-cycle rescue-wiring test). Genuinely mechanical steps stay on Haiku for
+  cost (`memory`, `worktree`, `finish`, `conduct`). Regenerated the HARNESS.md
+  model-selection table to match (`bin/generate-model-table`). No config-schema,
+  hook, symlink, or `bin/conduct` CLI change, so no migration block is required.
 
 ### Added
 
@@ -38,6 +50,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- HARNESS.md Communication Protocol (BUILD Phase, orchestrator rules): strengthened
+  the non-narration discipline with two explicit rules — keep the work area concise
+  (emit only status lines and errors, no running commentary), and do not explain what
+  is happening unless it is visible to the operator or actually useful to them (no
+  play-by-play of internal steps).
 - Armed `attribution_enforcement_cutover` (2026-07-11T08:30Z) in the committed
   project config: daemon builds now enforce inline-work attribution
   fail-closed (#505 machinery live, not just loaded). Canary evidence: with
@@ -60,6 +77,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (reachability → ancestry → non-empty → declared-Files overlap) to the
   mechanical `satisfied-by` form. Deterministic, git-derived; no operator-marker
   escape hatch introduced. Implementation follows in a separate build PR.
+- **`getEvidenceRange` logged a spurious `anchor  is unreachable` warning for
+  absent/whitespace-only evidence anchors (#510).** The gate/engine no-anchor
+  form of `deriveCompletion(root, planPath)` — used by `conductor.ts`,
+  `artifacts.ts`, and `evidence-cli.ts` — previously routed the empty anchor
+  through the same reachability probe as a real, unreachable anchor,
+  producing a misleading "unreachable" warning on every ordinary gate
+  evaluation. An absent anchor now skips the reachability probe entirely and
+  emits a distinct `console.info` "no recorded anchor" line instead; fallback
+  merge-base-ladder results are unchanged. Verified end-to-end against the
+  production `deriveCompletion` entry point (not just the `getEvidenceRange`
+  unit seam).
+
+- **Finish/pr skills' staleness-proof fallback never matched git's actual reflog wording
+  (#587).** `skills/finish/SKILL.md` and `skills/pr/SKILL.md` both ran `git reflog | grep
+  "rebase: finish"` as the fallback proof that a force-with-lease push after the daemon's
+  finish-time rebase is safe, but git writes `rebase (finish): returning to
+  refs/heads/<branch>` (parenthesized, no colon after "rebase") — the literal never matched.
+  On any branch where the merge-base ancestry fast path also failed (e.g. a twice-rebased
+  branch), both staleness proofs failed even though the remote was provably just the
+  pre-rebase snapshot, so finish halted believing foreign commits existed. Corrected both
+  skills' fallback to `grep -E "rebase \(finish\)"`, matching git's real wording, with a
+  regression test (`src/conductor/test/finish-staleness-grep.test.ts`) that pins the
+  corrected pattern against a real `git rebase` reflog capture.
 
 - **Tmux daemon-session leak guard: permanent-baseline blindspot (~400-session
   incident).** `reapLeakedDaemonSessions` only ever inspected `cc-daemon-*`
@@ -100,6 +140,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
   assumption and failed CI on every run since the #509 merge.
 - **Evidence stamp sync** (#526): `.pipeline/task-status.json` rows are now reconciled from `.pipeline/task-evidence.json` stamps. A stamped but `in_progress` row advances to `completed` immediately on stamp write or derived-completion pass. Orphan stamps (no matching row) emit a warning and never invent rows.
+- Daemon build-completion gate no longer false-parks a fully-completed build as 'empty/missing plan' when the plan's task headings use the `### Task N — Title` em-dash form: `parsePlanTaskPaths` now accepts an em-dash/en-dash title separator as a task-id terminator (previously only a colon or end-of-line), so em-dash plans parse their task ids, evidence is stamped, and the build passes the gate (ai-conductor#578).
 
 
 ### Changed
@@ -1563,6 +1604,7 @@ no action needed — the token requirement is skipped.
   play-forward path (`resumeRebaseFirst`) now calls `recordRebaseStepCompletion`,
   the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
   rebase stamps `state.rebase` instead of leaving it silently unmarked.
+- Judged attribution verdicts now advance the build gate in-cycle, not requiring a second loop iteration (#581).
 
 ## Migration
 

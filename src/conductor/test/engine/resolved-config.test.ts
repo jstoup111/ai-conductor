@@ -291,16 +291,19 @@ describe('engine/resolved-config', () => {
   });
 
   describe('resolveStepConfig — collateral-drift guard on untouched steps', () => {
-    it('finish and build resolve to pre-change models/efforts', () => {
+    it('finish stays haiku/low; build runs on sonnet (coding lane) at low effort', () => {
       // Regression guard: verify that changes to recovery/failure-response steps
       // (rebase, remediate) do not inadvertently affect unrelated steps.
-      // finish and build should maintain their haiku/low baseline.
+      // finish stays on its mechanical haiku/low baseline.
       const rFinish = resolveStepConfig('finish', 'SHIP');
       expect(rFinish.model).toBe('haiku');
       expect(rFinish.effort).toBe('low');
 
+      // build was intentionally bumped haiku→sonnet: it launches the code-
+      // authoring implementation session, so it needs a capable model. Effort
+      // is unchanged at low (the dispatch itself is light).
       const rBuild = resolveStepConfig('build', 'BUILD');
-      expect(rBuild.model).toBe('haiku');
+      expect(rBuild.model).toBe('sonnet');
       expect(rBuild.effort).toBe('low');
     });
   });
@@ -308,11 +311,11 @@ describe('engine/resolved-config', () => {
   describe('resolveStepConfig — BUILD-step models (regression guard)', () => {
     it('BUILD steps did not drift after DECIDE→fable migration', () => {
       // Regression: Task 2 changed DECIDE-step defaults (explore/prd/architecture_review→fable).
-      // This test verifies BUILD-step models remain locked at their original values:
-      // - build (dispatcher) → haiku
+      // This test verifies BUILD-step models remain at their expected values:
+      // - build (code-authoring implementation session) → sonnet (bumped from haiku)
       // - acceptance_specs (test generation) → sonnet
       // - stories (feature tasks) → sonnet
-      expect(resolveStepConfig('build', 'BUILD').model).toBe('haiku');
+      expect(resolveStepConfig('build', 'BUILD').model).toBe('sonnet');
       expect(resolveStepConfig('acceptance_specs', 'BUILD').model).toBe('sonnet');
       expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
     });

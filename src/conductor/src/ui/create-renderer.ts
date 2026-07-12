@@ -7,6 +7,7 @@ import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapsh
 import type { DashboardSnapshot, ViewMode } from './types.js';
 import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
+import { formatProgressDelta } from '../engine/format-retry-line.js';
 
 export interface CreateRendererOptions {
   stateFilePath: string;
@@ -127,11 +128,15 @@ export function createRenderer(
         notify('Conductor', `Step failed: ${event.step}`);
         break;
 
-      case 'step_retry':
+      case 'step_retry': {
+        const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
         region.log(
-          chalk.yellow(`  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}`),
+          chalk.yellow(
+            `  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}${delta ? ' ' + delta : ''}`,
+          ),
         );
         break;
+      }
 
       case 'rate_limit': {
         const mins = Math.ceil(event.waitSeconds / 60);

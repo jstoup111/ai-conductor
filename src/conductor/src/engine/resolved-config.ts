@@ -37,7 +37,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   architecture_review: 'fable',
   worktree: 'haiku',
   acceptance_specs: 'sonnet',
-  build: 'haiku',
+  build: 'sonnet',
   build_review: 'opus',
   manual_test: 'sonnet',
   prd_audit: 'opus',

@@ -152,4 +152,34 @@ describe('createRenderer — build progress/no-progress/stall', () => {
       renderer({ type: 'totally_unknown_event' } as unknown as ConductorEvent),
     ).resolves.not.toThrow();
   });
+
+  it('renders progress delta for step_retry with resolvedBefore/resolvedAfter', async () => {
+    await renderer({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 1,
+      maxAttempts: 3,
+      reason: 'some reason',
+      resolvedBefore: 3,
+      resolvedAfter: 5,
+    });
+
+    const output = stream.output();
+    expect(output).toContain('3→5 tasks');
+  });
+
+  it('omits progress delta for step_retry without resolvedBefore/resolvedAfter', async () => {
+    await expect(
+      renderer({
+        type: 'step_retry',
+        step: 'build',
+        attempt: 1,
+        maxAttempts: 3,
+        reason: 'some reason',
+      }),
+    ).resolves.not.toThrow();
+
+    const output = stream.output();
+    expect(output).not.toContain('→');
+  });
 });

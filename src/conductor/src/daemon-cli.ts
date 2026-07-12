@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
@@ -27,6 +28,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
+import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
@@ -506,6 +508,27 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
   process.once('exit', releaseBackstop);
 
+  // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
+  // lock is released — force-exiting on SIGTERM (the old behavior) let a
+  // second daemon race the pidfile while a conductor was still mid-write.
+  // The teardown controller gives the daemon loop a bounded window to drain
+  // (via shouldStop, wired into runDaemon below); if the drain doesn't
+  // finish within FORCE_RELEASE_TIMEOUT_MS, onForceRelease fires as a
+  // last-resort backstop: release the lock synchronously and exit non-zero,
+  // logged with a greppable marker for post-hoc forensics.
+  const FORCE_RELEASE_TIMEOUT_MS = 30_000;
+  const teardown = createDaemonTeardown({
+    timeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+    onForceRelease: () => {
+      log(
+        `[daemon] teardown force-release: drain did not complete within ${FORCE_RELEASE_TIMEOUT_MS / 1000}s — releasing lock and exiting`,
+      );
+      releaseBackstop();
+      const exitProcess = opts.exitProcess ?? process.exit;
+      exitProcess(1);
+    },
+  });
+
   // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
   // rate-limit waits across N concurrent conductors so a single process-level
   // handler can abort them all and coordinate state saves before exit.
@@ -513,16 +536,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // AbortControllers here instead of installing per-conductor handlers.
   const allWaitSignals = new Set<AbortController>();
 
-  // Task 22: Install ONE process-level SIGTERM handler (not N per-conductor).
-  // When SIGTERM fires, abort all in-flight waits and coordinate state saves.
+  // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
+  // per-conductor). When SIGTERM fires, abort all in-flight waits so they
+  // unblock promptly, then request the bounded drain-then-release teardown
+  // — runDaemon's shouldStop dep (wired below) sees the request at the top
+  // of its loop and exits normally, after which the completion path
+  // releases the lock. No direct process.exit here: the only force-exit
+  // path is the teardown's bounded onForceRelease backstop above.
   const daemonSigtermHandler = async () => {
     // Abort all in-flight rate-limit waits across all conductors
     for (const controller of allWaitSignals) {
       controller.abort();
     }
     // Note: State saves are handled by individual conductors' exit handlers.
-    // The daemon-cli process cleanup (releaseBackstop) will flush logs + release lock.
-    process.exit(1);
+    // Request the drain — runDaemon observes shouldStop() at its next loop
+    // boundary and stops with stoppedReason 'signal_teardown'; the normal
+    // completion path below then releases the lock and exits.
+    teardown.requestStop();
   };
   process.on('SIGTERM', daemonSigtermHandler);
 
@@ -1400,6 +1430,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       repoRootMissing: () => (existsSync(projectRoot) ? null : projectRoot),
       // Task 4: per-sweep ownership check — stop dispatch if pidfile was overwritten
       lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid)),
+      // #561: SIGTERM requests a drain via the teardown controller instead of
+      // force-exiting; runDaemon polls this at the top of its loop and stops
+      // with 'signal_teardown' once true.
+      shouldStop: () => teardown.shouldStop(),
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),
@@ -1427,11 +1461,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
   // Normal completion: drop the crash backstop, restore the console tee,
   // flush+close the log, and release the lock asynchronously.
+  // #561: cancel the teardown's force-release timer first — the drain (or
+  // ordinary completion) is finishing on its own, so the bounded backstop
+  // must not fire after the lock is already released below.
+  const teardownWasRequested = teardown.shouldStop();
+  teardown.cancel();
   process.off('exit', releaseBackstop);
   console.warn = originalConsoleWarn;
   console.error = originalConsoleError;
   await logSink.close();
   await lock.release();
+  // #561 (Story 1): only force a clean process exit when this completion was
+  // driven by a SIGTERM-requested drain — ordinary (non-signal) completion
+  // keeps today's return-and-let-the-event-loop-drain behavior.
+  if (teardownWasRequested) {
+    (opts.exitProcess ?? process.exit)(0);
+  }
 }
 
 /**
@@ -1469,9 +1514,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
       );
       break;
-    case 'step_retry':
-      log(`${dot} ${chalk.yellow('↻')} ${event.step} ${chalk.yellow('retry')}`);
+    case 'step_retry': {
+      const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
+      const deltaFragment = delta ? ' ' + delta : '';
+      log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${event.attempt}/${event.maxAttempts}: ${formatRetryReason(event.reason)})${deltaFragment}`);
       break;
+    }
     case 'gate_verdict':
       if (!event.satisfied) {
         log(

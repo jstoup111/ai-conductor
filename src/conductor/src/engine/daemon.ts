@@ -361,6 +361,13 @@ export interface DaemonDeps {
    */
   repoRootMissing?: () => string | null;
 
+  // ── #561: cooperative stop signal ───────────────────────────────────
+  /**
+   * Checked at loop top; when it returns true, stop STARTING new features
+   * and drain in-flight before returning.
+   */
+  shouldStop?: () => boolean;
+
   // ── Task 3: per-sweep pidfile ownership gate ──────────────────────────
   /**
    * Return true ONLY on a definitive loss-of-ownership reading — absent,
@@ -422,7 +429,8 @@ export type DaemonStopReason =
   | 'idle_timeout'
   | 'repo_root_missing'
   | 'engine_restart'
-  | 'lock_lost';
+  | 'lock_lost'
+  | 'signal_teardown';
 
 export interface DaemonResult {
   processed: FeatureOutcome[];
@@ -709,6 +717,12 @@ export async function runDaemon(
   let wasEpisodeActive = false;
 
   while (true) {
+    if (deps.shouldStop?.()) {
+      log('[daemon] teardown requested — draining in-flight, no new dispatch');
+      stopReason = 'signal_teardown';
+      break;
+    }
+
     const missingRoot = deps.repoRootMissing?.();
     if (missingRoot != null) {
       log(`[daemon] repo root missing: ${missingRoot} — stopping`);

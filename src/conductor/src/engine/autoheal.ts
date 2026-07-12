@@ -366,21 +366,7 @@ export async function getEvidenceRange(
 
     let lowerBound: string | null = null;
 
-    // First, verify that anchor is reachable
-    const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
-      cwd: projectRoot,
-      reject: false,
-    });
-
-    if (anchorCheck.exitCode === 0) {
-      // Anchor is reachable, use it as lower bound
-      lowerBound = anchor;
-    } else {
-      // Anchor is unreachable, fall back to merge-base
-      const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
-      logger.warnings.push(warningMsg);
-      console.warn(warningMsg);
-
+    const runMergeBaseLadder = async (): Promise<string | null> => {
       // Try fork-point merge-base first, then plain merge-base.
       const forkPoint = await execa('git', ['merge-base', '--fork-point', originRef, 'HEAD'], {
         cwd: projectRoot,
@@ -388,15 +374,48 @@ export async function getEvidenceRange(
       });
 
       if (forkPoint.exitCode === 0 && forkPoint.stdout.trim()) {
-        lowerBound = forkPoint.stdout.trim();
+        return forkPoint.stdout.trim();
+      }
+
+      const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
+        return plainMergeBase.stdout.trim();
+      }
+
+      return null;
+    };
+
+    if (anchor.trim() === '') {
+      // No anchor was supplied; skip the reachability probe entirely (it
+      // always fails on an empty string) and go straight to the merge-base
+      // ladder without logging a spurious "unreachable" warning. Still
+      // surface a routine informational line (not a warning/fault) so the
+      // absence is visible rather than silent.
+      const infoMsg =
+        'Evidence range: no recorded anchor; deriving lower bound from merge-base ladder';
+      console.info(infoMsg);
+
+      lowerBound = await runMergeBaseLadder();
+    } else {
+      // First, verify that anchor is reachable
+      const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
+        cwd: projectRoot,
+        reject: false,
+      });
+
+      if (anchorCheck.exitCode === 0) {
+        // Anchor is reachable, use it as lower bound
+        lowerBound = anchor;
       } else {
-        const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
-          cwd: projectRoot,
-          reject: false,
-        });
-        if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
-          lowerBound = plainMergeBase.stdout.trim();
-        }
+        // Anchor is unreachable, fall back to merge-base
+        const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
+        logger.warnings.push(warningMsg);
+        console.warn(warningMsg);
+
+        lowerBound = await runMergeBaseLadder();
       }
     }
 
@@ -707,6 +726,17 @@ async function deriveCompletionInternal(
     const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
 
     if (overlap.length === 0) {
+      // Path mismatch: a semantic-verified evidence stamp (judge lane)
+      // outranks the trailer/path-overlap heuristic — the judge has
+      // already confirmed intent against the actual diff.
+      const stamp = evidence.evidenceStamps.get(taskId);
+      if (stamp?.form === 'semantic-verified') {
+        result[taskId].completed = true;
+        result[taskId].status = 'completed';
+        result[taskId].evidencedBy = stamp.sha;
+        continue;
+      }
+
       // Path mismatch: log audit entry
       result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
       warnOnce(
@@ -1002,10 +1032,11 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   const lines = text.split('\n');
   let currentTaskId: string | null = null;
 
-  // Match: ### Task ID: Title (requires colon and at least some title)
+  // Match: ### Task ID: Title (or ### Task ID — Title with em/en-dash)
   // Supports numeric (1, 18, 100), dotted (1.2), alphanumeric with separators (task_1, rem-adr-001)
-  // Pattern: ### Task <id>: <title_with_at_least_one_char>
-  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN}):\\s+(.+)$`);
+  // Terminator accepts a colon or a whitespace-preceded em-dash/en-dash separator
+  // (the authoring convention: `### Task N — Title`)
+  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN})(?::\\s+|\\s+[—–]\\s+)(.+)$`);
 
   for (const line of lines) {
     const headerMatch = line.match(taskHeader);
@@ -1074,7 +1105,12 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
 
   // Match task headers and extract task ids (supports comma-separated ids, ranges like 1-3 for numeric)
   // Pattern allows: Task 1-3, rem-adr-001, 1.2: or Task 1-3, rem-adr-001, 1.2
-  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|$)/;
+  // Terminator accepts a colon, a whitespace-preceded em-dash/en-dash title
+  // separator (`### Task N — Title`, the authoring convention), or end-of-line.
+  // Without the dash alternative, em-dash headings parse to zero ids → the build
+  // gate reports "no tasks in plan" → false `empty/missing plan` auto-park of a
+  // completed build (#578).
+  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–]|$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {

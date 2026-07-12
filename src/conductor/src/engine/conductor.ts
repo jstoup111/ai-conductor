@@ -1634,6 +1634,10 @@ export class Conductor {
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
         let stallQuestion: string | null = null;
+        // #505 TS: Capture resolved task counts before/after build retry for step_retry emit.
+        // These are function-scoped to preserve values across block boundaries.
+        let retryResolvedBefore: number | undefined;
+        let retryResolvedAfter: number | undefined;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -1912,6 +1916,7 @@ export class Conductor {
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
                 reason: lastError,
+                ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
               });
               continue;
             }
@@ -2054,15 +2059,25 @@ export class Conductor {
                     pendingRetryHints.set('build', verdictHint);
                   }
 
-                  // Task 12: Counter reset. If the lane dispatched and stamped
-                  // tasks, those stamps are now in task-evidence.json. On the
-                  // NEXT evaluation cycle (next auto-heal or gate check), the
-                  // lane's stamps will cause residue to shrink. The existing
-                  // progress-detection logic (line 1932: resolvedTasksAfter >
-                  // resolvedTasksBefore) will then reset the counter. This run
-                  // does not re-derive to check stamps immediately — the lane's
-                  // stamps take effect on the next gate evaluation (same attempt
-                  // loop, next iteration of the while loop at line 1766).
+                  // Story 1 GREEN: if the lane stamped any residue tasks with
+                  // satisfied verdicts, re-check completion NOW rather than
+                  // waiting for the next while-loop iteration. Without this,
+                  // `completion` still reflects the pre-lane snapshot and a
+                  // fully-covered build incorrectly falls into the gate-miss
+                  // path below even though the judge just cleared the residue.
+                  if (laneResult.stampedTaskIds.length > 0) {
+                    await this.events.emit({
+                      type: 'auto_heal',
+                      step: 'build',
+                      healed: laneResult.stampedTaskIds.length,
+                      skipped: 0,
+                    });
+                    completion = await checkStepCompletion(
+                      this.projectRoot,
+                      step.name,
+                      await this.completionCtx(state),
+                    );
+                  }
                 }
               }
             }
@@ -2130,6 +2145,9 @@ export class Conductor {
                 }
 
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
+                // #505 TS: Capture retry task counts for step_retry emit (before resolvedTasksBefore is overwritten).
+                retryResolvedBefore = resolvedTasksBefore;
+                retryResolvedAfter = resolvedTasksAfter;
                 const markerSet = await haltMarkerExists(this.projectRoot);
                 if (markerSet) {
                   stalled = 'halt_marker';
@@ -2435,6 +2453,8 @@ export class Conductor {
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
+                  resolvedBefore: retryResolvedBefore,
+                  resolvedAfter: retryResolvedAfter,
                 });
                 continue;
               }
