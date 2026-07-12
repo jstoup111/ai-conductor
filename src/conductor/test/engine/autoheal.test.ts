@@ -1384,6 +1384,68 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
     await rm(seedDir, { recursive: true, force: true });
   });
+
+  it('treats a whitespace-only anchor as absent: no unreachable warning, range is merge-base..HEAD (#510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const whitespaceRange = await mod.getEvidenceRange(gitDir, '   ');
+    const emptyRange = await mod.getEvidenceRange(gitDir, '');
+
+    // Whitespace-only anchor must be treated exactly like an absent anchor:
+    // no "unreachable" warning, and the same commits/anomalies as ''.
+    expect(whitespaceRange.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(whitespaceRange.anomalies).toHaveLength(0);
+    expect(whitespaceRange.commits.length).toBeGreaterThan(0);
+    expect(whitespaceRange.commits.map((c) => c.sha)).toEqual(
+      emptyRange.commits.map((c) => c.sha),
+    );
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('fails closed on an absent anchor when origin default is unresolvable (no origin/HEAD, origin/main, or origin/master) (#510)', async () => {
+    const mod = await loadAutoheal();
+    const mockErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // No origin remote at all, so origin/HEAD, origin/main, and
+    // origin/master are all unresolvable.
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Fail-closed at the `if (!originRef)` guard must be reached before the
+    // anchor is ever inspected: zero commits, exactly one anomaly, and the
+    // anomaly text matches the same origin-unresolvable message as the
+    // no-anchor-at-all case.
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    expect(range.anomalies[0]).toMatch(/origin\/main|origin\/HEAD|origin default/i);
+    expect(range.warnings).toHaveLength(0);
+
+    mockErr.mockRestore();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
