@@ -14,6 +14,32 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
 
+### Fixed
+
+- Corrected a Fable-pricing doc error and re-reviewed model selection on the
+  right economics. Fable 5 is the **premium** tier ($10/$50 per 1M — ~2x Opus
+  4.8's $5/$25, 3-5x Sonnet), not "cheaper generation" as the `explore`, `prd`,
+  and `engineer` rationales claimed. Rewrote those rationales (source of truth:
+  `model-table-metadata.ts`) to justify each pick on cost-per-outcome (price ×
+  tokens-at-effort) rather than a false per-token price advantage, and dropped
+  two front-of-funnel Fable steps off max depth so they stop paying the premium
+  at high token counts: `explore` effort `xhigh`→`low` (divergent discovery,
+  localized mistake cost, 5-retry budget) and `prd` effort `xhigh`→`medium`
+  (its own rationale prioritises speed over depth). Both keep Fable but embody
+  the operator directive that a premium model at low effort can beat a cheaper
+  model at high effort on cost *and* outcome. `engineer` stays on Fable
+  (operator-driven interactive quality) with its inverted "without the cost of
+  opus" rationale corrected to name the choice as capability/preference, not
+  cost. Opus-tier assignments (`build_review`, `prd_audit`, `attribution_verify`,
+  code-review, cto-security/architecture) are reaffirmed: Opus is now the
+  value-premium tier at half Fable's price, and these are deep adversarial full-
+  artifact roles that genuinely need sustained high reasoning. Fable's other
+  capability-justified steps (`rebase`, `remediate`, `architecture_review`,
+  `conflict_check` L, `plan` L, `debugging`) are unchanged. No model *tier*
+  moved, so SKILL.md `model:` pins are untouched; regenerated the HARNESS.md
+  table via `bin/generate-model-table`. No config-schema, hook, symlink, or
+  `bin/conduct` CLI change — no migration block required.
+
 ### Changed
 
 - Bumped the default model for the `build` (pipeline) engine step from `haiku`
