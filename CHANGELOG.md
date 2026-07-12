@@ -39,6 +39,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- HARNESS.md Communication Protocol (BUILD Phase, orchestrator rules): strengthened
+  the non-narration discipline with two explicit rules — keep the work area concise
+  (emit only status lines and errors, no running commentary), and do not explain what
+  is happening unless it is visible to the operator or actually useful to them (no
+  play-by-play of internal steps).
 - Armed `attribution_enforcement_cutover` (2026-07-11T08:30Z) in the committed
   project config: daemon builds now enforce inline-work attribution
   fail-closed (#505 machinery live, not just loaded). Canary evidence: with
