@@ -904,6 +904,82 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  it('skips the reachability probe for an absent (empty-string) anchor and derives merge-base without an unreachable warning', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Absent anchor must fall straight into the merge-base ladder without
+    // ever being probed for reachability, so no "unreachable" warning.
+    expect(range.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('emits a distinct info line (not a warning) noting the anchor was absent', async () => {
+    const mod = await loadAutoheal();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // The info line must be surfaced via console.info/console.log, not
+    // pushed onto range.warnings and not routed through console.warn.
+    expect(range.warnings).toHaveLength(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    const allCalls = [...infoSpy.mock.calls, ...logSpy.mock.calls].map((args) => String(args[0]));
+    expect(allCalls.length).toBeGreaterThan(0);
+    expect(allCalls.some((msg) => /no recorded anchor/i.test(msg))).toBe(true);
+    expect(allCalls.some((msg) => /unreachable/i.test(msg))).toBe(false);
+    expect(allCalls.some((msg) => /anchor\s\sis/.test(msg))).toBe(false);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('logs warning when anchor is unreachable', async () => {
     const mod = await loadAutoheal();
 
@@ -932,6 +1008,59 @@ describe('getEvidenceRange', () => {
     // Should log a warning about the unreachable anchor
     expect(range.warnings).toHaveLength(1);
     expect(range.warnings[0]).toContain('unreachable');
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('regression guard: non-empty unreachable anchor keeps the exact prior warn text and fallback result (Task 3, #510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const shortSha = unreachableSha.slice(0, 7);
+
+    const range = await mod.getEvidenceRange(gitDir, unreachableSha);
+
+    // Exactly one warning, matching /unreachable/, containing the 7-char
+    // short SHA, and with no doubled-space/empty-value rendering.
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable/);
+    expect(range.warnings[0]).toContain(shortSha);
+    expect(range.warnings[0]).not.toMatch(/anchor\s\sis/);
+
+    // Compute the plain merge-base fallback independently and assert the
+    // returned range/commits are unchanged vs. before the Task 1/2 refactor.
+    const plainMergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: gitDir,
+    });
+    const expectedLowerBound = plainMergeBase.stdout.trim();
+
+    const logOutput = await execa(
+      'git',
+      ['log', '--format=%H', `${expectedLowerBound}..HEAD`],
+      { cwd: gitDir },
+    );
+    const expectedShas = logOutput.stdout.split('\n').filter((s) => s.trim());
+
+    expect(range.commits.map((c) => c.sha)).toEqual(expectedShas);
 
     // Cleanup
     await rm(bareDir, { recursive: true, force: true });
@@ -1254,6 +1383,68 @@ describe('getEvidenceRange', () => {
     mockErr.mockRestore();
     await rm(bareDir, { recursive: true, force: true });
     await rm(seedDir, { recursive: true, force: true });
+  });
+
+  it('treats a whitespace-only anchor as absent: no unreachable warning, range is merge-base..HEAD (#510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const whitespaceRange = await mod.getEvidenceRange(gitDir, '   ');
+    const emptyRange = await mod.getEvidenceRange(gitDir, '');
+
+    // Whitespace-only anchor must be treated exactly like an absent anchor:
+    // no "unreachable" warning, and the same commits/anomalies as ''.
+    expect(whitespaceRange.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(whitespaceRange.anomalies).toHaveLength(0);
+    expect(whitespaceRange.commits.length).toBeGreaterThan(0);
+    expect(whitespaceRange.commits.map((c) => c.sha)).toEqual(
+      emptyRange.commits.map((c) => c.sha),
+    );
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('fails closed on an absent anchor when origin default is unresolvable (no origin/HEAD, origin/main, or origin/master) (#510)', async () => {
+    const mod = await loadAutoheal();
+    const mockErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // No origin remote at all, so origin/HEAD, origin/main, and
+    // origin/master are all unresolvable.
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Fail-closed at the `if (!originRef)` guard must be reached before the
+    // anchor is ever inspected: zero commits, exactly one anomaly, and the
+    // anomaly text matches the same origin-unresolvable message as the
+    // no-anchor-at-all case.
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    expect(range.anomalies[0]).toMatch(/origin\/main|origin\/HEAD|origin default/i);
+    expect(range.warnings).toHaveLength(0);
+
+    mockErr.mockRestore();
   });
 });
 
@@ -1988,6 +2179,65 @@ Work on the literal task-N form.
     if (result['2'].auditEntry) {
       expect(result['2'].auditEntry).not.toContain(foreignSha);
       expect(result['2'].auditEntry).not.toContain(foreignSha.slice(0, 7));
+    }
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 5 (#510): prove the fix reaches the real production entry point.
+  // `deriveCompletion(root, planPath)` — the no-anchor gate form used by
+  // conductor.ts, artifacts.ts, and evidence-cli.ts — must NOT emit the
+  // spurious "anchor  is unreachable" warning when no anchor is recorded
+  // (anchorArg omitted, so getEvidenceRange resolves the branch base itself
+  // via its merge-base ladder). Completion results must be unchanged from
+  // prior behavior.
+  // ───────────────────────────────────────────────────────────────────────
+  it('gate path (no anchor arg) derives completion with zero unreachable warnings (#510)', async () => {
+    const autoheal = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Branch commits, last one carrying a `Task:` trailer.
+    await writeFile(join(gitDir, 'a.txt'), 'a');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit a'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b.txt'), 'b');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit b\n\nTask: 2\n'], { cwd: gitDir });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result;
+    try {
+      // Real production entry: no anchor arg supplied.
+      result = await autoheal.deriveCompletion(gitDir, planPath);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Completion is unchanged from current (fixed) behavior.
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+    expect(result['2'].evidencedBy).toBeTruthy();
+
+    // No `unreachable` warning was logged during the call — the absent
+    // anchor path must not synthesize a fake unreachable-anchor warning.
+    for (const call of warnSpy.mock.calls) {
+      const msg = String(call[0] ?? '');
+      expect(msg).not.toMatch(/unreachable/);
     }
 
     await rm(bareDir, { recursive: true, force: true });
