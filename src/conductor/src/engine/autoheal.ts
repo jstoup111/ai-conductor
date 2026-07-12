@@ -781,6 +781,10 @@ export async function deriveCompletion(
  * what actually flips a still-"pending" row to "completed" on disk so the build
  * gate's raw-row check (CUSTOM_COMPLETION_PREDICATES.build) sees it.
  *
+ * After processing derived hits on pending rows, reconciles non-terminal rows
+ * (in_progress, pending) that have evidence stamps from prior passes. This ensures
+ * stamped rows are never missed (issue #526).
+ *
  * Returns an AutoHealResult (healed/skipped) so callers can keep emitting the
  * existing `auto_heal` event shape without caring that the underlying engine
  * (attemptAutoHeal's commit-matching heuristic vs. deriveCompletion's trailer/
@@ -796,40 +800,60 @@ export async function applyDerivedCompletion(
     if (!status) return result;
 
     const pendingTasks = status.tasks.filter((t) => t.status === 'pending');
-    if (pendingTasks.length === 0) return result;
-
-    let wroteAnything = false;
-    for (const task of pendingTasks) {
-      const hit = derived[task.id];
-      if (hit?.status === 'skipped') {
-        // H5: `Evidence: skipped <reason>` no-op commits mark the row skipped
-        // (gate-acceptable) — previously dropped entirely by the write-back,
-        // leaving skip-evidenced tasks pending forever.
-        task.rawEntry.status = 'skipped';
-        if (hit.skipReason) task.rawEntry.skip_reason = hit.skipReason;
+    if (pendingTasks.length > 0) {
+      let wroteAnything = false;
+      for (const task of pendingTasks) {
+        const hit = derived[task.id];
+        if (hit?.status === 'skipped') {
+          // H5: `Evidence: skipped <reason>` no-op commits mark the row skipped
+          // (gate-acceptable) — previously dropped entirely by the write-back,
+          // leaving skip-evidenced tasks pending forever.
+          task.rawEntry.status = 'skipped';
+          if (hit.skipReason) task.rawEntry.skip_reason = hit.skipReason;
+          wroteAnything = true;
+          continue;
+        }
+        if (!hit?.completed) {
+          result.skipped.push({ taskId: task.id, reason: 'no derived evidence' });
+          continue;
+        }
+        task.rawEntry.status = 'completed';
+        if (hit.evidencedBy) {
+          task.rawEntry.commit = hit.evidencedBy.slice(0, 7);
+        }
         wroteAnything = true;
-        continue;
+        result.healed.push({
+          taskId: task.id,
+          commit: hit.evidencedBy ? hit.evidencedBy.slice(0, 7) : '',
+          subject: '',
+          matchedFiles: [],
+        });
       }
-      if (!hit?.completed) {
-        result.skipped.push({ taskId: task.id, reason: 'no derived evidence' });
-        continue;
+
+      if (wroteAnything) {
+        await writeTaskStatus(status);
       }
-      task.rawEntry.status = 'completed';
-      if (hit.evidencedBy) {
-        task.rawEntry.commit = hit.evidencedBy.slice(0, 7);
-      }
-      wroteAnything = true;
-      result.healed.push({
-        taskId: task.id,
-        commit: hit.evidencedBy ? hit.evidencedBy.slice(0, 7) : '',
-        subject: '',
-        matchedFiles: [],
-      });
     }
 
-    if (wroteAnything) {
-      await writeTaskStatus(status);
+    // After processing derived hits, reconcile rows with evidence stamps (#526).
+    // This handles in_progress and other non-terminal rows that have stamps
+    // from prior passes and would otherwise be missed.
+    try {
+      const reconcileResult = await reconcileStatusFromStamps(projectRoot);
+      // Add reconciled task IDs to the auto_heal result
+      for (const taskId of reconcileResult.synced) {
+        result.healed.push({
+          taskId,
+          commit: '',
+          subject: '',
+          matchedFiles: [],
+        });
+      }
+    } catch {
+      // reconcileStatusFromStamps is fail-soft, but in case it throws,
+      // catch and continue without disturbing the result
     }
+
     await writeAuditFile(projectRoot, result);
     return result;
   } catch {

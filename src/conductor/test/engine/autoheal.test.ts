@@ -2532,3 +2532,60 @@ describe('reconcileStatusFromStamps', () => {
     expect(result.orphanStamps).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for applyDerivedCompletion (Task 3, derived + reconciliation).
+//
+// Tests that applyDerivedCompletion not only processes pending rows with
+// derived hits but also reconciles in_progress rows via evidence stamps.
+// This ensures rows from prior passes (with stamps) are no longer missed.
+//
+// Task: 3 (wire reconcileStatusFromStamps into applyDerivedCompletion)
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('applyDerivedCompletion', () => {
+  it('advances in_progress rows via reconcileStatusFromStamps when no derived hit', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { countResolvedTasks } = await import('../../src/engine/task-progress.js');
+
+    // Setup: Create task-status.json with an in_progress row for task 26
+    const statusPath = join(gitDir, '.pipeline/task-status.json');
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    const statusContent = {
+      tasks: [
+        { id: '26', name: 'Task 26', status: 'in_progress' },
+      ],
+    };
+    await writeFile(statusPath, JSON.stringify(statusContent, null, 2) + '\n');
+
+    // Setup: Create evidence stamp for task 26 (simulating a prior pass)
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('26', { sha: 'abc1234567890def', form: 'trailer' });
+    await evidence.write();
+
+    // Simulate the #526 scenario: derived has no hit for task 26
+    // (it's a stamped row from a prior pass, not a new derived result this pass)
+    const derived = {};
+
+    // Call applyDerivedCompletion
+    const result = await autoheal.applyDerivedCompletion(gitDir, derived);
+
+    // Assertions:
+    // 1. Task 26's row should now read as completed on disk
+    const updatedStatus = JSON.parse(await readFile(statusPath, 'utf-8'));
+    expect(updatedStatus.tasks[0]).toHaveProperty('status', 'completed');
+    expect(updatedStatus.tasks[0]).toHaveProperty('commit', 'abc1234'); // 7-char short SHA
+
+    // 2. Task 26 should be in auto_heal result (added by reconciliation)
+    expect(result.healed.map(h => h.taskId)).toContain('26');
+
+    // 3. Task 26 should not be in skipped (no skip evidence)
+    expect(result.skipped).toEqual([]);
+
+    // 4. Use task-progress reader to confirm task 26 is resolved
+    const resolvedCount = await countResolvedTasks(gitDir);
+    expect(resolvedCount).toBe(1); // One task is now completed
+  });
+});
