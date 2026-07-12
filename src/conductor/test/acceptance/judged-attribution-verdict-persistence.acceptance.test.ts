@@ -234,6 +234,26 @@ function makeStepRunner(
   };
 }
 
+/**
+ * Conductor's push-evidence check (finish gate) shells out to `git` via an
+ * injectable `GitRunner`; `makeProductionGit()` refuses to exec under
+ * `AI_CONDUCTOR_NO_REAL_EXEC` (the vitest global setup's kill-switch —
+ * belt-and-suspenders against a test mutating real state). Since this file
+ * drives a REAL git repo end-to-end, inject a real execa-backed runner so
+ * `headPushedToUpstream` can resolve the upstream ref and ancestry against
+ * the fixture's actual `origin` remote instead of hitting the kill-switch
+ * and returning null (indeterminate — which the finish gate fails closed on).
+ */
+function makeRealGitRunner(repo: Repo): (
+  args: string[],
+  opts: { cwd: string },
+) => Promise<{ stdout: string }> {
+  return async (args: string[], opts: { cwd: string }) => {
+    const result = await execa('git', args, { cwd: opts.cwd ?? repo.root });
+    return { stdout: String(result.stdout ?? '') };
+  };
+}
+
 async function headSha(repo: Repo): Promise<string> {
   const res = await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.root });
   return res.stdout.trim();
@@ -302,6 +322,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
       // Final retry attempt (retries exhausted) — Story 1's second bullet:
       // the rescue must not depend on a "next cycle" that will never run.
       maxRetries: 1,
