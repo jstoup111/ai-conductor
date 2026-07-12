@@ -361,6 +361,14 @@ export interface DaemonDeps {
    */
   repoRootMissing?: () => string | null;
 
+  // ── Task 3: per-sweep pidfile ownership gate ──────────────────────────
+  /**
+   * Return true ONLY on a definitive loss-of-ownership reading — absent,
+   * corrupt, or different-uuid holder. Inconclusive/transient reads
+   * should return false (fail-safe toward continuing).
+   */
+  lockOwnershipLost?: () => Promise<boolean>;
+
   // ── Task 20: Episode-caused HALT self-heal sweep ─────────────────────────
   /**
    * Fired by the daemon when it parks a halted/error outcome (both leave a
@@ -413,7 +421,8 @@ export type DaemonStopReason =
   | 'time_ceiling'
   | 'idle_timeout'
   | 'repo_root_missing'
-  | 'engine_restart';
+  | 'engine_restart'
+  | 'lock_lost';
 
 export interface DaemonResult {
   processed: FeatureOutcome[];
@@ -704,6 +713,12 @@ export async function runDaemon(
     if (missingRoot != null) {
       log(`[daemon] repo root missing: ${missingRoot} — stopping`);
       stopReason = 'repo_root_missing';
+      break;
+    }
+
+    if (await deps.lockOwnershipLost?.()) {
+      log('[daemon] lock no longer held — stopping dispatch');
+      stopReason = 'lock_lost';
       break;
     }
 
