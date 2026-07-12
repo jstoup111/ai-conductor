@@ -17,7 +17,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   assess:
     'The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
-    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 5-retry budget. Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at LOW effort: cost-per-outcome favours a strong model at shallow depth over a cheaper model at high depth, and Fable-low ideation reportedly rivals prior-generation high/xhigh output.',
+    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 5-retry budget. Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis).',
   prd: 'Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need.',
   complexity:
     'Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching.',

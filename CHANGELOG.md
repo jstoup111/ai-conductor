@@ -23,8 +23,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `model-table-metadata.ts`) to justify each pick on cost-per-outcome (price ×
   tokens-at-effort) rather than a false per-token price advantage, and dropped
   two front-of-funnel Fable steps off max depth so they stop paying the premium
-  at high token counts: `explore` effort `xhigh`→`low` (divergent discovery,
-  localized mistake cost, 5-retry budget) and `prd` effort `xhigh`→`medium`
+  at high token counts: `explore` effort `xhigh`→`medium` (divergent discovery,
+  localized mistake cost, 5-retry budget — conservative setting per operator
+  decision, vs the more aggressive low-effort thesis) and `prd` effort
+  `xhigh`→`medium`
   (its own rationale prioritises speed over depth). Both keep Fable but embody
   the operator directive that a premium model at low effort can beat a cheaper
   model at high effort on cost *and* outcome. `engineer` stays on Fable

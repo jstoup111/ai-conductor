@@ -53,7 +53,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   bootstrap: 'low',
   memory: 'low',
   assess: 'high',
-  explore: 'low',
+  explore: 'medium',
   prd: 'medium',
   complexity: 'low',
   stories: 'medium',
