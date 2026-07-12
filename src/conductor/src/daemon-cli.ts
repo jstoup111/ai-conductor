@@ -20,7 +20,7 @@ import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
-import { holdLock, readPidRecord } from './engine/daemon-lock.js';
+import { holdLock, readPidRecord, ownsLock } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
   formatDaemonLogLine,
@@ -1416,6 +1416,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       },
       // TS-2: repo-root vanished self-termination
       repoRootMissing: () => (existsSync(projectRoot) ? null : projectRoot),
+      // Task 4: per-sweep ownership check — stop dispatch if pidfile was overwritten
+      lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid)),
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),
