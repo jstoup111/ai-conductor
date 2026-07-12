@@ -32,12 +32,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkStepCompletion, FINISH_CHOICE_MARKER } from '../../src/engine/artifacts.js';
 import { rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
 const PR_URL = 'https://github.com/owner/repo/pull/499';
 const SOURCE_REF = 'owner/repo#499';
 const HALT_TITLE = 'needs-remediation: feat/x — manual remediation required';
-const BODY_MARKER = 'This PR was opened automatically after an irrecoverable daemon HALT.';
 const FLOOR_TITLE = 'feat: finish step completion becomes engine machinery';
 
 /**
@@ -57,9 +57,10 @@ function makeGhFake(state: {
   let body = state.body ?? '';
   const calls: string[][] = [];
 
-  const gh: GhRunner = async (args) => {
+  const gh: GhRunner = async (args, opts?: { cwd?: string }) => {
     calls.push([...args]);
-    if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+    // Check if this is a pr view call that includes body in the --json fields
+    if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.includes('body'))) {
       return {
         stdout: JSON.stringify({
           title,
@@ -130,7 +131,7 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
       title: HALT_TITLE,
       labels: ['needs-remediation'],
       isDraft: true,
-      body: BODY_MARKER,
+      body: `Some PR description\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
     });
 
     // The NOT-YET-EXISTING repair seam: `ctx.repairFinishPr`. Composes exactly
@@ -171,7 +172,7 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
     expect(finalState.title).toBe(FLOOR_TITLE);
     const closesMatches = finalState.body.match(/Closes\s+owner\/repo#499/gi) ?? [];
     expect(closesMatches).toHaveLength(1);
-    expect(finalState.body).not.toContain(BODY_MARKER);
+    expect(finalState.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
 
     // ── First-try ship: the SAME completion evaluation returns done:true ──
     expect(result.done).toBe(true);
