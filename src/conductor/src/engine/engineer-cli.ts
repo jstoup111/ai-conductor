@@ -420,6 +420,68 @@ function printGuide(print: (s: string) => void): void {
   );
 }
 
+/**
+ * Per-subcommand help text (#524, Task 2): what the subcommand does, its flags,
+ * whether it mutates state, and how it fits the engineer loop. Printed by the
+ * `help` dispatch kind — a single `print` call, zero fs/gh/ledger access.
+ */
+const SUBCOMMAND_HELP: Record<string, string> = {
+  projects:
+    'conduct-ts engineer projects\n' +
+    '  What: list registered projects from the registry.\n' +
+    '  Flags: none.\n' +
+    '  Mutates: nothing — read-only.\n' +
+    '  Loop fit: used by the /engineer skill to resolve a project name to a path.',
+  worktree:
+    'conduct-ts engineer worktree --project <n> --idea "<i>"\n' +
+    '  What: create the per-idea authoring worktree for a project.\n' +
+    '  Flags: --project <name> (required), --idea "<text>" (required).\n' +
+    '  Mutates: creates a git worktree on disk.\n' +
+    '  Loop fit: called by the /engineer skill before authoring DECIDE artifacts.',
+  land:
+    'conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]\n' +
+    '  What: commit spec artifacts in the worktree.\n' +
+    '  Flags: --project, --idea, --worktree (all required), --source-ref (optional).\n' +
+    '  Mutates: commits to the worktree branch.\n' +
+    '  Loop fit: called by the /engineer skill after DECIDE artifacts are authored.',
+  handoff:
+    'conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>]\n' +
+    '  What: open the spec PR, remove the worktree, and nudge the project daemon.\n' +
+    '  Flags: --project, --branch, --worktree (all required), --source-ref (optional).\n' +
+    '  Mutates: opens a PR, deletes the worktree, writes intake back.\n' +
+    '  Loop fit: the last step of the /engineer skill for one idea.',
+  poll:
+    'conduct-ts engineer poll\n' +
+    '  What: poll github issues and enqueue new ideas into the durable inbox.\n' +
+    '  Flags: none.\n' +
+    '  Mutates: appends to the file queue + ledger (idempotent, dedup via ledger).\n' +
+    '  Loop fit: primes the inbox before `claim`; also run automatically at launch.',
+  claim:
+    'conduct-ts engineer claim\n' +
+    '  What: atomically dequeue the oldest pending idea from the intake inbox.\n' +
+    '  Flags: none.\n' +
+    '  Mutates: pops the file queue and stamps the ledger entry as claimed.\n' +
+    '  Loop fit: called by the /engineer skill to pick the next idea to drive.',
+  forget:
+    'conduct-ts engineer forget <owner/repo#N>\n' +
+    '  What: drop an intake ledger entry and strip its label.\n' +
+    '  Flags: positional sourceRef (required, e.g. owner/repo#123).\n' +
+    '  Mutates: deletes a ledger entry, removes the intake label via gh.\n' +
+    '  Loop fit: recovery primitive for abandoning a stranded/duplicate intake idea.',
+  resolve:
+    'conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]\n' +
+    '  What: mark a claimed intake entry as delivered.\n' +
+    '  Flags: positional sourceRef (required), --pr-url (required, http(s)://), --branch (optional).\n' +
+    '  Mutates: stamps the ledger entry with prUrl/branch evidence.\n' +
+    '  Loop fit: recovery primitive when the normal handoff write-back failed.',
+  'migrate-issue-deps':
+    'conduct-ts engineer migrate-issue-deps [--confirm]\n' +
+    '  What: one-time prose-to-link dependency migration across tracked issues.\n' +
+    '  Flags: --confirm (optional — omit for a dry-run proposal with zero writes).\n' +
+    '  Mutates: nothing without --confirm; writes issue links when --confirm is set.\n' +
+    '  Loop fit: one-off maintenance primitive, not part of the per-idea loop.',
+};
+
 // Construct the real gh runner used in production. Exported so other
 // composition roots (e.g. the intake-loop CLI, Task 17) can reuse the exact
 // same production `gh` wiring without duplicating it.
@@ -602,12 +664,17 @@ export async function dispatchEngineer(
     }
 
     // ── help ──────────────────────────────────────────────────────────────────
-    // `conduct-ts engineer <subcommand> --help|-h` (#524): print usage instead of
-    // executing the subcommand. Per-topic help text lands in a follow-up task —
-    // for now, route to the same guide printer so --help never falls through to
-    // real execution (the root-cause bug this task fixes).
+    // `conduct-ts engineer <subcommand> --help|-h` (#524, Task 2): print per-subcommand
+    // help (what/flags/mutates/loop-fit) instead of executing the subcommand. A single
+    // `print` call, no fs/gh/ledger access — zero side effects. Falls back to the guide
+    // for an unknown topic (defensive; detectEngineerCommand only emits known topics).
     case 'help': {
-      printGuide(print);
+      const text = SUBCOMMAND_HELP[dispatch.topic];
+      if (text) {
+        print(text);
+      } else {
+        printGuide(print);
+      }
       return 0;
     }
 
