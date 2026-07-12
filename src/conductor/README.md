@@ -665,6 +665,9 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 `adr-2026-07-10-session-hook-task-stamping.md`, and
 `adr-2026-07-10-inline-work-attribution-enforcement.md`.
 
+#### Evidence as source of truth: task-status reconciliation from stamps
+
+**Evidence as source of truth:** The `evidenceStamps` in `.pipeline/task-evidence.json` are the single source of truth for task completion. On every stamp write and at the end of each derived-completion pass, `.pipeline/task-status.json` rows are automatically reconciled from stamps, ensuring rows never lag behind evidence.
 
 #### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
 

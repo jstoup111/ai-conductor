@@ -64,6 +64,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   as `path [argv…]` instead of stat-ing the whole string — the mutation
   gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
   assumption and failed CI on every run since the #509 merge.
+- **Evidence stamp sync** (#526): `.pipeline/task-status.json` rows are now reconciled from `.pipeline/task-evidence.json` stamps. A stamped but `in_progress` row advances to `completed` immediately on stamp write or derived-completion pass. Orphan stamps (no matching row) emit a warning and never invent rows.
 
 
 ### Changed
