@@ -938,6 +938,48 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  it('emits a distinct info line (not a warning) noting the anchor was absent', async () => {
+    const mod = await loadAutoheal();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // The info line must be surfaced via console.info/console.log, not
+    // pushed onto range.warnings and not routed through console.warn.
+    expect(range.warnings).toHaveLength(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    const allCalls = [...infoSpy.mock.calls, ...logSpy.mock.calls].map((args) => String(args[0]));
+    expect(allCalls.length).toBeGreaterThan(0);
+    expect(allCalls.some((msg) => /no recorded anchor/i.test(msg))).toBe(true);
+    expect(allCalls.some((msg) => /unreachable/i.test(msg))).toBe(false);
+    expect(allCalls.some((msg) => /anchor\s\sis/.test(msg))).toBe(false);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('logs warning when anchor is unreachable', async () => {
     const mod = await loadAutoheal();
 

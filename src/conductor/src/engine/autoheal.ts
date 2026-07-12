@@ -391,7 +391,13 @@ export async function getEvidenceRange(
     if (anchor.trim() === '') {
       // No anchor was supplied; skip the reachability probe entirely (it
       // always fails on an empty string) and go straight to the merge-base
-      // ladder without logging a spurious "unreachable" warning.
+      // ladder without logging a spurious "unreachable" warning. Still
+      // surface a routine informational line (not a warning/fault) so the
+      // absence is visible rather than silent.
+      const infoMsg =
+        'Evidence range: no recorded anchor; deriving lower bound from merge-base ladder';
+      console.info(infoMsg);
+
       lowerBound = await runMergeBaseLadder();
     } else {
       // First, verify that anchor is reachable
