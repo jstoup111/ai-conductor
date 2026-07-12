@@ -1,21 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import {
+  detectEngineerCommand,
+  dispatchEngineer,
+  ENGINEER_SUBCOMMANDS,
+  SUBCOMMAND_HELP,
+} from '../../../src/engine/engineer-cli.js';
 
 function argv(...rest: string[]): string[] {
   return ['node', 'conduct-ts', 'engineer', ...rest];
 }
 
-const SUBCOMMANDS = [
-  'projects',
-  'worktree',
-  'land',
-  'handoff',
-  'poll',
-  'claim',
-  'forget',
-  'resolve',
-  'migrate-issue-deps',
-];
+const SUBCOMMANDS: readonly string[] = ENGINEER_SUBCOMMANDS;
+
+describe('help-content completeness guard (#524, Task 3)', () => {
+  it('every known subcommand has non-empty help text', () => {
+    for (const sub of ENGINEER_SUBCOMMANDS) {
+      const text = (SUBCOMMAND_HELP as Record<string, string>)[sub];
+      expect(text, `missing help text for subcommand "${sub}"`).toBeTruthy();
+      expect(text.trim().length, `empty help text for subcommand "${sub}"`).toBeGreaterThan(0);
+    }
+  });
+
+  it('SUBCOMMAND_HELP has no extra keys beyond ENGINEER_SUBCOMMANDS (catches typos)', () => {
+    const known = new Set<string>(ENGINEER_SUBCOMMANDS);
+    const extra = Object.keys(SUBCOMMAND_HELP).filter((k) => !known.has(k));
+    expect(extra).toEqual([]);
+  });
+});
 
 describe('engineer-cli --help/-h short-circuit (#524)', () => {
   for (const sub of SUBCOMMANDS) {

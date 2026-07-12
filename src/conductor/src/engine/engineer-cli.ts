@@ -28,6 +28,15 @@ import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
+
+// Single source of truth for known `conduct-ts engineer <subcommand>` names.
+// Used both by the --help short-circuit guard (below) and to give a
+// compile-time guarantee (via `satisfies`) that SUBCOMMAND_HELP covers every
+// entry (#524 Task 3).
+export const ENGINEER_SUBCOMMANDS = [
+  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
+  'migrate-issue-deps',
+] as const;
 import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
@@ -111,7 +120,8 @@ export type EngineerDispatch =
   | { kind: 'forget'; sourceRef: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean }
-  | { kind: 'help'; topic: string };
+  | { kind: 'help'; topic: string }
+  | { kind: 'reject'; sub: string; flag: string };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -126,6 +136,18 @@ export type EngineerDispatch =
  *   'handoff'            → {kind:'handoff', project, branch}  (--project <n> --branch <b>)
  *   malformed / missing-flags → {kind:'guide'}  (print usage)
  */
+/**
+ * First argv token (from index 4) starting with `--` that isn't in `allowed`
+ * and isn't `--help`/`-h` (already handled earlier) — or null if none.
+ */
+function findUnknownFlag(argv: string[], allowed: string[]): string | null {
+  for (let i = 4; i < argv.length; i++) {
+    const tok = argv[i];
+    if (tok.startsWith('--') && tok !== '--help' && tok !== '-h' && !allowed.includes(tok)) return tok;
+  }
+  return null;
+}
+
 export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   // argv is process.argv: [node, entry, sub, ...]
   const sub = argv[2];
@@ -141,15 +163,14 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   // #524: --help/-h MUST be checked BEFORE any subcommand's own dispatch logic —
   // mirrors the `daemon --help` guard in index.ts:378-388 (same failure class:
   // otherwise the flag is silently ignored and the subcommand actually executes).
-  const KNOWN_SUBCOMMANDS = new Set([
-    'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
-    'migrate-issue-deps',
-  ]);
+  const KNOWN_SUBCOMMANDS = new Set<string>(ENGINEER_SUBCOMMANDS);
   if (KNOWN_SUBCOMMANDS.has(subCmd) && argv.slice(4).some((a) => a === '--help' || a === '-h')) {
     return { kind: 'help', topic: subCmd };
   }
 
   if (subCmd === 'projects') {
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'projects', flag: unk };
     return { kind: 'projects' };
   }
 
@@ -192,11 +213,15 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 
   if (subCmd === 'poll') {
     // `conduct-ts engineer poll` — poll intake sources and enqueue; no routing/process.
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'poll', flag: unk };
     return { kind: 'poll' };
   }
 
   if (subCmd === 'claim') {
     // `conduct-ts engineer claim` — atomically dequeue the oldest pending idea.
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'claim', flag: unk };
     return { kind: 'claim' };
   }
 
@@ -240,6 +265,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
     // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
     // `--confirm` applies via the GET-before-POST writer.
+    const unk = findUnknownFlag(argv, ['--confirm']);
+    if (unk) return { kind: 'reject', sub: 'migrate-issue-deps', flag: unk };
     const confirm = argv.includes('--confirm');
     return { kind: 'migrate-issue-deps', confirm };
   }
@@ -425,7 +452,7 @@ function printGuide(print: (s: string) => void): void {
  * whether it mutates state, and how it fits the engineer loop. Printed by the
  * `help` dispatch kind — a single `print` call, zero fs/gh/ledger access.
  */
-const SUBCOMMAND_HELP: Record<string, string> = {
+export const SUBCOMMAND_HELP = {
   projects:
     'conduct-ts engineer projects\n' +
     '  What: list registered projects from the registry.\n' +
@@ -480,7 +507,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     '  Flags: --confirm (optional — omit for a dry-run proposal with zero writes).\n' +
     '  Mutates: nothing without --confirm; writes issue links when --confirm is set.\n' +
     '  Loop fit: one-off maintenance primitive, not part of the per-idea loop.',
-};
+} satisfies Record<typeof ENGINEER_SUBCOMMANDS[number], string>;
 
 // Construct the real gh runner used in production. Exported so other
 // composition roots (e.g. the intake-loop CLI, Task 17) can reuse the exact
@@ -669,13 +696,22 @@ export async function dispatchEngineer(
     // `print` call, no fs/gh/ledger access — zero side effects. Falls back to the guide
     // for an unknown topic (defensive; detectEngineerCommand only emits known topics).
     case 'help': {
-      const text = SUBCOMMAND_HELP[dispatch.topic];
+      const text = (SUBCOMMAND_HELP as Record<string, string>)[dispatch.topic];
       if (text) {
         print(text);
       } else {
         printGuide(print);
       }
       return 0;
+    }
+
+    // ── reject ────────────────────────────────────────────────────────────────
+    // Unrecognized flag on a zero/boolean-flag subcommand (projects/poll/claim/
+    // migrate-issue-deps): report the offending flag instead of silently ignoring
+    // it and executing the subcommand anyway.
+    case 'reject': {
+      printErr(`engineer ${dispatch.sub}: unrecognized flag "${dispatch.flag}".`);
+      return 1;
     }
 
     // ── projects ──────────────────────────────────────────────────────────────
