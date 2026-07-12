@@ -692,6 +692,96 @@ Another task.
     expect(result.has('rem-adr-001')).toBe(true);
     expect(result.get('rem-adr-001')!.has('src/fix.ts')).toBe(true);
   });
+
+  it('parses task headers with em-dash separator (authoring convention)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1 — Initialize project
+Initial setup work.
+
+### Task 1-3 — Setup multiple tasks
+Setup tasks.
+
+### Task rem-adr-001 — Remediation task
+Another task.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    // Should parse em-dash separated headers
+    expect(result.has('1')).toBe(true);
+    expect(result.get('1')!.name).toBe('Initialize project');
+
+    expect(result.has('1-3')).toBe(true);
+    expect(result.get('1-3')!.name).toBe('Setup multiple tasks');
+
+    expect(result.has('rem-adr-001')).toBe(true);
+    expect(result.get('rem-adr-001')!.name).toBe('Remediation task');
+  });
+
+  it('parses task paths with em-dash headers', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1 — API Update
+Update the API layer.
+
+**Files:**
+- \`src/api.ts\`
+- \`src/types.ts\`
+
+### Task 2 — UI Changes
+Update the interface.
+
+**Files:**
+- \`src/components/Button.tsx\`
+`;
+    const result = mod.parsePlanTaskPaths(planText);
+
+    expect(result.has('1')).toBe(true);
+    expect(result.get('1')!.has('src/api.ts')).toBe(true);
+    expect(result.get('1')!.has('src/types.ts')).toBe(true);
+
+    expect(result.has('2')).toBe(true);
+    expect(result.get('2')!.has('src/components/Button.tsx')).toBe(true);
+  });
+
+  it('accepts both colon and em-dash terminators in same plan', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Traditional colon style
+Work with colon.
+
+### Task 2 — Authoring style with em-dash
+Work with em-dash.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    // Both styles should work
+    expect(result.has('1')).toBe(true);
+    expect(result.get('1')!.name).toBe('Traditional colon style');
+
+    expect(result.has('2')).toBe(true);
+    expect(result.get('2')!.name).toBe('Authoring style with em-dash');
+  });
+
+  it('accepts en-dash as separator (alternative dash character)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1 – Initialize with en-dash
+Setup with en-dash separator.
+`;
+    const result = mod.parsePlanTasks(planText);
+
+    expect(result.has('1')).toBe(true);
+    expect(result.get('1')!.name).toBe('Initialize with en-dash');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

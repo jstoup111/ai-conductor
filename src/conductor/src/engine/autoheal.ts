@@ -1002,10 +1002,11 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   const lines = text.split('\n');
   let currentTaskId: string | null = null;
 
-  // Match: ### Task ID: Title (requires colon and at least some title)
+  // Match: ### Task ID: Title (or ### Task ID — Title with em/en-dash)
   // Supports numeric (1, 18, 100), dotted (1.2), alphanumeric with separators (task_1, rem-adr-001)
-  // Pattern: ### Task <id>: <title_with_at_least_one_char>
-  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN}):\\s+(.+)$`);
+  // Terminator accepts a colon or a whitespace-preceded em-dash/en-dash separator
+  // (the authoring convention: `### Task N — Title`)
+  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN})(?::\\s+|\\s+[—–]\\s+)(.+)$`);
 
   for (const line of lines) {
     const headerMatch = line.match(taskHeader);
@@ -1074,7 +1075,12 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
 
   // Match task headers and extract task ids (supports comma-separated ids, ranges like 1-3 for numeric)
   // Pattern allows: Task 1-3, rem-adr-001, 1.2: or Task 1-3, rem-adr-001, 1.2
-  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|$)/;
+  // Terminator accepts a colon, a whitespace-preceded em-dash/en-dash title
+  // separator (`### Task N — Title`, the authoring convention), or end-of-line.
+  // Without the dash alternative, em-dash headings parse to zero ids → the build
+  // gate reports "no tasks in plan" → false `empty/missing plan` auto-park of a
+  // completed build (#578).
+  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–]|$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {
