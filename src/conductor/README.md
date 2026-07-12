@@ -2327,6 +2327,13 @@ the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an o
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
 
+**`--help`/`-h` is safe on every subcommand.** `conduct-ts engineer <subcommand> --help` (or `-h`,
+anywhere in argv) short-circuits to that subcommand's usage text — what it does, its flags, whether
+it mutates state, and which loop it fits into — with **zero side effects**: no worktree, ledger, or
+registry mutation, and no dispatch of the underlying command (#524). Any flag not recognized by a
+subcommand is rejected before dispatch: the CLI exits `1` with an error naming the offending flag
+and makes **no state change**, instead of silently ignoring it and running the subcommand anyway.
+
 **Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
 dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
 "<i>"` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>` branch (reusing the

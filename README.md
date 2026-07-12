@@ -435,6 +435,11 @@ describe dependencies as prose into real GitHub issue-dependency links so the ga
 See [`src/conductor/README.md`](src/conductor/README.md#dependency-ordered-intake-and-dispatch)
 for details.
 
+**Every `engineer <subcommand> --help`/`-h` now prints usage with zero side effects** (no worktree,
+ledger, or registry mutation) instead of executing the subcommand, and unrecognized flags on a
+subcommand are rejected (exit `1`, no state change) instead of being silently ignored (#524). See
+[`src/conductor/README.md`](src/conductor/README.md#engineer-mode-agent-hosted-phase-93) for details.
+
 **Claim ordering honors priority bands.** `conduct-ts engineer claim` serves pending
 intake ideas **priority-band-first**: no-issue (no `sourceRef`) first, then
 `critical` → `high` → `medium` → `low`, with unlabeled ideas last. Within a band,
