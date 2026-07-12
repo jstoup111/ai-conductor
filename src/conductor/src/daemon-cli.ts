@@ -20,7 +20,7 @@ import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider } from './engine/config.js';
-import { holdLock } from './engine/daemon-lock.js';
+import { holdLock, readPidRecord } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
   formatDaemonLogLine,
@@ -451,11 +451,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
   // refuses to start. A live owner → exit now; we release the lock on completion below.
   // ADR Decision item 3: enable bounded-wait polling for takeover scenario (10s/250ms)
+  const LOCK_HELD_EXIT_CODE = 3;
   const lock = await holdLock(projectRoot, { takeoverWaitMs: 10_000, pollMs: 250 });
   if (lock === null) {
-    log(`another daemon is already running for ${projectRoot}; exiting (1-per-repo).`);
+    const holder = await readPidRecord(projectRoot);
+    if (holder && holder.pid) {
+      log(
+        `another daemon is already running (pid ${holder.pid})${holder.engineDir ? ` engineDir ${holder.engineDir}` : ''} for ${projectRoot}; exiting`
+      );
+    } else {
+      log(`another daemon is already running for ${projectRoot}; exiting`);
+    }
     const exitProcess = opts.exitProcess ?? process.exit;
-    exitProcess(0);
+    exitProcess(LOCK_HELD_EXIT_CODE);
     return;
   }
   // We own the repo: open the activity log and start teeing. renderDaemonEvent and
