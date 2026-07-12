@@ -191,4 +191,52 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
     expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
   });
+
+  it('#519 cascade regression — a failed dispatch never inherits an earlier id (#519)', async () => {
+    // Story 2 (all criteria): Three-dispatch sequence ensuring bookkeeping failure
+    // abstains loudly and never cascades a stale task id to later commits.
+
+    // (a) Healthy bookkeeping for Task: 1 → commit with trailer Task: 1
+    const dispatch1 = await runHook(preHookPath, 'PreToolUse', 'Task: 1');
+    expect(dispatch1.code).toBe(0);
+    expect(await currentTaskContent()).toBe('1');
+
+    const res1 = await commitFile('file1.txt', 'content1', 'feat: task 1 work');
+    expect(res1.code).toBe(0);
+    const msg1 = await lastCommitMessage();
+    expect(msg1).toMatch(/^Task: 1$/m);
+
+    // (b) Corrupt status file (wrong-shaped JSON), dispatch Task: 2
+    //     → exit 0 + abstain diagnostic + stamp REMOVED
+    //     → commit → NO Task: trailer (specifically NOT Task: 1)
+    const statusPath = join(dir, '.pipeline', 'task-status.json');
+    await writeFile(statusPath, '{"tasks": {"not_array": true}}', 'utf-8');
+
+    const dispatch2 = await runHook(preHookPath, 'PreToolUse', 'Task: 2');
+    expect(dispatch2.code).toBe(0);
+    // Abstain diagnostic is emitted
+    expect(dispatch2.stderr).toMatch(/pre-dispatch-hook: abstain/);
+    expect(dispatch2.stderr).toMatch(/Task: 2/);
+    // Stamp is removed due to the bookkeeping failure
+    expect(await currentTaskContent()).toBeNull();
+
+    const res2 = await commitFile('file2.txt', 'content2', 'feat: task 2 work (corrupted)');
+    expect(res2.code).toBe(0);
+    const msg2 = await lastCommitMessage();
+    // CRITICAL: No Task: trailer present — and specifically NOT Task: 1
+    expect(msg2).not.toMatch(/^Task: /m);
+
+    // (c) Restore healthy status file, dispatch Task: 3
+    //     → stamp contains 3, commit → trailer Task: 3
+    await seedTaskStatus(Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
+
+    const dispatch3 = await runHook(preHookPath, 'PreToolUse', 'Task: 3');
+    expect(dispatch3.code).toBe(0);
+    expect(await currentTaskContent()).toBe('3');
+
+    const res3 = await commitFile('file3.txt', 'content3', 'feat: task 3 work');
+    expect(res3.code).toBe(0);
+    const msg3 = await lastCommitMessage();
+    expect(msg3).toMatch(/^Task: 3$/m);
+  });
 });

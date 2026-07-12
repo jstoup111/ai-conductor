@@ -9,8 +9,8 @@
 /**
  * prepare-commit-msg hook
  * Appends Task: <id> via git interpret-trailers when no trailer exists.
- * ID comes from .pipeline/current-task, else the unique in_progress row.
- * Abstains on ambiguity, amend, rebase-in-progress, or corrupt JSON.
+ * ID comes from .pipeline/current-task, else abstains.
+ * Abstains on amend, rebase-in-progress, or when current-task is absent.
  */
 export const PREPARE_COMMIT_MSG_HOOK = [
   '#!/bin/bash',
@@ -48,21 +48,6 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   'TASK_ID=""',
   'if [[ -f "$CURRENT_TASK_FILE" ]]; then',
   '  TASK_ID="$(cat "$CURRENT_TASK_FILE" 2>/dev/null || true)"',
-  'fi',
-  '',
-  '# Fall back to unique in_progress row if current-task is absent',
-  'if [[ -z "$TASK_ID" ]] && [[ -f "$TASK_STATUS_FILE" ]]; then',
-  '  # Parse JSON safely via node — avoid jq dependency',
-  '  TASK_ID=$(node -e "',
-  '    const fs = require(\'fs\');',
-  '    try {',
-  '      const data = JSON.parse(fs.readFileSync(\'$TASK_STATUS_FILE\', \'utf-8\'));',
-  '      const inProgress = (data.tasks || []).filter(t => t.status === \'in_progress\');',
-  '      if (inProgress.length === 1) {',
-  '        console.log(inProgress[0].id);',
-  '      }',
-  '    } catch {}',
-  '  " 2>/dev/null || true)',
   'fi',
   '',
   '# If we have a task id, stamp the trailer',
@@ -190,7 +175,7 @@ export const COMMIT_MSG_HOOK = [
   '      const fs = require(\'fs\');',
   '      try {',
   '        const data = JSON.parse(fs.readFileSync(\'$TASK_STATUS_FILE\', \'utf-8\'));',
-  '        const ids = (data.tasks || []).map(t => t.id);',
+  '        const ids = (Array.isArray(data.tasks) ? data.tasks : []).map(t => String(t && t.id));',
   '        console.log(ids.includes(\'$TASK_TRAILER\') ? \'yes\' : \'no\');',
   '      } catch {',
   '        console.log(\'no\');',

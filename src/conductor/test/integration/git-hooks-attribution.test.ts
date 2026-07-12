@@ -49,6 +49,11 @@ describe('integration/git-hooks-attribution', () => {
     await writeFile(join(dir, '.pipeline', 'current-task'), id, 'utf-8');
   }
 
+  async function createBuildStepActive(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'build-step-active'), '', 'utf-8');
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'git-hooks-attr-'));
     await git('init', '-b', 'main');
@@ -92,16 +97,16 @@ describe('integration/git-hooks-attribution', () => {
       expect(msg).not.toMatch(/^Task: 7$/m);
     });
 
-    it('falls back to the sole in_progress row when current-task is absent', async () => {
+    it('abstains when current-task is absent, even with a sole in_progress row', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'in_progress' },
         { id: '3', status: 'pending' },
       ]);
-      const res = await commitFile('c.txt', 'c', 'feat: fallback stamp');
+      const res = await commitFile('c.txt', 'c', 'feat: no stamp, only one in_progress');
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
-      expect(msg).toMatch(/^Task: 2$/m);
+      expect(msg).not.toMatch(/^Task: /m);
     });
 
     it('abstains when zero rows are in_progress and current-task is absent', async () => {
@@ -157,6 +162,14 @@ describe('integration/git-hooks-attribution', () => {
       const msg = await lastCommitMessage();
       expect(msg).not.toMatch(/^Task: /m);
     });
+
+    it('abstains when there are no staged changes (message-only commit)', async () => {
+      await writeCurrentTask('7');
+      const res = await git('commit', '--allow-empty', '-m', 'feat: no staged changes');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).not.toMatch(/^Task: /m);
+    });
   });
 
   // --- Story 5: commit-msg rejects bad attribution at commit time ---
@@ -164,6 +177,35 @@ describe('integration/git-hooks-attribution', () => {
   describe('Story 5: commit-msg validation', () => {
     it('lands a commit with a valid Task: <id> trailer and a non-empty diff', async () => {
       const res = await commitFile('h.txt', 'h', 'feat: valid trailer\n\nTask: 7');
+      expect(res.code).toBe(0);
+    });
+
+    it('accepts Task: 16 when ids 1..16 are seeded (not rejected by array index bug)', async () => {
+      await seedTaskStatus(Array.from({ length: 16 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
+      const res = await commitFile('h_extended.txt', 'content', 'feat: last id in 16-task set\n\nTask: 16');
+      expect(res.code).toBe(0);
+    });
+
+    it('accepts Task: 7 in a mid-range position', async () => {
+      const res = await commitFile('h_midrange.txt', 'content', 'feat: mid-range id\n\nTask: 7');
+      expect(res.code).toBe(0);
+    });
+
+    it('accepts Task: 3 with numeric-id fixture (numeric id, not string index)', async () => {
+      // Fixture with numeric IDs (not stringified), e.g. from seed tooling
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: 1, name: 'task 1', status: 'pending' },
+            { id: 2, name: 'task 2', status: 'pending' },
+            { id: 3, name: 'task 3', status: 'pending' },
+          ],
+        }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('h_numeric.txt', 'content', 'feat: numeric id fixture\n\nTask: 3');
       expect(res.code).toBe(0);
     });
 
@@ -249,6 +291,95 @@ describe('integration/git-hooks-attribution', () => {
       const res = await commitFile('n.txt', 'n', 'feat: legacy untrailered commit');
       expect(res.code).toBe(0);
     });
+
+    // --- Task 8 negative path tests: out-of-set rejection, index-shaped rejection ---
+
+    it('rejects Task: 17 when ids 1..16 are seeded (out-of-set id)', async () => {
+      await seedTaskStatus(Array.from({ length: 16 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
+      const res = await commitFile('task8_out_of_set.txt', 'content', 'feat: out-of-set id\n\nTask: 17');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('rejects Task: 0 when ids are non-numeric (array index rejection)', async () => {
+      // Fixture with non-numeric ids (A.1, A.2) to ensure Task: 0 is rejected as an array index
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: 'A.1', name: 'task A.1', status: 'pending' },
+            { id: 'A.2', name: 'task A.2', status: 'pending' },
+          ],
+        }, null, 2),
+        'utf-8',
+      );
+      const res = await commitFile('task8_array_index.txt', 'content', 'feat: array index id\n\nTask: 0');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('still rejects task-3 grammar-drift format', async () => {
+      const res = await commitFile('task8_grammar_drift.txt', 'content', 'feat: grammar drift\n\nTask: task-3');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('task-N format');
+    });
+
+    it('accepts any Task: trailer when task-status.json is missing (tolerance unchanged)', async () => {
+      // Remove the status file to test fallback tolerance
+      await rm(join(dir, '.pipeline', 'task-status.json'), { force: true });
+      const res = await commitFile('task8_missing_status.txt', 'content', 'feat: missing status file\n\nTask: 999');
+      expect(res.code).toBe(0);
+    });
+
+    it('exempts merge commits from validation (no Task: required for merge)', async () => {
+      // Set up a merge scenario: create a branch with a commit, then attempt merge on main
+      // This properly sets MERGE_HEAD and allows testing the merge exemption
+      await writeCurrentTask('7');
+      await commitFile('base.txt', 'base', 'feat: base commit on main\n\nTask: 7');
+
+      // Create a feature branch with a commit
+      await git('checkout', '-b', 'merge-feature');
+      await commitFile('feature.txt', 'feature', 'feat: feature commit\n\nTask: 7');
+
+      // Go back to main and create an unrelated commit
+      await git('checkout', 'main');
+      await commitFile('other.txt', 'other', 'feat: other commit on main\n\nTask: 7');
+
+      // Start a merge (this will put us in a merge state with MERGE_HEAD present)
+      const mergeResult = await git('merge', 'merge-feature');
+
+      // If merge conflicts, resolve them; if auto-merged, commit it
+      if (mergeResult.code !== 0) {
+        // There's a conflict - resolve it and commit
+        await writeFile(join(dir, 'feature.txt'), 'feature-resolved', 'utf-8');
+        await git('add', 'feature.txt');
+        // At this point, MERGE_HEAD exists and a commit without Task: should be allowed
+        const commitRes = await git('commit', '--no-edit');
+        expect(commitRes.code).toBe(0);
+      } else {
+        // Auto-merge succeeded and was auto-committed (fast-forward or merge commit)
+        // Verify the merge commit exists
+        const msg = await lastCommitMessage();
+        expect(msg).toContain('Merge branch');
+      }
+    });
+
+    it('exempts CONDUCT_ENGINE_COMMIT=1 commits from validation', async () => {
+      // Run git commit with CONDUCT_ENGINE_COMMIT=1 environment variable
+      await writeFile(join(dir, 'task8_engine.txt'), 'engine-content', 'utf-8');
+      await git('add', 'task8_engine.txt');
+      try {
+        const result = await execFileAsync('bash', [
+          '-c',
+          `cd "${dir}" && CONDUCT_ENGINE_COMMIT=1 git commit -m 'chore: engine bookkeeping'`,
+        ]);
+        expect(result.stdout + result.stderr).not.toContain('rejected');
+      } catch (err) {
+        const e = err as { stdout?: string; stderr?: string };
+        fail(`Expected engine commit to succeed, got error: ${e.stderr}`);
+      }
+    });
   });
 
   // --- Story 6 happy path 3: chaining to the repo's own hooks ---
@@ -326,6 +457,54 @@ describe('integration/git-hooks-attribution', () => {
         const res = await commitFile('t.txt', 't', 'feat: no prepare common hook');
         expect(res.code).toBe(0);
       });
+    });
+  });
+
+  // --- Story 5: Loud-path composition — abstain, reject, self-stamp, accept ---
+
+  describe('Story 5: Loud-path composition with #509 build-step-active gate', () => {
+    it('rejects an untrailered commit when build-step-active is present and no stamp exists', async () => {
+      await createBuildStepActive();
+      const res = await commitFile('u.txt', 'u', 'feat: no stamp during build step');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('add a Task: <id> trailer');
+    });
+
+    it('accepts an explicit valid Task: 2 trailer on retry after rejection', async () => {
+      await createBuildStepActive();
+      // First attempt without trailer should be rejected
+      const firstAttempt = await commitFile('v.txt', 'v', 'feat: first attempt');
+      expect(firstAttempt.code).not.toBe(0);
+
+      // Retry with explicit Task: 2 should be accepted
+      const retryRes = await commitFile('w.txt', 'w', 'feat: retry with task trailer\n\nTask: 2');
+      expect(retryRes.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 2$/m);
+    });
+
+    it('rejects an invalid Task: 99 by real-id validation, even with explicit trailer during build step', async () => {
+      await createBuildStepActive();
+      const res = await commitFile('x.txt', 'x', 'feat: invalid task id\n\nTask: 99');
+      expect(res.code).not.toBe(0);
+      expect(res.stderr).toContain('not found in task-status.json');
+    });
+
+    it('auto-stamps and accepts an untrailered commit when build-step-active is present but a stamp exists (control)', async () => {
+      await createBuildStepActive();
+      await writeCurrentTask('2');
+      const res = await commitFile('y.txt', 'y', 'feat: stamp present during build step');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 2$/m);
+    });
+
+    it('accepts an untrailered commit when build-step-active is absent (control)', async () => {
+      // Do NOT create build-step-active — outside a build step
+      const res = await commitFile('z.txt', 'z', 'feat: no build step active');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).not.toMatch(/^Task: /m);
     });
   });
 });
