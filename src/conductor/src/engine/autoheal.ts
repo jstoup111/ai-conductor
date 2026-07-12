@@ -1228,3 +1228,67 @@ async function writeAuditFile(projectRoot: string, result: AutoHealResult): Prom
   const path = join(dir, `autoheal-${stamp}.json`);
   await writeFile(path, JSON.stringify(result, null, 2) + '\n').catch(() => {});
 }
+
+/**
+ * Synchronize non-terminal rows in task-status.json with evidence stamps.
+ *
+ * For each task with an evidence stamp in .pipeline/task-evidence.json:
+ * - If the row status is NOT terminal (completed/skipped): advance to completed
+ * - Set row.commit to the 7-char short SHA from the stamp
+ * - Terminal rows (completed/skipped) are left byte-identical, never touched
+ * - Rows without evidence stamps are never touched
+ *
+ * Returns synced task IDs and orphanStamps (empty for now; Task 2 handles orphan cleanup).
+ * Only writes to disk if something changed.
+ *
+ * Task: 1 (evidence-stamp sync, happy path)
+ */
+export async function reconcileStatusFromStamps(
+  projectRoot: string,
+): Promise<{ synced: string[]; orphanStamps: string[] }> {
+  const result = { synced: [] as string[], orphanStamps: [] as string[] };
+
+  try {
+    // Load current task-status.json
+    const status = await readTaskStatus(projectRoot);
+    if (!status) return result;
+
+    // Load evidence stamps
+    const { createTaskEvidence } = await import('./task-evidence.js');
+    const evidence = await createTaskEvidence(projectRoot);
+
+    if (evidence.evidenceStamps.size === 0) return result;
+
+    let wroteAnything = false;
+
+    // For each evidence stamp, try to advance the matching task row
+    for (const [taskId, stamp] of evidence.evidenceStamps.entries()) {
+      // Find the matching task row
+      const task = status.tasks.find((t) => t.id === taskId);
+      if (!task) continue; // No row for this stamp
+
+      // Skip terminal rows (never touch them)
+      if (task.status === 'completed' || task.status === 'skipped') continue;
+
+      // Advance non-terminal row to completed
+      task.rawEntry.status = 'completed';
+
+      // Set commit to the 7-char short SHA
+      if (stamp.sha) {
+        task.rawEntry.commit = stamp.sha.slice(0, 7);
+      }
+
+      result.synced.push(taskId);
+      wroteAnything = true;
+    }
+
+    // Only write if something changed
+    if (wroteAnything) {
+      await writeTaskStatus(status);
+    }
+
+    return result;
+  } catch {
+    return result;
+  }
+}
