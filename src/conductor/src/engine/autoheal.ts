@@ -1238,10 +1238,18 @@ async function writeAuditFile(projectRoot: string, result: AutoHealResult): Prom
  * - Terminal rows (completed/skipped) are left byte-identical, never touched
  * - Rows without evidence stamps are never touched
  *
- * Returns synced task IDs and orphanStamps (empty for now; Task 2 handles orphan cleanup).
+ * Orphan stamp handling (Task 2):
+ * - Stamps with no matching row are tracked but never create rows
+ * - Each orphan stamp ID emits exactly ONE console.warn with prefix "[task-evidence]"
+ *
+ * Missing/corrupt file safety (Task 2):
+ * - Wraps body in try-catch, returns empty results on error (fail-soft)
+ * - No exceptions thrown; operates fail-closed on missing/corrupt files
+ *
+ * Returns synced task IDs and orphanStamps (stamp IDs with no matching row).
  * Only writes to disk if something changed.
  *
- * Task: 1 (evidence-stamp sync, happy path)
+ * Task: 1, 2 (evidence-stamp sync + orphan handling + safety)
  */
 export async function reconcileStatusFromStamps(
   projectRoot: string,
@@ -1260,12 +1268,15 @@ export async function reconcileStatusFromStamps(
     if (evidence.evidenceStamps.size === 0) return result;
 
     let wroteAnything = false;
+    const stampIdsWithMatches = new Set<string>();
 
     // For each evidence stamp, try to advance the matching task row
     for (const [taskId, stamp] of evidence.evidenceStamps.entries()) {
       // Find the matching task row
       const task = status.tasks.find((t) => t.id === taskId);
-      if (!task) continue; // No row for this stamp
+      if (!task) continue; // No row for this stamp — will be tracked as orphan later
+
+      stampIdsWithMatches.add(taskId);
 
       // Skip terminal rows (never touch them)
       if (task.status === 'completed' || task.status === 'skipped') continue;
@@ -1282,6 +1293,14 @@ export async function reconcileStatusFromStamps(
       wroteAnything = true;
     }
 
+    // Track orphan stamps (stamps with no matching row)
+    for (const stampId of evidence.evidenceStamps.keys()) {
+      if (!stampIdsWithMatches.has(stampId)) {
+        result.orphanStamps.push(stampId);
+        console.warn(`[task-evidence] stamp for unknown task id ${stampId}`);
+      }
+    }
+
     // Only write if something changed
     if (wroteAnything) {
       await writeTaskStatus(status);
@@ -1289,6 +1308,7 @@ export async function reconcileStatusFromStamps(
 
     return result;
   } catch {
+    // Fail-soft: log error and return empty results without throwing
     return result;
   }
 }

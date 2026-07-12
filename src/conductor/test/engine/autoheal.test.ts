@@ -2431,4 +2431,104 @@ describe('reconcileStatusFromStamps', () => {
     expect(result.synced).toEqual([]);
     expect(result.orphanStamps).toEqual([]);
   });
+
+  it('orphan stamps: stamps with no matching row do not create rows but are tracked', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create task-status.json with no row for task 99, but a valid row for task 7
+    const statusPath = join(gitDir, '.pipeline/task-status.json');
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    const statusContent = {
+      tasks: [
+        { id: '7', name: 'Task 7', status: 'in_progress' },
+      ],
+    };
+    await writeFile(statusPath, JSON.stringify(statusContent, null, 2) + '\n');
+
+    // Create evidence stamps: task 99 (orphan) and task 7 (valid)
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('99', { sha: 'orphansha1234567', form: 'trailer' });
+    evidence.evidenceStamps.set('7', { sha: 'abc1234def567890', form: 'trailer' });
+    await evidence.write();
+
+    // Spy on console.warn to verify orphan warning
+    const warnSpy = vi.spyOn(console, 'warn');
+
+    // Call reconcileStatusFromStamps
+    const result = await autoheal.reconcileStatusFromStamps(gitDir);
+
+    // Row 7 should be synced, orphan 99 should be tracked
+    expect(result.synced).toContain('7');
+    expect(result.synced).not.toContain('99');
+    expect(result.orphanStamps).toContain('99');
+
+    // No row should be created for orphan task 99
+    const updatedStatus = JSON.parse(await readFile(statusPath, 'utf-8'));
+    expect(updatedStatus.tasks).toHaveLength(1); // Still only one task
+    expect(updatedStatus.tasks[0]).toHaveProperty('id', '7');
+
+    // Exactly one console.warn with the orphan prefix
+    const orphanWarns = warnSpy.mock.calls.filter(call => {
+      const msg = String(call[0]);
+      return msg.includes('[task-evidence]') && msg.includes('stamp for unknown task id 99');
+    });
+    expect(orphanWarns).toHaveLength(1);
+
+    warnSpy.mockRestore();
+  });
+
+  it('no-stamp rows: rows without evidence stamps are never advanced', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create task-status.json with row 8 (pending) but no stamp for it
+    const statusPath = join(gitDir, '.pipeline/task-status.json');
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    const statusContent = {
+      tasks: [
+        { id: '8', name: 'Task 8', status: 'pending' },
+      ],
+    };
+    await writeFile(statusPath, JSON.stringify(statusContent, null, 2) + '\n');
+
+    // Create empty evidence (no stamps for task 8)
+    const evidence = await createTaskEvidence(gitDir);
+    await evidence.write();
+
+    // Call reconcileStatusFromStamps
+    const result = await autoheal.reconcileStatusFromStamps(gitDir);
+
+    // Nothing synced, no orphans
+    expect(result.synced).toEqual([]);
+    expect(result.orphanStamps).toEqual([]);
+
+    // Task 8 should still be pending
+    const updatedStatus = JSON.parse(await readFile(statusPath, 'utf-8'));
+    expect(updatedStatus.tasks[0]).toHaveProperty('status', 'pending');
+    expect(updatedStatus.tasks[0]).not.toHaveProperty('commit'); // No commit set
+  });
+
+  it('missing/corrupt task-status.json: fails soft with no exceptions', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Case 1: No task-status.json file at all
+    await mkdir(join(gitDir, '.pipeline'), { recursive: true });
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('20', { sha: 'abc1234567890def', form: 'trailer' });
+    await evidence.write();
+
+    let result = await autoheal.reconcileStatusFromStamps(gitDir);
+    expect(result.synced).toEqual([]);
+    expect(result.orphanStamps).toEqual([]);
+
+    // Case 2: Corrupted JSON in task-status.json
+    const statusPath = join(gitDir, '.pipeline/task-status.json');
+    await writeFile(statusPath, 'invalid json { broken');
+
+    result = await autoheal.reconcileStatusFromStamps(gitDir);
+    expect(result.synced).toEqual([]);
+    expect(result.orphanStamps).toEqual([]);
+  });
 });
