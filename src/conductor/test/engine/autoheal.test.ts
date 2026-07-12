@@ -1592,6 +1592,104 @@ Update specific files.
     mockWarn.mockRestore();
   });
 
+  // DOMAIN: precedence rule — semantic-verified evidence stamp outranks a
+  // failing (path-mismatched) Task: trailer.
+  //
+  // The judge lane (#520/#586) stamps `form: 'semantic-verified'` only after
+  // an LLM judge has read the actual diff and confirmed the task's intent is
+  // satisfied — a strictly higher-trust signal than the trailer/path-overlap
+  // heuristic, which merely regexes commit messages and diffs file lists.
+  // A judge can rightly verify a task through files the plan didn't
+  // enumerate (refactors, generated files, indirection) — that is not
+  // evidence of failure, it's evidence the heuristic's path list was
+  // incomplete. Today (line ~661-716), deriveCompletionInternal finds
+  // `matchingCommit` via the Task: trailer BEFORE consulting the sidecar
+  // stamp, so a truthy `matchingCommit` short-circuits past the demotion
+  // -prevention branch at line 668 (which only runs when `!matchingCommit`)
+  // and falls into the path-overlap check, which zeroes out completion and
+  // clobbers the stamp's authority with `auditEntry` incompletion. The
+  // sidecar stamp must be checked, and take precedence, ahead of — not only
+  // in the absence of — a path-mismatched trailer. This is a "stamp wins"
+  // rule specifically for the already-verified case: it must NOT be
+  // read as "any stamp waives path corroboration" — no-verdict/fail judge
+  // outcomes are untouched (no-whitewash preserved), and the second test
+  // below pins that absent-stamp + failing-trailer still yields
+  // `completed: false` with no invented coverage.
+  it('semantic-verified stamp outranks a Task: trailer whose files do not overlap declared paths', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 9: Judged task
+Update specific files.
+
+- \`src/judged.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Commit carries the Task: trailer but touches unrelated files — a
+    // path-mismatch that would normally zero out completion.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/unrelated.ts'), 'export const unrelated = 1;');
+    await execa('git', ['add', 'src/unrelated.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: unrelated work\n\nTask: 9\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    // Judge lane already stamped this task as semantically satisfied.
+    const judgeSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+    evidence.evidenceStamps.set('9', { sha: judgeSha, form: 'semantic-verified' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // The semantic-verified stamp must win: task is completed despite the
+    // path-mismatched trailer.
+    expect(result).toHaveProperty('9');
+    expect(result['9']).toHaveProperty('completed', true);
+  });
+
+  it('no stamp + failing trailer (path mismatch) still yields completed: false (no invented coverage)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 10: Unjudged task
+Update specific files.
+
+- \`src/unjudged.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Commit carries the Task: trailer but touches unrelated files, and no
+    // sidecar stamp exists at all (no judge lane involvement).
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/other-unrelated.ts'), 'export const other = 1;');
+    await execa('git', ['add', 'src/other-unrelated.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: other unrelated work\n\nTask: 10\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('10');
+    expect(result['10']).toHaveProperty('completed', false);
+
+    mockWarn.mockRestore();
+  });
+
   it('completes task with guarded task-N alias when alias is NOT in plan', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');

@@ -2059,15 +2059,25 @@ export class Conductor {
                     pendingRetryHints.set('build', verdictHint);
                   }
 
-                  // Task 12: Counter reset. If the lane dispatched and stamped
-                  // tasks, those stamps are now in task-evidence.json. On the
-                  // NEXT evaluation cycle (next auto-heal or gate check), the
-                  // lane's stamps will cause residue to shrink. The existing
-                  // progress-detection logic (line 1932: resolvedTasksAfter >
-                  // resolvedTasksBefore) will then reset the counter. This run
-                  // does not re-derive to check stamps immediately — the lane's
-                  // stamps take effect on the next gate evaluation (same attempt
-                  // loop, next iteration of the while loop at line 1766).
+                  // Story 1 GREEN: if the lane stamped any residue tasks with
+                  // satisfied verdicts, re-check completion NOW rather than
+                  // waiting for the next while-loop iteration. Without this,
+                  // `completion` still reflects the pre-lane snapshot and a
+                  // fully-covered build incorrectly falls into the gate-miss
+                  // path below even though the judge just cleared the residue.
+                  if (laneResult.stampedTaskIds.length > 0) {
+                    await this.events.emit({
+                      type: 'auto_heal',
+                      step: 'build',
+                      healed: laneResult.stampedTaskIds.length,
+                      skipped: 0,
+                    });
+                    completion = await checkStepCompletion(
+                      this.projectRoot,
+                      step.name,
+                      await this.completionCtx(state),
+                    );
+                  }
                 }
               }
             }

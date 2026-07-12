@@ -707,6 +707,17 @@ async function deriveCompletionInternal(
     const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
 
     if (overlap.length === 0) {
+      // Path mismatch: a semantic-verified evidence stamp (judge lane)
+      // outranks the trailer/path-overlap heuristic — the judge has
+      // already confirmed intent against the actual diff.
+      const stamp = evidence.evidenceStamps.get(taskId);
+      if (stamp?.form === 'semantic-verified') {
+        result[taskId].completed = true;
+        result[taskId].status = 'completed';
+        result[taskId].evidencedBy = stamp.sha;
+        continue;
+      }
+
       // Path mismatch: log audit entry
       result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
       warnOnce(
