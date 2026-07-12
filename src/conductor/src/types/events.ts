@@ -31,6 +31,8 @@ export type ConductorEvent =
       attempt: number; // 1-based: "attempt 2 of 3"
       maxAttempts: number;
       reason: string;
+      resolvedBefore?: number;
+      resolvedAfter?: number;
     }
   | { type: 'checkpoint_reached'; step: StepName }
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }

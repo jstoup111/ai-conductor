@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
@@ -1469,9 +1470,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
       );
       break;
-    case 'step_retry':
-      log(`${dot} ${chalk.yellow('↻')} ${event.step} ${chalk.yellow('retry')}`);
+    case 'step_retry': {
+      const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
+      const deltaFragment = delta ? ' ' + delta : '';
+      log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${event.attempt}/${event.maxAttempts}: ${formatRetryReason(event.reason)})${deltaFragment}`);
       break;
+    }
     case 'gate_verdict':
       if (!event.satisfied) {
         log(
