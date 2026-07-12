@@ -212,15 +212,21 @@ EOF
 
 After creating/updating, output the PR URL.
 
-**Halt-PR rehabilitation (MANDATORY when the existing PR is a reused halt PR).**
-If the pre-existing PR carries a halt signal — title prefixed `needs-remediation:`
-OR the `needs-remediation` label — regenerate the title and body exactly as you
-would for a fresh PR and apply them with `gh pr edit`. Never keep the halt
-banner/boilerplate in title or body; the halt history lives in the PR comment
-thread, which is never rewritten. (Draft status alone is NOT a halt signal.)
-The engine separately flips draft→ready, clears the label, and injects the
-`Closes` ref; the finish completion gate fails while the title still starts
-with `needs-remediation:` (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+**Engine Behavior — Halt-PR Rehabilitation (automated after PR is created/updated).**
+When you create or update a PR that replaces a reused halt PR (one with title
+prefixed `needs-remediation:` or the `needs-remediation` label), your job is to
+generate a fresh title and body as described in §3 and §4 above. You do NOT need
+to run `gh pr edit` to remove the halt signal or clear the label yourself — the
+conductor's finish step automatically rehabilitates the PR after you complete:
+
+- The engine removes the `needs-remediation` label (if present)
+- The engine rewrites the title to remove `needs-remediation:` prefix (if stale)
+- The engine injects or updates the `Closes` reference to match the implementation
+- The engine flips the PR from draft to ready (if it was drafted)
+
+This means your fresh title/body (from §3 and §4) and the engine's rehabilitation
+happen in sequence. The finish completion gate verifies the final PR state does NOT
+start with `needs-remediation:` (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
 
 ### 7. Verify
 
