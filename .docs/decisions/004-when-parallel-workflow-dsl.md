@@ -86,3 +86,7 @@ The `__` separator avoids collision with existing step keys: harness `ALL_STEPS`
 - 2026-04-12 conductor rewrite ADRs preserved the flat state-file format; this decision honors that constraint.
 - Bash conductor cooldown machinery (preserved in TS rewrite per 2026-04-12 ADR-3) remains the single point of LLM throttling — parallel branches must route through it.
 - Existing step state values (`pending | in_progress | done | failed | skipped | stale`) already include `skipped`, so downstream gate logic only needs to extend "satisfied" to include skipped (one-line change in `gates.ts`).
+
+## Amendment
+
+**Amended by:** adr-2026-07-10-concurrent-group-core (2026-07-10) — the `parallel:` DSL schema is unchanged, but execution moves from `runParallelGroup` (deleted; dispatched the group name instead of each branch's skill, unbounded fan-out, no rate-limit/retry wiring) to the capped, engine-integrated concurrent group core shared with the built-in SHIP validation group (adr-2026-07-10-validation-group-join).
