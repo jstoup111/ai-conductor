@@ -2011,7 +2011,12 @@ export class Conductor {
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
-              retryHint = buildRetryHint(step.name, completion.reason);
+              retryHint = buildRetryHint(
+                step.name,
+                completion.reason,
+                completion.missing,
+                this.pipelineDir ?? undefined,
+              );
 
               // prd-audit short-circuit (daemon only): re-auditing unchanged code
               // yields the same verdict, so the default retries are pure waste
@@ -4063,9 +4068,35 @@ export function buildRemediationHint(
  * with a "tasks not completed" reason, redirect Claude to verify on disk
  * before rewriting and to update `.pipeline/task-status.json` when the
  * work is already there.
+ *
+ * Task 11 (ADR D4): when the completion miss is classified `missing:'recording'`
+ * (the finish skill did the real work but failed to record the outcome), the
+ * standard hint would send Claude back through the full `/finish` walk —
+ * needless churn when only `finish-record` needs to run. `pipelineDirArg`, when
+ * provided, is the absolute `--pipeline-dir` value (mirrors the auto-mode
+ * dispatch in step-runners.ts) so the narrow prompt points at the same
+ * worktree pipeline dir regardless of cwd.
  */
-export function buildRetryHint(step: StepName, reason: string | undefined): string {
+export function buildRetryHint(
+  step: StepName,
+  reason: string | undefined,
+  missing?: 'recording' | 'other',
+  pipelineDirArg?: string,
+): string {
   const r = reason ?? 'unknown';
+  if (step === 'finish' && missing === 'recording') {
+    const dirArg = pipelineDirArg ?? '.pipeline';
+    return (
+      `Previous attempt did not satisfy the completion check: ${r}. ` +
+      'The finish work itself appears done — only the outcome was not recorded. ' +
+      'Do NOT repeat the full /finish walk. Instead, determine the finish outcome ' +
+      '(pr | merge-local | keep | discard) from current repo state and run ONLY:\n' +
+      `  conduct-ts finish-record --choice <choice> [--pr-url <url>] --pipeline-dir ${dirArg}\n` +
+      'IMPORTANT: do NOT `cd` elsewhere before running it; use this exact `--pipeline-dir` value ' +
+      'regardless of the current working directory. The step is NOT complete until ' +
+      '`finish-record` exits 0.'
+    );
+  }
   if (step === 'build') {
     if (/tasks? not completed/i.test(r)) {
       return (
