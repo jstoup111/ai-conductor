@@ -1851,4 +1851,42 @@ describe('engine/daemon — runDaemon', () => {
       });
     });
   });
+
+  // ── #561: cooperative shouldStop drains in-flight dispatch ────────────
+
+  it('shouldStop mid-dispatch: drains the in-flight feature, stops with signal_teardown, and never starts a second feature', async () => {
+    let dispatches = 0;
+    let stopRequested = false;
+    let resolveWorker: ((value: { slug: string; status: 'done' }) => void) | undefined;
+    const workerPromise = new Promise<{ slug: string; status: 'done' }>((resolve) => {
+      resolveWorker = resolve;
+    });
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(2)),
+      runFeature: async (it: BacklogItem) => {
+        dispatches++;
+        // The first feature dispatched blocks until the test resolves it.
+        // If a second feature is ever dispatched, `dispatches` will exceed 1
+        // and the test's assertion on dispatches will fail.
+        if (dispatches === 1) {
+          stopRequested = true; // flip shouldStop once the first feature is in flight
+          return workerPromise;
+        }
+        return { slug: it.slug, status: 'done' as const };
+      },
+      shouldStop: () => stopRequested,
+      sleep: async () => {},
+      log: () => {},
+    };
+    const daemonPromise = runDaemon(deps, { concurrency: 1, once: true });
+    // Yield to let the daemon dispatch the first feature and flip shouldStop.
+    await new Promise((r) => setTimeout(r, 10));
+    resolveWorker?.({ slug: 'f0', status: 'done' });
+    const res = await daemonPromise;
+    expect(res.stoppedReason).toBe('signal_teardown');
+    expect(dispatches).toBe(1); // second feature never started after stop flipped
+    expect(res.processed).toHaveLength(1); // in-flight feature drained, not dropped
+    expect(res.processed[0].slug).toBe('f0');
+    expect(res.processed[0].status).toBe('done');
+  });
 });
