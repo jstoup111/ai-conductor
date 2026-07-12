@@ -64,6 +64,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **`getEvidenceRange` logged a spurious `anchor  is unreachable` warning for
+  absent/whitespace-only evidence anchors (#510).** The gate/engine no-anchor
+  form of `deriveCompletion(root, planPath)` — used by `conductor.ts`,
+  `artifacts.ts`, and `evidence-cli.ts` — previously routed the empty anchor
+  through the same reachability probe as a real, unreachable anchor,
+  producing a misleading "unreachable" warning on every ordinary gate
+  evaluation. An absent anchor now skips the reachability probe entirely and
+  emits a distinct `console.info` "no recorded anchor" line instead; fallback
+  merge-base-ladder results are unchanged. Verified end-to-end against the
+  production `deriveCompletion` entry point (not just the `getEvidenceRange`
+  unit seam).
+
 - **Finish/pr skills' staleness-proof fallback never matched git's actual reflog wording
   (#587).** `skills/finish/SKILL.md` and `skills/pr/SKILL.md` both ran `git reflog | grep
   "rebase: finish"` as the fallback proof that a force-with-lease push after the daemon's

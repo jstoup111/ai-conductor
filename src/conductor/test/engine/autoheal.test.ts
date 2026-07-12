@@ -2184,6 +2184,65 @@ Work on the literal task-N form.
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 5 (#510): prove the fix reaches the real production entry point.
+  // `deriveCompletion(root, planPath)` — the no-anchor gate form used by
+  // conductor.ts, artifacts.ts, and evidence-cli.ts — must NOT emit the
+  // spurious "anchor  is unreachable" warning when no anchor is recorded
+  // (anchorArg omitted, so getEvidenceRange resolves the branch base itself
+  // via its merge-base ladder). Completion results must be unchanged from
+  // prior behavior.
+  // ───────────────────────────────────────────────────────────────────────
+  it('gate path (no anchor arg) derives completion with zero unreachable warnings (#510)', async () => {
+    const autoheal = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Branch commits, last one carrying a `Task:` trailer.
+    await writeFile(join(gitDir, 'a.txt'), 'a');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit a'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b.txt'), 'b');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit b\n\nTask: 2\n'], { cwd: gitDir });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result;
+    try {
+      // Real production entry: no anchor arg supplied.
+      result = await autoheal.deriveCompletion(gitDir, planPath);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Completion is unchanged from current (fixed) behavior.
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+    expect(result['2'].evidencedBy).toBeTruthy();
+
+    // No `unreachable` warning was logged during the call — the absent
+    // anchor path must not synthesize a fake unreachable-anchor warning.
+    for (const call of warnSpy.mock.calls) {
+      const msg = String(call[0] ?? '');
+      expect(msg).not.toMatch(/unreachable/);
+    }
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('no code path invokes `git log --reverse` for anchor resolution', async () => {
     // Static assertion: the genesis-fallback block that shelled out to
     // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
