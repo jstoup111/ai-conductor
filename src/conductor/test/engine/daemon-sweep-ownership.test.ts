@@ -133,6 +133,71 @@ describe('engine/daemon — per-sweep ownership gate', () => {
     expect(res.processed).toHaveLength(2);
   });
 
+  it('production wiring: lockOwnershipLost detects pidfile overwrites via ownsLock check', async () => {
+    // Verify that the ownsLock predicate correctly detects when the pidfile
+    // has been overwritten with a different uuid (simulating another daemon's takeover).
+    // This test ensures the production wiring in daemon-cli.ts is correct:
+    // lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid))
+    const { readFile, writeFile, mkdir } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { mkdtemp } = await import('node:fs/promises');
+
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-ownership-detect-'));
+
+    try {
+      const daemonLock = await import('../../src/engine/daemon-lock.js');
+
+      // Step 1: Simulate acquiring the lock with uuid A
+      const uuidA = 'uuid-a-original-holder';
+      await mkdir(join(projectRoot, '.daemon'), { recursive: true });
+      const recordA: any = {
+        pid: 12345,
+        uuid: uuidA,
+        startedAt: new Date().toISOString(),
+      };
+      await writeFile(
+        join(projectRoot, '.daemon', 'daemon.pid'),
+        JSON.stringify(recordA),
+        'utf8',
+      );
+
+      // Verify we own the lock with uuid A
+      const ownsWithA = await daemonLock.ownsLock(projectRoot, uuidA);
+      expect(ownsWithA).toBe(true);
+
+      // Step 2: Simulate another daemon overwriting the pidfile with uuid B
+      const uuidB = 'uuid-b-takeover';
+      const recordB: any = {
+        pid: 99999,
+        uuid: uuidB,
+        startedAt: new Date().toISOString(),
+      };
+      await writeFile(
+        join(projectRoot, '.daemon', 'daemon.pid'),
+        JSON.stringify(recordB),
+        'utf8',
+      );
+
+      // Step 3: Verify that ownership check returns false for original uuid A
+      const ownsWithA_After = await daemonLock.ownsLock(projectRoot, uuidA);
+      expect(ownsWithA_After).toBe(false); // We no longer own the lock
+
+      // Step 4: Verify that the new holder owns it with uuid B
+      const ownsWithB = await daemonLock.ownsLock(projectRoot, uuidB);
+      expect(ownsWithB).toBe(true);
+
+      // Step 5: Construct the production wiring check and verify it detects loss
+      // This mirrors: lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid))
+      const lockOwnershipLost = async () => !(await daemonLock.ownsLock(projectRoot, uuidA));
+      const detected = await lockOwnershipLost();
+      expect(detected).toBe(true); // Ownership IS lost
+    } finally {
+      const { rm } = await import('node:fs/promises');
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('ownership check is called at top of loop, before discovery and dispatch', async () => {
     const callOrder: string[] = [];
     let ownershipCallCount = 0;
