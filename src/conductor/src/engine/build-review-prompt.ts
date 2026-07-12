@@ -31,9 +31,9 @@ Score the diff against exactly these three rubric items:
 All-or-FAIL rule: PASS only if all three rubric items pass. If any one of the
 three rubric items fails, the overall verdict is FAIL.
 
-Before judging, run the project's test suite yourself and observe the output
-firsthand — do not trust any claim about test results other than what you
-see by running the suite in this session.
+Before judging, run only the scoped tests exercised by this diff (the changed
+test files) — observe their output firsthand. The full project suite runs at
+CI and at finish, not here.
 
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
 exactly this JSON schema:
