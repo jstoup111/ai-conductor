@@ -156,12 +156,23 @@ function makeVerdictWritingDispatcher(
 function makeStepRunner(
   buildResult: StepRunResult,
   dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']>,
+  repo: Repo,
 ): StepRunner {
   const calls: StepName[] = [];
   return {
     run: async (step: StepName): Promise<StepRunResult> => {
       calls.push(step);
       if (step === 'build') return buildResult;
+      if (step === 'manual_test') {
+        const pipelineDir = join(repo.root, '.pipeline');
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(
+          join(pipelineDir, 'manual-test-results.md'),
+          '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
       return { success: true };
     },
     dispatchVerifier,
@@ -230,7 +241,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       })),
     }));
 
-    const runner = makeStepRunner({ success: true }, realDispatch);
+    const runner = makeStepRunner({ success: true }, realDispatch, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -279,7 +290,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       results: residueIds.map((id) => ({ taskId: id, verdict: 'no-verdict', reason: 'no citable sha' })),
     }));
 
-    const runner = makeStepRunner({ success: true }, dispatchVerifier);
+    const runner = makeStepRunner({ success: true }, dispatchVerifier, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -327,7 +338,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       })),
     }));
 
-    const runner = makeStepRunner({ success: true }, dispatchVerifier);
+    const runner = makeStepRunner({ success: true }, dispatchVerifier, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -383,7 +394,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       ),
     }));
 
-    const runner = makeStepRunner({ success: true }, dispatchVerifier);
+    const runner = makeStepRunner({ success: true }, dispatchVerifier, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -431,7 +442,7 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       })),
     }));
 
-    const runner = makeStepRunner({ success: true }, dispatchVerifier);
+    const runner = makeStepRunner({ success: true }, dispatchVerifier, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
