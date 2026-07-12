@@ -14,6 +14,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
 
+### Changed
+
+- Bumped the default model for the `build` (pipeline) engine step from `haiku`
+  to `sonnet`. The build step launches the implementation session that authors
+  code through the TDD RED/DOMAIN/GREEN cycle — it is the real coding lane, not
+  a thin dispatcher, and Haiku stalled on real coding tasks (e.g. a multi-file
+  in-cycle rescue-wiring test). Genuinely mechanical steps stay on Haiku for
+  cost (`memory`, `worktree`, `finish`, `conduct`). Regenerated the HARNESS.md
+  model-selection table to match (`bin/generate-model-table`). No config-schema,
+  hook, symlink, or `bin/conduct` CLI change, so no migration block is required.
+
 ### Added
 
 - Semantic attribution verification lane at the build evidence gate
