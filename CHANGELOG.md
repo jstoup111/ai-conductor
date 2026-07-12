@@ -64,6 +64,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Spec: mechanical `Evidence: satisfied-by <sha>` citations validated for
+  provenance, not just object existence (#533).** The build evidence gate's
+  mechanical lane (`deriveCompletionInternal` in
+  `src/conductor/src/engine/autoheal.ts`) previously stamped a task complete
+  whenever the cited sha merely existed in the git object database
+  (`git rev-parse --verify`), so an empty commit citing a dangling pre-rebase
+  object — not an ancestor of HEAD, with an unrelated diff — could forge
+  completion (observed on the #520 build, task 24). This lands the DECIDE-phase
+  spec (`.docs/{track,complexity,stories,conflicts,plans}/satisfied-by-forged-citation-validation.md`)
+  to extend the judged lane's already-approved citation-validation rule
+  (reachability → ancestry → non-empty → declared-Files overlap) to the
+  mechanical `satisfied-by` form. Deterministic, git-derived; no operator-marker
+  escape hatch introduced. Implementation follows in a separate build PR.
 - **`getEvidenceRange` logged a spurious `anchor  is unreachable` warning for
   absent/whitespace-only evidence anchors (#510).** The gate/engine no-anchor
   form of `deriveCompletion(root, planPath)` — used by `conductor.ts`,
