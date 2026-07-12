@@ -212,6 +212,16 @@ export async function writeJudgedStamps(
   // (they remain unresolved, to be retried or manually addressed)
 
   await evidence.write();
+
+  // Task 4: After stamping, reconcile task-status rows immediately so stamped
+  // rows become completed in the same call. Use dynamic import to avoid init
+  // cycles (autoheal already dynamically imports task-evidence).
+  try {
+    const autoheal = await import('./autoheal.js');
+    await autoheal.reconcileStatusFromStamps(projectRoot);
+  } catch {
+    // Reconciliation is fail-soft; errors don't propagate or change return value
+  }
 }
 
 /**
