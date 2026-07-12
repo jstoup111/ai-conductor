@@ -47,6 +47,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Finish/pr skills' staleness-proof fallback never matched git's actual reflog wording
+  (#587).** `skills/finish/SKILL.md` and `skills/pr/SKILL.md` both ran `git reflog | grep
+  "rebase: finish"` as the fallback proof that a force-with-lease push after the daemon's
+  finish-time rebase is safe, but git writes `rebase (finish): returning to
+  refs/heads/<branch>` (parenthesized, no colon after "rebase") — the literal never matched.
+  On any branch where the merge-base ancestry fast path also failed (e.g. a twice-rebased
+  branch), both staleness proofs failed even though the remote was provably just the
+  pre-rebase snapshot, so finish halted believing foreign commits existed. Corrected both
+  skills' fallback to `grep -E "rebase \(finish\)"`, matching git's real wording, with a
+  regression test (`src/conductor/test/finish-staleness-grep.test.ts`) that pins the
+  corrected pattern against a real `git rebase` reflog capture.
+
 - **Tmux daemon-session leak guard: permanent-baseline blindspot (~400-session
   incident).** `reapLeakedDaemonSessions` only ever inspected `cc-daemon-*`
   sessions absent from the suite-start baseline — correct for distinguishing
