@@ -1233,6 +1233,27 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         // fail-open — presentation is not worth blocking a ship on gh failure
       }
+
+      // Story 3: Ship-readiness gate — fail if the recorded PR is still in draft
+      // state. A draft PR is not ready to ship (even if it has a clean title and
+      // all evidence passed). The finish/pr skill must undraft the PR before
+      // completing. Fail-open on any gh error: network unavailability never blocks
+      // a ship.
+      try {
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const { stdout } = await ghRunner(['pr', 'view', prUrl, '--json', 'isDraft'], { cwd: dir });
+        const parsed = JSON.parse(stdout || '{}') as { isDraft?: unknown };
+        const isDraft = Boolean(parsed.isDraft);
+        if (isDraft) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} is still in draft state — not ready for ship (ship-readiness: requires PR to be marked ready before completing)`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
+      }
     }
     return { done: true };
   },

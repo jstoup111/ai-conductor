@@ -599,6 +599,63 @@ describe('engine/artifacts', () => {
       readStaleHaltTitleSpy.mockClear();
       expect(result).toEqual({ done: true });
     });
+
+    it('Story 3: Phase 2 presentation (isDraft): fails when fakeGh returns isDraft=true with clean title (ship-readiness check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a draft PR with clean title (no needs-remediation prefix)
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: true,
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/draft/i);
+      expect(result.reason).toMatch(/ship-readiness/i);
+      expect(result.missing).toBe('other');
+    });
+
+    it('Story 3: Phase 2 presentation (isDraft): passes when fakeGh returns isDraft=false with clean title (ready to ship)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns a ready (non-draft) PR with clean title
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: false,
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {
