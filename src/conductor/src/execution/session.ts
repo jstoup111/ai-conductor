@@ -1,4 +1,4 @@
-import { readFile, writeFile, rm, access } from 'node:fs/promises';
+import { readFile, writeFile, rm, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -30,6 +30,8 @@ export class SessionManager {
 
     const id = uuidv4();
     this.sessionId = id;
+    // Ensure .pipeline directory exists before writing (guards against mid-run wipe)
+    await mkdir(this.pipelineDir, { recursive: true });
     await writeFile(filePath, id, 'utf-8');
     return id;
   }

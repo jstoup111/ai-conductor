@@ -3216,8 +3216,8 @@ export class Conductor {
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
       const reason = `conductor error: ${err instanceof Error ? err.message : String(err)}`;
-      await writeState(this.stateFilePath, state).catch(() => {});
       await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+      await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
         () => {},
       );

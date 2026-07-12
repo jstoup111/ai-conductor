@@ -104,7 +104,25 @@ describe.skipIf(!shouldRun)(
       // real process cwd (not repoRoot) during the probe; strip it so the
       // global-setup leak guard doesn't flag it (same guard as
       // claude-provider.smoke.test.ts).
-      rmSync(join(process.cwd(), '.pipeline'), { recursive: true, force: true });
+      //
+      // SCOPE GUARD (D2): Only delete .pipeline if it's inside the mkdtemp root
+      // created by this test. Do not delete a shared/repo .pipeline that exists
+      // outside the test's isolation boundary.
+      const targetPath = join(process.cwd(), '.pipeline');
+
+      // Check 1: Is the target path inside the mkdtemp root?
+      // Require the trailing slash to prevent /tmp/test from matching /tmp/test-2
+      const isSafeInMkdtemp = targetPath.startsWith(repoRoot + '/');
+
+      // Check 2: Reject if the resolved path equals repo root or parent directories
+      // (shared-root guard). This prevents deletion when the path resolves to /
+      // or any parent of the repo.
+      const isRepoRootOrParent = targetPath === repoRoot || repoRoot.startsWith(targetPath);
+
+      if (isSafeInMkdtemp && !isRepoRootOrParent) {
+        rmSync(targetPath, { recursive: true, force: true });
+      }
+      // Otherwise, no-op: refuse to delete an unsafe path
     });
 
     it(
