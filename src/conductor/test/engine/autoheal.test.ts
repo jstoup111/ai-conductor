@@ -1013,6 +1013,59 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  it('regression guard: non-empty unreachable anchor keeps the exact prior warn text and fallback result (Task 3, #510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const shortSha = unreachableSha.slice(0, 7);
+
+    const range = await mod.getEvidenceRange(gitDir, unreachableSha);
+
+    // Exactly one warning, matching /unreachable/, containing the 7-char
+    // short SHA, and with no doubled-space/empty-value rendering.
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable/);
+    expect(range.warnings[0]).toContain(shortSha);
+    expect(range.warnings[0]).not.toMatch(/anchor\s\sis/);
+
+    // Compute the plain merge-base fallback independently and assert the
+    // returned range/commits are unchanged vs. before the Task 1/2 refactor.
+    const plainMergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: gitDir,
+    });
+    const expectedLowerBound = plainMergeBase.stdout.trim();
+
+    const logOutput = await execa(
+      'git',
+      ['log', '--format=%H', `${expectedLowerBound}..HEAD`],
+      { cwd: gitDir },
+    );
+    const expectedShas = logOutput.stdout.split('\n').filter((s) => s.trim());
+
+    expect(range.commits.map((c) => c.sha)).toEqual(expectedShas);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('does not throw on missing origin/main', async () => {
     const mod = await loadAutoheal();
 
