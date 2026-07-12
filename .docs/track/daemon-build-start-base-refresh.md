@@ -4,13 +4,17 @@ Track: technical
 
 ## Rationale
 
-This change adds an opt-in, config-driven build-start refresh to THIS repo's conductor/
-daemon build flow: when the project's `.ai-conductor/config.yml` sets
-`build_start_base_refresh: true`, the daemon runs `git fetch origin` + rebase of the
-feature worktree onto the latest `origin/<default>` at the BUILD boundary (before any
-task runs). It is read at daemon startup exactly like the existing `owner_gate_cutover`,
-`auto_restart_on_stale_engine`, and `attribution_judge_cutover` flags — absent/false is a
-no-op, so it imposes no new command, flag, or behavior on downstream consumer projects,
-and interactive `/conduct` is unaffected. There is no product requirement — the behavior
-is an internal, per-project build-flow correctness toggle whose acceptance criteria belong
-in stories, not a PRD. → **technical track** (skip `/prd`).
+This change generalises THIS repo's conductor into a **config-driven custom-step framework**:
+a project may declare extra pipeline steps in its own `.ai-conductor/config.yml` (`steps:`
+map, each with an `after:` insertion point and a body that is a `skill:`, an engine-native
+`action:`, or a `hooks.before` script), and the engine splices them into the step sequence
+for THAT repo only — nothing global, nothing baked into the harness for downstream consumers.
+The build-start base-refresh is then wired as ONE such custom step in this repo's config
+(`action: base-refresh`, `after: plan`), running `git fetch origin` + rebase onto
+`origin/<default>` before any build task.
+
+There is no user-facing product surface: the framework is an internal engine capability and
+the base-refresh is a per-project build-flow correctness step. Acceptance criteria (insertion
+ordering, `after:`/cycle validation, skill-optional bodies, enforcement + fail-closed
+semantics) are engine behaviours that belong in stories, not a PRD. → **technical track**
+(skip `/prd`).

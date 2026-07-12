@@ -1,137 +1,171 @@
-# Daemon build-start base refresh (config-driven rebase of feature worktree onto origin/main before task dispatch)
+# Config-driven custom-step framework + build-start base-refresh instance
 
 Status: Accepted
 Track: technical
-Tier: S
+Tier: M
 
 ## Context (explore synthesis)
 
 **Problem.** The daemon builds features on stale code bases and re-fails on already-merged
-fixes. A feature's spec branch is frequently cut off a `main` that has since advanced; by the
-time the daemon reaches BUILD, `origin/<default>` contains merged fixes the worktree does not.
-Tasks then run against stale code.
+fixes: a feature's spec branch is cut off a `main` that `origin/<default>` has since advanced
+past, and the only refresh is the SHIP-time `rebase` step (`engine/steps.ts:218` →
+`Conductor.runRebaseStep`, `engine/conductor.ts:3799` → `performRebase`, `engine/rebase.ts:361`,
+whose `resolveBase` already fetches `origin` and rebases onto `origin/<default>` — **not** local
+main). The gap is TIMING: that rebase runs *after* the whole build, so (1) tasks build on a
+stale base, and (2) the late rebase re-parents evidence-bearing commits — the direct cause of
+judged-attribution `Evidence range: anchor is unreachable` failures (#535 / PR #593).
 
-**What already exists (verified in source, corrects the operator's premise).** The pipeline
-already has an engine-native `rebase` step (`engine/steps.ts:218`, handled by
-`Conductor.runRebaseStep` at `engine/conductor.ts:3799`). It calls `performRebase`
-(`engine/rebase.ts:361`), whose `resolveBase` helper **fetches `origin` and rebases onto
-`origin/<default>` — not local main** (`engine/rebase.ts`, `git fetch origin <default>` →
-`origin/<default>`). So the "rebases onto stale local main" framing is inaccurate for that step.
+**Operator direction (supersedes the earlier boolean-flag revision).** Do NOT add a bespoke
+build-start rebase step. Instead build a **general, config-driven custom-step framework**, then
+wire the base-refresh as one instance in THIS repo's `.ai-conductor/config.yml`.
 
-**The actual gap is TIMING, not the base.** The only base-refresh rebase runs at **SHIP**
-(`phase: 'SHIP'`, `prerequisites: ['manual_test']`) — i.e. *after* the entire build. Two
-consequences:
-1. Every task is authored against the pre-fetch base; merged fixes are absent during BUILD and
-   only appear at ship, exactly when re-doing work is most expensive.
-2. That late rebase moves HEAD *after* evidence-bearing commits exist, re-parenting their
-   anchors. This is the direct cause of the judged-attribution `Evidence range: anchor is
-   unreachable` completion-check failures (#535 / PR #593, the anchor-unreachable class).
+**What already exists (verified in source).** A partial custom-step mechanism is present:
+- `StepConfig` (`types/config.ts:64`) already carries `after`, `skill`, `enforcement`,
+  `hooks: { before, after }`, `gate`, `kickback_target`, `by_tier`.
+- `buildStepRegistry` (`engine/steps.ts`) already splices `config.steps` entries into
+  `ALL_STEPS` at the `after` position, inheriting the target's phase/loopGate.
+- The validator (`engine/config.ts:368`) already requires `after` to resolve to a built-in or
+  sibling custom and validates `enforcement` and `hooks` paths.
+- `runWithHooks` (`engine/hooks.ts:46`) already runs before/after hooks around a step body.
 
-**Design (config-driven, per operator direction on PR #603).** This is **NOT** a new custom
-harness step. It is an opt-in, per-project toggle in `.ai-conductor/config.yml`:
+**The three gaps this spec closes.**
+1. Custom steps **require `skill:`** today — both `buildStepRegistry` (`if (!c.after || !c.skill)
+   continue;`) and the validator (`Custom step "…" requires 'skill:'`) reject a skill-less step.
+2. There is **no engine-native `action:`** concept for a deterministic, in-process step body.
+3. `runWithHooks` **has zero callers** — hooks are validated but never executed; the hook/action
+   dispatch is not wired into the step loop.
 
-- **Config key:** `build_start_base_refresh?: boolean` — a top-level optional boolean added to
-  `HarnessConfig` (`src/conductor/src/types/config.ts`), modeled on the existing
-  `auto_restart_on_stale_engine` flag. Absent/`false`/malformed → OFF (safe default).
-- **Read at daemon startup**, like `owner_gate_cutover` / `auto_restart_on_stale_engine` /
-  `attribution_judge_cutover`: validated in `engine/config.ts`, resolved via a
-  `resolveBuildStartBaseRefresh(config)` helper in `engine/resolved-config.ts`.
-- **Enforced at the BUILD boundary** by a small daemon-only guard in the conductor step loop
-  (`engine/conductor.ts`, at the reset-before-first-BUILD-step seam ~`conductor.ts:1587`),
-  which runs **once per run** before the first BUILD-phase step (`acceptance_specs`, or `build`
-  when acceptance is tier-skipped) dispatches. When the flag is set and `this.daemon`, it
-  composes the existing primitives: `discoverLocalBase` → `resolveBase` (origin fetch) →
-  `performRebase` → `runGatedRebaseResolution`. **No new `StepName`, no `ALL_STEPS` entry, no
-  `Record<StepName, …>` config-map churn.**
+**Target schema (per operator).**
+```yaml
+steps:
+  my-security-scan:
+    after: writing-system-tests
+    skill: .claude/skills/security-scan/SKILL.md   # optional
+    enforcement: advisory
+    hooks:
+      before: scripts/setup-scan.sh
+      after: scripts/teardown-scan.sh
+```
+A custom step declares an insertion point (`after:`) and EXACTLY ONE body:
+- `skill:` — dispatch a SKILL.md (existing path), or
+- `action:` — an engine-native deterministic action from a small in-engine registry, or
+- **hook-only** — no `skill`/`action`, but a `hooks.before` script that IS the step body.
+`hooks.before`/`hooks.after` may also wrap a `skill:`/`action:` body (setup/teardown).
 
-**Scope guards.** Project-specific (daemon-only, opt-in via config), NOT a global git hook and
-NOT consumer-facing default behavior. Deterministic engine code, NOT an LLM step. Conflicts
-fail closed (HALT → existing `/rebase` resolver), never a silent bad merge.
+**LOAD-BEARING DESIGN RECONCILIATION (must not be lost).** The base-refresh is a
+**deterministic git/engine operation, not an LLM skill**, AND it must reuse the *in-process* TS
+primitives `resolveBase`/`performRebase`/`runGatedRebaseResolution` to keep the gated `/rebase`
+resolver, the CHANGELOG-only auto-resolve, and the fail-closed HALT. A detached bash
+`hooks.before` script **cannot** call those in-process functions — it would reimplement rebase
+in shell and silently lose the resolver + auto-resolve + fail-closed semantics. Therefore
+base-refresh is specced as an **engine-native `action: base-refresh`**, NOT a hook script. The
+generic hook-only path is ALSO specced (for arbitrary non-git deterministic steps like the
+`security-scan` example), but base-refresh deliberately uses the engine-action path.
 
-**Sibling relationship — #598.** #598 is the daemon running a stale **engine** binary after an
-upstream fix merges. This feature refreshes the **code base** the build runs against. Same root
-cause ("daemon does not refresh from origin before acting") at two layers; **kept as separate
-efforts / separate PRs**, cross-referenced. They could later share a single `git fetch origin`
-primitive, but the engine-swap (#598) and the worktree-rebase (this) have different failure
-modes, blast radius, and recovery, so folding them would couple unrelated risk.
+**Scope guards.** Custom steps exist only for the repo that declares them (opt-in `steps:` map;
+empty for all consumers). The base-refresh action is daemon-gated (no-op when `!this.daemon`,
+matching `runRebaseStep`). Conflicts fail closed (HALT → `/rebase`); no/unreachable origin →
+clean no-op. Deterministic engine code, not an LLM step.
 
-## Story 1 — Config-enabled build-start rebase onto latest origin default before any task runs (happy path)
+**Sibling — #598.** #598 = daemon running a stale **engine binary**; this = the **code base** the
+build runs against. Same root cause, different layers/blast radius → **kept separate**,
+cross-referenced. (The custom-step framework could later host a #598 remedy too, but the
+engine-swap and worktree-rebase have different failure modes; do not fold.)
 
-As the daemon build loop, when `build_start_base_refresh: true` is set in the project's
-`.ai-conductor/config.yml`, the engine must fetch `origin` and rebase the feature worktree onto
-`origin/<default>` **before** the first BUILD-phase step dispatches, so every task is authored
-against the newest merged code.
+## Story 1 — A custom step declared in config.yml is spliced into the sequence at `after` (framework happy path)
+
+As a project maintainer, when I declare a custom step under `steps:` with an `after:` target and
+a body, the engine must insert it into the pipeline at that position for THIS repo only.
 
 ### Happy Path
 
-- **Given** a daemon (auto-mode) run with `build_start_base_refresh: true` whose feature branch
-  was cut off a `main` that `origin/<default>` has since advanced past (merged fixes present
-  upstream, absent locally),
-- **When** the conductor reaches the pre-first-BUILD-step guard,
-- **Then** the engine runs `resolveBase` (fetches `origin`, discovers the default branch) and
-  `performRebase` onto `origin/<default>`, the worktree HEAD is now a descendant of
-  `origin/<default>`, and only then is the first build task (`acceptance_specs`/`build`)
-  dispatched — the guard runs exactly once for the run (idempotent; re-entry is a no-op).
+- **Given** a repo whose `.ai-conductor/config.yml` declares `steps.my-step` with
+  `after: writing-system-tests`, a valid body (`skill:` / `action:` / `hooks.before`), and
+  `enforcement: advisory`,
+- **When** `buildStepRegistry(config)` runs,
+- **Then** `my-step` appears exactly once immediately after `writing-system-tests`, inherits that
+  target's phase, joins the tail loop iff the target is a loop member (or per explicit `gate:`),
+  and same-`after` siblings execute in config-file order,
+- **And** a repo with no `steps:` map gets the stock `ALL_STEPS` sequence unchanged (no global
+  or consumer-visible effect).
 
-## Story 2 — Flag absent / false / non-daemon is a strict no-op (negative path / default-safe)
+## Story 2 — Build-start base-refresh runs before any task via `action: base-refresh` (instance happy path)
 
-As any run without the opt-in — a consumer project, an interactive `/conduct`, or the test
-suite — the build-start rebase must never fire and never touch git.
+As the daemon build loop for THIS repo, with the base-refresh custom step declared
+(`after: plan`, `action: base-refresh`), the engine must fetch origin and rebase the feature
+worktree onto `origin/<default>` before the first BUILD-phase step dispatches.
 
-### Negative Path
+### Happy Path
 
-- **Given** a run where `build_start_base_refresh` is absent, `false`, or malformed, **or** any
-  non-daemon run (`this.daemon === false`),
-- **When** the conductor reaches the BUILD boundary,
-- **Then** the guard is skipped entirely — no fetch, no rebase, no verdict change, unchanged loop
-  topology — so downstream consumers and interactive users see identical behavior to today, and
-  vitest-driven Conductors never touch a live checkout.
+- **Given** this repo's `.ai-conductor/config.yml` declares
+  `steps.build-start-base-refresh: { after: plan, action: base-refresh, enforcement: structural,
+  gate: false }`, and a daemon run whose branch was cut off a now-stale `main`,
+- **When** the pipeline reaches the inserted step (between `plan` and `acceptance_specs`/`build`),
+- **Then** the engine runs the `base-refresh` action — `discoverLocalBase` → `resolveBase`
+  (fetch origin, discover default) → `performRebase` onto `origin/<default>` — HEAD becomes a
+  descendant of `origin/<default>`, and only THEN is the first build task dispatched, so all
+  evidence commits are authored on the already-rebased base (removes the #535 anchor-unreachable
+  churn; the ship-time `rebase` is then a `noop` unless something merged during the build).
 
-## Story 3 — A build-start conflict fails closed to the gated /rebase resolver (negative path)
+## Story 3 — A skill-less (action or hook-only) custom step is valid and runs its body (negative path vs. today's skill-mandatory)
 
-As the daemon, when the enabled build-start rebase cannot apply cleanly, the engine must not
-proceed on a bad merge; it must attempt the gated resolver and otherwise HALT.
-
-### Negative Path
-
-- **Given** an enabled `build_start_base_refresh` rebase that returns `conflict_halt` (a genuine
-  overlap between the spec branch's committed `.docs`/code and upstream),
-- **When** the guard runs,
-- **Then** the engine invokes `runGatedRebaseResolution` (the same resolver cap
-  `rebase_resolution_attempts` the ship-time step uses), and if unresolved writes
-  `.pipeline/HALT` leaving the rebase paused for the operator's `/rebase` skill — **no build task
-  is dispatched and no unrebased/half-merged tree is ever built**.
-- **And** the CHANGELOG-only auto-resolve path (`performRebase`'s `changelog_resolved`) still
-  applies, so a lone `[Unreleased]` conflict does not HALT.
-
-## Story 4 — No / unreachable origin degrades to a clean no-op, never a HALT (negative path)
-
-As the daemon with the flag on but in a remote-less or unreachable-origin situation, the guard
-must complete, not park.
+As the framework, a custom step with an `action:` or a `hooks.before` body but **no `skill:`**
+must be accepted and executed — reversing today's "custom step requires skill" rejection.
 
 ### Negative Path
 
-- **Given** the flag is on but the repo has no `origin` remote, or `git fetch origin` fails
-  (offline/unreachable),
-- **When** the guard runs,
-- **Then** `resolveBase`/`performRebase` degrade to the existing local-base / no-op fallbacks
-  (FR-3 spirit already in `performRebase`), the guard returns without error, and the build
-  proceeds — base-refresh is best-effort correctness, not a hard remote dependency.
+- **Given** `steps.x` with `after: plan` and either `action: base-refresh` OR only
+  `hooks.before: scripts/foo.sh` (no `skill:`),
+- **When** config validation and `buildStepRegistry` run,
+- **Then** the step is accepted (not rejected for missing `skill`), inserted at `after`, and at
+  dispatch the engine runs the engine-action (for `action:`) or the before-hook as the body (for
+  hook-only) — exit 0 → step satisfied; non-zero → failure handled per `enforcement`,
+- **And** a custom step declaring **no** body at all (no `skill`, no `action`, no `hooks.before`)
+  is rejected by the validator with a clear "custom step needs a skill, action, or before-hook"
+  error, and a step declaring more than one body is rejected as ambiguous.
 
-## Story 5 — Evidence anchors are generated on the already-rebased base (negative path / anti-regression)
+## Story 4 — A build-start rebase conflict fails closed to the gated /rebase resolver (negative path)
 
-As the judged-attribution completion check, an enabled build-start rebase must **remove**, not
-re-introduce, the `anchor is unreachable` failure class.
+As the daemon, when the `base-refresh` action cannot rebase cleanly, the engine must never build
+a half-merged tree.
 
 ### Negative Path
 
-- **Given** a build (flag on) that authors evidence-bearing commits after the build-start guard
-  has rebased the worktree onto `origin/<default>`,
-- **When** the completion/evidence gate later resolves sha-anchored citations,
-- **Then** every anchor is reachable from the current base because it was created *on top of*
-  the rebased base (no pre-build commits were re-parented), and the ship-time `rebase` step —
-  which remains, to catch merges landing *during* the build — is a `noop` when nothing merged
-  in the interim (`isBranchCurrent` short-circuit), so this feature strictly reduces the #535
-  exposure window rather than duplicating or fighting PR #593's patch-id anchor translation.
-- **And** the ship-time `rebase` step is unchanged; #593's translation still covers the residual
-  "merged during build" window this guard cannot (nothing had merged yet at build start).
+- **Given** the `base-refresh` action whose `performRebase` returns `conflict_halt`,
+- **When** the step runs,
+- **Then** the engine invokes `runGatedRebaseResolution` (the same `rebase_resolution_attempts`
+  cap the ship-time step uses) and, if unresolved, writes `.pipeline/HALT` leaving the rebase
+  paused for the operator's `/rebase` skill — **no build task is dispatched**,
+- **And** a lone CHANGELOG `[Unreleased]` conflict still auto-resolves (`performRebase`'s
+  `changelog_resolved`), and this fail-closed HALT holds even though the step's declared
+  `enforcement` is not `advisory` — an intrinsic conflict HALT is never downgraded.
+
+## Story 5 — No/unreachable origin and non-daemon runs are a clean no-op (negative path)
+
+As the `base-refresh` action outside a live daemon-with-origin context, it must complete without
+HALTing and without touching a live checkout.
+
+### Negative Path
+
+- **Given** the action fires but `this.daemon === false` (interactive `/conduct` or the vitest
+  suite), OR the repo has no `origin` remote, OR `git fetch origin` fails (offline),
+- **When** the action runs,
+- **Then** it degrades to a `noop` (the `!daemon` guard mirrors `runRebaseStep`;
+  remote-less/failed-fetch uses `performRebase`'s existing local-base/no-op fallbacks), records
+  no HALT, and the build proceeds — base-refresh is best-effort correctness, not a hard
+  dependency, and it never corrupts an interactive/test checkout.
+
+## Story 6 — Invalid `after:` targets and insertion cycles are rejected at config load (negative path)
+
+As config validation, a custom step pointing at a nonexistent step, or a set of sibling customs
+that reference each other cyclically, must fail loudly at startup — not silently vanish.
+
+### Negative Path
+
+- **Given** `steps.x.after: no-such-step`, OR two customs `a.after: b` and `b.after: a` (a cycle),
+- **When** the config is validated at daemon startup,
+- **Then** validation returns a clear error (`unknown after target` / `custom-step cycle detected:
+  a → b → a`) and the daemon refuses to start that build rather than silently dropping the step
+  (today an unresolvable/cyclic chain is quietly skipped by `buildStepRegistry`'s iterative pass),
+- **And** a valid `after:` that names a sibling custom earlier in the chain is still accepted
+  (multi-custom chains keep working).
