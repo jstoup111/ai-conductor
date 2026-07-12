@@ -31,6 +31,14 @@ import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/executi
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { runAttributionLane } from '../../src/engine/attribution-lane.js';
+import { reconcileStatusFromStamps } from '../../src/engine/autoheal.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -492,4 +500,248 @@ Implementation that requires semantic verification.
     expect(taskEvidencePath).toBeDefined(); // Verify path is set up correctly
   });
 
+});
+
+/**
+ * RED (Story 2, Task 3): no-whitewash paths for the judged attribution lane.
+ *
+ * PROBLEM: Task 2 taught runAttributionLane to stamp 'semantic-verified' evidence
+ * for satisfied verdicts with valid citations so covered builds can advance past
+ * the completion gate. That gain must not come at the cost of whitewashing: a
+ * `no-verdict` residue task, a `satisfied` verdict whose citations don't hold up
+ * under validateCitations, or a mix of satisfied/unsatisfied results must all
+ * leave the affected task(s) unstamped — so the completion gate (which derives
+ * "done" from task-status.json rows reconciled off evidence stamps, see
+ * autoheal.ts reconcileStatusFromStamps) stays not-done and the build is refused
+ * rather than allowed to advance on an unearned verdict.
+ *
+ * These tests exercise runAttributionLane end-to-end with a fake dispatchVerifier
+ * (writes the verdict file, simulating the real verifier) and a fake git runner
+ * (controls citation validation outcomes deterministically, no real repo needed),
+ * then reconcile task-status.json off the resulting evidence stamps and assert
+ * the gate-relevant row(s) never reach 'completed'.
+ */
+describe('attribution lane no-whitewash: gate stays not-done on no-verdict/invalid-citation/mixed results', () => {
+  let dir: string;
+  let projectRoot: string;
+  const HEAD_SHA = 'abc1234567890123456789012345678901234567';
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-no-whitewash-'));
+    projectRoot = dir;
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** git runner where every check (reachability, ancestry, non-empty, path overlap) passes. */
+  function passingGit() {
+    return async (args: string[]) => {
+      if (args[0] === 'diff-tree' && args.includes('--name-only')) {
+        return { stdout: 'src/main.ts\n', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'diff-tree' && args.includes('--quiet')) {
+        // exit 1 == has diffs (non-empty commit)
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+  }
+
+  /** git runner where the citation SHA is unreachable — fails validateCitations check 1. */
+  function failingGit() {
+    return async (args: string[]) => {
+      if (args[0] === 'cat-file') {
+        return { stdout: '', stderr: 'fatal: bad object', exitCode: 1 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+  }
+
+  async function writeStatusFile(tasks: Array<{ id: string; status: string }>) {
+    const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    await writeFile(
+      statusPath,
+      JSON.stringify({ tasks: tasks.map((t) => ({ ...t, name: `Task ${t.id}` })) }, null, 2) + '\n',
+      'utf-8',
+    );
+    return statusPath;
+  }
+
+  async function writePlan(entries: Array<{ id: string; title: string; path: string }>) {
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const body = entries
+      .map((e) => `### Task ${e.id}: ${e.title}\n**Files:** \`${e.path}\`\n\nWork for task ${e.id}.\n`)
+      .join('\n');
+    const planPath = join(planDir, 'test.md');
+    await writeFile(planPath, `# Plan\n\n${body}`, 'utf-8');
+    return planPath;
+  }
+
+  it('(a) no-verdict residue task → no stamp written → gate row stays not-completed → refuse', async () => {
+    const planPath = await writePlan([{ id: '7', title: 'No-verdict task', path: 'src/main.ts' }]);
+    await writeStatusFile([{ id: '7', status: 'in_progress' }]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'no-verdict',
+            reason: 'diff ambiguous between adjacent tasks',
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: passingGit(),
+      dispatchVerifier,
+    });
+
+    // No task should be stamped for a no-verdict result.
+    expect(result.stampedTaskIds).toEqual([]);
+
+    // No evidence stamp should exist for task 7.
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+
+    // Reconciling task-status off stamps must leave the row un-advanced (refused, not
+    // whitewashed to completed).
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    expect(task7.status).not.toBe('completed');
+    expect(task7.status).toBe('in_progress');
+  });
+
+  it('(b) satisfied verdict whose citations fail validateCitations → refused → no advance', async () => {
+    const planPath = await writePlan([{ id: '7', title: 'Bad citation task', path: 'src/main.ts' }]);
+    await writeStatusFile([{ id: '7', status: 'in_progress' }]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'deadbeef', rationale: 'claims to implement the feature' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      // Citation SHA is unreachable — engine refuses to trust the verifier's claim.
+      git: failingGit(),
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    expect(task7.status).not.toBe('completed');
+    expect(task7.status).toBe('in_progress');
+  });
+
+  it('(c) mixed satisfied+unsatisfied residue → satisfied stamps, unsatisfied stays not-done', async () => {
+    const planPath = await writePlan([
+      { id: '7', title: 'Satisfied task', path: 'src/main.ts' },
+      { id: '9', title: 'Unsatisfied task', path: 'src/cli.ts' },
+    ]);
+    await writeStatusFile([
+      { id: '7', status: 'in_progress' },
+      { id: '9', status: 'in_progress' },
+    ]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7', '9'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'implements the feature' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+          },
+          {
+            taskId: '9',
+            verdict: 'unsatisfied',
+            reason: 'no candidate diff touches the CLI surface',
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7', '9'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: passingGit(),
+      dispatchVerifier,
+    });
+
+    // Only the satisfied task should be stamped.
+    expect(result.stampedTaskIds).toEqual(['7']);
+
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    expect(evidence.evidenceStamps.has('9')).toBe(false);
+
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    const task9 = status.tasks.find((t: Record<string, unknown>) => t.id === '9');
+
+    // Satisfied, cited task advances.
+    expect(task7.status).toBe('completed');
+    // Unsatisfied task must NOT be whitewashed to completed — gate stays not-done
+    // for the residue that failed judging.
+    expect(task9.status).not.toBe('completed');
+    expect(task9.status).toBe('in_progress');
+  });
 });
