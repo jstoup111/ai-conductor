@@ -1,13 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
   validateSlug,
+  resolveMainRepoRoot,
 } from '../../src/engine/daemon-park-cli.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
+
+const execFile = promisify(execFileCb);
 
 describe('engine/daemon-park-cli', () => {
   let root: string;
@@ -22,6 +27,55 @@ describe('engine/daemon-park-cli', () => {
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  describe('resolveMainRepoRoot', () => {
+    const git = (cwd: string, ...args: string[]) => execFile('git', args, { cwd });
+
+    it('resolves the same root from the main root, a nested subdir, and a linked worktree', async () => {
+      const repoRoot = await realpath(root);
+      await git(repoRoot, 'init', '-q');
+      await git(repoRoot, 'config', 'user.email', 'test@example.com');
+      await git(repoRoot, 'config', 'user.name', 'Test');
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(repoRoot, 'README.md'), '# repo\n');
+      await git(repoRoot, 'add', '.');
+      await git(repoRoot, 'commit', '-q', '-m', 'initial');
+
+      const fromRoot = await resolveMainRepoRoot(repoRoot);
+      expect(fromRoot).toEqual({ root: repoRoot });
+
+      const nestedDir = join(repoRoot, 'a', 'b', 'c');
+      await mkdir(nestedDir, { recursive: true });
+      const fromNested = await resolveMainRepoRoot(nestedDir);
+      expect(fromNested).toEqual({ root: repoRoot });
+
+      const worktreeParent = await mkdtemp(join(tmpdir(), 'daemon-park-cli-wt-'));
+      const worktreePath = join(await realpath(worktreeParent), 'linked-wt');
+      await git(repoRoot, 'branch', 'wt-branch');
+      await git(repoRoot, 'worktree', 'add', worktreePath, 'wt-branch');
+      try {
+        const fromWorktree = await resolveMainRepoRoot(worktreePath);
+        expect(fromWorktree).toEqual({ root: repoRoot });
+      } finally {
+        await git(repoRoot, 'worktree', 'remove', '--force', worktreePath).catch(() => {});
+        await rm(worktreeParent, { recursive: true, force: true });
+      }
+    });
+
+    it('returns a clear error (not "slug not found") when called outside any git repo', async () => {
+      const outsideDir = await mkdtemp(join(tmpdir(), 'daemon-park-cli-outside-'));
+      try {
+        const result = await resolveMainRepoRoot(outsideDir);
+        expect('error' in result).toBe(true);
+        if ('error' in result) {
+          expect(result.error.toLowerCase()).toContain("daemon park <slug>");
+          expect(result.error.toLowerCase()).not.toContain('slug not found');
+        }
+      } finally {
+        await rm(outsideDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('detectDaemonParkCommand', () => {
@@ -168,6 +222,19 @@ describe('engine/daemon-park-cli', () => {
         `not found under ${root} (no .docs/plans/totally-unknown-slug.md or .worktrees/totally-unknown-slug)`,
       );
       expect(await isOperatorParked(root, 'totally-unknown-slug')).toBe(false);
+    });
+
+    it('not-found message names the searched root, distinguishing it from a wrong-cwd error', async () => {
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'park', slug: 'unknown' },
+        { cwd: root, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(1);
+      const joined = out.join('\n');
+      expect(joined).toBe(
+        `error: slug 'unknown' not found under ${root} (no .docs/plans/unknown.md or .worktrees/unknown)`,
+      );
     });
 
     it('parks successfully when known by plan file only (no worktree)', async () => {
