@@ -656,6 +656,68 @@ describe('engine/artifacts', () => {
       });
       expect(result).toEqual({ done: true });
     });
+    it('Story 3: Phase 2 fail-open: passes when fakeGh throws during presentation check (gh error → logged warning)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that throws an error (network failure, auth error, etc.)
+      const fakeGh = async (args: string[]) => {
+        throw new Error('network error: connection refused');
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Story 3: Phase 2 fail-open: passes when fakeGh returns malformed JSON (unparseable → logged warning)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      // fakeGh that returns invalid JSON
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: 'not valid json {',
+          };
+        }
+        return { stdout: '{}' };
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Story 3: Phase 1 short-circuit: fails at phase 1 when state lacks pr_url under choice="pr" (zero gh calls)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      // No .pipeline/conduct-state.json with pr_url — should fail in Phase 1
+      // and NEVER call the gh runner (short-circuit test)
+      const ghCallCount = { count: 0 };
+      const fakeGh = async (args: string[]) => {
+        ghCallCount.count++;
+        throw new Error('gh should not be called in this scenario');
+      };
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/pr_url/);
+      expect(result.missing).toBe('recording');
+      expect(ghCallCount.count).toBe(0); // Verify Phase 2 was never reached
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {
