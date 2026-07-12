@@ -30,7 +30,7 @@ export function createDaemonTeardown<T = ReturnType<typeof setTimeout>>(
       const handle = setTimer(opts.onForceRelease, opts.timeoutMs);
       const maybeUnref = handle as unknown as { unref?: () => void };
       if (typeof maybeUnref?.unref === 'function') {
-        maybeUnref.unref();
+        maybeUnref.unref(); // portability-ok: guarded typeof check; only detaches the force-release timeout timer from process exit, no effect on teardown semantics
       }
       timerHandle = handle;
     },
