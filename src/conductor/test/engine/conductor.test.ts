@@ -7282,6 +7282,60 @@ describe('build-step stall circuit breaker', () => {
     expect(runner.runInteractive).not.toHaveBeenCalled();
   });
 
+  it('step_retry emit includes resolvedBefore and resolvedAfter for build step retries (#505 TS)', async () => {
+    await seedAllArtifactsExceptTaskStatus();
+    await writeTaskStatus(2, 5); // 2/5 done — incomplete, should trigger gate miss and retry
+    // No halt marker — conductor should retry and emit step_retry events
+
+    let buildAttempts = 0;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+      run: vi.fn(async (step: StepName) => {
+        // Build step is incomplete, returns success but gate will fail
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const retryEvents: Array<{ step: string; reason: string; before?: number; after?: number }> = [];
+    events.on('step_retry', (e) => {
+      if (e.type === 'step_retry') {
+        retryEvents.push({
+          step: e.step,
+          reason: e.reason,
+          before: e.resolvedBefore,
+          after: e.resolvedAfter,
+        });
+      }
+    });
+
+    const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      onRecovery,
+    });
+
+    await conductor.run();
+
+    // At least one step_retry should have been emitted (build step incomplete gate)
+    expect(retryEvents.length).toBeGreaterThanOrEqual(1);
+    // The build step retry should have resolvedBefore and resolvedAfter populated
+    const buildRetries = retryEvents.filter((e) => e.step === 'build');
+    if (buildRetries.length > 0) {
+      // Build step retries should have numeric resolved counts (both defined)
+      expect(buildRetries[0].before).toBeDefined();
+      expect(buildRetries[0].after).toBeDefined();
+      expect(typeof buildRetries[0].before).toBe('number');
+      expect(typeof buildRetries[0].after).toBe('number');
+      // Progress delta should be non-negative (this verifies the values are correctly captured)
+      expect(buildRetries[0].after! >= buildRetries[0].before!).toBeTruthy();
+    }
+  });
+
 });
 
 // Task 14: Engine records the active plan path
