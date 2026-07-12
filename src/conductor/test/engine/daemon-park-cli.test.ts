@@ -164,7 +164,9 @@ describe('engine/daemon-park-cli', () => {
         { cwd: root, out: (l) => out.push(l) },
       );
       expect(code).toBe(1);
-      expect(out.join('\n')).toContain('not found in plans/ or worktrees/');
+      expect(out.join('\n')).toContain(
+        `not found under ${root} (no .docs/plans/totally-unknown-slug.md or .worktrees/totally-unknown-slug)`,
+      );
       expect(await isOperatorParked(root, 'totally-unknown-slug')).toBe(false);
     });
 

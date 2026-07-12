@@ -10,9 +10,40 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked, getProvenanceType } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
+
+const execFile = promisify(execFileCb);
+
+/**
+ * Resolve the main repo root (the parent of `.git`) from any cwd — the
+ * project root itself, or any directory inside a linked worktree.
+ * `git rev-parse --git-common-dir` returns the same common `.git` dir for
+ * the main checkout and every linked worktree, so its parent is the stable
+ * "main repo root" regardless of which worktree/cwd we were invoked from.
+ */
+export async function resolveMainRepoRoot(
+  startCwd: string,
+): Promise<{ root: string } | { error: string }> {
+  const NOT_A_PROJECT_ERROR =
+    "not inside a conduct project — run 'daemon park <slug>' from the project root or any directory inside it";
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', '--git-common-dir'], {
+      cwd: startCwd,
+    });
+    const raw = stdout.trim();
+    if (!raw) {
+      return { error: NOT_A_PROJECT_ERROR };
+    }
+    const absoluteCommonDir = isAbsolute(raw) ? raw : resolve(startCwd, raw);
+    return { root: dirname(absoluteCommonDir) };
+  } catch {
+    return { error: NOT_A_PROJECT_ERROR };
+  }
+}
 
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
@@ -72,7 +103,9 @@ export async function dispatchDaemonPark(
   try {
     if (cmd.kind === 'park') {
       if (!validateSlug(cmd.slug, cwd)) {
-        out(`error: slug '${cmd.slug}' not found in plans/ or worktrees/`);
+        out(
+          `error: slug '${cmd.slug}' not found under ${cwd} (no .docs/plans/${cmd.slug}.md or .worktrees/${cmd.slug})`,
+        );
         return 1;
       }
       const alreadyParked = await isOperatorParked(cwd, cmd.slug);
