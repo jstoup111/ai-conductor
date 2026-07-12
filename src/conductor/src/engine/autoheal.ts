@@ -366,21 +366,7 @@ export async function getEvidenceRange(
 
     let lowerBound: string | null = null;
 
-    // First, verify that anchor is reachable
-    const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
-      cwd: projectRoot,
-      reject: false,
-    });
-
-    if (anchorCheck.exitCode === 0) {
-      // Anchor is reachable, use it as lower bound
-      lowerBound = anchor;
-    } else {
-      // Anchor is unreachable, fall back to merge-base
-      const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
-      logger.warnings.push(warningMsg);
-      console.warn(warningMsg);
-
+    const runMergeBaseLadder = async (): Promise<string | null> => {
       // Try fork-point merge-base first, then plain merge-base.
       const forkPoint = await execa('git', ['merge-base', '--fork-point', originRef, 'HEAD'], {
         cwd: projectRoot,
@@ -388,15 +374,42 @@ export async function getEvidenceRange(
       });
 
       if (forkPoint.exitCode === 0 && forkPoint.stdout.trim()) {
-        lowerBound = forkPoint.stdout.trim();
+        return forkPoint.stdout.trim();
+      }
+
+      const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
+        return plainMergeBase.stdout.trim();
+      }
+
+      return null;
+    };
+
+    if (anchor.trim() === '') {
+      // No anchor was supplied; skip the reachability probe entirely (it
+      // always fails on an empty string) and go straight to the merge-base
+      // ladder without logging a spurious "unreachable" warning.
+      lowerBound = await runMergeBaseLadder();
+    } else {
+      // First, verify that anchor is reachable
+      const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
+        cwd: projectRoot,
+        reject: false,
+      });
+
+      if (anchorCheck.exitCode === 0) {
+        // Anchor is reachable, use it as lower bound
+        lowerBound = anchor;
       } else {
-        const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
-          cwd: projectRoot,
-          reject: false,
-        });
-        if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
-          lowerBound = plainMergeBase.stdout.trim();
-        }
+        // Anchor is unreachable, fall back to merge-base
+        const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
+        logger.warnings.push(warningMsg);
+        console.warn(warningMsg);
+
+        lowerBound = await runMergeBaseLadder();
       }
     }
 

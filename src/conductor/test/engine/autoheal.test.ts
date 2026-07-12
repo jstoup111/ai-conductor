@@ -904,6 +904,40 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  it('skips the reachability probe for an absent (empty-string) anchor and derives merge-base without an unreachable warning', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Absent anchor must fall straight into the merge-base ladder without
+    // ever being probed for reachability, so no "unreachable" warning.
+    expect(range.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('logs warning when anchor is unreachable', async () => {
     const mod = await loadAutoheal();
 
