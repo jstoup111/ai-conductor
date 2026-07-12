@@ -714,6 +714,15 @@ verification lane runs an engine-embedded judge to validate unresolved residue:
   resetting the `noEvidenceAttempts` counter via the existing progress branch
   (conductor.ts Task-12 block).
 
+- **In-cycle advancement (#581):** a satisfied verdict — one that passes engine-side
+  validation (valid citations + passing test evidence) — persists its evidence stamp
+  and re-checks the completion gate immediately, in the same build cycle, rather than
+  waiting for a subsequent loop iteration. This fixes prior behavior where a fully
+  judged-covered build would still HALT because the gate had already evaluated before
+  the stamp landed; only the following loop pass would pick it up. `no-verdict` and
+  `fail` outcomes are unaffected — no-whitewash still applies, and the build halts
+  exactly as before for those cases.
+
 - **Split attribution:** the verdict is per-task; multiple tasks may cite the same
   SHA (bundled commit case). The validator accepts overlapping citations.
 

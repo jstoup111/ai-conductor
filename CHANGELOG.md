@@ -1579,6 +1579,7 @@ no action needed — the token requirement is skipped.
   play-forward path (`resumeRebaseFirst`) now calls `recordRebaseStepCompletion`,
   the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
   rebase stamps `state.rebase` instead of leaving it silently unmarked.
+- Judged attribution verdicts now advance the build gate in-cycle, not requiring a second loop iteration (#581).
 
 ## Migration
 
