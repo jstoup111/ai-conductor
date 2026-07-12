@@ -195,6 +195,9 @@ or a status line is waste.
 - Do NOT explain why a test failed before fixing it. Fix it, then report the status.
 - Do NOT summarize completed steps. The audit trail and progress.log handle that.
 - Do NOT introduce subagent dispatches. Dispatch silently.
+- Keep the work area concise. Emit only status lines and errors — no running commentary.
+- Do NOT explain what is happening unless it is either visible to the operator or actually
+  useful to them. No play-by-play of internal steps.
 - Between TDD phases, output ONLY the status line (PASS/FAIL + reason). No commentary.
 
 **Rules for subagents (generator, domain-reviewer, evaluator):**
