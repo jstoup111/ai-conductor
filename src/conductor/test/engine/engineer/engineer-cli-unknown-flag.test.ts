@@ -1,8 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { detectEngineerCommand } from '../../../src/engine/engineer-cli.js';
+import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 
 function argv(...rest: string[]): string[] {
   return ['node', 'conduct-ts', 'engineer', ...rest];
+}
+
+function captureOut() {
+  const out: string[] = [];
+  const err: string[] = [];
+  const opts = (
+    extra: Partial<Parameters<typeof dispatchEngineer>[1]> = {},
+  ): Parameters<typeof dispatchEngineer>[1] => ({
+    print: (s) => out.push(s),
+    printErr: (s) => err.push(s),
+    gh: (() => {
+      throw new Error('gh must not be called for a rejected unknown-flag dispatch');
+    }) as unknown as NonNullable<Parameters<typeof dispatchEngineer>[1]>['gh'],
+    ...extra,
+  });
+  return { out, err, opts };
 }
 
 describe('engineer-cli unknown-flag rejection on zero/boolean-flag subcommands (#524)', () => {
@@ -252,5 +268,55 @@ describe('engineer-cli unknown-flag rejection on required-named-flag subcommands
     expect(detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'b'))).toEqual({
       kind: 'guide',
     });
+  });
+});
+
+describe('dispatchEngineer: reject kind exits 1 with zero mutation (#524 Task 7)', () => {
+  it('claim: exits 1, stderr names sub + flag, stdout empty, gh never invoked', async () => {
+    const { out, err, opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'reject', sub: 'claim', flag: '--verbose' },
+      opts(),
+    );
+    expect(code).toBe(1);
+    expect(err.some((e) => e.includes('claim'))).toBe(true);
+    expect(err.some((e) => e.includes('--verbose'))).toBe(true);
+    expect(out.length).toBe(0);
+  });
+
+  it('projects: exits 1, stderr names sub + flag, stdout empty, gh never invoked', async () => {
+    const { out, err, opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'reject', sub: 'projects', flag: '--typo' },
+      opts(),
+    );
+    expect(code).toBe(1);
+    expect(err.some((e) => e.includes('projects'))).toBe(true);
+    expect(err.some((e) => e.includes('--typo'))).toBe(true);
+    expect(out.length).toBe(0);
+  });
+
+  it('resolve: exits 1, stderr names sub + flag, stdout empty, gh never invoked', async () => {
+    const { out, err, opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'reject', sub: 'resolve', flag: '--dry-run' },
+      opts(),
+    );
+    expect(code).toBe(1);
+    expect(err.some((e) => e.includes('resolve'))).toBe(true);
+    expect(err.some((e) => e.includes('--dry-run'))).toBe(true);
+    expect(out.length).toBe(0);
+  });
+
+  it('land: exits 1, stderr names sub + flag, stdout empty, gh never invoked', async () => {
+    const { out, err, opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'reject', sub: 'land', flag: '--bogus' },
+      opts(),
+    );
+    expect(code).toBe(1);
+    expect(err.some((e) => e.includes('land'))).toBe(true);
+    expect(err.some((e) => e.includes('--bogus'))).toBe(true);
+    expect(out.length).toBe(0);
   });
 });
