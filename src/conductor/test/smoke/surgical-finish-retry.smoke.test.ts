@@ -71,11 +71,9 @@ describe('smoke: surgical finish-record retry drives one-command completion (Sto
       // facet code today, so this fails for the right reason.
       expect((completion as { missing?: string }).missing).toBe('recording');
 
-      // NOT YET IMPLEMENTED (Task 11): buildRetryHint doesn't branch on the
-      // recording-only classification today, so the generic fallback text
-      // ("Finish the work now.") is produced instead of the surgical
-      // finish-record command below — this fails for the right reason.
-      const hint = buildRetryHint('finish', completion.reason, completion as any);
+      // The surgical prompt names the finish-record command when the miss is
+      // classification-only (recording). Pass the missing field and pipelineDir.
+      const hint = buildRetryHint('finish', completion.reason, completion.missing, pipelineDirAbs);
       expect(hint).toContain('conduct-ts finish-record');
       expect(hint).toContain(`--pipeline-dir ${pipelineDirAbs}`);
 
