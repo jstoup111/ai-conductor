@@ -371,6 +371,12 @@ const DEFAULT_POLL_MS = 250;
 export interface DaemonLockHandle {
   /** The pid recorded in the pidfile (this process), or process.pid if unwritten. */
   pid: number;
+  /**
+   * The per-boot uuid recorded in the pidfile — immune to pid reuse, unlike
+   * `pid`. Empty string ('') on unowned/error handles (no pidfile record
+   * was written by us).
+   */
+  uuid: string;
   /** True when we own the pidfile and release() should unlink it. */
   owned: boolean;
   /** Async release — unlink our pidfile (best-effort). Call on normal exit. */
@@ -393,9 +399,15 @@ export interface HoldLockOptions {
   pollMs?: number;
 }
 
-function makeLockHandle(repoPath: string, pid: number, owned: boolean): DaemonLockHandle {
+function makeLockHandle(
+  repoPath: string,
+  pid: number,
+  owned: boolean,
+  uuid: string,
+): DaemonLockHandle {
   return {
     pid,
+    uuid,
     owned,
     release: async () => {
       if (!owned) return;
@@ -447,7 +459,7 @@ export async function holdLock(
 ): Promise<DaemonLockHandle | null> {
   const result = await acquire(repoPath);
   if (result.acquired) {
-    return makeLockHandle(repoPath, result.pid, true);
+    return makeLockHandle(repoPath, result.pid, true, result.uuid);
   }
   if (result.reason === 'occupied') {
     const owner = result.owner;
@@ -466,7 +478,7 @@ export async function holdLock(
           // Try to acquire the lock.
           const pollResult = await acquire(repoPath);
           if (pollResult.acquired) {
-            return makeLockHandle(repoPath, pollResult.pid, true);
+            return makeLockHandle(repoPath, pollResult.pid, true, pollResult.uuid);
           }
           // If the result is occupied but by a dead pid, the loop will
           // continue polling until the timeout, then fall through to the
@@ -485,16 +497,30 @@ export async function holdLock(
     // Stale (dead or phantom) → reclaim (immediate, no wait).
     const r = await reclaim(repoPath, defaultKill);
     if (r.reclaimed) {
-      return makeLockHandle(repoPath, r.pid, true);
+      return makeLockHandle(repoPath, r.pid, true, r.uuid);
     }
     if (r.reason === 'alive') {
       return null; // a concurrent reclaimer won and is alive
     }
     // reclaim error → fall through to unowned handle (best-effort build).
-    return makeLockHandle(repoPath, process.pid, false);
+    return makeLockHandle(repoPath, process.pid, false, '');
   }
   // acquire error (permission, etc.) → run without an observable lock.
-  return makeLockHandle(repoPath, process.pid, false);
+  return makeLockHandle(repoPath, process.pid, false, '');
+}
+
+/**
+ * ownsLock — check whether the on-disk pidfile record's uuid matches the
+ * given uuid. Never throws: absent, corrupt, or mismatched records all
+ * resolve to false. The uuid (unlike pid) is immune to pid reuse, so this
+ * is the safe way to confirm continued ownership.
+ *
+ * @param repoPath - Absolute path to the repository root.
+ * @param uuid     - The uuid to check against the on-disk record.
+ */
+export async function ownsLock(repoPath: string, uuid: string): Promise<boolean> {
+  const record = await readPidRecord(repoPath);
+  return record?.uuid === uuid;
 }
 
 /**

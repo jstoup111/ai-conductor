@@ -262,6 +262,21 @@ describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
     await expect(access(pidfile())).rejects.toThrow(); // pidfile gone
   });
 
+  it('fresh-acquire path → handle.uuid matches the uuid recorded in the pidfile', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    const handle = await holdLock(repoPath);
+    expect(handle).not.toBeNull();
+
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(typeof handle.uuid).toBe('string');
+    expect(handle.uuid.length).toBeGreaterThan(0);
+    expect(handle.uuid).toBe(rec.uuid);
+
+    await handle.release();
+  });
+
   it('a LIVE owner already holds the lock → returns null (1-per-repo), pidfile untouched', async () => {
     const mod = await load(LOCK_MOD);
     const holdLock = requireFn(mod, 'holdLock');
@@ -299,6 +314,26 @@ describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
 
     handle.releaseSync();
     await expect(access(pidfile())).rejects.toThrow();
+  });
+
+  it('dead-holder reclaim path → handle.uuid matches the freshly reclaimed uuid in the pidfile', async () => {
+    const mod = await load(LOCK_MOD);
+    const holdLock = requireFn(mod, 'holdLock');
+
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      pidfile(),
+      JSON.stringify({ pid: deadPid(), uuid: 'dead-holder-uuid', startedAt: new Date(0).toISOString() }),
+    );
+
+    const handle = await holdLock(repoPath);
+    expect(handle).not.toBeNull();
+
+    const rec = JSON.parse(await readFile(pidfile(), 'utf8'));
+    expect(handle.uuid).not.toBe('dead-holder-uuid'); // reclaimed with a fresh uuid
+    expect(handle.uuid).toBe(rec.uuid);
+
+    handle.releaseSync();
   });
 
   it('a LIVE owner releases the lock during bounded-wait → acquires (holdLock bounded-wait happy path)', async () => {
@@ -434,5 +469,55 @@ describe('daemon-lock: holdLock — daemon lifetime lock (ADR-010)', () => {
     expect(rec.pid).toBe(process.pid);
 
     await handle?.release();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 2: ownsLock(repoPath, uuid) — never throws; false on absent/corrupt/mismatch.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('daemon-lock: ownsLock(repoPath, uuid)', () => {
+  const pidfile = (): string => join(repoPath, '.daemon', 'daemon.pid');
+
+  it('returns true when the on-disk record uuid matches', async () => {
+    const mod = await load(LOCK_MOD);
+    const ownsLock = requireFn(mod, 'ownsLock');
+
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      pidfile(),
+      JSON.stringify({ pid: process.pid, uuid: 'match-me', startedAt: new Date().toISOString() }),
+    );
+
+    await expect(ownsLock(repoPath, 'match-me')).resolves.toBe(true);
+  });
+
+  it('returns false when no pidfile is present', async () => {
+    const mod = await load(LOCK_MOD);
+    const ownsLock = requireFn(mod, 'ownsLock');
+
+    await expect(ownsLock(repoPath, 'some-uuid')).resolves.toBe(false);
+  });
+
+  it('returns false when the on-disk record has a different uuid', async () => {
+    const mod = await load(LOCK_MOD);
+    const ownsLock = requireFn(mod, 'ownsLock');
+
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(
+      pidfile(),
+      JSON.stringify({ pid: process.pid, uuid: 'someone-elses-uuid', startedAt: new Date().toISOString() }),
+    );
+
+    await expect(ownsLock(repoPath, 'my-uuid')).resolves.toBe(false);
+  });
+
+  it('returns false (never throws) when the pidfile is corrupt', async () => {
+    const mod = await load(LOCK_MOD);
+    const ownsLock = requireFn(mod, 'ownsLock');
+
+    await mkdir(join(repoPath, '.daemon'), { recursive: true });
+    await writeFile(pidfile(), 'not valid json {{{');
+
+    await expect(ownsLock(repoPath, 'any-uuid')).resolves.toBe(false);
   });
 });
