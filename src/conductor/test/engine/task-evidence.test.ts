@@ -523,5 +523,166 @@ describe('task-evidence', () => {
       expect(written.evidenceStamps.get('3')?.citedShas).toEqual(['shared-sha-100', 'other-sha-1']);
       expect(written.evidenceStamps.get('4')?.citedShas).toEqual(['shared-sha-100', 'other-sha-2']);
     });
+
+    it('reconciles task-status rows after stamping', async () => {
+      // Setup: create a task-status.json with task 10 in in_progress state
+      const pipelineDir = join(dir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(
+        join(pipelineDir, 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '10', title: 'Test Task 10', status: 'in_progress', rework_cycles: 0 },
+            { id: '11', title: 'Test Task 11', status: 'pending', rework_cycles: 0 },
+          ],
+        }),
+      );
+
+      // Call writeJudgedStamps with a verdict for task 10
+      const validated = [
+        {
+          taskId: '10',
+          sha: 'abc123def456abc123def456abc123def456',
+          citedShas: ['abc123def456abc123def456abc123def456'],
+          verdictAnchor: 'head-verdict',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+      await writeJudgedStamps(dir, validated, []);
+
+      // Assertions:
+      // 1. Stamp is written to .pipeline/task-evidence.json
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.evidenceStamps.has('10')).toBe(true);
+      expect(evidence.evidenceStamps.get('10')).toEqual({
+        sha: 'abc123def456abc123def456abc123def456',
+        form: 'semantic-verified',
+        citedShas: ['abc123def456abc123def456abc123def456'],
+        verdictAnchor: 'head-verdict',
+        testEvidence: { command: 'test', exit: 0 },
+      });
+
+      // 2. Task 10's row reads as 'completed' on disk (reconciliation advanced it)
+      const statusContent = await readFile(join(pipelineDir, 'task-status.json'), 'utf-8');
+      const status = JSON.parse(statusContent);
+      const task10 = status.tasks.find((t: any) => t.id === '10');
+      expect(task10).toBeDefined();
+      expect(task10.status).toBe('completed');
+
+      // 3. The row's commit field contains the 7-char short SHA from the stamp
+      expect(task10.commit).toBe('abc123d');
+
+      // 4. Orphan handling: task 99 has no matching row, should not invent one
+      // and should log a warning
+      const orphanValidated = [
+        {
+          taskId: '99',
+          sha: 'orphan-sha-999999999999999999999999',
+          citedShas: ['orphan-sha-999999999999999999999999'],
+          verdictAnchor: 'head-orphan',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await writeJudgedStamps(dir, orphanValidated, []);
+      const warnCalls = warnSpy.mock.calls.filter((call) =>
+        call[0]?.toString().includes('task-evidence'),
+      );
+      warnSpy.mockRestore();
+
+      // Verify warning was logged for orphan
+      expect(warnCalls.length).toBeGreaterThan(0);
+
+      // Verify task 99 row was NOT invented
+      const finalStatus = JSON.parse(
+        await readFile(join(pipelineDir, 'task-status.json'), 'utf-8'),
+      );
+      expect(finalStatus.tasks.find((t: any) => t.id === '99')).toBeUndefined();
+
+      // But the stamp should exist
+      const finalEvidence = await createTaskEvidence(dir);
+      expect(finalEvidence.evidenceStamps.has('99')).toBe(true);
+    });
+    it('reconciles task-status rows after stamping', async () => {
+      // Setup: create a task-status.json with task 10 in in_progress state
+      const pipelineDir = join(dir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(
+        join(pipelineDir, 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '10', title: 'Test Task 10', status: 'in_progress', rework_cycles: 0 },
+            { id: '11', title: 'Test Task 11', status: 'pending', rework_cycles: 0 },
+          ],
+        }),
+      );
+
+      // Call writeJudgedStamps with a verdict for task 10
+      const validated = [
+        {
+          taskId: '10',
+          sha: 'abc123def456abc123def456abc123def456',
+          citedShas: ['abc123def456abc123def456abc123def456'],
+          verdictAnchor: 'head-verdict',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+      await writeJudgedStamps(dir, validated, []);
+
+      // Assertions:
+      // 1. Stamp is written to .pipeline/task-evidence.json
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.evidenceStamps.has('10')).toBe(true);
+      expect(evidence.evidenceStamps.get('10')).toEqual({
+        sha: 'abc123def456abc123def456abc123def456',
+        form: 'semantic-verified',
+        citedShas: ['abc123def456abc123def456abc123def456'],
+        verdictAnchor: 'head-verdict',
+        testEvidence: { command: 'test', exit: 0 },
+      });
+
+      // 2. Task 10's row reads as 'completed' on disk (reconciliation advanced it)
+      const statusContent = await readFile(join(pipelineDir, 'task-status.json'), 'utf-8');
+      const status = JSON.parse(statusContent);
+      const task10 = status.tasks.find((t: any) => t.id === '10');
+      expect(task10).toBeDefined();
+      expect(task10.status).toBe('completed');
+
+      // 3. The row's commit field contains the 7-char short SHA from the stamp
+      expect(task10.commit).toBe('abc123d');
+
+      // 4. Orphan handling: task 99 has no matching row, should not invent one
+      // and should log a warning
+      const orphanValidated = [
+        {
+          taskId: '99',
+          sha: 'orphan-sha-999999999999999999999999',
+          citedShas: ['orphan-sha-999999999999999999999999'],
+          verdictAnchor: 'head-orphan',
+          testEvidence: { command: 'test', exit: 0 },
+        },
+      ];
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await writeJudgedStamps(dir, orphanValidated, []);
+      const warnCalls = warnSpy.mock.calls.filter((call) =>
+        call[0]?.toString().includes('task-evidence'),
+      );
+      warnSpy.mockRestore();
+
+      // Verify warning was logged for orphan
+      expect(warnCalls.length).toBeGreaterThan(0);
+
+      // Verify task 99 row was NOT invented
+      const finalStatus = JSON.parse(
+        await readFile(join(pipelineDir, 'task-status.json'), 'utf-8'),
+      );
+      expect(finalStatus.tasks.find((t: any) => t.id === '99')).toBeUndefined();
+
+      // But the stamp should exist
+      const finalEvidence = await createTaskEvidence(dir);
+      expect(finalEvidence.evidenceStamps.has('99')).toBe(true);
+    });
   });
 });
