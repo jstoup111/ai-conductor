@@ -1262,7 +1262,11 @@ export class Conductor {
       if (currentWaitController) {
         currentWaitController.abort();
       }
-      await writeState(this.stateFilePath, state);
+      try {
+        await writeState(this.stateFilePath, state);
+      } catch {
+        // A signal handler must never reject; best-effort state save only.
+      }
       process.exit(1);
     };
     if (!this.daemon) {

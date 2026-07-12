@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
+import { dirname } from 'path';
 import type { ConductState, StateResult } from '../types/index.js';
 import type { StepName, StepStatus, ComplexityTier } from '../types/index.js';
 
@@ -66,6 +67,7 @@ function migrateState(state: ConductState): ConductState {
  * (matches bash format for backward compat).
  */
 export async function writeState(path: string, state: ConductState): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify(state, null, 2) + '\n', 'utf-8');
 }
 
