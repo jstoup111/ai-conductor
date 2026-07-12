@@ -953,4 +953,150 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
     const haltMarker = await readFile(join(repo.root, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltMarker).toBeNull();
   });
+
+  /**
+   * Story 4 (guard): the re-check added in Story 1 must only fire when the
+   * lane actually stamped something. A lane that runs but stamps nothing
+   * (e.g. a no-verdict result) must not trigger a redundant
+   * `checkStepCompletion` call — that call would be pure overhead and, if the
+   * guard regressed to "always re-check", risks masking future no-whitewash
+   * bugs behind a spurious second evaluation.
+   */
+  it('lane runs but stampedTaskIds is empty → no extra checkStepCompletion call', async () => {
+    const repo = await initRepo('wiring-rescue-empty-stamps-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-stamps-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-stamps-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const calls: Array<{ residueIds: string[] }> = [];
+    // No-verdict result: dispatcher runs, writes a verdict, but nothing is
+    // stamped — stampedTaskIds must end up empty.
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'no-verdict',
+          reason: 'diff ambiguous between adjacent tasks',
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    };
+
+    const artifactsModule = await import('../../src/engine/artifacts.js');
+    const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
+
+    const runner = makeStepRunner(dispatchVerifier);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+    });
+
+    await conductor.run();
+
+    // The lane dispatched (residue existed, cutover armed) but stamped
+    // nothing — no-whitewash means the gate stays not-done.
+    expect(calls).toHaveLength(1);
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+
+    // Exactly one checkStepCompletion call for the 'build' step: the guard
+    // must NOT fire a second call when stampedTaskIds is empty.
+    const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
+    expect(buildChecks).toHaveLength(1);
+
+    checkSpy.mockRestore();
+  });
+
+  /**
+   * Story 4 (guard): with the cutover absent (unconfigured), the lane must
+   * be skipped entirely — same as the pre-attribution-lane flow. No
+   * dispatchVerifier call, no extra checkStepCompletion call, byte-identical
+   * to behavior before the lane existed.
+   */
+  it('cutover absent → lane skipped entirely, no re-check, flow byte-identical to before', async () => {
+    const repo = await initRepo('wiring-rescue-no-cutover-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-no-cutover-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-no-cutover-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const calls: Array<{ residueIds: string[] }> = [];
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      return { success: false, output: 'should never be called' };
+    };
+
+    const artifactsModule = await import('../../src/engine/artifacts.js');
+    const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
+
+    const runner = makeStepRunner(dispatchVerifier);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+      // No attribution_judge_cutover configured — lane must be fully skipped.
+      config: {} as never,
+    });
+
+    await conductor.run();
+
+    // Lane never dispatched.
+    expect(calls).toHaveLength(0);
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+
+    // Exactly one checkStepCompletion call for 'build' — the pre-lane
+    // baseline, with no lane-triggered re-check.
+    const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
+    expect(buildChecks).toHaveLength(1);
+
+    checkSpy.mockRestore();
+  });
 });
