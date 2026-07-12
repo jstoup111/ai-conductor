@@ -1157,6 +1157,82 @@ describe('engine/artifacts', () => {
 
         await rm(bareDir, { recursive: true, force: true });
       });
+
+      // Regression tests (Task 3): em-dash plan parser—prevent false-positive empty-plan auto-park
+      describe('regression: em-dash headings (### Task N — Title) are not false-positives for empty-plan', () => {
+        it('Story 1: Em-dash plan with evidence is "done", not "empty"', async () => {
+          // Setup: git repo with initial commit
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+          // Setup: bare "origin" so plan + work commits are ahead
+          const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-emdash-origin-'));
+          await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+          await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+          await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+          // Seed plan with EM-DASH task headings: "### Task N — Title"
+          // (not colon separator, which would be ### Task N: Title)
+          await writePlan(
+            '# Implementation Plan: Em-dash Test\n\n' +
+            '### Task 1 — First em-dash task\n' +
+            '**Story:** 1\n' +
+            'Content mentioning `src/task1.ts`\n\n' +
+            '### Task 2 — Second em-dash task\n' +
+            '**Story:** 2\n' +
+            'Content mentioning `src/task2.ts`\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add em-dash plan'], { cwd: dir });
+
+          // Seed real commits with evidence (Task: N trailers + corroborating paths)
+          await mkdir(join(dir, 'src'), { recursive: true });
+
+          await writeFile(join(dir, 'src/task1.ts'), 'export const task1 = true;\n');
+          await execa('git', ['add', 'src/task1.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement task 1\n\nTask: 1\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/task2.ts'), 'export const task2 = true;\n');
+          await execa('git', ['add', 'src/task2.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement task 2\n\nTask: 2\n'], { cwd: dir });
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+          // Main assertion: em-dash plan with evidence should PASS the gate
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result).toEqual({ done: true });
+
+          // Verify it does NOT report empty-plan or no-tasks-in-plan reason
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/empty|no tasks in plan|plan is empty/i);
+          }
+
+          await rm(bareDir, { recursive: true, force: true });
+        });
+
+        it('Story 2: Task-less plan (no Task headings) still triggers empty-plan reason', async () => {
+          // Seed a plan file with NO task headings — just prose
+          await writePlan(
+            '# Implementation Plan: Task-less Document\n\n' +
+            'This is a prose-only plan with no ### Task N headings.\n' +
+            'It should be treated as an empty plan for gating purposes.\n' +
+            'The PLAN artifact exists on disk but defines zero tasks.\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+          // Main assertion: task-less plan should FAIL the gate
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+
+          // Verify the reason mentions empty-plan trigger
+          expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+      });
     });
   });
 
