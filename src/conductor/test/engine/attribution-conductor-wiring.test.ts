@@ -839,6 +839,28 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
     return res.stdout.trim();
   }
 
+  /**
+   * Conductor's push-evidence check (finish gate) shells out to `git` via an
+   * injectable `GitRunner`; `makeProductionGit()` refuses to exec under
+   * `AI_CONDUCTOR_NO_REAL_EXEC` (the vitest global setup's kill-switch —
+   * belt-and-suspenders against a test mutating real state). Since this
+   * describe block drives a REAL git repo end-to-end (execa is restored to
+   * its real implementation in `beforeEach` above), inject a real
+   * execa-backed runner so `headPushedToUpstream` can resolve the upstream
+   * ref and ancestry against the fixture's actual `origin` remote instead of
+   * hitting the kill-switch and returning null (indeterminate — which the
+   * finish gate fails closed on).
+   */
+  function makeRealGitRunner(repo: { root: string }): (
+    args: string[],
+    opts: { cwd: string },
+  ) => Promise<{ stdout: string }> {
+    return async (args: string[], opts: { cwd: string }) => {
+      const result = await realExeca('git', args, { cwd: opts.cwd ?? repo.root });
+      return { stdout: String(result.stdout ?? '') };
+    };
+  }
+
   async function seedToBuildGate(statePath: string, featureDesc: string): Promise<void> {
     const state: Record<string, unknown> = {};
     for (const s of ALL_STEPS) {
@@ -984,6 +1006,7 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
       // Final retry attempt (retries exhausted) — the rescue must not depend
       // on a "next cycle" that will never run.
       maxRetries: 1,
