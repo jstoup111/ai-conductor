@@ -1912,6 +1912,7 @@ export class Conductor {
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
                 reason: lastError,
+                ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
               });
               continue;
             }
@@ -2435,6 +2436,8 @@ export class Conductor {
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
+                  resolvedBefore: resolvedTasksBefore,
+                  resolvedAfter: resolvedTasksAfter,
                 });
                 continue;
               }
