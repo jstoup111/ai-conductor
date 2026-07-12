@@ -718,6 +718,167 @@ describe('engine/artifacts', () => {
       expect(result.missing).toBe('recording');
       expect(ghCallCount.count).toBe(0); // Verify Phase 2 was never reached
     });
+
+    describe('Task 8: order-gated repair invocation between phases', () => {
+      it('happy path: repair invoked exactly once after phase 1 passes, before phase 2 gh.prView', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const callLog: string[] = [];
+        const repairFinishPr = vi.fn(async () => {
+          callLog.push('repair');
+        });
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            callLog.push('gh-prView');
+          }
+          return {
+            stdout: JSON.stringify({
+              title: 'Clean feature title',
+              isDraft: false,
+            }),
+          };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        });
+
+        expect(result).toEqual({ done: true });
+        expect(repairFinishPr).toHaveBeenCalledTimes(1);
+        expect(repairFinishPr).toHaveBeenCalledWith(prUrl);
+        // Verify repair was called before gh.prView (order check)
+        const repairIndex = callLog.indexOf('repair');
+        const ghIndex = callLog.indexOf('gh-prView');
+        expect(repairIndex).toBeLessThan(ghIndex);
+        expect(repairIndex).toBeGreaterThanOrEqual(0);
+      });
+
+      it('phase 1 miss: repair not invoked when pr_url missing', async () => {
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        // No .pipeline/conduct-state.json with pr_url
+
+        const repairFinishPr = vi.fn(async () => {
+          throw new Error('repair should not be called');
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          repairFinishPr,
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pr_url/);
+        expect(repairFinishPr).not.toHaveBeenCalled();
+      });
+
+      it('phase 1 miss: repair not invoked when push verification fails', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const repairFinishPr = vi.fn(async () => {
+          throw new Error('repair should not be called');
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => false,
+          repairFinishPr,
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/push|push evidence/i);
+        expect(repairFinishPr).not.toHaveBeenCalled();
+      });
+
+      it('repair throws: warning logged, predicate continues to phase 2', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const repairError = new Error('repair failed: network error');
+        const repairFinishPr = vi.fn(async () => {
+          throw repairError;
+        });
+
+        const logSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                title: 'Clean feature title',
+                isDraft: false,
+              }),
+            };
+          }
+          return { stdout: '{}' };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        });
+
+        expect(result).toEqual({ done: true });
+        expect(repairFinishPr).toHaveBeenCalledTimes(1);
+        expect(logSpy).toHaveBeenCalled();
+        const warningCall = logSpy.mock.calls.find((call) =>
+          String(call[0]).includes('repair'),
+        );
+        expect(warningCall).toBeDefined();
+
+        logSpy.mockRestore();
+      });
+
+      it('legacy mode: absent injectable, repair skipped, phase 2 runs as normal', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile(
+          '.pipeline/conduct-state.json',
+          JSON.stringify({ pr_url: prUrl }),
+        );
+
+        const fakeGh = async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                title: 'Clean feature title',
+                isDraft: false,
+              }),
+            };
+          }
+          return { stdout: '{}' };
+        };
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          // repairFinishPr is undefined (legacy)
+        });
+
+        expect(result).toEqual({ done: true });
+      });
+    });
   });
 
   describe('checkStepCompletion: build predicate (halt marker)', () => {

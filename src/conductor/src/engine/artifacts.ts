@@ -371,6 +371,13 @@ export interface CompletionContext {
    * predicate to seed task-status and validate plan presence/emptiness.
    */
   planPath?: string;
+  /**
+   * Optional repair callback (Task 8, ADR D1 order-gate).
+   * Invoked after Phase 1 evidence checks pass and before Phase 2 presentation checks.
+   * If the injectable is absent, repair is skipped (backward compatible).
+   * If repair throws, a warning is logged and Phase 2 proceeds (warn-only, not fatal).
+   */
+  repairFinishPr?: (prUrl: string) => Promise<void>;
 }
 
 /**
@@ -1209,6 +1216,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             missing: 'other',
           };
         }
+      }
+    }
+
+    // ---- Order-gate: repair invocation (Task 8, ADR D1) — runs after Phase 1
+    // passes, before Phase 2 presentation checks. Only when repairFinishPr injectable
+    // is present and we have a valid prUrl. Fail-open: repair errors are logged but
+    // do not block the gate (warn-only, not fatal).
+    if (choice === 'pr' && prUrl && ctx.repairFinishPr) {
+      try {
+        await ctx.repairFinishPr(prUrl);
+      } catch (error) {
+        console.warn(
+          `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing to Phase 2 (warn-only)`,
+        );
       }
     }
 
