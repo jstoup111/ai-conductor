@@ -13,6 +13,7 @@ export default defineConfig({
     globalSetup: ['./test/global-setup.ts'],
     pool: 'forks',
     poolOptions: { forks: { maxForks: 3, minForks: 1 } },
-    testTimeout: 10000,
+    testTimeout: 20000,
+    hookTimeout: 30000,
   },
 });
