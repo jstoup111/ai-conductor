@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   listDaemonSessions,
   reapLeakedDaemonSessions,
+  sweepStaleDaemonSessions,
   killDaemonSession,
   snapshotDaemonSessions,
   isTmpdirRooted,
@@ -252,6 +253,112 @@ describe('reapLeakedDaemonSessions (#437) — uncorroborated sessions are report
     expect(result.indeterminate).toHaveLength(1);
     expect(result.indeterminate[0]).toContain('cc-daemon-gone');
     expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+  });
+});
+
+describe('sweepStaleDaemonSessions — permanent-baseline-blindspot fix', () => {
+  it('kills a pre-existing tmpdir-rooted session with NO baseline involved at all', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-stale-debris\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 0, stdout: `${os.tmpdir()}/leftover-fixture-from-a-killed-run\n`, stderr: '' };
+      }
+      if (args[0] === 'kill-session') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    // No snapshot/baseline is ever taken or passed — this is the whole point:
+    // the sweep must not require "new this run" to authorize a kill.
+    const result = sweepStaleDaemonSessions(runner);
+
+    expect(result.killed).toHaveLength(1);
+    expect(result.killed[0]).toContain('cc-daemon-stale-debris');
+    expect(result.killed[0]).toContain('pane cwd:');
+
+    const killCalls = calls.filter((a) => a[0] === 'kill-session');
+    expect(killCalls).toEqual([['kill-session', '-t', '=cc-daemon-stale-debris']]);
+  });
+
+  it('never kills a session whose pane cwd is a real repo checkout (the operator daemon)', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-james-stoup-agents-87f14f\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 0, stdout: '/home/user/code/james-stoup-agents\n', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const result = sweepStaleDaemonSessions(runner);
+
+    expect(result.killed).toEqual([]);
+    expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+  });
+
+  it('never kills a session whose pane cwd is unresolvable (fail-closed, same as reap)', () => {
+    const calls: string[][] = [];
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: 'cc-daemon-gone\n', stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        return { code: 1, stdout: '', stderr: "can't find pane" };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const result = sweepStaleDaemonSessions(runner);
+
+    expect(result.killed).toEqual([]);
+    expect(calls.some((a) => a[0] === 'kill-session')).toBe(false);
+  });
+
+  it('empty session list ⇒ no-op', () => {
+    const runner: TmuxRunner = (args: string[]) => {
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    expect(sweepStaleDaemonSessions(runner)).toEqual({ killed: [] });
+  });
+
+  it('real tmux: a session created BEFORE any snapshot is taken (simulating debris left by a ' +
+    'previously-interrupted run) is swept and killed with zero baseline involvement', async () => {
+    if (!(await tmuxInstalled())) return; // no tmux in this sandbox — skip
+
+    const name = `cc-daemon-swtest-${randomBytes(4).toString('hex')}`;
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    try {
+      // Simulate a leaked session that predates this "run" (no snapshot taken
+      // before or after creating it — that's the point of the pre-run sweep).
+      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
+      expect(await hasSession(name)).toBe(true);
+
+      const { killed } = sweepStaleDaemonSessions();
+
+      expect(killed.some((l) => l.includes(name))).toBe(true);
+      expect(await hasSession(name)).toBe(false);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+      killDaemonSession(name); // idempotent safety net
+    }
   });
 });
 

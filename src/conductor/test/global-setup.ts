@@ -1,5 +1,10 @@
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
-import { snapshotDaemonSessions, reapLeakedDaemonSessions, type ReapResult } from './tmux-leak-guard.js';
+import {
+  snapshotDaemonSessions,
+  reapLeakedDaemonSessions,
+  sweepStaleDaemonSessions,
+  type ReapResult,
+} from './tmux-leak-guard.js';
 
 /**
  * Global vitest setup/teardown: detect .pipeline leaks during test runs.
@@ -57,15 +62,73 @@ export function applyTeardownDecision(
   }
 }
 
+/**
+ * Best-effort reap on graceful interruption (SIGINT/SIGTERM). vitest's
+ * `globalTeardown` only runs on a normal process exit — Ctrl-C, an external
+ * `timeout`-style SIGTERM, or a killed worker all bypass it entirely, which
+ * is exactly how sessions escaped the post-run reap in the first place. This
+ * cannot catch SIGKILL (uncatchable by design); the pre-run sweep in
+ * `setup()` is the backstop for whatever this can't reach.
+ */
+function installInterruptReap(
+  getSnapshot: () => ReturnType<typeof snapshotDaemonSessions>,
+  logger: (message: string) => void
+): () => void {
+  let handled = false;
+  const onSignal = (signal: NodeJS.Signals) => {
+    if (handled) return;
+    handled = true;
+    try {
+      const result = reapLeakedDaemonSessions(getSnapshot());
+      if (result.killed.length > 0) {
+        logger(`tmux-leak-guard: reaped on ${signal} before exit: ${result.killed.join('; ')}`);
+      }
+    } catch {
+      // Best-effort only — never let reap failure block shutdown.
+    } finally {
+      process.exit(1);
+    }
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  return () => {
+    process.removeListener('SIGINT', onSignal);
+    process.removeListener('SIGTERM', onSignal);
+  };
+}
+
 export default async function setup() {
   const beforeState = await snapshotPipeline(process.cwd());
+
+  // Pre-run sweep (see tmux-leak-guard.ts header: "PERMANENT-BASELINE-
+  // BLINDSPOT FIX"): kill any cc-daemon-* session already running whose pane
+  // cwd is tmpdir-rooted — debris left behind by a previous run that was
+  // interrupted before ITS teardown could reap it. Runs BEFORE the baseline
+  // snapshot below so that debris is never silently absorbed as "pre-existing,
+  // therefore never inspected again".
+  const sweep = sweepStaleDaemonSessions();
+  if (sweep.killed.length > 0) {
+    console.error(
+      `tmux-leak-guard: swept ${sweep.killed.length} stale tmpdir-rooted daemon ` +
+        `session(s) left behind by a previous interrupted run (killed at pre-run ` +
+        `sweep — this run is not at fault): ${sweep.killed.join('; ')}`
+    );
+  }
+
   // Tmux leak guard (#377): snapshot the operator's pre-existing cc-daemon-*
   // sessions so only sessions CREATED during this run count as leaks.
   const daemonSnapshot = snapshotDaemonSessions();
   globalThis.__tmuxSnapshot = daemonSnapshot;
 
+  const removeInterruptHandlers = installInterruptReap(
+    () => globalThis.__tmuxSnapshot ?? daemonSnapshot,
+    console.error
+  );
+
   // Return the async teardown function
   return async () => {
+    removeInterruptHandlers();
+
     const afterState = await snapshotPipeline(process.cwd());
     const diff = diffPipeline(beforeState, afterState);
 
