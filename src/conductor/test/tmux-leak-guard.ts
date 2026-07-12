@@ -28,6 +28,31 @@
 // and an indeterminate (fail-closed, left running) report are never
 // confusable in logs: `tmux-leak-guard: KILLED leaked session…` vs
 // `tmux-leak-guard: NOT killed (fail-closed): …`.
+//
+// PERMANENT-BASELINE-BLINDSPOT FIX (2026-07-12, ~400-session incident):
+// `reapLeakedDaemonSessions` only ever inspects sessions ABSENT from the
+// suite-start baseline (`before.has(name) ⇒ skip, no inspection at all`).
+// That is correct for distinguishing "new this run" from "the operator's
+// long-lived daemon" WHEN the run's own teardown gets to execute — but
+// vitest's `globalTeardown` is a normal-exit-only hook: it never fires on
+// SIGKILL, an external `timeout`-style SIGTERM, or a crashed/OOM-killed
+// worker. When a run is interrupted before teardown runs, any session it
+// leaked survives into the NEXT run's baseline snapshot — at which point
+// `before.has(name)` is true FOREVER, and the diff-based reaper never even
+// looks at its pane cwd again. Repeat across enough interrupted runs (this
+// harness is driven by many short-lived agent invocations against a 2-minute
+// default Bash timeout) and leaked sessions accumulate without bound — this
+// is exactly how ~400 stale `cc-daemon-*` sessions piled up in production.
+//
+// `sweepStaleDaemonSessions` (below) closes the hole with an orthogonal,
+// unconditional check that runs BEFORE the baseline is taken: any
+// `cc-daemon-*` session whose pane cwd is tmpdir-rooted is, by construction,
+// never the operator's real per-repo daemon (a real daemon's cwd is always a
+// real repo checkout, never `os.tmpdir()`) — so tmpdir-rootedness alone is
+// sufficient kill authority here, with no "new this run" requirement, because
+// at sweep time EVERYTHING found necessarily predates this run. This makes
+// the guard self-healing: even a session that leaked past every prior run's
+// teardown gets swept the next time ANY vitest invocation starts.
 
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -176,4 +201,44 @@ export function reapLeakedDaemonSessions(
   }
 
   return { killed, indeterminate };
+}
+
+/** Result of a pre-run sweep: sessions killed because they are unconditionally
+ * proven leaks (tmpdir-rooted pane cwd), regardless of baseline membership. */
+export type SweepResult = {
+  killed: string[];
+};
+
+/**
+ * Pre-run sweep — closes the permanent-baseline-blindspot (see header):
+ * kills every currently-running `cc-daemon-*` session whose pane cwd is
+ * tmpdir-rooted, BEFORE any baseline snapshot is taken.
+ *
+ * Unlike `reapLeakedDaemonSessions`, this does NOT require "absent from
+ * baseline" as a precondition — at sweep time there IS no baseline yet, and
+ * everything found is necessarily pre-existing. That is exactly the class
+ * `reapLeakedDaemonSessions` can never see again once it lands in a baseline.
+ * The single signal used here (pane cwd resolves AND is tmpdir-rooted) is the
+ * same TR-2 corroboration `reapLeakedDaemonSessions` uses, and is sufficient
+ * on its own: a real per-repo production daemon's pane cwd is always a real
+ * repo checkout path, never `os.tmpdir()`, so tmpdir-rootedness alone can
+ * never misidentify `cc-daemon-james-stoup-agents-*` or any other live
+ * operator daemon as a leak.
+ *
+ * An unresolvable pane cwd (`(unknown)`) is left alone (fail-closed, same as
+ * `reapLeakedDaemonSessions`) — an unresolvable signal is never treated as a
+ * "yes".
+ */
+export function sweepStaleDaemonSessions(runner: TmuxRunner = realTmuxRunner): SweepResult {
+  const killed: string[] = [];
+
+  for (const name of listDaemonSessions(runner)) {
+    const cwd = sessionPaneCwd(name, runner);
+    if (cwd !== '(unknown)' && isTmpdirRooted(cwd)) {
+      killDaemonSession(name, runner);
+      killed.push(`${name} (pane cwd: ${cwd})`);
+    }
+  }
+
+  return { killed };
 }

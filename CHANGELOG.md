@@ -47,6 +47,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Tmux daemon-session leak guard: permanent-baseline blindspot (~400-session
+  incident).** `reapLeakedDaemonSessions` only ever inspected `cc-daemon-*`
+  sessions absent from the suite-start baseline — correct for distinguishing
+  "new this run" from the operator's real daemon, but `vitest`'s
+  `globalTeardown` only fires on a normal process exit (never on SIGKILL, an
+  external `timeout`-style SIGTERM, or a crashed/OOM-killed worker). Any test
+  session leaked by an interrupted run survived into the *next* run's
+  baseline snapshot, at which point it was permanently invisible to the
+  diff-based reaper — repeat across enough interrupted runs and leaked
+  sessions accumulate without bound (this is how ~400 stale sessions piled up
+  and wedged a live production daemon). Added `sweepStaleDaemonSessions`
+  (`src/conductor/test/tmux-leak-guard.ts`): an unconditional pre-run sweep,
+  run before the baseline is taken, that kills any `cc-daemon-*` session whose
+  pane cwd is tmpdir-rooted regardless of baseline membership — tmpdir-rooted
+  cwd alone is sufficient proof of "test leak" since a real per-repo daemon's
+  cwd is always a real checkout, never `os.tmpdir()`, so `cc-daemon-<repo>-*`
+  and other real sessions (`engineer-*`, `halt-monitor`) are never touched.
+  Also adds a best-effort SIGINT/SIGTERM reap-on-interrupt handler in
+  `test/global-setup.ts` (can't catch SIGKILL; the next run's pre-run sweep
+  is the backstop for that). The existing post-run diff-based reap and its
+  fail-loud teardown assertion are unchanged.
 - **Attribution abstain-or-loud hardening (#519, #501).** Pre-dispatch bookkeeping
   failures now abstain loudly (with stderr diagnostics named to stderr) instead of
   silently leaving a stale `current-task` that misattributes every later commit.
