@@ -57,3 +57,30 @@ describe('engineer-cli unknown-flag rejection on zero/boolean-flag subcommands (
     expect(detectEngineerCommand(argv('projects'))).toEqual({ kind: 'projects' });
   });
 });
+
+describe('engineer-cli unknown-flag rejection on positional/optional-flag subcommands (#524)', () => {
+  it('rejects an unknown flag on `forget`', () => {
+    expect(detectEngineerCommand(argv('forget', 'o/a#1', '--force'))).toEqual({
+      kind: 'reject',
+      sub: 'forget',
+      flag: '--force',
+    });
+  });
+
+  it('rejects an unknown flag on `resolve`', () => {
+    expect(
+      detectEngineerCommand(argv('resolve', 'o/a#1', '--pr-url', 'https://x/1', '--dry-run')),
+    ).toEqual({
+      kind: 'reject',
+      sub: 'resolve',
+      flag: '--dry-run',
+    });
+  });
+
+  it('regression: `forget <sourceRef>` with no flags still returns forget', () => {
+    expect(detectEngineerCommand(argv('forget', 'o/a#1'))).toEqual({
+      kind: 'forget',
+      sourceRef: 'o/a#1',
+    });
+  });
+});
