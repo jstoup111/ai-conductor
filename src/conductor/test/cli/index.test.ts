@@ -174,6 +174,38 @@ describe('CLI', () => {
       expect(help).not.toContain('conduct help');
       expect(help).not.toContain('conduct engineer help');
     });
+
+    // #524 Task 8: the engineer subtree was missing worktree/poll/claim/forget/
+    // resolve/migrate-issue-deps — only projects/land/handoff were declared, so
+    // the generated full reference was silently incomplete.
+    it('documents every engineer subcommand, not just projects/land/handoff', () => {
+      for (const path of [
+        'conduct engineer worktree',
+        'conduct engineer poll',
+        'conduct engineer claim',
+        'conduct engineer forget',
+        'conduct engineer resolve',
+        'conduct engineer migrate-issue-deps',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents --worktree and --source-ref on land/handoff', () => {
+      expect(help).toContain('--worktree');
+      expect(help).toContain('--source-ref');
+    });
+  });
+
+  // Root --help must name BOTH loops (daemon + engineer), not just describe a
+  // single generic "SDLC pipeline" — #524/#227: the two loops are distinct
+  // (build/ship daemon vs. engineer/brain idea→spec loop) and the root
+  // description should point operators at `engineer --help` for its subtree.
+  it('root --help names both the daemon and engineer loops', () => {
+    const helpOutput = createProgram().helpInformation();
+    expect(helpOutput).toContain('daemon');
+    expect(helpOutput).toContain('engineer');
+    expect(helpOutput).toContain('engineer --help');
   });
 
   // `conduct daemon --help` renders the daemon subtree only (run flags + every

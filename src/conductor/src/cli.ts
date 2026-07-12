@@ -73,7 +73,10 @@ function applyPipelineOptions(cmd: Command): Command {
 // subcommands, so a feature description is never mistaken for an unknown command.
 function createBaseProgram(): Command {
   const program = new Command();
-  program.name('conduct').description('Orchestrate SDLC pipeline');
+  program.name('conduct').description(
+    'Orchestrate SDLC pipeline — two loops: the build/ship daemon (`daemon`) and the ' +
+      'engineer/brain idea→spec loop (`engineer`, or `engineer --help` for its full command reference)',
+  );
   return applyPipelineOptions(program);
 }
 
@@ -131,15 +134,42 @@ export function createProgram(): Command {
     .command('projects')
     .description('List registered projects as JSON (name, path, description, tags)');
   engineer
+    .command('worktree')
+    .description('Create the per-idea authoring worktree for a project')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--idea <idea>', 'The idea/spec being authored');
+  engineer
     .command('land')
     .description('Commit the already-authored .docs spec artifacts onto a spec/<slug> branch')
     .option('--project <name>', 'Target project name (resolved from the registry)')
-    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)');
+    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)')
+    .option('--worktree <path>', 'The per-idea authoring worktree to commit in')
+    .option('--source-ref <ref>', 'Originating intake ref (owner/repo#N), for write-back');
   engineer
     .command('handoff')
     .description('Open the spec PR (local-commit fallback when no remote) and nudge the target daemon')
     .option('--project <name>', 'Target project name (resolved from the registry)')
-    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
+    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`')
+    .option('--worktree <path>', 'The per-idea authoring worktree to remove after handoff')
+    .option('--source-ref <ref>', 'Originating intake ref (owner/repo#N), for write-back');
+  engineer
+    .command('poll')
+    .description('Poll github issues and enqueue new ideas into the durable inbox');
+  engineer
+    .command('claim')
+    .description('Atomically dequeue the oldest pending idea from the intake inbox');
+  engineer
+    .command('forget <sourceRef>')
+    .description('Drop an intake ledger entry and strip its label');
+  engineer
+    .command('resolve <sourceRef>')
+    .description('Mark a claimed intake entry as delivered')
+    .option('--pr-url <url>', 'The PR URL that delivered this idea (http(s)://)')
+    .option('--branch <branch>', 'The branch that delivered this idea');
+  engineer
+    .command('migrate-issue-deps')
+    .description('One-time prose-to-link dependency migration across tracked issues')
+    .option('--confirm', 'Perform the migration (omit for a dry-run proposal with zero writes)');
 
   // Task subcommand (Task 7). NON-INTERACTIVE: dispatched by index.ts
   // (detectTaskCommand) before the pipeline boots. Routes to task start/done
