@@ -37,6 +37,12 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { runAttributionLane } from '../../src/engine/attribution-lane.js';
 import { reconcileStatusFromStamps } from '../../src/engine/autoheal.js';
 
@@ -743,5 +749,208 @@ describe('attribution lane no-whitewash: gate stays not-done on no-verdict/inval
     // for the residue that failed judging.
     expect(task9.status).not.toBe('completed');
     expect(task9.status).toBe('in_progress');
+  });
+});
+
+/**
+ * Story 1 (RED): in-cycle rescue wiring.
+ *
+ * PROBLEM: In `Conductor.run()`'s build gate-miss branch, `completion` is
+ * snapshotted BEFORE `runAttributionLane` dispatches the verifier and stamps
+ * residue tasks (conductor.ts:~1968, re-checked only on `heal.healed.length >
+ * 0`, i.e. from auto-heal — NOT re-derived after the lane's stamps land).
+ * The halt decision at `if (!completion.done)` (conductor.ts:~2070) reads
+ * that stale, pre-lane snapshot even when every residue task the lane just
+ * judged is `satisfied` with valid citations and passing test evidence. This
+ * drives the REAL `Conductor` (not a fake dispatcher) through a genuine
+ * build-gate miss and asserts the gate resolves `done` on the SAME attempt —
+ * no HALT marker, no dependency on a second while-loop iteration or retry.
+ *
+ * This block needs real git plumbing (git log/diff/show for
+ * `deriveCompletion`'s auto-heal derivation, not just `git rev-parse HEAD`),
+ * so it restores the real `execa` implementation for its own tests rather
+ * than relying on the file-level `vi.mock('execa', ...)` stub used by the
+ * dispatcher-only tests above.
+ */
+describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () => {
+  let repos: Array<{ root: string; bareOrigin: string }> = [];
+  let realExeca: typeof import('execa')['execa'];
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('execa')>('execa');
+    realExeca = actual.execa;
+    vi.mocked(execa).mockImplementation(((...args: unknown[]) =>
+      (realExeca as (...a: unknown[]) => unknown)(...args)) as typeof execa);
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      repos.flatMap((r) => [
+        rm(r.root, { recursive: true, force: true }),
+        rm(r.bareOrigin, { recursive: true, force: true }),
+      ]),
+    );
+    repos = [];
+    // Restore the file-level fake so the dispatcher-only tests above are
+    // unaffected if the file's test order changes.
+    vi.mocked(execa).mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') {
+        return { stdout: 'abc1234567890123456789012345678901234567\n', stderr: '', exitCode: 0 } as never;
+      }
+      return { stdout: '', stderr: '', exitCode: 0 } as never;
+    });
+  });
+
+  /**
+   * deriveCompletion's evidence-range resolution fails closed (zero commits)
+   * unless an `origin` remote with a resolvable default branch exists — a
+   * bare origin + `push -u` is the minimal fixture (mirrors
+   * test/engine/autoheal.test.ts and the #581 acceptance spec's own
+   * `initRepo` convention).
+   */
+  async function initRepo(prefix: string): Promise<{ root: string; bareOrigin: string }> {
+    const root = await mkdtemp(join(tmpdir(), `${prefix}-`));
+    const bareOrigin = await mkdtemp(join(tmpdir(), `${prefix}-origin-`));
+    await realExeca('git', ['init', '--bare'], { cwd: bareOrigin });
+    await realExeca('git', ['init', '-b', 'main'], { cwd: root });
+    await realExeca('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await realExeca('git', ['config', 'user.name', 'Test User'], { cwd: root });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, 'README.md'), '# fixture\n');
+    await realExeca('git', ['add', 'README.md'], { cwd: root });
+    await realExeca('git', ['commit', '-m', 'chore: init'], { cwd: root });
+    await realExeca('git', ['remote', 'add', 'origin', bareOrigin], { cwd: root });
+    await realExeca('git', ['push', '-u', 'origin', 'main'], { cwd: root });
+    return { root, bareOrigin };
+  }
+
+  async function commit(
+    repo: { root: string },
+    file: string,
+    contents: string,
+    message: string,
+  ): Promise<string> {
+    const fileDir = join(repo.root, file.split('/').slice(0, -1).join('/') || '.');
+    await mkdir(fileDir, { recursive: true });
+    await writeFile(join(repo.root, file), contents, 'utf-8');
+    await realExeca('git', ['add', file], { cwd: repo.root });
+    await realExeca('git', ['commit', '-m', message], { cwd: repo.root });
+    const sha = await realExeca('git', ['rev-parse', 'HEAD'], { cwd: repo.root });
+    return sha.stdout.trim();
+  }
+
+  async function headSha(repo: { root: string }): Promise<string> {
+    const res = await realExeca('git', ['rev-parse', 'HEAD'], { cwd: repo.root });
+    return res.stdout.trim();
+  }
+
+  async function seedToBuildGate(statePath: string, featureDesc: string): Promise<void> {
+    const state: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      state[s.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = featureDesc;
+    state.track = 'technical';
+    await writeState(statePath, state as unknown as ConductState);
+  }
+
+  async function writeTaskStatus(root: string, taskIds: string[]): Promise<void> {
+    const tasks = taskIds.map((id) => ({ id, status: 'pending' }));
+    await writeFile(
+      join(root, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks }, null, 2) + '\n',
+      'utf-8',
+    );
+  }
+
+  function makeStepRunner(
+    dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']>,
+  ): StepRunner {
+    return {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') return { success: true };
+        return { success: true };
+      },
+      dispatchVerifier,
+    };
+  }
+
+  it('a fully-covered residue build advances (done, no HALT) on the SAME attempt when the judge lane stamps every residue task satisfied', async () => {
+    const repo = await initRepo('wiring-rescue-happy-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Task 1 resolves mechanically (trailered commit). Task 2 is residue —
+    // implemented but untrailered, exactly the shape the judge lane exists
+    // to rescue.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    const shaB = await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const calls: Array<{ residueIds: string[] }> = [];
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'satisfied',
+          citations: [{ sha: shaB, rationale: 'implements task 2 (b.ts)' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    };
+
+    const runner = makeStepRunner(dispatchVerifier);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      // Final retry attempt (retries exhausted) — the rescue must not depend
+      // on a "next cycle" that will never run.
+      maxRetries: 1,
+      fromStep: 'build',
+      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+    });
+
+    await conductor.run();
+
+    // The lane must have been dispatched exactly once, on residue task 2.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].residueIds).toEqual(['2']);
+
+    // KEY ASSERTION (RED today): the gate resolves 'done' on the SAME
+    // attempt — no HALT, no reliance on a second loop iteration. Today the
+    // gate-miss decision reads the pre-lane `completion` snapshot, so
+    // `build` stays incomplete despite every residue task being stamped
+    // 'satisfied' with valid citations and passing test evidence.
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).toBe('done');
+    }
+    const haltMarker = await readFile(join(repo.root, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltMarker).toBeNull();
   });
 });
