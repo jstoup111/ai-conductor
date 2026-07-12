@@ -65,6 +65,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   gate's surface flag (`mutation-gate.sh write|bash`) broke the raw-path
   assumption and failed CI on every run since the #509 merge.
 - **Evidence stamp sync** (#526): `.pipeline/task-status.json` rows are now reconciled from `.pipeline/task-evidence.json` stamps. A stamped but `in_progress` row advances to `completed` immediately on stamp write or derived-completion pass. Orphan stamps (no matching row) emit a warning and never invent rows.
+- Daemon build-completion gate no longer false-parks a fully-completed build as 'empty/missing plan' when the plan's task headings use the `### Task N — Title` em-dash form: `parsePlanTaskPaths` now accepts an em-dash/en-dash title separator as a task-id terminator (previously only a colon or end-of-line), so em-dash plans parse their task ids, evidence is stamped, and the build passes the gate (ai-conductor#578).
 
 
 ### Changed
