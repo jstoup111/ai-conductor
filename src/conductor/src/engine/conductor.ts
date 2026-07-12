@@ -2073,7 +2073,7 @@ export class Conductor {
                 step.name,
                 completion.reason,
                 completion.missing,
-                this.pipelineDir ?? undefined,
+                join(this.projectRoot, '.pipeline'),
               );
 
               // prd-audit short-circuit (daemon only): re-auditing unchanged code
