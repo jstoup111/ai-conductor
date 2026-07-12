@@ -139,6 +139,11 @@ import {
 } from './task-evidence.js';
 import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
 import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
+import {
+  rehabilitateHaltPr,
+  retitleFloor,
+  ensureShipReady,
+} from './halt-pr-rehabilitation.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -616,6 +621,57 @@ export class Conductor {
       planPath = undefined;
     }
 
+    // Resolve sourceRef from intake marker for repair callback
+    let sourceRef: string | undefined;
+    if (state.feature_desc && planPath) {
+      try {
+        const stem = planStem(planPath);
+        const intakeMarkerPath = join(this.projectRoot, `.docs/intake/${stem}.md`);
+        const intakeContent = await readFile(intakeMarkerPath, 'utf-8').catch(() => null);
+        sourceRef = parseIntakeSourceRef(intakeContent);
+      } catch {
+        // Intake marker read failed — sourceRef remains undefined (no-op in repair)
+        sourceRef = undefined;
+      }
+    }
+
+    // Compose the repair callback that applies the three repairs in order
+    const repairFinishPr = async (prUrl: string): Promise<void> => {
+      const gh = this.gh;
+      const cwd = this.projectRoot;
+      const branch = state.worktree_branch;
+      const featureDesc = state.feature_desc;
+
+      // Step 1: Rehabilitate halt PR (unlabel, title fix, close injection)
+      try {
+        await rehabilitateHaltPr({
+          gh,
+          cwd,
+          prUrl,
+          sourceRef,
+        });
+      } catch (err) {
+        // Warn-only: repair is best-effort, failures don't block further steps
+        console.warn(`[conductor-repair] rehabilitateHaltPr failed: ${err}`);
+      }
+
+      // Step 2: Retitle floor (fix stale needs-remediation: title)
+      try {
+        await retitleFloor(gh, cwd, prUrl, { featureDesc, branch });
+      } catch (err) {
+        // Warn-only
+        console.warn(`[conductor-repair] retitleFloor failed: ${err}`);
+      }
+
+      // Step 3: Ensure PR is ready (draft→ready flip)
+      try {
+        await ensureShipReady(gh, cwd, prUrl);
+      } catch (err) {
+        // Warn-only
+        console.warn(`[conductor-repair] ensureShipReady failed: ${err}`);
+      }
+    };
+
     return {
       sessionStartedAt: state.session_started_at,
       featureDesc: state.feature_desc,
@@ -633,6 +689,8 @@ export class Conductor {
       },
       projectRoot: this.projectRoot,
       planPath,
+      gh: this.gh,
+      repairFinishPr,
     };
   }
 
