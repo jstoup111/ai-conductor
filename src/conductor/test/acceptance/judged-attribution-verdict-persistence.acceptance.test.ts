@@ -163,12 +163,64 @@ function makeStepRunner(
     run: async (step: StepName): Promise<StepRunResult> => {
       calls.push(step);
       if (step === 'build') return buildResult;
+      const pipelineDir = join(repo.root, '.pipeline');
       if (step === 'manual_test') {
-        const pipelineDir = join(repo.root, '.pipeline');
         await mkdir(pipelineDir, { recursive: true });
         await writeFile(
           join(pipelineDir, 'manual-test-results.md'),
           '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
+      if (step === 'build_review') {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(
+          join(pipelineDir, 'build-review.md'),
+          '# Build Review\n\n| Item | Status |\n|--|--|\n| Design | approved |\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
+      if (step === 'architecture_review_as_built') {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(
+          join(pipelineDir, 'architecture-review-as-built.md'),
+          '# Architecture Review\n\nVerdict: APPROVED\n\n| Item | Status |\n|--|--|\n| Aligned | approved |\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
+      if (step === 'prd_audit') {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(
+          join(pipelineDir, 'prd-audit.md'),
+          '# PRD Audit\n\nNo FRs to audit (technical track).\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
+      if (step === 'retro') {
+        const retroDir = join(repo.root, '.docs/retros');
+        await mkdir(retroDir, { recursive: true });
+        await writeFile(
+          join(retroDir, '2026-07-12-fixture.md'),
+          '# Retro\n\nNothing notable.\n',
+          'utf-8',
+        );
+        return { success: true };
+      }
+      if (step === 'finish') {
+        await mkdir(pipelineDir, { recursive: true });
+        // The finish gate's push-evidence check requires HEAD to be a real
+        // ancestor of refs/remotes/origin/<branch> — push before recording
+        // the choice so `isHeadPushed` resolves true instead of null
+        // (indeterminate, which the gate fails closed on).
+        await execa('git', ['push', 'origin', 'HEAD'], { cwd: repo.root }).catch(() => {});
+        await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n', 'utf-8');
+        await writeFile(
+          join(pipelineDir, 'conduct-state.json'),
+          JSON.stringify({ pr_url: 'https://github.com/example/repo/pull/1' }, null, 2),
           'utf-8',
         );
         return { success: true };

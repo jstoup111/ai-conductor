@@ -37,12 +37,6 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
-import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
 import { runAttributionLane } from '../../src/engine/attribution-lane.js';
 import { reconcileStatusFromStamps } from '../../src/engine/autoheal.js';
 
@@ -868,10 +862,73 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
 
   function makeStepRunner(
     dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']>,
+    root: string,
   ): StepRunner {
     return {
       run: async (step: StepName): Promise<StepRunResult> => {
         if (step === 'build') return { success: true };
+        const pipelineDir = join(root, '.pipeline');
+        if (step === 'manual_test') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'build_review') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'build-review.md'),
+            '# Build Review\n\n| Item | Status |\n|--|--|\n| Design | approved |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'architecture_review_as_built') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'architecture-review-as-built.md'),
+            '# Architecture Review\n\nVerdict: APPROVED\n\n| Item | Status |\n|--|--|\n| Aligned | approved |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'prd_audit') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'prd-audit.md'),
+            '# PRD Audit\n\nNo FRs to audit (technical track).\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'retro') {
+          const retroDir = join(root, '.docs/retros');
+          await mkdir(retroDir, { recursive: true });
+          await writeFile(
+            join(retroDir, '2026-07-12-fixture.md'),
+            '# Retro\n\nNothing notable.\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'finish') {
+          await mkdir(pipelineDir, { recursive: true });
+          // The finish gate's push-evidence check requires HEAD to be a real
+          // ancestor of refs/remotes/origin/<branch> — push before recording
+          // the choice so `isHeadPushed` resolves true instead of null
+          // (indeterminate, which the gate fails closed on).
+          await realExeca('git', ['push', 'origin', 'HEAD'], { cwd: root }).catch(() => {});
+          await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n', 'utf-8');
+          await writeFile(
+            join(pipelineDir, 'conduct-state.json'),
+            JSON.stringify({ pr_url: 'https://github.com/example/repo/pull/1' }, null, 2),
+            'utf-8',
+          );
+          return { success: true };
+        }
         return { success: true };
       },
       dispatchVerifier,
@@ -918,7 +975,7 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       return { success: true, output: JSON.stringify(verdict) };
     };
 
-    const runner = makeStepRunner(dispatchVerifier);
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -1003,7 +1060,7 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
     const artifactsModule = await import('../../src/engine/artifacts.js');
     const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
 
-    const runner = makeStepRunner(dispatchVerifier);
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -1066,7 +1123,7 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
     const artifactsModule = await import('../../src/engine/artifacts.js');
     const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
 
-    const runner = makeStepRunner(dispatchVerifier);
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
