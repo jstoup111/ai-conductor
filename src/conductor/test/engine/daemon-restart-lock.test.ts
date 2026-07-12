@@ -16,6 +16,7 @@ import {
   readPidRecord,
   writePidRecord,
   isLive,
+  holdLock,
   type PidRecord,
 } from '../../src/engine/daemon-lock.js';
 import { dispatchDaemonSupervisor } from '../../src/engine/daemon-supervisor-cli.js';
@@ -325,5 +326,27 @@ describe('dispatchDaemonSupervisor restart verb — wired through clearStaleLock
     expect(code).toBe(0);
     expect((ownerAtRestartTime as any)?.pid).toBe(process.pid);
     expect((ownerAtRestartTime as any)?.uuid).toBe('live-owner');
+  });
+});
+
+describe('holdLock — Story 2: successor refused while predecessor pidfile persists through drain (#561)', () => {
+  it('successor holdLock refuses while predecessor pidfile persists through drain, then acquires once predecessor releases', async () => {
+    // Predecessor A claims the lock — pidfile written with a live pid (process.pid).
+    const a = await holdLock(repoPath);
+    expect(a).not.toBeNull();
+    expect(a?.owned).toBe(true);
+
+    // A's handle is deliberately NOT released yet — this models the drain window:
+    // Task 3 ensures the pidfile persists through drain instead of being released early.
+    const b = await holdLock(repoPath, { takeoverWaitMs: 300, pollMs: 50 });
+    expect(b).toBeNull();
+
+    // Drain completes — A releases.
+    await a?.release();
+
+    // Now the pidfile is genuinely free — B cleanly acquires via O_EXCL.
+    const bAfter = await holdLock(repoPath);
+    expect(bAfter).not.toBeNull();
+    expect(bAfter?.owned).toBe(true);
   });
 });

@@ -326,3 +326,54 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3 (#561, daemon-releases-the-lock-only-after-draining-in-fl): SIGTERM
+// must drain (via runDaemon's shouldStop) before the lock is released, with a
+// bounded force-release if the drain never completes. Static source-assert
+// checks mirroring the Task 22 SIGTERM block above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () => {
+  it('daemonSigtermHandler body does not call process.exit directly and calls teardown.requestStop', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+
+    const handlerMatch = src.match(
+      /const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/,
+    );
+    expect(handlerMatch).not.toBeNull();
+    const handlerBody = handlerMatch![1];
+
+    // The handler must no longer force-exit the process directly — that now
+    // happens only via the bounded teardown's onForceRelease callback.
+    expect(handlerBody).not.toContain('process.exit');
+    // The handler must request the drain-then-release teardown instead.
+    expect(handlerBody).toContain('teardown.requestStop()');
+  });
+
+  it('runDaemon is invoked with a shouldStop dep wired to the teardown controller', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+
+    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
+  });
+
+  it('onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+
+    const teardownMatch = src.match(
+      /createDaemonTeardown\(\{([\s\S]*?)\n  \}\);/,
+    );
+    expect(teardownMatch).not.toBeNull();
+    const teardownArgs = teardownMatch![1];
+
+    expect(teardownArgs).toContain('onForceRelease');
+    expect(teardownArgs).toContain('releaseBackstop()');
+    expect(teardownArgs).toMatch(/force-release/);
+  });
+
+  it('normal-completion path cancels the teardown controller before/around releasing the lock', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+
+    expect(src).toMatch(/teardown\.cancel\(\);[\s\S]*?await lock\.release\(\);/);
+  });
+});
