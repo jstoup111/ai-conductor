@@ -793,10 +793,13 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('self-heals an impl-gap audit back to BUILD, then HALTs at the cap', async () => {
+    it('self-heals an impl-gap audit back to BUILD, then HALTs on the first no-op cycle (D2)', async () => {
       await seedToPrdAudit();
-      // Perpetual impl-gap: every audit reports the same un-closed impl-gap, so
-      // the daemon routes back to BUILD until the self-heal cap, then HALTs.
+      // Perpetual impl-gap: every audit reports the same un-closed impl-gap,
+      // and the fake BUILD makes zero net progress (task-status.json is
+      // byte-identical each call, no repo to move HEAD) — D2 (#647) now
+      // HALTs on the first no-op kickback cycle instead of spending the
+      // self-heal budget re-kicking a build that provably isn't helping.
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
       const kickbacks: Array<{ from: string; to: string }> = [];
       events.on('kickback', (e) => {
@@ -819,13 +822,15 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Routed back to BUILD (kickback prd_audit→build) and rebuilt.
-      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(2);
-      expect(calls.filter((s) => s === 'build').length).toBe(2);
-      // Exhausted the self-heal budget → HALT (not an opaque crash).
+      // Routed back to BUILD (kickback prd_audit→build) exactly once, then
+      // the re-entered prd_audit's zero-progress + unchanged-verdict re-fail
+      // escalates to HALT (D2) instead of a second self-heal round.
+      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(1);
+      expect(calls.filter((s) => s === 'build').length).toBe(1);
+      // Exhausted budget → HALT (not an opaque crash).
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/impl-gap unresolved after 2 build attempt/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
@@ -1221,7 +1226,7 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('routes a FAILing manual_test back to build with the FAIL rows, then HALTs at the cap', async () => {
+    it('routes a FAILing manual_test back to build with the FAIL rows, then HALTs on the first no-op cycle (D2)', async () => {
       await seedToManualTest();
       const { runner, calls } = failingManualTestRunner();
       const kickbacks: Array<{ from: string; to: string }> = [];
@@ -1246,14 +1251,15 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Kicked back to build twice (the cap), rebuilt each time, then HALTed
-      // with a reason naming the exhausted budget and the surviving FAIL row.
-      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(2);
-      expect(calls.filter((s) => s === 'build').length).toBe(2);
+      // Kicked back to build once; the fake BUILD makes zero net progress
+      // (identical task-status.json, no repo to move HEAD) and manual_test
+      // FAILs with the same rows again — D2 (#647) HALTs on this first
+      // no-op cycle instead of spending a second kickback toward the cap.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+      expect(calls.filter((s) => s === 'build').length).toBe(1);
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/manual-test FAIL unresolved after 2 build kickback/);
-      expect(halt).toMatch(/s1/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
@@ -2766,9 +2772,10 @@ describe('engine/conductor', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 
-    it('as-built review failure routes via /remediate and HALTs at the remediation cap', async () => {
-      // A perpetually-BLOCKED as-built review: routed to build twice (the
-      // remediation budget), then the generic HALT — never an unbounded loop.
+    it('as-built review failure routes via /remediate and HALTs on the first no-op kickback cycle (D2)', async () => {
+      // A perpetually-BLOCKED as-built review whose remediation build makes
+      // zero net progress each time — D2 (#647) HALTs on the first no-op
+      // kickback cycle instead of spending the full remediation budget.
       await seedShipTail({ architecture_review_as_built: 'pending' });
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
@@ -2822,10 +2829,10 @@ describe('engine/conductor', () => {
       expect(
         kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build')
           .length,
-      ).toBe(2);
+      ).toBe(1);
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/failed in auto mode \(retries exhausted\)/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('non-daemon auto mode does NOT dispatch /remediate on a finish failure', async () => {

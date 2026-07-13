@@ -105,6 +105,11 @@ import {
   readAllVerdicts,
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
+import {
+  classifyBuildProgress,
+  shouldEscalateKickback,
+  type ShouldEscalateKickbackResult,
+} from './kickback-escalation.js';
 import { WorktreeManager } from './worktree.js';
 import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
@@ -1459,6 +1464,72 @@ export class Conductor {
     // attempt; later attempts use the step's own failure/gate-miss hint.
     const pendingRetryHints = new Map<StepName, string>();
 
+    // D2 (adr-2026-07-13-kickback-build-no-op-escalation): context captured
+    // immediately before a kickback routes back to BUILD, keyed by the
+    // source gate that initiated the kickback. Consulted the next time that
+    // same gate fails again — if the intervening build produced zero net
+    // progress (no HEAD movement, no resolved-task movement) AND the gate's
+    // verdict is unchanged, the loop HALTs instead of re-kicking toward
+    // MAX_KICKBACKS_PER_GATE. Cleared once consulted (or once the gate
+    // clears) so a later, unrelated kickback starts with a fresh baseline.
+    const kickbackToBuildContext = new Map<
+      StepName,
+      { priorVerdict: boolean; resolvedBefore: number; headBefore: string | null }
+    >();
+    const kickbackEscalationEnabled =
+      (this.config as unknown as { kickback_escalation?: { enabled?: boolean } } | undefined)
+        ?.kickback_escalation?.enabled ?? true;
+
+    /**
+     * Records the pre-kickback baseline for `sourceGate` right before a
+     * navigateBack(..., 'build', ...) is committed, so the next time
+     * `sourceGate` fails again we can tell whether the intervening build
+     * cycle made any real progress.
+     */
+    const captureKickbackToBuildContext = async (sourceGate: StepName): Promise<void> => {
+      const [headBefore, resolvedBefore] = await Promise.all([
+        currentCommitSha(this.projectRoot),
+        countResolvedTasks(this.projectRoot),
+      ]);
+      kickbackToBuildContext.set(sourceGate, {
+        priorVerdict: false, // we only ever kick back to build on a failing gate
+        resolvedBefore,
+        headBefore,
+      });
+    };
+
+    /**
+     * Checks whether `sourceGate` re-failing right now is a no-op re-entry
+     * from a prior kickback-to-build cycle. Returns a halt result (with
+     * reason) when D2's guard should fire, else `{ halt: false }`. Clears
+     * the captured context either way — it is single-use per kickback.
+     */
+    const checkKickbackToBuildEscalation = async (
+      sourceGate: StepName,
+    ): Promise<ShouldEscalateKickbackResult> => {
+      const ctx = kickbackToBuildContext.get(sourceGate);
+      if (!ctx) return { halt: false };
+      kickbackToBuildContext.delete(sourceGate);
+      const [headAfter, resolvedAfter] = await Promise.all([
+        currentCommitSha(this.projectRoot),
+        countResolvedTasks(this.projectRoot),
+      ]);
+      const progress = classifyBuildProgress({
+        headBefore: ctx.headBefore,
+        headAfter,
+        resolvedBefore: ctx.resolvedBefore,
+        resolvedAfter,
+      });
+      // The gate is failing again right now (that's why this is being
+      // consulted), so nextVerdict is always false/unsatisfied here.
+      return shouldEscalateKickback({
+        progress,
+        priorVerdict: ctx.priorVerdict,
+        nextVerdict: false,
+        enabled: kickbackEscalationEnabled,
+      });
+    };
+
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
@@ -2765,6 +2836,27 @@ export class Conductor {
             if (this.daemon && step.name === 'manual_test') {
               const failRows = await readManualTestFailRows(this.projectRoot);
               if (failRows.length > 0) {
+                // D2: same no-op re-entry guard as build_review — see below.
+                const manualTestEscalation = await checkKickbackToBuildEscalation('manual_test');
+                if (manualTestEscalation.halt) {
+                  const reason = `manual_test kickback-to-build no-op: ${manualTestEscalation.reason}`;
+                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                    () => {},
+                  );
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
                   manualTestSelfHeals++;
                   const evidence = failRows.join('\n');
@@ -2795,6 +2887,7 @@ export class Conductor {
                   if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                     return;
                   }
+                  await captureKickbackToBuildContext('manual_test');
                   const nav = navigateBack(state, 'build', steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; manual_test
@@ -2845,6 +2938,30 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                // D2: a build_review FAIL that re-enters right after a prior
+                // kickback-to-build cycle made zero net progress on an
+                // unchanged verdict escalates to HALT on this cycle instead
+                // of spending another kickback toward the cap.
+                const escalation = await checkKickbackToBuildEscalation('build_review');
+                if (escalation.halt) {
+                  const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
+                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                    () => {},
+                  );
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 const count = (kickbackCounts.get('build_review') ?? 0) + 1;
                 if (count <= MAX_KICKBACKS_PER_GATE) {
                   kickbackCounts.set('build_review', count);
@@ -2873,6 +2990,7 @@ export class Conductor {
                   if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                     return;
                   }
+                  await captureKickbackToBuildContext('build_review');
                   const nav = navigateBack(state, 'build', steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; build_review
@@ -3103,6 +3221,30 @@ export class Conductor {
             }
 
             if (this.daemon && step.name === 'prd_audit') {
+              // D2: prd_audit re-failing right after a prior kickback-to-build
+              // cycle that made zero net progress on an unchanged verdict
+              // escalates to HALT here instead of spending another remediation
+              // round or self-heal toward the caps below.
+              const prdAuditEscalation = await checkKickbackToBuildEscalation('prd_audit');
+              if (prdAuditEscalation.halt) {
+                const reason = `prd_audit kickback-to-build no-op: ${prdAuditEscalation.reason}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               // Agentic remediation (preferred): dispatch /remediate to plan how
               // to close the blocking gaps, then route deterministically from its
               // structured plan. HALT is reserved for architectural-clarity /
@@ -3138,6 +3280,9 @@ export class Conductor {
                   // ship and return successfully.
                   if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                     return;
+                  }
+                  if (outcome.target === 'build') {
+                    await captureKickbackToBuildContext('prd_audit');
                   }
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
@@ -3205,6 +3350,7 @@ export class Conductor {
                 if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                   return;
                 }
+                await captureKickbackToBuildContext('prd_audit');
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; prd_audit is
@@ -3248,6 +3394,32 @@ export class Conductor {
               remediationRounds < MAX_KICKBACKS_PER_GATE
             ) {
               const finishGate = step.name === 'finish';
+              // D2: this gate re-failing right after a prior kickback-to-build
+              // cycle that made zero net progress on an unchanged verdict
+              // escalates to HALT here instead of spending another
+              // remediation round toward MAX_KICKBACKS_PER_GATE.
+              const gateEscalation = await checkKickbackToBuildEscalation(step.name);
+              if (gateEscalation.halt) {
+                const reason =
+                  `${finishGate ? 'finish' : 'as-built architecture review'} ` +
+                  `kickback-to-build no-op: ${gateEscalation.reason}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               const outcome = await this.planRemediation(
                 state,
                 steps,
@@ -3285,6 +3457,9 @@ export class Conductor {
                   return;
                 }
 
+                if (outcome.target === 'build') {
+                  await captureKickbackToBuildContext(step.name);
+                }
                 const nav = navigateBack(state, outcome.target, steps);
                 state = nav.state;
                 // markDownstreamStale only restages `done` steps; this gate is
