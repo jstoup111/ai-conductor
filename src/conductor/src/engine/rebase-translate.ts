@@ -118,6 +118,138 @@ interface SerializedRewriteMap {
   map: Record<string, string>;
 }
 
+interface EvidenceStampLike {
+  sha?: string;
+  citedShas?: string[];
+  verdictAnchor?: string;
+  [key: string]: unknown;
+}
+
+interface SerializedEvidenceDataLike {
+  evidenceStamps: Record<string, EvidenceStampLike>;
+  [key: string]: unknown;
+}
+
+interface TaskStatusTaskLike {
+  id: string;
+  commit?: string;
+  [key: string]: unknown;
+}
+
+interface TaskStatusFileLike {
+  tasks: TaskStatusTaskLike[];
+  [key: string]: unknown;
+}
+
+async function atomicWriteJson(
+  dir: string,
+  filePath: string,
+  prefix: string,
+  data: unknown,
+): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  const tempFile = join(
+    dir,
+    `.${prefix}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    await writeFile(tempFile, JSON.stringify(data, null, 2));
+    await rename(tempFile, filePath);
+  } catch (err) {
+    await rm(tempFile, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Rewrites every mapped sha occurrence in `.pipeline/task-evidence.json`
+ * (EvidenceStamp `sha`, `citedShas[]`, `verdictAnchor`) and
+ * `.pipeline/task-status.json` (TaskStatusRecord `commit`, both full and
+ * short-sha forms) through `map`, in place. Shas that are not keys in `map`
+ * are left byte-identical. Missing files are silently skipped (no-op).
+ *
+ * Reuses the atomic temp+rename discipline from `task-evidence.ts`'s
+ * `write()`.
+ */
+export async function applyMapToStores(
+  projectRoot: string,
+  map: Record<string, string>,
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const evidencePath = join(pipelineDir, 'task-evidence.json');
+  const statusPath = join(pipelineDir, 'task-status.json');
+
+  // task-evidence.json
+  try {
+    const raw = await readFile(evidencePath, 'utf-8');
+    const parsed = JSON.parse(raw) as SerializedEvidenceDataLike;
+
+    if (parsed && typeof parsed === 'object' && parsed.evidenceStamps) {
+      for (const stamp of Object.values(parsed.evidenceStamps)) {
+        if (!stamp || typeof stamp !== 'object') continue;
+
+        if (typeof stamp.sha === 'string') {
+          stamp.sha = resolveThroughMap(stamp.sha, map);
+        }
+        if (Array.isArray(stamp.citedShas)) {
+          stamp.citedShas = stamp.citedShas.map((sha) => resolveThroughMap(sha, map));
+        }
+        if (typeof stamp.verdictAnchor === 'string') {
+          stamp.verdictAnchor = resolveThroughMap(stamp.verdictAnchor, map);
+        }
+      }
+
+      await atomicWriteJson(pipelineDir, evidencePath, 'task-evidence', parsed);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  // task-status.json
+  try {
+    const raw = await readFile(statusPath, 'utf-8');
+    const parsed = JSON.parse(raw) as TaskStatusFileLike;
+
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) {
+      for (const task of parsed.tasks) {
+        if (task && typeof task.commit === 'string') {
+          task.commit = resolveThroughMap(task.commit, map);
+        }
+      }
+
+      await atomicWriteJson(pipelineDir, statusPath, 'task-status', parsed);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Loads the persisted rewrite map from `.pipeline/rebase-rewrites.json`.
+ * Returns an empty map if the file is missing, unreadable, or corrupt —
+ * read-time consumers (attribution-validate, autoheal) treat "no map" the
+ * same as "no rewrites happened," so `resolveThroughMap` is always safe to
+ * call unconditionally with the result.
+ */
+export async function loadRewriteMap(projectRoot: string): Promise<Record<string, string>> {
+  const rewritesPath = join(projectRoot, '.pipeline', 'rebase-rewrites.json');
+
+  try {
+    const raw = await readFile(rewritesPath, 'utf-8');
+    const parsed = JSON.parse(raw) as SerializedRewriteMap;
+    if (parsed && typeof parsed === 'object' && parsed.map && typeof parsed.map === 'object') {
+      return parsed.map;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Persists `map` to `.pipeline/rebase-rewrites.json`, merging transitively
  * with any existing persisted map: if the file already has `old -> mid` and
