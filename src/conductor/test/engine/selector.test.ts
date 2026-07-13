@@ -67,6 +67,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -82,6 +83,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: { satisfied: false, checkedAt: 2, reason: 'FR-3 MISSING' },
       architecture_review_as_built: VSAT,
@@ -98,6 +100,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -113,6 +116,7 @@ describe('engine/selector — selectNextGate', () => {
       ...frontDone(),
       build: 'skipped',
       build_review: 'skipped',
+      wiring_check: 'skipped',
       manual_test: 'skipped',
       retro: 'skipped',
     };
@@ -138,6 +142,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       rebase: VSAT,
@@ -159,6 +164,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       retro: VSAT,
@@ -178,6 +184,7 @@ describe('engine/selector — selectNextGate', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       // as-built pending, review ran → as-built must run
@@ -243,6 +250,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -259,6 +267,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -296,6 +305,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       ...frontDone(),
       build: 'skipped',
       build_review: 'skipped',
+      wiring_check: 'skipped',
       manual_test: 'skipped',
       retro: 'skipped',
       // prd_audit is pending and unsatisfied
@@ -360,6 +370,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
+      wiring_check: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,

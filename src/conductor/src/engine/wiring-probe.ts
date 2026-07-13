@@ -18,7 +18,14 @@
 
 import { access, readFile as readFileFs } from 'fs/promises';
 import { join } from 'path';
-import * as ts from 'typescript';
+import { createRequire } from 'node:module';
+// Type-only import: erased at build time so the `typescript` package is NEVER
+// bundled into the ESM dist. Bundling it broke the whole binary at startup —
+// tsup rewrites TypeScript's internal CommonJS `require('fs')` into a shim that
+// throws "Dynamic require of \"fs\" is not supported", crashing `conduct-ts`
+// before any command runs. The runtime compiler is loaded lazily via
+// `loadTypescript()` only when Layer 2 actually walks the import graph.
+import type * as ts from 'typescript';
 import type { GitRunner } from './pr-labels.js';
 import {
   extractWiredIntoContracts,
@@ -716,16 +723,23 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
   const graph: ImportGraph = new Map();
   if (roots.length === 0) return graph;
 
+  // Load the TypeScript compiler lazily at call time (see the type-only import
+  // note at the top of the file). `createRequire` resolves the real package
+  // from node_modules instead of a bundled copy, and throws a clear
+  // module-not-found error when `typescript` is absent — which the Layer 2
+  // predicate catches and reports as a degraded skip rather than crashing.
+  const tsc = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+
   const compilerOptions: ts.CompilerOptions = {
     allowJs: true,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    target: ts.ScriptTarget.ES2020,
+    module: tsc.ModuleKind.ESNext,
+    moduleResolution: tsc.ModuleResolutionKind.Bundler,
+    target: tsc.ScriptTarget.ES2020,
     noEmit: true,
   };
 
-  const host = ts.createCompilerHost(compilerOptions);
-  const program = ts.createProgram(roots, compilerOptions, host);
+  const host = tsc.createCompilerHost(compilerOptions);
+  const program = tsc.createProgram(roots, compilerOptions, host);
 
   const queue = [...roots];
   const visited = new Set<string>();
@@ -752,8 +766,8 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
     // `foo.test.ts` (or the test runner treats it as an entry point).
     if (!isTestPath(filePath)) {
       const addEdge = (moduleSpecifier: ts.Expression) => {
-        if (!ts.isStringLiteral(moduleSpecifier)) return;
-        const resolved = ts.resolveModuleName(
+        if (!tsc.isStringLiteral(moduleSpecifier)) return;
+        const resolved = tsc.resolveModuleName(
           moduleSpecifier.text,
           filePath,
           compilerOptions,
@@ -780,18 +794,18 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
       // than loudly flagging it.
       const visit = (node: ts.Node) => {
         if (
-          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          (tsc.isImportDeclaration(node) || tsc.isExportDeclaration(node)) &&
           node.moduleSpecifier
         ) {
           addEdge(node.moduleSpecifier);
         } else if (
-          ts.isCallExpression(node) &&
-          node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          tsc.isCallExpression(node) &&
+          node.expression.kind === tsc.SyntaxKind.ImportKeyword &&
           node.arguments.length > 0
         ) {
           addEdge(node.arguments[0]);
         }
-        ts.forEachChild(node, visit);
+        tsc.forEachChild(node, visit);
       };
       visit(sourceFile);
     }

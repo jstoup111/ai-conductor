@@ -85,8 +85,9 @@ describe('Integration: config flow', () => {
     // here because no track is set (defaults to product); `explore` + `prd`
     // replace the former single `brainstorm` step, and prd_audit still runs
     // (the PRD exists regardless of the architecture review). build_review is
-    // a new prerequisite of manual_test so it also runs.
-    expect(runner.calls).toHaveLength(13);
+    // a prerequisite of manual_test so it also runs, and wiring_check (the
+    // reachability gate between build_review and manual_test) dispatches too.
+    expect(runner.calls).toHaveLength(14);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -129,8 +130,8 @@ describe('Integration: config flow', () => {
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
     expect(customIdx).toBe(buildIdx + 1);
-    // build_review is now a step between custom step and manual_test
-    expect(manualTestIdx).toBe(customIdx + 2);
+    // build_review and wiring_check are steps between custom step and manual_test
+    expect(manualTestIdx).toBe(customIdx + 3);
 
     const customStep = registry[customIdx];
     expect(customStep.phase).toBe('BUILD');
