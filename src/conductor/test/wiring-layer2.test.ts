@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { loadConfig } from '../src/engine/config.js';
-import { resolveLayer2Applicability } from '../src/engine/wiring-probe.js';
+import {
+  resolveLayer2Applicability,
+  buildImportGraph,
+  reachableFromRoots,
+} from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -106,6 +110,60 @@ describe('resolveLayer2Applicability', () => {
       expect(result.message).toBe(
         'wiring.entry_points root "src/bad/path.ts" does not exist',
       );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildImportGraph / reachableFromRoots', () => {
+  async function makeFixtureProject(): Promise<string> {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-import-graph-'));
+    await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+    await mkdir(join(tmpDir, 'src'), { recursive: true });
+    await writeFile(
+      join(tmpDir, 'src', 'root.ts'),
+      "import { a } from './a.js';\nexport const rootValue = a;\n",
+    );
+    await writeFile(
+      join(tmpDir, 'src', 'a.ts'),
+      "import { b } from './b.js';\nexport const a = b;\n",
+    );
+    await writeFile(join(tmpDir, 'src', 'b.ts'), 'export const b = 1;\n');
+    return tmpDir;
+  }
+
+  it('builds a module import graph transitively from configured roots', async () => {
+    const tmpDir = await makeFixtureProject();
+    try {
+      const rootFile = join(tmpDir, 'src', 'root.ts');
+      const graph = buildImportGraph([rootFile], tmpDir);
+
+      const aFile = join(tmpDir, 'src', 'a.ts');
+      const bFile = join(tmpDir, 'src', 'b.ts');
+
+      expect(graph.has(rootFile)).toBe(true);
+      expect(graph.get(rootFile)).toContain(aFile);
+      expect(graph.has(aFile)).toBe(true);
+      expect(graph.get(aFile)).toContain(bFile);
+      expect(graph.has(bFile)).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a transitively-imported module as reachable from roots with the chain as evidence', async () => {
+    const tmpDir = await makeFixtureProject();
+    try {
+      const rootFile = join(tmpDir, 'src', 'root.ts');
+      const aFile = join(tmpDir, 'src', 'a.ts');
+      const bFile = join(tmpDir, 'src', 'b.ts');
+
+      const graph = buildImportGraph([rootFile], tmpDir);
+      const result = reachableFromRoots(graph, [rootFile], bFile);
+
+      expect(result.reachable).toBe(true);
+      expect(result.chain).toEqual([rootFile, aFile, bFile]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

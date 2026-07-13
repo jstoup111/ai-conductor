@@ -18,6 +18,7 @@
 
 import { access } from 'fs/promises';
 import { join } from 'path';
+import * as ts from 'typescript';
 import type { GitRunner } from './pr-labels.js';
 import type { InertRef, WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -683,4 +684,125 @@ export async function resolveLayer2Applicability(
   }
 
   return { applicable: true, roots: entryPoints };
+}
+
+// ── Import graph (TS compiler API reachability) ────────────────────────────
+
+/**
+ * Directed module-import graph: each key is an absolute file path, each
+ * value the set of absolute file paths it directly imports (resolved via
+ * the TS compiler's module resolution, so path aliases/extension-less
+ * imports resolve the same way `tsc` itself would).
+ */
+export type ImportGraph = Map<string, Set<string>>;
+
+/**
+ * Builds a directed module-import graph by walking transitively from the
+ * given root files, using the TypeScript compiler API (`ts.createProgram`)
+ * for both parsing and import resolution rather than a hand-rolled parser
+ * — this is a real TS project, so path aliases/tsconfig resolution behave
+ * the same way `tsc` itself would resolve them.
+ *
+ * `roots` and the graph's keys/values are absolute file paths.
+ */
+export function buildImportGraph(roots: string[], projectRoot: string): ImportGraph {
+  const graph: ImportGraph = new Map();
+  if (roots.length === 0) return graph;
+
+  const compilerOptions: ts.CompilerOptions = {
+    allowJs: true,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    target: ts.ScriptTarget.ES2020,
+    noEmit: true,
+  };
+
+  const host = ts.createCompilerHost(compilerOptions);
+  const program = ts.createProgram(roots, compilerOptions, host);
+
+  const queue = [...roots];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const filePath = queue.shift() as string;
+    if (visited.has(filePath)) continue;
+    visited.add(filePath);
+
+    const sourceFile = program.getSourceFile(filePath);
+    if (!sourceFile) {
+      graph.set(filePath, new Set());
+      continue;
+    }
+
+    const imports = new Set<string>();
+
+    ts.forEachChild(sourceFile, (node) => {
+      let moduleSpecifier: ts.Expression | undefined;
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier
+      ) {
+        moduleSpecifier = node.moduleSpecifier;
+      }
+      if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) return;
+
+      const resolved = ts.resolveModuleName(
+        moduleSpecifier.text,
+        filePath,
+        compilerOptions,
+        host,
+      );
+      const resolvedFileName = resolved.resolvedModule?.resolvedFileName;
+      if (!resolvedFileName) return;
+
+      imports.add(resolvedFileName);
+      if (!visited.has(resolvedFileName)) {
+        queue.push(resolvedFileName);
+      }
+    });
+
+    graph.set(filePath, imports);
+  }
+
+  return graph;
+}
+
+export interface ReachabilityResult {
+  reachable: boolean;
+  chain?: string[];
+}
+
+/**
+ * Determines whether `targetModule` is reachable from any of `roots` by
+ * traversing the directed import graph (`buildImportGraph`), via BFS so the
+ * returned chain is a shortest path. `roots` and `targetModule` are
+ * expected to be the same absolute-path form used as graph keys/values.
+ */
+export function reachableFromRoots(
+  graph: ImportGraph,
+  roots: string[],
+  targetModule: string,
+): ReachabilityResult {
+  const visited = new Set<string>(roots);
+  const queue: string[][] = roots.map((root) => [root]);
+
+  while (queue.length > 0) {
+    const chain = queue.shift() as string[];
+    const current = chain[chain.length - 1];
+
+    if (current === targetModule) {
+      return { reachable: true, chain };
+    }
+
+    const neighbors = graph.get(current);
+    if (!neighbors) continue;
+
+    for (const neighbor of neighbors) {
+      if (visited.has(neighbor)) continue;
+      visited.add(neighbor);
+      queue.push([...chain, neighbor]);
+    }
+  }
+
+  return { reachable: false };
 }
