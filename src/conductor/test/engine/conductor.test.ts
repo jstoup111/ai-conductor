@@ -28,6 +28,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 });
 import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -7897,6 +7898,19 @@ describe('durable no-evidence counter', () => {
       verifyArtifacts: true,
       maxRetries: 3,
       onRecovery,
+      // T4: this fixture's build gate can never genuinely complete (its local
+      // writeTaskStatus helper never writes the plan file or evidence
+      // stamps) — it was always relying on the fixed retry budget being
+      // exhausted at the exact moment the last progress-driven reset fired.
+      // The progress-bypass gate (T4) correctly keeps re-dispatching through
+      // that budget as long as forward progress continues, which changes the
+      // timing this test coincidentally depended on. Disabling
+      // build_progress_halt restores the pre-T4 fixed-budget timing this
+      // counter-reset invariant test actually exercises — it isn't testing
+      // T4's bypass semantics.
+      config: {
+        build_progress_halt: { enabled: false, attempt_ceiling: 30, dispatch_ceiling: 20 },
+      } as HarnessConfig,
     });
 
     await conductor.run();

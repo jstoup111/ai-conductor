@@ -28,7 +28,11 @@ import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { resolveBuildProgressConfig, isAttributionJudgeCutoverActive } from './config.js';
+import {
+  resolveBuildProgressConfig,
+  isAttributionJudgeCutoverActive,
+  BUILD_PROGRESS_HALT_DEFAULTS,
+} from './config.js';
 import {
   isEnforcementConfigured,
   writeBuildStepMarker,
@@ -1625,6 +1629,13 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+        // T4 (adr-2026-07-12-progress-aware-build-halt): bounded counter for
+        // "attempts bypassed because this attempt made real forward
+        // progress" — distinct from `attempt`/`stepMaxRetries` (the fixed
+        // per-step retry budget). Compared against
+        // `build_progress_halt.attempt_ceiling` so a progressing build isn't
+        // halted just because the fixed retry budget ran out.
+        let progressAttempts = 0;
         // #505 TS-15: HEAD sha captured at build-step entry, compared against
         // HEAD at step exit to detect a zero-work-product session (dispatched
         // work that produced no new commits, or nothing dispatched at all).
@@ -2114,6 +2125,11 @@ export class Conductor {
               // "three options: ..." rhetorical questions that no automated
               // retry will ever resolve.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
+              // T4: set true when this attempt made real forward progress
+              // and is still under the progress-attempt ceiling — signals
+              // the retry decision below to re-dispatch without consuming
+              // the fixed `stepMaxRetries` budget.
+              let progressBypassed = false;
               if (step.name === 'build') {
                 // #505 TS-15: zero-work-product detection. Runs before the
                 // stall circuit breaker below — a zero-work session is a
@@ -2176,6 +2192,29 @@ export class Conductor {
                       this.taskEvidence.noEvidenceReasons.push('zero_work_product');
                     }
                     await this.taskEvidence.write();
+                  }
+                }
+
+                // T4: within-dispatch progress-bypass gate. A completion-gate
+                // miss that nonetheless resolved at least one more task than
+                // the previous attempt is real forward progress, not a stall
+                // — re-dispatch without letting this attempt count toward
+                // the fixed `stepMaxRetries` halt/park budget, bounded by
+                // the separate `attempt_ceiling` progress-attempt counter so
+                // slow-drip progress can't loop forever (absolute ceiling
+                // enforcement itself is T5, out of scope here).
+                {
+                  const bpHaltCfg = this.config.build_progress_halt;
+                  const bpEnabled = bpHaltCfg?.enabled ?? BUILD_PROGRESS_HALT_DEFAULTS.enabled;
+                  const bpCeiling =
+                    bpHaltCfg?.attempt_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling;
+                  if (
+                    bpEnabled &&
+                    resolvedTasksAfter > resolvedTasksBefore &&
+                    progressAttempts < bpCeiling
+                  ) {
+                    progressAttempts++;
+                    progressBypassed = true;
                   }
                 }
 
@@ -2446,7 +2485,7 @@ export class Conductor {
                 resolvedTasksBefore = resolvedTasksAfter;
               }
 
-              if (attempt < stepMaxRetries) {
+              if (progressBypassed || attempt < stepMaxRetries) {
                 await this.events.emit({
                   type: 'step_retry',
                   step: step.name,
@@ -2456,6 +2495,13 @@ export class Conductor {
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
                 });
+                // T4: this attempt made forward progress and is under the
+                // progress-attempt ceiling — undo the `attempt++` at the top
+                // of the loop so it doesn't consume the fixed
+                // `stepMaxRetries` budget.
+                if (progressBypassed) {
+                  attempt--;
+                }
                 continue;
               }
               break;
