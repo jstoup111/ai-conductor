@@ -51,7 +51,14 @@ export type TreeState = 'clean' | 'dirty';
  *   - `outputTail`: tail of the setup output for diagnostics
  *   - `quarantineRef?`: ref to quarantine state if applicable
  *   - `preservedPaths?`: paths preserved during recovery if applicable
- *   - `contractOutcome?`: contract verification outcome if applicable
+ *   - `contractOutcome?`: contract verification outcome if applicable. For
+ *     `park` outcomes produced by `fixSession`, one of:
+ *       - `'setup-still-failing'`: runPrepare threw again after the fix
+ *         session — bin/setup itself is still broken.
+ *       - `'dirty-tree-uncleaned'`: runPrepare succeeded (bin/setup did NOT
+ *         fail) but the worktree was left dirty; residual paths (tracked and
+ *         untracked) were quarantined. Distinct from setup failure — must
+ *         never be reported as "setup failed".
  */
 export type TriageOutcome =
   | {
@@ -544,7 +551,8 @@ export async function runTriage(
  * 3. Retry the full prepare process (runPrepare)
  * 4. If prepare fails: return park with contractOutcome 'setup-still-failing'
  * 5. Check tree is clean (git status --porcelain)
- * 6. If tree is dirty: return park with dirty paths named
+ * 6. If tree is dirty: quarantine the residual paths and return a distinct
+ *    'dirty-tree-uncleaned' park (never "setup failed" — bin/setup passed)
  * 7. If all checks pass: return fixed-pass
  *
  * Parameters:
@@ -561,7 +569,9 @@ export async function runTriage(
  * Outcomes documented in union:
  *   - (a) seam resolves, runPrepare passes, porcelain empty → fixed-pass
  *   - (b) seam resolves but runPrepare fails → park with contractOutcome 'setup-still-failing'
- *   - (c) runPrepare passes but porcelain dirty → park with dirty paths
+ *   - (c) runPrepare passes but porcelain dirty → park with contractOutcome
+ *         'dirty-tree-uncleaned', quarantineRef set, preservedPaths named
+ *         (never "setup failed" — bin/setup itself succeeded)
  *   - (d) seam throws → park, seam called exactly once
  */
 export async function fixSession(
@@ -601,11 +611,25 @@ export async function fixSession(
   const dirtyPaths = parsePortcelainPaths(porcelainResult.stdout);
 
   if (dirtyPaths.length > 0) {
-    // Step 6: Tree is dirty after prepare succeeded — park, naming the dirty paths
+    // Step 6: Tree is dirty after prepare succeeded — bin/setup itself did not
+    // fail, so this is NOT "setup failed". Quarantine the residual strays
+    // (tracked and untracked alike) and return a distinct park outcome so
+    // downstream reporting never mislabels this as a setup failure.
+    const quarantineAttempt = await quarantine(git, slug);
+
+    if ('kind' in quarantineAttempt) {
+      // Preservation itself failed — fail toward park, unchanged, naming the
+      // preservation failure. Do not proceed.
+      return quarantineAttempt;
+    }
+
+    const { ref, preservedPaths } = quarantineAttempt;
     return {
       kind: 'park',
-      outputTail: '',
-      preservedPaths: dirtyPaths,
+      outputTail: `bin/setup exited 0 but the worktree could not be brought clean — residual uncommitted paths quarantined to ${ref}: ${preservedPaths.join(', ')}`,
+      contractOutcome: 'dirty-tree-uncleaned',
+      quarantineRef: ref,
+      preservedPaths,
     };
   }
 
