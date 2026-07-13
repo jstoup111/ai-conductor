@@ -2233,6 +2233,16 @@ export class Conductor {
                 }
 
                 if (bpCeilingHit) {
+                  // T7: stamp the ending resolved count on this park exit too
+                  // — every build-step exit path records lastResolvedCount,
+                  // not just success. Re-read fresh from disk (see the
+                  // success-exit comment above) so this doesn't clobber
+                  // stamps written directly to the sidecar elsewhere.
+                  if (this.taskEvidence) {
+                    const freshEvidence = await createTaskEvidence(this.projectRoot);
+                    freshEvidence.lastResolvedCount = resolvedTasksAfter;
+                    await freshEvidence.write();
+                  }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
                   await writeFile(
                     join(this.projectRoot, LOOP_HALT_MARKER),
@@ -2275,6 +2285,17 @@ export class Conductor {
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
                   });
                   if (parkResult.parked) {
+                    // T7: stamp the ending resolved count on this park exit
+                    // too — every build-step exit path records
+                    // lastResolvedCount, not just success. Re-read fresh
+                    // from disk (see the success-exit comment above) so this
+                    // doesn't clobber stamps written directly to the
+                    // sidecar elsewhere.
+                    if (this.taskEvidence) {
+                      const freshEvidence = await createTaskEvidence(this.projectRoot);
+                      freshEvidence.lastResolvedCount = resolvedTasksAfter;
+                      await freshEvidence.write();
+                    }
                     const reason =
                       `auto-parked: ${emptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
@@ -2532,8 +2553,35 @@ export class Conductor {
                 }
                 continue;
               }
+              // T7: stamp the ending resolved count on this exit too — the
+              // fixed-budget-exhausted / non-daemon-park failure exit is
+              // still a build-step dispatch end, so lastResolvedCount must
+              // be recorded here even though nothing "succeeded".
+              if (step.name === 'build' && this.taskEvidence) {
+                // Re-read fresh from disk rather than writing the possibly-
+                // stale in-memory `this.taskEvidence` snapshot — stamps can
+                // be written directly to the sidecar by other pathways
+                // (autoheal reconciliation, writeJudgedStamps) between this
+                // Conductor's start and this exit, and blindly writing the
+                // stale snapshot would clobber them.
+                const freshEvidence = await createTaskEvidence(this.projectRoot);
+                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                await freshEvidence.write();
+              }
               break;
             }
+          }
+
+          // T7: stamp the ending resolved count on the success/completing
+          // exit — every build-step exit path (success, park, ceiling)
+          // records lastResolvedCount, not just the park paths above.
+          if (step.name === 'build' && this.taskEvidence) {
+            // Re-read fresh from disk — see comment at the fixed-budget-
+            // exhausted exit above for why this must not write the stale
+            // in-memory `this.taskEvidence` snapshot.
+            const freshEvidence = await createTaskEvidence(this.projectRoot);
+            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+            await freshEvidence.write();
           }
 
           succeeded = true;

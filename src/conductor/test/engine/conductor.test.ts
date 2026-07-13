@@ -1678,6 +1678,170 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('T7: lastResolvedCount recorded at build-step dispatch exit', () => {
+    // Seed state up through (but not including) build, without writing a
+    // plan/task-status.json — the runner or the test body supplies those,
+    // per exit path under test.
+    async function seedToBuild(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+    }
+
+    // Writes a plan with `total` "### Task N: Step N" headers and a matching
+    // task-status.json with `completed` of them marked completed, each
+    // backed by an evidence stamp (H6: an unstamped 'completed' row is
+    // demoted at every gate evaluation, so stamps are required for the
+    // count to stick).
+    async function writePlanAndStatus(completed: number, total: number): Promise<void> {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      const planLines: string[] = ['# Plan', ''];
+      for (let i = 1; i <= total; i++) planLines.push(`### Task ${i}: Step ${i}`, '');
+      await writeFile(join(dir, '.docs/plans/plan.md'), planLines.join('\n'));
+
+      const tasks: Array<{ id: number; status: string }> = [];
+      const stamps: Record<string, { sha: string; form: string }> = {};
+      for (let i = 1; i <= total; i++) {
+        const done = i <= completed;
+        tasks.push({ id: i, status: done ? 'completed' : 'pending' });
+        if (done) {
+          stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
+        }
+      }
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+      );
+    }
+
+    it('records lastResolvedCount in the sidecar on a successful/completing build exit', async () => {
+      await seedToBuild();
+      const TOTAL = 3;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writePlanAndStatus(TOTAL, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(TOTAL);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (daemon auto-park)', async () => {
+      await seedToBuild();
+      // A parseable plan that never gets any resolved tasks, but no
+      // task-status.json is ever written by the runner — every gate
+      // evaluation misses with zero resolved tasks, and the durable
+      // no-evidence counter (seeded one below threshold) crosses the
+      // auto-park threshold on the first attempt.
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'plan.md'),
+        '# Plan\n\n### Task 1: First\n\n### Task 2: Second\n',
+      );
+      const evidenceSeed = await createTaskEvidence(dir);
+      evidenceSeed.noEvidenceAttempts = 2; // DAEMON_NO_EVIDENCE_THRESHOLD (3) - 1
+      await evidenceSeed.write();
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      expect(parkEvents).toHaveLength(1);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(0);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (T5 absolute attempt-ceiling backstop)', async () => {
+      await seedToBuild();
+      const TOTAL = 5;
+      const CEILING = 2;
+      let progress = 0;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            progress++;
+            await writePlanAndStatus(progress, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const loopHaltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') loopHaltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // far above the ceiling — proves the ceiling bounds this run
+        fromStep: 'build',
+        config: {
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(loopHaltEvents).toHaveLength(1);
+      expect(loopHaltEvents[0].reason).toMatch(/attempt ceiling/i);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(CEILING);
+    });
+  });
+
   describe('daemon build stall remediation dispatch (Task 4)', () => {
     const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
     const REMEDIATION_ANSWER = 'Use Auth0 — matches the existing SSO integration.';
