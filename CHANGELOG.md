@@ -41,6 +41,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Daemon no longer autonomously rewinds to DECIDE-phase steps on remediation routing (#644):
+  `planRemediation()` in `src/conductor/src/engine/conductor.ts` now guards the single
+  `earliestRemediationTarget` choke point — in daemon mode, a remediation target whose step
+  phase is `DECIDE` (e.g. `architecture_review`, `plan`, derived from the step definitions,
+  not a hardcoded list) converts the route into a `halt` with a gap ledger naming the DECIDE
+  target, writing `LOOP_HALT` for the operator instead of `navigateBack`-rewinding the whole
+  DECIDE tail unattended. BUILD-phase targets (`build`, `acceptance_specs`) still route, the
+  deterministic `classifyPrdAuditGaps` fallback is untouched, and interactive mode is
+  unchanged. Pure engine logic — no migration needed.
 - finish GATE 0 no longer instructs a false-positive rebase check (#634): the skill
   prose implied that output from `git rev-parse --git-path rebase-merge` indicates a
   rebase in progress, but `--git-path` prints the path unconditionally — finish
