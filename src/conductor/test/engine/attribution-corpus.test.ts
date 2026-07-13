@@ -303,16 +303,21 @@ Core logic update.
     const derived = await deriveCompletion(dir, planPath, '', commits, evidence);
     await applyDerivedCompletion(dir, derived);
 
-    // GREEN: All 16 tasks should remain unresolved
-    // The mono-dispatch bug means the mechanical gate cannot resolve ANY task
-    // (the single "Task: 1" trailer points to task 1, but the diff is for task 15's file,
-    // which doesn't match task 1's path). All stay as residue.
+    // GREEN: Tasks 2-16 remain unresolved — their trailers all say
+    // "Task: 1", so no candidate matches them mechanically. Task 1 itself
+    // DOES resolve under #548 any-candidate corroboration: one of its
+    // trailered candidates (the `feat: task 1 work` commit) genuinely
+    // touches task 1's declared path — the newest candidate (task 15's
+    // diff) no longer shadows it.
     status = await readStatusRows();
     const residueTasks = status.tasks.filter((t: any) => t.status !== 'completed');
     expect(residueTasks.length).toBeGreaterThanOrEqual(15);
 
-    // Derived should show tasks 1-15 unresolved (at minimum)
-    for (let i = 1; i <= 15; i++) {
+    expect(derived['1']).toBeDefined();
+    expect(derived['1'].completed).toBe(true);
+
+    // Derived should show tasks 2-15 unresolved
+    for (let i = 2; i <= 15; i++) {
       const taskId = String(i);
       expect(derived[taskId]).toBeDefined();
       expect(derived[taskId].completed).toBe(false);
@@ -1091,15 +1096,20 @@ describe('Task 24 escape corpus: bypass and bundle shapes converge to green', ()
       );
     }
 
-    // RED: mechanical gate cannot resolve ANY task — all 16 stay residue.
+    // RED: the mechanical gate cannot resolve tasks 2-16 (their trailers
+    // all say "Task: 1"). Task 1 itself resolves mechanically under #548
+    // any-candidate corroboration — its own `feat: task 1 work` commit
+    // carries its trailer AND touches its declared path, and is no longer
+    // shadowed by the newest "Task: 1" candidate (task 15's diff).
     const before = await deriveAndApply(planPath);
     const residueBefore = unresolvedIds(await readStatusRows());
-    expect(residueBefore.sort()).toEqual(allIds.slice().sort());
-    for (const id of allIds) {
+    expect(residueBefore.sort()).toEqual(allIds.filter((id) => id !== '1').sort());
+    expect(before.derived['1']?.completed).toBe(true);
+    for (const id of allIds.filter((i) => i !== '1')) {
       expect(before.derived[id]?.completed).toBe(false);
     }
 
-    // The judged lane's verdict splits attribution: each of tasks 1-15 gets
+    // The judged lane's verdict splits attribution: each of tasks 2-15 gets
     // its OWN citation (its own commit sha), resolved out of a single
     // mono-trailered dispatch group. Task 16 has no candidate diff at all,
     // so the verifier honestly reports no-verdict for it.
@@ -1130,29 +1140,27 @@ describe('Task 24 escape corpus: bypass and bundle shapes converge to green', ()
       dispatchVerifier: dispatch,
     });
 
-    // SPLIT ATTRIBUTION: 15 distinct tasks (1-15), each stamped from its own
+    // SPLIT ATTRIBUTION: 14 distinct tasks (2-15), each stamped from its own
     // citation, resolved out of the single mono-trailered dispatch group.
-    // Task 16 (no diff, no citation) is correctly excluded.
+    // Task 1 already resolved mechanically (any-candidate corroboration,
+    // #548) so it is not residue; task 16 (no diff, no citation) is
+    // correctly excluded.
     expect(result.stampedTaskIds.slice().sort()).toEqual(
-      Array.from({ length: 15 }, (_, i) => String(i + 1)).sort(),
+      Array.from({ length: 14 }, (_, i) => String(i + 2)).sort(),
     );
     expect(result.stampedTaskIds).not.toContain('16');
 
     // GREEN without operator action: the judged lane itself is the sole
-    // writer of the sidecar's evidenceStamps — each satisfied task (1-15)
-    // carries its OWN distinct commit citation, proof the split wasn't a
-    // single blanket stamp reused across every id. Task 16 (no diff, no
-    // citation) is correctly excluded. (Task 1's mechanical re-derivation
-    // is intentionally left unexercised here: its own trailer also matches
-    // the mono-dispatch bug's most-recent-commit candidate — task 15's
-    // diff — which fails path corroboration against task 1's own path, so
-    // a subsequent mechanical re-derive pass would re-flag it; that
-    // mechanical/judged interplay for a task whose id collides with the
-    // shared trailer is out of scope for this fixture, which targets the
-    // split itself.)
+    // writer of the sidecar's semantic-verified evidenceStamps — each
+    // satisfied task (2-15) carries its OWN distinct commit citation, proof
+    // the split wasn't a single blanket stamp reused across every id.
+    // Task 1 carries a mechanical 'trailer' stamp from its own genuine
+    // commit; task 16 (no diff, no citation) is correctly excluded.
     const evidenceRaw = await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8');
     const evidence = JSON.parse(evidenceRaw);
-    for (let i = 1; i <= 15; i++) {
+    expect(evidence.evidenceStamps['1']?.form).toBe('trailer');
+    expect(evidence.evidenceStamps['1']?.sha).toBe(shaByTask['1']);
+    for (let i = 2; i <= 15; i++) {
       expect(evidence.evidenceStamps[String(i)]?.form).toBe('semantic-verified');
       expect(evidence.evidenceStamps[String(i)]?.citedShas).toContain(shaByTask[String(i)]);
     }

@@ -3273,3 +3273,242 @@ describe('applyDerivedCompletion', () => {
     expect(resolvedCount).toBe(1); // One task is now completed
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #548 sub-cause: per-task corroboration must consider the SET of trailered
+// commits, not solely the newest one.
+//
+// Live failure (2026-07-13, build 2026-07-12-wiring-reachability-gate): tasks
+// 10/18 each had an earlier feature commit that overlapped plan paths AND a
+// newer test-fix commit carrying the same `Task: <id>` trailer touching only
+// test files. deriveCompletionInternal selected a single candidate via
+// `commits.find(...)` (newest-first git log order), so the newest trailer
+// shadowed the perfectly-corroborated earlier commit and the task was
+// rejected ("trailer <sha> has no overlap with plan paths").
+//
+// Correct semantics: a task is corroborated if ANY reachable commit bearing
+// its trailer overlaps the task's plan paths. Adjacent variant (#535): a
+// stale/unreachable candidate SHA is skipped, not a terminal rejection, when
+// another satisfying candidate exists.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion any-candidate corroboration (#548)', () => {
+  it('newer no-overlap commit does not shadow an older overlapping commit with the same Task trailer', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 10: Wire the gate-loop tail
+Wire wiring_check kickback.
+
+- \`src/conductor.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Earlier feature commit: overlaps the plan's declared path.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/conductor.ts'), 'export const wired = true;');
+    await execa('git', ['add', 'src/conductor.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wire kickback into gate-loop tail\n\nTask: 10\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer test-fix commit: same trailer, touches only a test file NOT in
+    // the plan's declared paths. This is the shadowing candidate.
+    await mkdir(join(gitDir, 'test'), { recursive: true });
+    await writeFile(join(gitDir, 'test/fixtures.ts'), 'export const fixture = 1;');
+    await execa('git', ['add', 'test/fixtures.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'fix(test): seed default fixtures\n\nTask: 10\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // ANY satisfying trailered commit corroborates: the task must resolve via
+    // the earlier feature commit, not be rejected on the newest one.
+    expect(result).toHaveProperty('10');
+    expect(result['10']).toHaveProperty('completed', true);
+    expect(result['10']).toHaveProperty('evidencedBy', featureSha);
+    expect(result['10'].status).toBe('completed');
+
+    const stamp = evidence.evidenceStamps.get('10');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(featureSha);
+    expect(stamp!.form).toBe('trailer');
+
+    mockWarn.mockRestore();
+  });
+
+  it('newer empty commit with the same trailer does not shadow an older overlapping commit', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 18: Injection seam
+Invoke live probe via injection seam.
+
+- \`src/artifacts.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/artifacts.ts'), 'export const seam = 1;');
+    await execa('git', ['add', 'src/artifacts.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: injection seam\n\nTask: 18\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer EMPTY commit with the same trailer (no Evidence: form).
+    await execa('git', ['commit', '--allow-empty', '-m', 'chore: retry marker\n\nTask: 18\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['18']).toHaveProperty('completed', true);
+    expect(result['18']).toHaveProperty('evidencedBy', featureSha);
+  });
+
+  it('skips a stale/unreachable candidate SHA when another satisfying candidate exists', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 11: Tolerant reads
+Tolerant sidecar accessor.
+
+- \`src/task-evidence.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/task-evidence.ts'), 'export const tolerant = 1;');
+    await execa('git', ['add', 'src/task-evidence.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: tolerant accessor\n\nTask: 11\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    // Prepend a stale candidate: a trailered commit whose SHA no longer
+    // resolves in this repo (e.g. rewritten by a rebase). It sorts newest,
+    // so a single-candidate gate would reject the task on it.
+    const staleCandidate = {
+      sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      subject: 'feat: tolerant accessor (pre-rebase)',
+      trailers: { Task: ['11'] },
+    };
+    const withStale = [staleCandidate, ...commits];
+
+    const evidence = await createTaskEvidence(gitDir);
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', withStale, evidence);
+
+    // The unreachable SHA is skipped as a candidate — not a terminal
+    // rejection — because a reachable satisfying candidate exists.
+    expect(result['11']).toHaveProperty('completed', true);
+    expect(result['11']).toHaveProperty('evidencedBy', featureSha);
+
+    mockWarn.mockRestore();
+  });
+
+  it('dangling Evidence: satisfied-by falls back to a satisfying trailered commit instead of terminally rejecting', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 12: Feature with stale evidence pointer
+Implement the feature.
+
+- \`src/pointer.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Real overlapping feature commit with the Task trailer.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/pointer.ts'), 'export const pointer = 1;');
+    await execa('git', ['add', 'src/pointer.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: pointer feature\n\nTask: 12\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer no-op evidence commit whose satisfied-by SHA is dangling
+    // (e.g. it referenced a commit later rewritten by a rebase).
+    await execa(
+      'git',
+      ['commit', '--allow-empty', '-m', 'chore: evidence\n\nTask: 12\nEvidence: satisfied-by deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'],
+      { cwd: gitDir },
+    );
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // The dangling satisfied-by pointer must not terminally reject the task:
+    // the reachable, overlapping trailered commit still corroborates it.
+    expect(result['12']).toHaveProperty('completed', true);
+    expect(result['12']).toHaveProperty('evidencedBy', featureSha);
+
+    mockWarn.mockRestore();
+  });
+
+  it('still rejects with an audit entry when NO trailered candidate overlaps the plan paths', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 13: Strict task
+Update the declared file only.
+
+- \`src/declared.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // TWO trailered commits, NEITHER overlapping the declared path.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/wrong-a.ts'), 'export const a = 1;');
+    await execa('git', ['add', 'src/wrong-a.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong a\n\nTask: 13\n'], { cwd: gitDir });
+    await writeFile(join(gitDir, 'src/wrong-b.ts'), 'export const b = 1;');
+    await execa('git', ['add', 'src/wrong-b.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong b\n\nTask: 13\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['13']).toHaveProperty('completed', false);
+    expect(result['13']).toHaveProperty('auditEntry');
+    expect(evidence.evidenceStamps.has('13')).toBe(false);
+
+    mockWarn.mockRestore();
+  });
+});
