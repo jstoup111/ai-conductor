@@ -1271,6 +1271,92 @@ describe('engine/conductor', () => {
       expect(calls[0][0]).toBe('build');
     });
 
+    it('T6: zero-progress path still accrues noEvidenceAttempts naturally and auto-parks at the pre-existing threshold, unaffected by T4/T5 progress-bypass logic', async () => {
+      // Regression lock for T4 (progressAttempts/progressBypassed bypass) and
+      // T5 (absolute attempt-ceiling backstop): when resolvedTasksAfter never
+      // exceeds resolvedTasksBefore (a fake runner that resolves ZERO new
+      // tasks per attempt), T4's bypass condition
+      // (`resolvedTasksAfter > resolvedTasksBefore`) never fires, so this
+      // path must behave exactly as it did before T4/T5 landed — the durable
+      // noEvidenceAttempts counter increments on every gate miss and
+      // checkAndAutoPark parks at DAEMON_NO_EVIDENCE_THRESHOLD (N=3), the
+      // same threshold asserted by the pre-existing seeded-counter test
+      // above ('daemon: N consecutive no-evidence gate misses...').
+      //
+      // Unlike that pre-existing test, this one does NOT pre-seed the
+      // counter — it drives the counter to threshold purely through natural
+      // per-attempt accrual across two conductor.run() invocations
+      // (simulating a daemon re-kick, per Task 12's "accrues ACROSS
+      // attempts, runs, and re-kicks" durability guarantee), proving the
+      // increment-and-park mechanics themselves (not just the park trigger
+      // at a hand-set value) are unchanged by T4/T5.
+      const N = 3; // DAEMON_NO_EVIDENCE_THRESHOLD (src/engine/conductor.ts)
+      await seedToBuildGate(0, true); // fresh counter, parseable plan present
+
+      // Fake runner: always "succeeds" but never produces completion
+      // evidence or advances task-status — so countResolvedTasks() returns 0
+      // before and after every attempt (zero forward progress), and the
+      // build completion gate misses every time.
+      const runner = createMockStepRunner();
+
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Re-kick #1: a bounded retry loop (maxRetries: 2) with zero progress
+      // hits the pre-existing `no_task_progress` stall verdict at attempt 2
+      // and breaks out of the retry loop without reaching the auto-park
+      // threshold yet — counter accrues to 2, feature not parked.
+      const conductor1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'feat')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+
+      // Re-kick #2 (simulating the daemon re-dispatching the still-failed
+      // build step): the durable counter (Task 12: accrues ACROSS attempts,
+      // runs, and re-kicks) carries over from re-kick #1. The very first
+      // attempt of this run is still zero-progress, pushing the counter to
+      // N=3 and crossing the auto-park threshold — proving the natural
+      // increment-and-park mechanics (not just a hand-set counter value)
+      // are unaffected by T4/T5's progress-bypass logic, which never
+      // engages because resolvedTasksAfter never exceeds resolvedTasksBefore.
+      const conductor2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(N);
+      expect(await getProvenanceType(dir, 'feat')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(
+        new RegExp(`no completion evidence after ${N} attempts`),
+      );
+    });
+
     it('daemon: empty plan at seed auto-parks with "empty plan" reason', async () => {
       await seedToBuildGate(0);
       // Don't create a plan file — empty/missing plan condition
