@@ -181,11 +181,6 @@ check_installation() {
   fi
   if command -v rtk &>/dev/null; then
     ok "rtk installed (token usage reduction)"
-    if [ -f "${HOME}/.claude/hooks/rtk-rewrite.sh" ]; then
-      ok "rtk hook initialized"
-    else
-      warn "rtk installed but not initialized — run ./bin/install or 'rtk init -g'"
-    fi
   else
     warn "rtk not installed — token usage reduction unavailable"
   fi
