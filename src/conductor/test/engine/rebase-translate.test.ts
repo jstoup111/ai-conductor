@@ -661,3 +661,73 @@ describe('resolveThroughMap — module contract: never maps a non-key sha (Task 
     expect(resolveThroughMap(sha, MAP)).toBe(sha);
   });
 });
+
+// FR-1 closure (prd-audit 2026-07-13): Story 1's SECOND scenario — the
+// persisted map must survive SUCCESSIVE rebases. When a prior rebase already
+// persisted `old -> mid` and a second rebase persists `mid -> new` over the
+// existing `.pipeline/rebase-rewrites.json`, persistRewriteMap's
+// merge-and-close branch (src/engine/rebase-translate.ts:268-294) must
+// repoint the stale chain so the file resolves `old -> new` directly —
+// no two-hop chain, no stale `old -> mid` left behind. Every other
+// persistRewriteMap call in the suite is single-hop against an empty prior
+// map, so this is the only test exercising that merge path.
+describe('persistRewriteMap — transitive closure across successive rebases (FR-1)', () => {
+  const OLD_FULL = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const MID_FULL = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const NEW_FULL = 'cccccccccccccccccccccccccccccccccccccccc';
+  const OLD_SHORT = OLD_FULL.slice(0, 7);
+  const MID_SHORT = MID_FULL.slice(0, 7);
+
+  let projectRoot: string;
+  let rewritesPath: string;
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'persist-rewrite-closure-'));
+    rewritesPath = join(projectRoot, '.pipeline', 'rebase-rewrites.json');
+  }, 30_000);
+
+  afterAll(async () => {
+    if (projectRoot) {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('repoints a prior old→mid hop through a second-rebase mid→new hop so the persisted file resolves old→new', async () => {
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+
+    // First rebase: buildRewriteMap-shaped hop (full AND short pre-image
+    // keys, both -> the full post-image sha), persisted against NO existing
+    // file.
+    await persistRewriteMap(projectRoot, {
+      [OLD_FULL]: MID_FULL,
+      [OLD_SHORT]: MID_FULL,
+    });
+
+    // Second rebase: `mid` itself is rewritten to `new`; persisted OVER the
+    // existing rebase-rewrites.json — the merge-and-close branch.
+    await persistRewriteMap(projectRoot, {
+      [MID_FULL]: NEW_FULL,
+      [MID_SHORT]: NEW_FULL,
+    });
+
+    const persisted = JSON.parse(await readFile(rewritesPath, 'utf-8')) as Record<
+      string,
+      string
+    >;
+
+    // The stale chain is collapsed IN THE FILE: old (full and short) points
+    // directly at new, not at the intermediate mid.
+    expect(persisted[OLD_FULL]).toBe(NEW_FULL);
+    expect(persisted[OLD_SHORT]).toBe(NEW_FULL);
+    // The new hop itself is present too.
+    expect(persisted[MID_FULL]).toBe(NEW_FULL);
+    expect(persisted[MID_SHORT]).toBe(NEW_FULL);
+    // No value anywhere still dangles at the rewritten intermediate sha.
+    expect(Object.values(persisted)).not.toContain(MID_FULL);
+
+    // And a read-time consumer resolving through the loaded file lands on
+    // `new` for the original pre-first-rebase sha.
+    expect(resolveThroughMap(OLD_FULL, persisted)).toBe(NEW_FULL);
+    expect(resolveThroughMap(OLD_SHORT, persisted)).toBe(NEW_FULL);
+  });
+});
