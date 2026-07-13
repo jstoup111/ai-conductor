@@ -218,6 +218,23 @@ export interface DaemonDeps {
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   /**
+   * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
+   * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
+   * (resolved config default: 20 — see `config.ts` `BUILD_PROGRESS_HALT_DEFAULTS`).
+   * This is an already-resolved plain number (mirrors `checkAndAutoPark`'s
+   * `maxAttempts` seam) — the daemon core has no config-parsing knowledge.
+   * Once a slug's re-kick count reaches this ceiling, `isProgressReKickEligible`
+   * is treated as permanently false for it for the rest of this run (a single
+   * `log()` line records the reason, once, distinct from T5's absolute
+   * attempt-ceiling reason) — but this ONLY disables the progress-gated
+   * re-kick path; `isHalted`/`isParked`/the base-advance `rekickSweep` and
+   * operator-unpark remain fully in effect (FR: spec stays eligible for
+   * base-advance re-kick / operator unpark). Absent → defaults to 20 (same
+   * numeric default as the prior hardcoded interim cap, so unconfigured
+   * behavior is unchanged).
+   */
+  progressReKickDispatchCeiling?: number;
+  /**
    * Watch for HALT marker cleared on a parked feature and invoke `onCleared` when
    * detected. Returns an unsubscribe function to tear down the watch. Used by
    * event-driven re-dispatch to re-kick a halted slug without polling.
@@ -525,18 +542,30 @@ export async function runDaemon(
   const waker = Waker();
   const watchers = new Map<string, () => void>();
 
-  // Task 8 (D2) safety valve: `isProgressReKickEligible` has no per-spec bound
-  // of its own yet (that config-driven ceiling is T9's job). Without SOME
-  // bound here a spec whose sidecar keeps showing progress would re-kick
-  // every tick forever — an unbounded dispatch loop. This is a conservative,
-  // hardcoded interim cap (not the configurable `dispatch_ceiling`); T9
-  // replaces it with the real per-spec ceiling + recorded reason.
-  const INTERIM_PROGRESS_REKICK_CAP = 20;
+  // Task 9: per-spec dispatch-ceiling bound on `isProgressReKickEligible`.
+  // Defaults to 20 (same numeric value as the prior hardcoded interim cap —
+  // T8's safety valve — so unconfigured behavior is unchanged); production
+  // wires `deps.progressReKickDispatchCeiling` from the resolved
+  // `build_progress_halt.dispatch_ceiling` config. Once a slug's count
+  // reaches the ceiling, the progress-gated re-kick path is disabled for it
+  // (permanently, for this run) and a distinct reason is logged exactly
+  // once — this does NOT touch isHalted/isParked/rekickSweep/operator-unpark,
+  // so the slug stays eligible for base-advance re-kick or operator unpark.
+  const progressReKickDispatchCeiling = deps.progressReKickDispatchCeiling ?? 20;
   const progressReKickCounts = new Map<string, number>();
+  const progressReKickCeilingLogged = new Set<string>();
   const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
     ? async (slug: string): Promise<boolean> => {
         const count = progressReKickCounts.get(slug) ?? 0;
-        if (count >= INTERIM_PROGRESS_REKICK_CAP) return false;
+        if (count >= progressReKickDispatchCeiling) {
+          if (!progressReKickCeilingLogged.has(slug)) {
+            progressReKickCeilingLogged.add(slug);
+            log(
+              `[daemon] ${slug}: progress-gated re-kick dispatch ceiling (${progressReKickDispatchCeiling}) reached — stopping re-kicks for this run; spec remains eligible for base-advance rekickSweep / operator unpark`,
+            );
+          }
+          return false;
+        }
         let eligible = false;
         try {
           eligible = await deps.isProgressReKickEligible!(slug);
