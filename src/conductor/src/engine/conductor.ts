@@ -1783,17 +1783,11 @@ export class Conductor {
         // (including the checkpoint after manual_test) is byte-for-byte unchanged.
         const builtinGroup = getGroupForStep(step.name);
         if (builtinGroup && builtinGroup.members[0] === step.name && this.mode === 'auto') {
-          await this.events.emit({
-            type: 'parallel_started',
-            step: step.name,
-            branches: builtinGroup.members,
-          });
-
           // Membership resolution (Task 15): reuse the existing skip cascade
           // per member. When every member would skip, the group itself is
           // skipped and NO branch (including the entry-point step below)
           // dispatches — real fan-out of the still-dispatchable members lands
-          // in later tasks (16+).
+          // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
           const membership = resolveGroupMembership(builtinGroup, state, groupTrack, this.config);
           if (membership.allSkipped) {
@@ -1803,6 +1797,20 @@ export class Conductor {
               await this.events.emit({ type: 'config_skip', step: member.name as StepName });
             }
             continue;
+          }
+
+          // Width-1 degrade (Task 16): when exactly one member is
+          // dispatchable, there is nothing to actually parallelize — the
+          // fan-out ceremony event (`parallel_started`) is skipped so the
+          // observable event stream for that single member is
+          // byte-for-byte equivalent to the pre-Task-14 serial baseline.
+          // Width 2+ still emits `parallel_started` to mark the group path.
+          if (membership.dispatchable.length > 1) {
+            await this.events.emit({
+              type: 'parallel_started',
+              step: step.name,
+              branches: builtinGroup.members,
+            });
           }
         }
 

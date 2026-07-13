@@ -4421,6 +4421,63 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('width-1 group degrades to serial semantics (Task 16)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+    } as ConductState;
+
+    it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'S',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // S tier + technical track resolve to width 1 (only manual_test
+      // dispatchable — prd_audit and architecture_review_as_built both
+      // skip). No fan-out ceremony event should fire: the event stream for
+      // manual_test must be byte-for-byte equivalent to the pre-Task-14
+      // serial baseline for that single member.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+      expect(observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test')).toBe(
+        true,
+      );
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+  });
+
   describe('validation group membership resolution (Task 15)', () => {
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
