@@ -1721,6 +1721,9 @@ no action needed — the token requirement is skipped.
   installs self-heal automatically the next time they run `bin/install` or `bin/install
   --update` — see `.docs/release-waivers/2026-07-12-rtk-hook-preservation.md` for why no
   separate migration step is required.
+- Auto-park decisions are contradiction-checked against completion evidence; a
+  build with completed-task evidence is never parked as `empty/missing plan`
+  (#612).
 
 ## Migration
 

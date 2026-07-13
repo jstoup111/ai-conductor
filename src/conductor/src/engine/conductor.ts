@@ -2199,17 +2199,49 @@ export class Conductor {
                     gateReason.includes('no tasks in plan') ||
                     gateReason.includes('plan file not found');
                   const slug = state.feature_desc || 'unknown';
-                  const { checkAndAutoPark } = await import('./daemon-auto-park.js');
+                  const { checkAndAutoPark, detectParkContradiction } = await import(
+                    './daemon-auto-park.js'
+                  );
+
+                  // #612: an empty/missing plan verdict is the gate's own
+                  // seed-time signal — never re-derived here — but it can be
+                  // FALSE (e.g. a plan-parser bug). Before trusting it,
+                  // contradiction-check it against the run's own completion
+                  // evidence (summary.json, task-evidence stamps, resolved
+                  // tasks). A contradiction strips the immediate reason so
+                  // checkAndAutoPark falls back to the durable no-evidence
+                  // counter semantics instead of parking immediately.
+                  let effectiveEmptyPlan = emptyPlan;
+                  if (emptyPlan) {
+                    const contradiction = await detectParkContradiction(this.projectRoot, {
+                      resolvedTasks: resolvedTasksAfter,
+                      evidenceStampCount: this.taskEvidence?.evidenceStamps.size ?? 0,
+                    });
+                    if (contradiction) {
+                      effectiveEmptyPlan = false;
+                      await this.events.emit({
+                        type: 'auto_park_contradiction',
+                        slug,
+                        verdict: 'empty/missing plan',
+                        evidence: {
+                          summaryTasksCompleted: contradiction.summaryTasksCompleted,
+                          evidenceStamps: contradiction.evidenceStamps,
+                          resolvedTasks: contradiction.resolvedTasks,
+                        },
+                      });
+                    }
+                  }
+
                   const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
                     maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
                     daemon: this.daemon,
-                    ...(emptyPlan ? { reason: 'empty/missing plan' } : {}),
+                    ...(effectiveEmptyPlan ? { reason: 'empty/missing plan' } : {}),
                     emit: (evt) =>
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
                   });
                   if (parkResult.parked) {
                     const reason =
-                      `auto-parked: ${emptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
                     await writeFile(
                       join(this.projectRoot, LOOP_HALT_MARKER),
