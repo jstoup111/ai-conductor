@@ -43,3 +43,21 @@ Safe to build independently. If #532/#520/#581/#530/#529 merge first, rebase and
 named anchors (`daemon-rekick.ts:361`, `attribution-lane.ts:85`, `conductor.ts:3832`,
 `autoheal.ts:602-645`) are still at the plan's line references before applying edits. No blocking
 conflict; the changes are additive and ordering-safe.
+
+## Re-check (2026-07-13, post-build)
+
+Result: **PASS — zero blocking, zero degrading.**
+
+- Internal story consistency re-verified against the accepted stories (10 stories incl. the
+  Story 9 `classifyClean`-noop pin and Story 10 `--empty` pin): stores partition cleanly
+  (Story 2/3/4 by file, Story 5 read-time-only), residue vs no-laundering partition on
+  map-key membership (Story 7 vs 8) — no contradiction (verified, 95%).
+- Insertion-point anchors verified on the branch as built: both call sites funnel through
+  `performRebase` with the capability injected — `conductor.ts:3884` (finish) and
+  `daemon-rekick.ts:385` (rekick), translation invoked at `rebase.ts:441-445` (verified).
+- New upstream merges since branch base (#639, #610, #638, #636/#637, #624) touch
+  `autoheal.ts`, `task-evidence.ts`, `conductor.ts`, `task-seed.ts`. Reviewed #636's
+  `canonicalTaskId` T<N>↔<N> aliasing directly: it changes task-id comparison seams only,
+  never SHA fields — orthogonal to this feature's sha translation; residue records ids
+  verbatim and downstream consumers fold them (verified via diff, 90%). Overlap is a
+  textual merge surface for the sanctioned finish-time rebase, not a story conflict.
