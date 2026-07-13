@@ -17,7 +17,7 @@
  */
 
 import type { GitRunner } from './pr-labels.js';
-import type { WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
+import type { InertRef, WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
 
 export interface NewExport {
   file: string;
@@ -421,4 +421,59 @@ export function checkContractConsistency(
   }
 
   return gaps;
+}
+
+// ── Waiver ref resolution (inert `Wired-into:` declarations) ──────────────────
+
+/**
+ * Injected file-existence checker — same injected-runner convention as
+ * `GitRunner`/`FileReader`/`ReferenceSearchRunner`: production code checks
+ * the real filesystem, tests inject a fake so this module stays testable
+ * without touching disk.
+ */
+export type FileExistsChecker = (path: string) => Promise<boolean>;
+
+/**
+ * Injected `gh` CLI runner — same injected-runner convention as `GitRunner`.
+ * Not yet exercised: issue-form ref resolution (Task 20) is the only caller;
+ * path-form resolution (this task) must never invoke it.
+ */
+export type GhRunner = (args: string[]) => Promise<{ stdout: string }>;
+
+export interface ResolveWaiverRefResult {
+  status: 'waived' | 'gap';
+  message?: string;
+  evidence?: string;
+}
+
+/**
+ * Resolves an `inert` waiver's `ref` (see `InertRef` in wired-into.ts) to a
+ * waived/gap verdict.
+ *
+ * Path-form: checked on disk via the injected `fileExists` checker, never
+ * shelling out to `gh` — a path ref is either present in the repo or it
+ * isn't, no network required.
+ *
+ * Issue-form: not yet implemented here (Task 20 wires up the `gh` runner to
+ * check issue open/closed state); this fails closed with a placeholder gap
+ * rather than silently treating an issue ref as waived.
+ */
+export async function resolveWaiverRef(
+  ref: InertRef,
+  fileExists: FileExistsChecker,
+  _gh: GhRunner,
+): Promise<ResolveWaiverRefResult> {
+  if (ref.form === 'path') {
+    const exists = await fileExists(ref.path);
+    if (exists) {
+      return { status: 'waived', evidence: '(path exists)' };
+    }
+    return { status: 'gap', message: `inert waiver ref ${ref.path} not found` };
+  }
+
+  // Issue-form resolution is Task 20 — fail closed rather than assuming waived.
+  return {
+    status: 'gap',
+    message: `inert waiver ref ${ref.owner}/${ref.repo}#${ref.number}: issue-form resolution not yet implemented`,
+  };
 }
