@@ -17,7 +17,7 @@
  */
 
 import type { GitRunner } from './pr-labels.js';
-import type { WiredIntoSite } from './wired-into.js';
+import type { WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
 
 export interface NewExport {
   file: string;
@@ -328,4 +328,66 @@ export async function orphanBackstop(
   }
 
   return results;
+}
+
+// ── Contract consistency (declared-vs-actual cross-reference) ─────────────────
+
+/**
+ * A single task's declared `Wired-into:` contract, paired with the files it
+ * touches so its actual new exports (scoped from `extractNewExports`) can be
+ * cross-referenced against what it claims.
+ *
+ * `parseResult` is `null` when the task has no `Wired-into:` line at all —
+ * distinct from a `declared`/`no_new_surface`/`inert` parse, which means the
+ * line is present but may still be malformed.
+ */
+export interface TaskWiringContract {
+  taskId: string;
+  files: string[];
+  parseResult: WiredIntoParseResult | null;
+}
+
+/**
+ * Cross-references each task's declared `Wired-into:` contract against its
+ * actual new exports (scoped to the task's own files) and reports two kinds
+ * of contradiction:
+ *
+ * 1. A task declares `no_new_surface` ("no new production surface") but its
+ *    files' diff adds new exports anyway — the declaration is false.
+ * 2. A task has new exports but no `Wired-into:` line at all — an
+ *    undeclared new-export surface. This only fires when at least one task
+ *    in the set carries a contract (`declared`, `no_new_surface`, or
+ *    `inert`), i.e. the plan is contract-bearing; a plan with no Wired-into
+ *    convention in use at all is out of scope for this check.
+ */
+export function checkContractConsistency(
+  tasks: TaskWiringContract[],
+  newExports: NewExport[],
+): string[] {
+  const gaps: string[] = [];
+  const planIsContractBearing = tasks.some((task) => task.parseResult !== null);
+
+  for (const task of tasks) {
+    const taskFiles = new Set(task.files);
+    const taskExports = newExports.filter((exp) => taskFiles.has(exp.file));
+
+    if (task.parseResult?.kind === 'no_new_surface') {
+      if (taskExports.length > 0) {
+        const symbols = taskExports.map((exp) => exp.symbol).join(', ');
+        gaps.push(
+          `task ${task.taskId}: declared 'no new production surface' but diff adds new export(s): ${symbols}`,
+        );
+      }
+      continue;
+    }
+
+    if (task.parseResult === null && planIsContractBearing && taskExports.length > 0) {
+      const symbols = taskExports.map((exp) => exp.symbol).join(', ');
+      gaps.push(
+        `task ${task.taskId}: undeclared new-export surface — diff adds new export(s): ${symbols} but task has no Wired-into declaration`,
+      );
+    }
+  }
+
+  return gaps;
 }

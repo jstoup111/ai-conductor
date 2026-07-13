@@ -15,10 +15,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractNewExports, verifyDeclaredSites, orphanBackstop } from '../src/engine/wiring-probe.js';
+import {
+  extractNewExports,
+  verifyDeclaredSites,
+  orphanBackstop,
+  checkContractConsistency,
+} from '../src/engine/wiring-probe.js';
 import type { GitRunner } from '../src/engine/pr-labels.js';
 import type { WiredIntoSite } from '../src/engine/wired-into.js';
-import type { ReferenceSearchRunner } from '../src/engine/wiring-probe.js';
+import type { ReferenceSearchRunner, TaskWiringContract } from '../src/engine/wiring-probe.js';
 
 // ── Fake GitRunner factory ────────────────────────────────────────────────────
 
@@ -397,6 +402,67 @@ describe('orphanBackstop', () => {
         status: 'gap',
         message: 'foo exported but referenced only within its own defining file (no external wiring)',
       },
+    ]);
+  });
+});
+
+// ── checkContractConsistency ────────────────────────────────────────────────
+
+describe('checkContractConsistency', () => {
+  it('passes a task declaring no_new_surface whose files add no new exports', () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '1',
+        files: ['src/a.ts'],
+        parseResult: { kind: 'no_new_surface' },
+      },
+    ];
+    const newExports = [{ file: 'src/other.ts', symbol: 'unrelated' }];
+
+    const gaps = checkContractConsistency(tasks, newExports);
+
+    expect(gaps).toEqual([]);
+  });
+
+  it('reports a gap when a task declares no_new_surface but its diff adds new exports', () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '1',
+        files: ['src/a.ts'],
+        parseResult: { kind: 'no_new_surface' },
+      },
+    ];
+    const newExports = [
+      { file: 'src/a.ts', symbol: 'fooExport' },
+      { file: 'src/a.ts', symbol: 'barExport' },
+    ];
+
+    const gaps = checkContractConsistency(tasks, newExports);
+
+    expect(gaps).toEqual([
+      "task 1: declared 'no new production surface' but diff adds new export(s): fooExport, barExport",
+    ]);
+  });
+
+  it('reports an undeclared new-export surface gap when a contract-bearing plan has a task with new exports and no Wired-into line', () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '1',
+        files: ['src/a.ts'],
+        parseResult: { kind: 'declared', sites: [{ path: 'src/b.ts', symbol: 'used' }] },
+      },
+      {
+        taskId: '2',
+        files: ['src/c.ts'],
+        parseResult: null,
+      },
+    ];
+    const newExports = [{ file: 'src/c.ts', symbol: 'newThing' }];
+
+    const gaps = checkContractConsistency(tasks, newExports);
+
+    expect(gaps).toEqual([
+      'task 2: undeclared new-export surface — diff adds new export(s): newThing but task has no Wired-into declaration',
     ]);
   });
 });
