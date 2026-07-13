@@ -526,4 +526,102 @@ describe('reconcileHaltPrs (Task 15)', () => {
     expect(okPr.isDraft).toBe(true);
     expect(okPr.labels).toContain('needs-remediation');
   });
+
+  it('(Task 3) warm all-conforming steady-state sweep (unchanged signature) logs zero lines total, including no summary line', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: establishes cache + signature (1 marked PR observed conforming)
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache });
+    expect(logs1.length).toBeGreaterThan(0);
+
+    // Sweep 2: warm steady-state — same list/marked counts, cache already conforming
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache });
+    expect(logs2).toHaveLength(0);
+  });
+
+  it('(Task 3) sweep whose (prList.length, markedPrs.length) signature changed logs exactly one summary line, even with zero per-PR lines', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+    const unmarked: FakePr = {
+      number: 303,
+      url: PR_URL_UNMARKED,
+      isDraft: false,
+      labels: [],
+      body: 'A completely normal feature PR description.',
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: only the marked PR present → establishes signature (1, 1)
+    const { gh: gh1 } = makeFakeGhForReconciliation([conforming]);
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh1, log: (m) => logs1.push(m), cache });
+    expect(logs1.length).toBeGreaterThan(0);
+
+    // Sweep 2: prList.length changes (2, 1) — cache still says conforming for the marked PR,
+    // so zero per-PR lines, but the signature change must still force exactly one summary line.
+    const { gh: gh2 } = makeFakeGhForReconciliation([conforming, unmarked]);
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh2, log: (m) => logs2.push(m), cache });
+    expect(logs2.filter((msg) => msg.includes('already conforming'))).toHaveLength(0);
+    expect(logs2.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+    expect(logs2).toHaveLength(1);
+  });
+
+  it('(Task 3) sweep emitting >=1 per-PR line also emits exactly one summary line', async () => {
+    const broken: FakePr = {
+      number: 301,
+      url: PR_URL_BROKEN,
+      isDraft: false,
+      labels: [],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([broken]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const logs: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs.push(m), cache });
+
+    expect(logs.some((msg) => msg.includes('healing'))).toBe(true);
+    expect(logs.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+  });
+
+  it('(Task 3) no cache/carrier passed → summary line always emitted (legacy/back-compat)', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    // Sweep 1 (no cache passed)
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m) });
+    expect(logs1.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+
+    // Sweep 2 (no cache passed, identical state) — still must emit summary every time
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m) });
+    expect(logs2.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+  });
 });

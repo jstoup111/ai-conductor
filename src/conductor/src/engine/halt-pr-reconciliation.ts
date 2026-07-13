@@ -23,6 +23,8 @@ interface GhPrListItem {
 
 export type PrSweepOutcome = 'conforming' | 'healed' | 'unconfirmed';
 
+const summarySignatures = new WeakMap<Map<string, PrSweepOutcome>, string>();
+
 interface ReconcileOpts {
   projectRoot: string;
   log?: (msg: string) => void;
@@ -67,7 +69,13 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, cache }: Recon
       return body.includes(NEEDS_REMEDIATION_BODY_MARKER);
     });
 
-    log?.(`[halt-pr-reconciliation] enumerated ${prList.length} open PRs, found ${markedPrs.length} marked`);
+    const summaryLine = `[halt-pr-reconciliation] enumerated ${prList.length} open PRs, found ${markedPrs.length} marked`;
+
+    let loggedPerPrLine = false;
+    const emit = (msg: string) => {
+      loggedPerPrLine = true;
+      log?.(msg);
+    };
 
     // ── Step 3: for each marked PR, ensure it's conform (draft + labeled) ──
     for (const pr of markedPrs) {
@@ -79,26 +87,38 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, cache }: Recon
         // If already conforming (draft + labeled), skip (idempotent no-op)
         if (isDraft && hasLabel) {
           if (outcomeCache.get(pr.url) !== 'conforming') {
-            log?.(`[halt-pr-reconciliation] ${pr.url} already conforming (draft+labeled), skipping`);
+            emit(`[halt-pr-reconciliation] ${pr.url} already conforming (draft+labeled), skipping`);
           }
           outcomeCache.set(pr.url, 'conforming');
           continue;
         }
 
         // Non-conforming: call ensureHaltPresentation to heal it
-        log?.(`[halt-pr-reconciliation] healing ${pr.url}: isDraft=${isDraft}, hasLabel=${hasLabel}`);
+        emit(`[halt-pr-reconciliation] healing ${pr.url}: isDraft=${isDraft}, hasLabel=${hasLabel}`);
         const result = await ensureHaltPresentation(gh, projectRoot, pr.url, log);
         if (result === 'confirmed') {
-          log?.(`[halt-pr-reconciliation] ${pr.url} healed (confirmed)`);
+          emit(`[halt-pr-reconciliation] ${pr.url} healed (confirmed)`);
           outcomeCache.set(pr.url, 'healed');
         } else {
-          log?.(`[halt-pr-reconciliation] ${pr.url} heal unconfirmed (will retry on next tick)`);
+          emit(`[halt-pr-reconciliation] ${pr.url} heal unconfirmed (will retry on next tick)`);
           outcomeCache.set(pr.url, 'unconfirmed');
         }
       } catch (err) {
         // Per-PR exception: log + skip, continue with other PRs
-        log?.(`[halt-pr-reconciliation] error healing ${pr.url}: ${err}`);
+        emit(`[halt-pr-reconciliation] error healing ${pr.url}: ${err}`);
       }
+    }
+
+    const signature = `${prList.length}:${markedPrs.length}`;
+    const shouldLogSummary =
+      cache === undefined ||
+      loggedPerPrLine ||
+      summarySignatures.get(outcomeCache) !== signature;
+    if (shouldLogSummary) {
+      log?.(summaryLine);
+    }
+    if (cache !== undefined) {
+      summarySignatures.set(outcomeCache, signature);
     }
 
     // Prune cache entries for PRs no longer in the marked set (merged/closed)
