@@ -746,6 +746,15 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
       }
       if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) return;
 
+      // Test-path exclusion: edges originating FROM a test file (per the
+      // same `.test.`/`test/`/`__tests__/` convention as `isTestPath`) are
+      // never added to the graph. A test file importing production code is
+      // normal, but it must never manufacture a false reachability path —
+      // e.g. `foo.test.ts` importing `bar.ts` must not make `bar.ts`
+      // reachable just because some production root happens to import
+      // `foo.test.ts` (or the test runner treats it as an entry point).
+      if (isTestPath(filePath)) return;
+
       const resolved = ts.resolveModuleName(
         moduleSpecifier.text,
         filePath,
@@ -805,4 +814,57 @@ export function reachableFromRoots(
   }
 
   return { reachable: false };
+}
+
+export interface ExportReachabilityResult {
+  file: string;
+  symbol: string;
+  reachable: boolean;
+  message?: string;
+}
+
+/**
+ * Layer 2 gap-producing function: checks each newly-added export for
+ * reachability from the configured entry-point roots via the TS import
+ * graph (`buildImportGraph` + `reachableFromRoots`). An unreachable export
+ * is a gap — this covers both orphan islands (modules that only import each
+ * other, never reached from any root — this falls out naturally from BFS,
+ * since a node with no path from a root is simply never visited) and
+ * exports reached only through test-path edges (excluded at
+ * `buildImportGraph` construction time, per the same test-path convention
+ * as `isTestPath`).
+ *
+ * Standalone, following the same pattern as Layer 1's exported functions
+ * (`verifyDeclaredSites`, `orphanBackstop`, `checkContractConsistency`) —
+ * not yet wired into a single top-level "all gaps" collector, per the
+ * deferred full-orchestration note on this feature.
+ *
+ * `newExports` file paths and `roots` are repo-relative, matching the shape
+ * produced elsewhere in this module (`extractNewExports`,
+ * `resolveLayer2Applicability`); this function resolves them to absolute
+ * paths against `projectRoot` before walking the graph.
+ */
+export function checkExportReachability(
+  newExports: NewExport[],
+  roots: string[],
+  projectRoot: string,
+): ExportReachabilityResult[] {
+  const absoluteRoots = roots.map((root) => join(projectRoot, root));
+  const graph = buildImportGraph(absoluteRoots, projectRoot);
+
+  return newExports.map((newExport) => {
+    const targetFile = join(projectRoot, newExport.file);
+    const { reachable } = reachableFromRoots(graph, absoluteRoots, targetFile);
+
+    if (reachable) {
+      return { file: newExport.file, symbol: newExport.symbol, reachable: true };
+    }
+
+    return {
+      file: newExport.file,
+      symbol: newExport.symbol,
+      reachable: false,
+      message: `«${newExport.symbol}» exported but unreachable from any entry point (roots: ${roots.join(', ')})`,
+    };
+  });
 }

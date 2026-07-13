@@ -4,6 +4,7 @@ import {
   resolveLayer2Applicability,
   buildImportGraph,
   reachableFromRoots,
+  checkExportReachability,
 } from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -164,6 +165,72 @@ describe('buildImportGraph / reachableFromRoots', () => {
 
       expect(result.reachable).toBe(true);
       expect(result.chain).toEqual([rootFile, aFile, bFile]);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('checkExportReachability — orphan islands and test-only edges', () => {
+  it('reports an orphan island (modules that import each other but are unreachable from any root) as unreachable', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-orphan-island-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(join(tmpDir, 'src', 'root.ts'), 'export const rootValue = 1;\n');
+      await writeFile(
+        join(tmpDir, 'src', 'islandA.ts'),
+        "import { b } from './islandB.js';\nexport const a = b;\n",
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'islandB.ts'),
+        "import { a } from './islandA.js';\nexport const b = a;\n",
+      );
+
+      const roots = ['src/root.ts'];
+      const results = checkExportReachability(
+        [{ file: 'src/islandA.ts', symbol: 'a' }],
+        roots,
+        tmpDir,
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0].reachable).toBe(false);
+      expect(results[0].message).toBe(
+        `«a» exported but unreachable from any entry point (roots: ${roots.join(', ')})`,
+      );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a module reachable only through a test file import as unreachable', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-test-only-edge-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(
+        join(tmpDir, 'src', 'root.ts'),
+        "import './foo.test.js';\nexport const rootValue = 1;\n",
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'foo.test.ts'),
+        "import { barValue } from './bar.js';\nexport const usesBar = barValue;\n",
+      );
+      await writeFile(join(tmpDir, 'src', 'bar.ts'), 'export const barValue = 1;\n');
+
+      const roots = ['src/root.ts'];
+      const results = checkExportReachability(
+        [{ file: 'src/bar.ts', symbol: 'barValue' }],
+        roots,
+        tmpDir,
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0].reachable).toBe(false);
+      expect(results[0].message).toBe(
+        `«barValue» exported but unreachable from any entry point (roots: ${roots.join(', ')})`,
+      );
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
