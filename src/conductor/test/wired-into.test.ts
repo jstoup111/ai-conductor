@@ -4,8 +4,10 @@ import {
   serializeWiredInto,
   resolveWiredInto,
   combineWiredInto,
+  extractWiredIntoContracts,
   type WiredIntoParseResult,
 } from '../src/engine/wired-into';
+import { parsePlanTaskPaths } from '../src/engine/autoheal';
 
 describe('parseWiredIntoLine', () => {
   it('parses a single declared site', () => {
@@ -158,5 +160,48 @@ describe('combineWiredInto (multi-line accumulation)', () => {
     const bad: WiredIntoParseResult = { kind: 'malformed', message: 'bad' };
     expect(combineWiredInto(declared, bad)).toEqual(bad);
     expect(combineWiredInto(bad, declared)).toEqual(bad);
+  });
+});
+
+describe('parseWiredIntoLine (repo-relative path enforcement)', () => {
+  it('rejects a declared site whose path escapes the repo root via ../ as malformed', () => {
+    const result = parseWiredIntoLine('**Wired-into:** ../outside.ts#f');
+    expect(result.kind).toBe('malformed');
+  });
+});
+
+describe('parsePlanTaskPaths (Wired-into consumed before Files: fallback)', () => {
+  it('does not leak a Wired-into declared path into Files: corroboration when no Files: line is present', () => {
+    const plan = [
+      '### Task 1: Add helper',
+      '- **Wired-into:** `src/b.ts#foo`',
+      '',
+    ].join('\n');
+    const paths = parsePlanTaskPaths(plan);
+    const task1Paths = paths.get('1') ?? new Set<string>();
+    expect(task1Paths.has('src/b.ts#foo')).toBe(false);
+    expect(task1Paths.size).toBe(0);
+  });
+});
+
+describe('extractWiredIntoContracts (plan-level extraction)', () => {
+  it('returns per-task parsed contracts keyed by task id', () => {
+    const plan = [
+      '### Task 1: Add helper',
+      '**Wired-into:** src/a.ts#foo',
+      '',
+      '### Task 2: Use helper',
+      '**Wired-into:** same as Task 1',
+      '',
+    ].join('\n');
+    const contracts = extractWiredIntoContracts(plan);
+    expect(contracts.get('1')).toEqual({
+      kind: 'declared',
+      sites: [{ path: 'src/a.ts', symbol: 'foo' }],
+    });
+    expect(contracts.get('2')).toEqual({
+      kind: 'declared',
+      sites: [{ path: 'src/a.ts', symbol: 'foo' }],
+    });
   });
 });

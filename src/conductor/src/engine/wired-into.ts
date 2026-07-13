@@ -1,3 +1,11 @@
+// Deferred import to avoid a hard circular-module dependency at eval time —
+// autoheal.ts imports parsing helpers from this module, so this module
+// reaches back for only the one grammar constant it needs (kept in lockstep
+// per the TASK_ID_PATTERN comment further below), used solely inside
+// function bodies (never at module top-level), which is safe under ESM's
+// live-binding circular-import semantics.
+import { TASK_ID_PATTERN as AUTOHEAL_TASK_ID_PATTERN } from './autoheal.js';
+
 // A task's **Wired-into:** line is the authoring-time declaration of which
 // call site(s) actually reach the new code (the wiring reachability gate).
 // Matches `**Wired-into:**`, with an optional list bullet — same style as
@@ -112,6 +120,16 @@ function classifyInertRef(text: string): InertRef {
 const SITE_ENTRY = /^`?([^`#\s]+)#([^`\s]+?)`?$/;
 
 /**
+ * A declared site's path must be repo-relative: no leading `/` (absolute),
+ * and no `..` segment escaping the repo root (e.g. `../outside.ts`).
+ */
+function isRepoRelativePath(path: string): boolean {
+  if (path.startsWith('/')) return false;
+  const segments = path.split('/');
+  return !segments.includes('..');
+}
+
+/**
  * Parse a **Wired-into:** markdown line into its declared sites, in the
  * order they appear. Entries are comma-separated `path#symbol` pairs, each
  * optionally wrapped in backticks (`` `src/a.ts#foo` ``).
@@ -134,7 +152,7 @@ export function parseWiredIntoLine(line: string): WiredIntoParseResult {
     const token = raw.trim();
     if (!token) continue;
     const entryMatch = token.match(SITE_ENTRY);
-    if (!entryMatch) {
+    if (!entryMatch || !isRepoRelativePath(entryMatch[1])) {
       return malformed(rest);
     }
     sites.push({ path: entryMatch[1], symbol: entryMatch[2] });
@@ -224,4 +242,62 @@ export function combineWiredInto(
   }
 
   return { kind: 'declared', sites: [...aSites, ...bSites] };
+}
+
+// Mirrors parsePlanTasks' task header grammar in autoheal.ts (`### Task ID:
+// Title`, `### Task ID — Title`, or the bare `### T<N> — Title` shorthand) —
+// the convention `extractWiredIntoContracts` uses to split a plan into
+// per-task sections.
+const PLAN_TASK_HEADER = new RegExp(
+  `^#{1,6}\\s+(?:Task\\s+(${AUTOHEAL_TASK_ID_PATTERN})|T(\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
+);
+
+/**
+ * Walk a full plan's text and return each task's parsed **Wired-into:**
+ * contract, keyed by bare task id. Multiple **Wired-into:** lines within one
+ * task section are accumulated in order via `combineWiredInto`; `same as
+ * Task N` inheritance shorthand is resolved via `resolveWiredInto` against
+ * the contracts of tasks already seen (document order — a task can only
+ * inherit from an earlier task).
+ *
+ * Tasks with no **Wired-into:** line at all are omitted from the returned
+ * map (no contract declared, distinct from a `malformed`/`no_new_surface`
+ * declaration).
+ */
+export function extractWiredIntoContracts(
+  planText: string,
+): Map<string, WiredIntoParseResult> {
+  const order: string[] = [];
+  const linesByTask = new Map<string, string[]>();
+  let currentId: string | null = null;
+
+  for (const line of planText.split('\n')) {
+    const headerMatch = line.match(PLAN_TASK_HEADER);
+    if (headerMatch) {
+      currentId = headerMatch[1] ?? headerMatch[2];
+      if (!linesByTask.has(currentId)) {
+        linesByTask.set(currentId, []);
+        order.push(currentId);
+      }
+      continue;
+    }
+    if (!currentId) continue;
+    if (WIRED_INTO_LINE.test(line)) {
+      linesByTask.get(currentId)!.push(line);
+    }
+  }
+
+  const contracts = new Map<string, WiredIntoParseResult>();
+  for (const id of order) {
+    const wiredLines = linesByTask.get(id) ?? [];
+    if (wiredLines.length === 0) continue;
+    let combined: WiredIntoParseResult | null = null;
+    for (const line of wiredLines) {
+      const parsed = resolveWiredInto(line, contracts);
+      combined = combined ? combineWiredInto(combined, parsed) : parsed;
+    }
+    if (combined) contracts.set(id, combined);
+  }
+
+  return contracts;
 }
