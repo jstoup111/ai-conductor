@@ -65,4 +65,33 @@ describe('validateWiringEvidence — validator for wiring-reachability evidence 
       expect(result.reason).toContain('bogus-kind');
     }
   });
+
+  it('evidence recorded for a stale HEAD sha fails validation (freshness check)', () => {
+    const ev = validEvidence();
+    // Evidence was recorded at 'head456', but HEAD has since advanced by
+    // one commit to 'head789' — a later commit invalidates the wiring
+    // analysis and must not be trusted as still-current evidence.
+    const result = validateWiringEvidence(ev, 'head789');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('evidence recorded for head456 but HEAD is head789');
+    }
+  });
+
+  it('evidence recorded for the current HEAD sha passes the freshness check', () => {
+    const ev = validEvidence();
+
+    const result = validateWiringEvidence(ev, 'head456');
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('freshness check is skipped when currentHead is not provided', () => {
+    const ev = validEvidence();
+
+    const result = validateWiringEvidence(ev);
+
+    expect(result).toEqual({ ok: true });
+  });
 });

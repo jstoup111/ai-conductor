@@ -595,6 +595,7 @@ const WIRING_GAP_KINDS: WiringGapKind[] = [
  */
 export function validateWiringEvidence(
   ev: unknown,
+  currentHead?: string | null,
 ): { ok: true } | { ok: false; reason: string } {
   if (typeof ev !== 'object' || ev === null) {
     return { ok: false, reason: `${WIRING_EVIDENCE} is not a JSON object` };
@@ -606,8 +607,15 @@ export function validateWiringEvidence(
   if (str('baseSha') === null) {
     return { ok: false, reason: `${WIRING_EVIDENCE} must include "baseSha" as a non-empty string` };
   }
-  if (str('headSha') === null) {
+  const headSha = str('headSha');
+  if (headSha === null) {
     return { ok: false, reason: `${WIRING_EVIDENCE} must include "headSha" as a non-empty string` };
+  }
+  if (currentHead != null && currentHead !== headSha) {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} is stale — evidence recorded for ${headSha} but HEAD is ${currentHead}; re-run wiring-reachability analysis at the current HEAD`,
+    };
   }
   if (typeof e.layer2Applicable !== 'boolean') {
     return {
