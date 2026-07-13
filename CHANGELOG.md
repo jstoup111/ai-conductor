@@ -41,6 +41,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Spec landed for #649 (`.docs/{track,complexity,intake,stories,plans}/session-fresh-verdict-artifacts.md`
+  + `.docs/decisions/adr-2026-07-13-session-fresh-verdict-artifacts.md`): the three SHIP-tail verdict
+  completion checks (`architecture_review_as_built`, `prd_audit`, `build_review`) will require their
+  session-produced verdict artifact to be fresh relative to the **per-attempt judging session** rather
+  than the conductor-run start. Today the freshness guard uses `sessionStartedAt`, stamped once per
+  `run()` and shared by every in-loop retry, so a verdict written by an early retry stays "fresh"
+  forever and a review session that fails to rewrite its verdict re-scores the stale verdict against
+  code that no longer exists (incident `2026-07-12-wiring-reachability-gate`, 2026-07-13: an
+  as-built BLOCKED verdict from 19:56Z looped three retries after the code was fixed at 20:22Z). The
+  fix threads an `attemptStartedAt` floor captured before each review dispatch onto `CompletionContext`
+  and scores a loud, distinct "no fresh verdict" (never reusing a prior session's verdict) when the
+  artifact predates it; a `verdict_freshness` audit event records fresh-vs-stale-reused per evaluation.
+  Falls back to the current `sessionStartedAt` floor when no per-attempt floor is present (legacy/
+  resume). `manual_test` (already covered by the #367 whitewash guard), `acceptance_specs` RED
+  evidence, and `retro` are enumerated and deferred; orthogonal to the unmerged #642 (touches the
+  verdict predicates + retry-loop seam, not `autoheal.ts`/`deriveCompletion`). Implementation tracked
+  separately; this entry documents the queued fix.
 - Spec landed for #647 (`.docs/{track,complexity,intake,stories,plans}/kickback-to-build-no-op-when-target-evidence-stamped.md`
   + `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`): a remediation kickback→build
   that cannot produce real rework will fail loud and fast instead of looping silently. When
