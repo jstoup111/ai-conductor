@@ -16,6 +16,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Path corroboration in the build-completion gate no longer rejects valid task
+  evidence when a plan task declares its file paths only *inline in prose*
+  rather than in a `**Files:**` line or a dedicated `- \`path\`` bullet. The
+  legacy per-task backtick scan (`parsePlanTaskPaths` in
+  `src/engine/autoheal.ts`) previously harvested *every* backtick token in a
+  section that had no `**Files:**` line — including incidental references like a
+  runtime artifact the task guards (`task-status.json`) or a line-annotated
+  citation (`bin/install:494–506`) — and made them the task's *required*
+  corroboration paths. A real single-file commit whose trailer named the task
+  then "had no overlap with plan paths" and was rejected, zeroing the attempt's
+  progress and cascading into `no_task_progress` stall halts (ai-conductor#548;
+  overnight 2026-07-13: #280 plan T11 / commit `b4ce60a`, and
+  `2026-07-12-rtk-hook-preservation` T1/T3/T5). The scan is now restricted to
+  dedicated file-list bullet items; a backtick token embedded in a prose
+  sentence is treated as an incidental reference, not a declaration. With no
+  declared path, corroboration **abstains** and the engine-stamped `Task:`
+  trailer stands on its own (abstain-or-loud, #519/#530) — while a genuinely
+  *declared* path (a `**Files:**` line or a `- \`path\`` bullet) that is disjoint
+  from the commit still rejects, and segment-anchored suffix matching (#424/#425)
+  is unchanged.
 - Spec landed for #625 (`.docs/{track,complexity,stories,conflicts,plans,intake}/rekick-resume-republish-stale-worktree-engine.md` + `.docs/architecture/2026-07-13-rekick-resume-republish-review.md`): on a self-host re-kick resume, after `resumeRebaseFirst`'s rebase replays commits touching `src/conductor`, the worktree engine will be republished (reusing the existing content-addressed `npm run build` → `publish-engine.mjs`) BEFORE `conductor.run()` runs the gate — closing the worktree-engine variant of the stale-engine class (sibling of #598) where setup builds the `dist` from pre-rebase source and the rebase then delivers the fix into source only, so the gate mis-parses the plan (`▶ build 0/0`) and halts on the already-fixed defect. A failed republish will fail closed (HALT, worktree kept), never gate on the stale `dist`. Implementation tracked separately; this entry documents the queued fix.
 - Updated `resolved-config.test.ts` expectations for `explore`/`prd` reasoning effort (`xhigh` → `medium`), which had drifted from #607's re-scope of those defaults on cost-per-outcome grounds — restores CI green on `main` (2 failing tests fixed). No production defaults changed.
 
