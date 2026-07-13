@@ -19,7 +19,10 @@ import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-f
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
-import { loadConfig, resolveMemoryProvider } from './engine/config.js';
+import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import type { HarnessConfig } from './types/config.js';
+import { readLastResolvedCount } from './engine/task-evidence.js';
+import { countResolvedTasks } from './engine/task-progress.js';
 import { holdLock, readPidRecord, ownsLock } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
@@ -359,6 +362,63 @@ export function createRestartRequester(
       process.exit(0);
       return { fired: true };
     }
+  };
+}
+
+/**
+ * T14 (daemon-halts-a-build-that-is-making-forward-progre): construct the
+ * REAL `DaemonDeps.isProgressReKickEligible` predicate and
+ * `progressReKickDispatchCeiling` from `config.build_progress_halt` — the
+ * production wiring that was missing despite T8/T9/T10's full unit coverage
+ * at the daemon.ts/pickEligible level (with hand-injected stub predicates)
+ * and `readLastResolvedCount`'s existence in task-evidence.ts. Without this,
+ * a parked-but-progressing build in the real daemon stayed parked exactly as
+ * it did before the feature shipped.
+ *
+ * Gated on `build_progress_halt.enabled`: when disabled (or config/the block
+ * is absent), `isProgressReKickEligible` is OMITTED entirely (not merely a
+ * function that always returns false) so pickEligible's optional-chaining
+ * guard (`ctx.isProgressReKickEligible && ...`) never even consults it —
+ * true end-to-end inertness, matching the pre-feature behavior byte for
+ * byte. `progressReKickDispatchCeiling` is always threaded (mirrors
+ * `BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling` when the block/field is
+ * absent), since daemon.ts already defaults it — this just avoids a second,
+ * possibly-drifting default living in two places.
+ *
+ * Eligibility per slug: the live resolved-task count in that slug's worktree
+ * (`countResolvedTasks`, reads the pipeline task-status sidecar) strictly
+ * exceeds the count its last build-step dispatch stamped to the
+ * `TaskEvidence` sidecar (`readLastResolvedCount`, reads
+ * `.pipeline/task-evidence.json`) —
+ * i.e. forward progress happened since the dispatch that halted/parked it.
+ * Both readers are tolerant of a missing/corrupt file (read as 0), so an
+ * absent worktree degrades to "no progress" rather than throwing.
+ */
+export function buildProgressReKickDeps(
+  config: HarnessConfig | undefined,
+  worktreeBase: string,
+): {
+  isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  progressReKickDispatchCeiling: number;
+} {
+  const block = config?.build_progress_halt;
+  const progressReKickDispatchCeiling =
+    block?.dispatch_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling;
+
+  if (!block?.enabled) {
+    return { progressReKickDispatchCeiling };
+  }
+
+  return {
+    progressReKickDispatchCeiling,
+    isProgressReKickEligible: async (slug: string) => {
+      const slugRoot = join(worktreeBase, slug);
+      const [lastResolvedCount, liveResolvedCount] = await Promise.all([
+        readLastResolvedCount(slugRoot),
+        countResolvedTasks(slugRoot),
+      ]);
+      return liveResolvedCount > lastResolvedCount;
+    },
   };
 }
 
@@ -1114,6 +1174,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // `.daemon/parked/<slug>` marker is durable across restarts and is
       // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
       isParked: (slug) => isOperatorParked(projectRoot, slug),
+      // T14 (daemon-halts-a-build-that-is-making-forward-progre): wire the
+      // real progress-gated cross-dispatch re-kick (T8/T9/T10) into runDaemon
+      // — previously constructed and fully unit-tested only at the
+      // daemon.ts/pickEligible level, never reachable from this entrypoint.
+      ...buildProgressReKickDeps(config, worktreeBase),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).

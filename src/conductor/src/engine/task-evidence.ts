@@ -35,12 +35,16 @@ export interface EvidenceStamp {
  *   (e.g. `zero_work_product` — #505 TS-16). Append-only per miss; cleared
  *   whenever the counter itself resets on progress.
  * - migrationGrandfather: Set<string> — task IDs grandfathered during migration
+ * - lastResolvedCount: number — net task-resolution count from the most recent
+ *   attempt/dispatch (progress-aware halt/park decision, #601). Missing on
+ *   older sidecars; defaults to 0 for backward compatibility.
  */
 export interface TaskEvidence {
   evidenceStamps: Map<string, EvidenceStamp>;
   noEvidenceAttempts: number;
   noEvidenceReasons: string[];
   migrationGrandfather: Set<string>;
+  lastResolvedCount: number;
   write(): Promise<void>;
 }
 
@@ -59,6 +63,7 @@ interface SerializedEvidenceData {
   noEvidenceAttempts: number;
   noEvidenceReasons?: string[];
   migrationGrandfather: string[];
+  lastResolvedCount?: number;
 }
 
 /**
@@ -119,6 +124,8 @@ function createInstance(
       ? [...data.noEvidenceReasons]
       : [],
     migrationGrandfather,
+    lastResolvedCount:
+      typeof data.lastResolvedCount === 'number' ? data.lastResolvedCount : 0,
 
     async write() {
       const sidecarDir = join(projectRoot, '.pipeline');
@@ -133,6 +140,7 @@ function createInstance(
         noEvidenceAttempts: instance.noEvidenceAttempts,
         noEvidenceReasons: [...instance.noEvidenceReasons],
         migrationGrandfather: Array.from(instance.migrationGrandfather),
+        lastResolvedCount: instance.lastResolvedCount,
       };
 
       // TRUE atomic write: unique temp file in the SAME directory, then
@@ -261,4 +269,19 @@ export async function resetNoEvidenceAttempts(projectRoot: string): Promise<void
 export async function readNoEvidenceAttempts(projectRoot: string): Promise<number> {
   const evidence = await createTaskEvidence(projectRoot);
   return evidence.noEvidenceAttempts;
+}
+
+/**
+ * Read `lastResolvedCount` from the sidecar (Task 11 — tolerant reads).
+ *
+ * Thin delegate over `createTaskEvidence`, which already tolerates a
+ * missing or corrupt/unparseable `.pipeline/task-evidence.json` by
+ * returning empty state (`lastResolvedCount: 0`). Never throws: a
+ * corrupt/missing sidecar reads as zero progress, so the progress-delta
+ * computation (`resolvedCount - lastResolvedCount`) degrades to "no
+ * progress" rather than crashing the daemon tick.
+ */
+export async function readLastResolvedCount(projectRoot: string): Promise<number> {
+  const evidence = await createTaskEvidence(projectRoot);
+  return evidence.lastResolvedCount;
 }

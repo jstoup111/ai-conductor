@@ -275,6 +275,41 @@ describe('task-evidence', () => {
       expect(evidence.noEvidenceReasons).toEqual([]);
     });
 
+  });
+
+  // T3: lastResolvedCount tracks net task-resolution progress per attempt/dispatch
+  // so the progress-aware halt/park decision can distinguish forward progress
+  // from a stalled build even when the fixed retry budget is exhausted.
+  describe('lastResolvedCount', () => {
+    it('defaults to 0 when sidecar file is absent', async () => {
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(0);
+    });
+
+    it('round-trips through write/read', async () => {
+      const evidence1 = await createTaskEvidence(dir);
+      evidence1.lastResolvedCount = 3;
+      await evidence1.write();
+
+      const evidence2 = await createTaskEvidence(dir);
+      expect(evidence2.lastResolvedCount).toBe(3);
+    });
+
+    it('reads old sidecars missing lastResolvedCount as 0', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {},
+          noEvidenceAttempts: 2,
+          migrationGrandfather: [],
+        }),
+      );
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(0);
+    });
+
     it('has a resolvable, descriptive entry for zero_work_product', () => {
       const description = NO_EVIDENCE_REASON_DESCRIPTIONS.zero_work_product;
       expect(description).toBeTruthy();

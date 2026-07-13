@@ -28,6 +28,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 });
 import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -1270,6 +1271,92 @@ describe('engine/conductor', () => {
       expect(calls[0][0]).toBe('build');
     });
 
+    it('T6: zero-progress path still accrues noEvidenceAttempts naturally and auto-parks at the pre-existing threshold, unaffected by T4/T5 progress-bypass logic', async () => {
+      // Regression lock for T4 (progressAttempts/progressBypassed bypass) and
+      // T5 (absolute attempt-ceiling backstop): when resolvedTasksAfter never
+      // exceeds resolvedTasksBefore (a fake runner that resolves ZERO new
+      // tasks per attempt), T4's bypass condition
+      // (`resolvedTasksAfter > resolvedTasksBefore`) never fires, so this
+      // path must behave exactly as it did before T4/T5 landed — the durable
+      // noEvidenceAttempts counter increments on every gate miss and
+      // checkAndAutoPark parks at DAEMON_NO_EVIDENCE_THRESHOLD (N=3), the
+      // same threshold asserted by the pre-existing seeded-counter test
+      // above ('daemon: N consecutive no-evidence gate misses...').
+      //
+      // Unlike that pre-existing test, this one does NOT pre-seed the
+      // counter — it drives the counter to threshold purely through natural
+      // per-attempt accrual across two conductor.run() invocations
+      // (simulating a daemon re-kick, per Task 12's "accrues ACROSS
+      // attempts, runs, and re-kicks" durability guarantee), proving the
+      // increment-and-park mechanics themselves (not just the park trigger
+      // at a hand-set value) are unchanged by T4/T5.
+      const N = 3; // DAEMON_NO_EVIDENCE_THRESHOLD (src/engine/conductor.ts)
+      await seedToBuildGate(0, true); // fresh counter, parseable plan present
+
+      // Fake runner: always "succeeds" but never produces completion
+      // evidence or advances task-status — so countResolvedTasks() returns 0
+      // before and after every attempt (zero forward progress), and the
+      // build completion gate misses every time.
+      const runner = createMockStepRunner();
+
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Re-kick #1: a bounded retry loop (maxRetries: 2) with zero progress
+      // hits the pre-existing `no_task_progress` stall verdict at attempt 2
+      // and breaks out of the retry loop without reaching the auto-park
+      // threshold yet — counter accrues to 2, feature not parked.
+      const conductor1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'feat')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+
+      // Re-kick #2 (simulating the daemon re-dispatching the still-failed
+      // build step): the durable counter (Task 12: accrues ACROSS attempts,
+      // runs, and re-kicks) carries over from re-kick #1. The very first
+      // attempt of this run is still zero-progress, pushing the counter to
+      // N=3 and crossing the auto-park threshold — proving the natural
+      // increment-and-park mechanics (not just a hand-set counter value)
+      // are unaffected by T4/T5's progress-bypass logic, which never
+      // engages because resolvedTasksAfter never exceeds resolvedTasksBefore.
+      const conductor2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(N);
+      expect(await getProvenanceType(dir, 'feat')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(
+        new RegExp(`no completion evidence after ${N} attempts`),
+      );
+    });
+
     it('daemon: empty plan at seed auto-parks with "empty plan" reason', async () => {
       await seedToBuildGate(0);
       // Don't create a plan file — empty/missing plan condition
@@ -1672,6 +1759,170 @@ describe('engine/conductor', () => {
       expect(recoveryStepName).toBe('acceptance_specs');
       // The second parameter indicates whether a retry reason is needed
       expect(typeof recoveryReason).toBe('boolean');
+    });
+  });
+
+  describe('T7: lastResolvedCount recorded at build-step dispatch exit', () => {
+    // Seed state up through (but not including) build, without writing a
+    // plan/task-status.json — the runner or the test body supplies those,
+    // per exit path under test.
+    async function seedToBuild(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+    }
+
+    // Writes a plan with `total` "### Task N: Step N" headers and a matching
+    // task-status.json with `completed` of them marked completed, each
+    // backed by an evidence stamp (H6: an unstamped 'completed' row is
+    // demoted at every gate evaluation, so stamps are required for the
+    // count to stick).
+    async function writePlanAndStatus(completed: number, total: number): Promise<void> {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      const planLines: string[] = ['# Plan', ''];
+      for (let i = 1; i <= total; i++) planLines.push(`### Task ${i}: Step ${i}`, '');
+      await writeFile(join(dir, '.docs/plans/plan.md'), planLines.join('\n'));
+
+      const tasks: Array<{ id: number; status: string }> = [];
+      const stamps: Record<string, { sha: string; form: string }> = {};
+      for (let i = 1; i <= total; i++) {
+        const done = i <= completed;
+        tasks.push({ id: i, status: done ? 'completed' : 'pending' });
+        if (done) {
+          stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
+        }
+      }
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+      );
+    }
+
+    it('records lastResolvedCount in the sidecar on a successful/completing build exit', async () => {
+      await seedToBuild();
+      const TOTAL = 3;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writePlanAndStatus(TOTAL, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(TOTAL);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (daemon auto-park)', async () => {
+      await seedToBuild();
+      // A parseable plan that never gets any resolved tasks, but no
+      // task-status.json is ever written by the runner — every gate
+      // evaluation misses with zero resolved tasks, and the durable
+      // no-evidence counter (seeded one below threshold) crosses the
+      // auto-park threshold on the first attempt.
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'plan.md'),
+        '# Plan\n\n### Task 1: First\n\n### Task 2: Second\n',
+      );
+      const evidenceSeed = await createTaskEvidence(dir);
+      evidenceSeed.noEvidenceAttempts = 2; // DAEMON_NO_EVIDENCE_THRESHOLD (3) - 1
+      await evidenceSeed.write();
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      expect(parkEvents).toHaveLength(1);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(0);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (T5 absolute attempt-ceiling backstop)', async () => {
+      await seedToBuild();
+      const TOTAL = 5;
+      const CEILING = 2;
+      let progress = 0;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            progress++;
+            await writePlanAndStatus(progress, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const loopHaltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') loopHaltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // far above the ceiling — proves the ceiling bounds this run
+        fromStep: 'build',
+        config: {
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(loopHaltEvents).toHaveLength(1);
+      expect(loopHaltEvents[0].reason).toMatch(/attempt ceiling/i);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(CEILING);
     });
   });
 
@@ -7981,6 +8232,19 @@ describe('durable no-evidence counter', () => {
       verifyArtifacts: true,
       maxRetries: 3,
       onRecovery,
+      // T4: this fixture's build gate can never genuinely complete (its local
+      // writeTaskStatus helper never writes the plan file or evidence
+      // stamps) — it was always relying on the fixed retry budget being
+      // exhausted at the exact moment the last progress-driven reset fired.
+      // The progress-bypass gate (T4) correctly keeps re-dispatching through
+      // that budget as long as forward progress continues, which changes the
+      // timing this test coincidentally depended on. Disabling
+      // build_progress_halt restores the pre-T4 fixed-budget timing this
+      // counter-reset invariant test actually exercises — it isn't testing
+      // T4's bypass semantics.
+      config: {
+        build_progress_halt: { enabled: false, attempt_ceiling: 30, dispatch_ceiling: 20 },
+      } as HarnessConfig,
     });
 
     await conductor.run();

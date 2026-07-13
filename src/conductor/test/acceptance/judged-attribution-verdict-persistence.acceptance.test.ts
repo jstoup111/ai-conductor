@@ -478,7 +478,15 @@ describe('acceptance: judged attribution verdict persists into the SAME build at
       verifyArtifacts: true,
       maxRetries: 1,
       fromStep: 'build',
-      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+      // build_progress_halt defaults to enabled: true (adr-2026-07-12);
+      // disable it here so this spec — isolated to the judged-attribution
+      // dispatch count — doesn't also exercise the orthogonal progress-bypass
+      // gate, which would otherwise re-dispatch the attempt whenever the
+      // fixture's own setup commits register as forward progress.
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
     });
 
     await conductor.run();

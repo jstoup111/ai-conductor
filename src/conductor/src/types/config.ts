@@ -237,6 +237,23 @@ export interface BuildProgressConfig {
 }
 
 /**
+ * Progress-aware build halt/park config (build_progress_halt): raises the
+ * retry ceiling while a build keeps resolving tasks, so a build resolving
+ * >=1 additional task per attempt/dispatch keeps re-dispatching instead of
+ * halting when the fixed retry budget is exhausted. All fields optional —
+ * absent block resolves to documented defaults (owned by runtime default
+ * resolution/validation, not this type).
+ */
+export interface BuildProgressHaltConfig {
+  /** Master on/off switch for progress-aware halt. */
+  enabled?: boolean;
+  /** Ceiling on retry attempts before halting, when progress is being made. */
+  attempt_ceiling?: number;
+  /** Ceiling on dispatches before halting, when progress is being made. */
+  dispatch_ceiling?: number;
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -338,6 +355,11 @@ export interface HarnessConfig {
    * enabled: true }. See `resolveBuildProgressConfig` in engine/config.ts.
    */
   build_progress?: BuildProgressConfig;
+  /**
+   * Progress-aware build halt/park config. Absent block resolves to defaults
+   * owned by runtime resolution (not this type). See `BuildProgressHaltConfig`.
+   */
+  build_progress_halt?: BuildProgressHaltConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

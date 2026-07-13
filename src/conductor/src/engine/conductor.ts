@@ -28,7 +28,11 @@ import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
-import { resolveBuildProgressConfig, isAttributionJudgeCutoverActive } from './config.js';
+import {
+  resolveBuildProgressConfig,
+  isAttributionJudgeCutoverActive,
+  BUILD_PROGRESS_HALT_DEFAULTS,
+} from './config.js';
 import {
   isEnforcementConfigured,
   writeBuildStepMarker,
@@ -1625,6 +1629,13 @@ export class Conductor {
         let resolvedTasksBefore = step.name === 'build'
           ? await countResolvedTasks(this.projectRoot)
           : 0;
+        // T4 (adr-2026-07-12-progress-aware-build-halt): bounded counter for
+        // "attempts bypassed because this attempt made real forward
+        // progress" — distinct from `attempt`/`stepMaxRetries` (the fixed
+        // per-step retry budget). Compared against
+        // `build_progress_halt.attempt_ceiling` so a progressing build isn't
+        // halted just because the fixed retry budget ran out.
+        let progressAttempts = 0;
         // #505 TS-15: HEAD sha captured at build-step entry, compared against
         // HEAD at step exit to detect a zero-work-product session (dispatched
         // work that produced no new commits, or nothing dispatched at all).
@@ -2114,6 +2125,11 @@ export class Conductor {
               // "three options: ..." rhetorical questions that no automated
               // retry will ever resolve.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
+              // T4: set true when this attempt made real forward progress
+              // and is still under the progress-attempt ceiling — signals
+              // the retry decision below to re-dispatch without consuming
+              // the fixed `stepMaxRetries` budget.
+              let progressBypassed = false;
               if (step.name === 'build') {
                 // #505 TS-15: zero-work-product detection. Runs before the
                 // stall circuit breaker below — a zero-work session is a
@@ -2179,6 +2195,67 @@ export class Conductor {
                   }
                 }
 
+                // T4: within-dispatch progress-bypass gate. A completion-gate
+                // miss that nonetheless resolved at least one more task than
+                // the previous attempt is real forward progress, not a stall
+                // — re-dispatch without letting this attempt count toward
+                // the fixed `stepMaxRetries` halt/park budget, bounded by
+                // the separate `attempt_ceiling` progress-attempt counter so
+                // slow-drip progress can't loop forever (absolute ceiling
+                // enforcement itself is T5, out of scope here).
+                let bpCeilingHit = false;
+                let bpCeilingValue = 0;
+                {
+                  const bpHaltCfg = this.config.build_progress_halt;
+                  const bpEnabled = bpHaltCfg?.enabled ?? BUILD_PROGRESS_HALT_DEFAULTS.enabled;
+                  const bpCeiling =
+                    bpHaltCfg?.attempt_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling;
+                  if (bpEnabled && resolvedTasksAfter > resolvedTasksBefore) {
+                    if (progressAttempts + 1 < bpCeiling) {
+                      progressAttempts++;
+                      progressBypassed = true;
+                    } else {
+                      // T5: absolute attempt-ceiling backstop. This attempt is
+                      // still making real forward progress (T4's bypass
+                      // condition would otherwise re-dispatch it indefinitely),
+                      // but bypassing this attempt would push the
+                      // progress-attempt counter to (or past) `attempt_ceiling`
+                      // — stop bypassing on THIS attempt and park/halt with a
+                      // distinct reason so operators can tell "genuinely
+                      // stuck" (the generic completion-gate "tasks not
+                      // completed" reason) apart from "still progressing but
+                      // hit the absolute ceiling" (this branch).
+                      progressAttempts++;
+                      bpCeilingHit = true;
+                      bpCeilingValue = bpCeiling;
+                    }
+                  }
+                }
+
+                if (bpCeilingHit) {
+                  // T7: stamp the ending resolved count on this park exit too
+                  // — every build-step exit path records lastResolvedCount,
+                  // not just success. Re-read fresh from disk (see the
+                  // success-exit comment above) so this doesn't clobber
+                  // stamps written directly to the sidecar elsewhere.
+                  if (this.taskEvidence) {
+                    const freshEvidence = await createTaskEvidence(this.projectRoot);
+                    freshEvidence.lastResolvedCount = resolvedTasksAfter;
+                    await freshEvidence.write();
+                  }
+                  const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {});
+                  state[step.name] = 'failed';
+                  await writeState(this.stateFilePath, state);
+                  await this.events.emit({ type: 'loop_halt', reason });
+                  process.off('SIGINT', sigintHandler);
+                  return;
+                }
+
                 // Task 23: daemon auto-park at the build gate layer (ADR
                 // "last resort" + H7 durable counter). Fires ONLY on a build
                 // gate miss: an empty/missing plan (the gate's own seed-time
@@ -2240,6 +2317,17 @@ export class Conductor {
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
                   });
                   if (parkResult.parked) {
+                    // T7: stamp the ending resolved count on this park exit
+                    // too — every build-step exit path records
+                    // lastResolvedCount, not just success. Re-read fresh
+                    // from disk (see the success-exit comment above) so this
+                    // doesn't clobber stamps written directly to the
+                    // sidecar elsewhere.
+                    if (this.taskEvidence) {
+                      const freshEvidence = await createTaskEvidence(this.projectRoot);
+                      freshEvidence.lastResolvedCount = resolvedTasksAfter;
+                      await freshEvidence.write();
+                    }
                     const reason =
                       `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
@@ -2453,32 +2541,47 @@ export class Conductor {
                   // if still failing, fall into the normal recovery menu.
                   // Skipped in auto mode — there's no human to break the stall,
                   // so we fall straight through to the (auto) failure handling.
-                  if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
-                    await this.stepRunner.runInteractive(step.name);
-                  }
-                  const recheck = await checkStepCompletion(
-                    this.projectRoot,
-                    step.name,
-                    await this.completionCtx(state),
-                  );
-                  if (recheck.done) {
-                    succeeded = true;
-                    successOutput = result.output;
-
-                    // Task 12: If the interactive REPL resolved the issue and the gate
-                    // now passes, reset the counter since progress was made.
-                    if (this.taskEvidence) {
-                      this.taskEvidence.noEvidenceAttempts = 0;
-                      this.taskEvidence.noEvidenceReasons = [];
-                      await this.taskEvidence.write();
+                  //
+                  // Daemon + no_task_progress (not halt_marker) is the
+                  // exception: there is no human to hand off to, AND the
+                  // durable no-evidence counter (checked via checkAndAutoPark
+                  // above, every attempt) already owns the halt decision for
+                  // this exact condition. Breaking the retry loop here
+                  // unconditionally capped the counter at 2 increments per
+                  // run — the park threshold (3) could only ever be reached
+                  // by a SEPARATE re-kicked run, never within one generous
+                  // (e.g. maxRetries: 10) run. Falling through instead lets
+                  // the normal retry accounting keep going so the counter can
+                  // reach its threshold, or the step's own maxRetries budget,
+                  // within a single run.
+                  if (!(this.daemon && stalled === 'no_task_progress')) {
+                    if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
+                      await this.stepRunner.runInteractive(step.name);
                     }
+                    const recheck = await checkStepCompletion(
+                      this.projectRoot,
+                      step.name,
+                      await this.completionCtx(state),
+                    );
+                    if (recheck.done) {
+                      succeeded = true;
+                      successOutput = result.output;
+
+                      // Task 12: If the interactive REPL resolved the issue and the gate
+                      // now passes, reset the counter since progress was made.
+                      if (this.taskEvidence) {
+                        this.taskEvidence.noEvidenceAttempts = 0;
+                        this.taskEvidence.noEvidenceReasons = [];
+                        await this.taskEvidence.write();
+                      }
+                    }
+                    break;
                   }
-                  break;
                 }
                 resolvedTasksBefore = resolvedTasksAfter;
               }
 
-              if (attempt < stepMaxRetries) {
+              if (progressBypassed || attempt < stepMaxRetries) {
                 await this.events.emit({
                   type: 'step_retry',
                   step: step.name,
@@ -2488,10 +2591,44 @@ export class Conductor {
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
                 });
+                // T4: this attempt made forward progress and is under the
+                // progress-attempt ceiling — undo the `attempt++` at the top
+                // of the loop so it doesn't consume the fixed
+                // `stepMaxRetries` budget.
+                if (progressBypassed) {
+                  attempt--;
+                }
                 continue;
+              }
+              // T7: stamp the ending resolved count on this exit too — the
+              // fixed-budget-exhausted / non-daemon-park failure exit is
+              // still a build-step dispatch end, so lastResolvedCount must
+              // be recorded here even though nothing "succeeded".
+              if (step.name === 'build' && this.taskEvidence) {
+                // Re-read fresh from disk rather than writing the possibly-
+                // stale in-memory `this.taskEvidence` snapshot — stamps can
+                // be written directly to the sidecar by other pathways
+                // (autoheal reconciliation, writeJudgedStamps) between this
+                // Conductor's start and this exit, and blindly writing the
+                // stale snapshot would clobber them.
+                const freshEvidence = await createTaskEvidence(this.projectRoot);
+                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                await freshEvidence.write();
               }
               break;
             }
+          }
+
+          // T7: stamp the ending resolved count on the success/completing
+          // exit — every build-step exit path (success, park, ceiling)
+          // records lastResolvedCount, not just the park paths above.
+          if (step.name === 'build' && this.taskEvidence) {
+            // Re-read fresh from disk — see comment at the fixed-budget-
+            // exhausted exit above for why this must not write the stale
+            // in-memory `this.taskEvidence` snapshot.
+            const freshEvidence = await createTaskEvidence(this.projectRoot);
+            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+            await freshEvidence.write();
           }
 
           succeeded = true;

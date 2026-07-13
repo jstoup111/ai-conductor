@@ -1094,7 +1094,16 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       verifyArtifacts: true,
       maxRetries: 1,
       fromStep: 'build',
-      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+      // build_progress_halt defaults to enabled: true (adr-2026-07-12); this
+      // spec is isolated to the attribution-lane re-check wiring and must not
+      // also exercise the (orthogonal) progress-bypass gate, which would
+      // otherwise re-dispatch the attempt and double-count checkStepCompletion
+      // calls whenever the fixture's own setup commits register as forward
+      // progress.
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
     });
 
     await conductor.run();
@@ -1158,7 +1167,10 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       maxRetries: 1,
       fromStep: 'build',
       // No attribution_judge_cutover configured — lane must be fully skipped.
-      config: {} as never,
+      // build_progress_halt defaults to enabled: true (adr-2026-07-12);
+      // disable it here so this spec — isolated to the attribution-lane
+      // wiring — doesn't also exercise the orthogonal progress-bypass gate.
+      config: { build_progress_halt: { enabled: false } } as never,
     });
 
     await conductor.run();
