@@ -38,7 +38,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   is unchanged.
 - Spec landed for #625 (`.docs/{track,complexity,stories,conflicts,plans,intake}/rekick-resume-republish-stale-worktree-engine.md` + `.docs/architecture/2026-07-13-rekick-resume-republish-review.md`): on a self-host re-kick resume, after `resumeRebaseFirst`'s rebase replays commits touching `src/conductor`, the worktree engine will be republished (reusing the existing content-addressed `npm run build` → `publish-engine.mjs`) BEFORE `conductor.run()` runs the gate — closing the worktree-engine variant of the stale-engine class (sibling of #598) where setup builds the `dist` from pre-rebase source and the rebase then delivers the fix into source only, so the gate mis-parses the plan (`▶ build 0/0`) and halts on the already-fixed defect. A failed republish will fail closed (HALT, worktree kept), never gate on the stale `dist`. Implementation tracked separately; this entry documents the queued fix.
 - Updated `resolved-config.test.ts` expectations for `explore`/`prd` reasoning effort (`xhigh` → `medium`), which had drifted from #607's re-scope of those defaults on cost-per-outcome grounds — restores CI green on `main` (2 failing tests fixed). No production defaults changed.
-
+- Daemon's halt-PR reconciliation sweep (`runDaemonMode` in `src/daemon-cli.ts`)
+  now owns a single `PrSweepOutcome` cache for the lifetime of each daemon run
+  and passes it into every startup + idle-poll `reconcileHaltPrs` call, instead
+  of calling with no cache. `reconcileHaltPrs` already gated its per-PR and
+  summary log lines on cache state deltas; without the cache wired in,
+  production sweeps recomputed a fresh cache every tick and re-logged the full
+  baseline every time. Idle steady-state ticks are now silent for unchanged
+  conforming PRs, reducing daemon log volume (#521).
 - Daemon build-completion gate no longer false-parks a fully-completed build as
   "empty/missing plan" when the plan's task headings use the bare `### T<N> —
   Title` shorthand (no "Task" word, ids starting at `T0`) — the form used by
