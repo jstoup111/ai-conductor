@@ -539,6 +539,142 @@ export function validateAcceptanceRedEvidence(
 }
 
 /**
+ * Path to the wiring-reachability gate's evidence artifact. Written by the
+ * wiring-reachability-gate skill after analyzing whether a task's symbols
+ * are actually wired into a reachable surface. Gitignored run evidence, not
+ * a committed design artifact.
+ */
+export const WIRING_EVIDENCE = '.pipeline/wiring-evidence.json';
+
+export type WiringContractForm = 'declared' | 'none_no_surface' | 'inert' | 'malformed';
+export type WiringGapKind =
+  | 'no-reference'
+  | 'orphan'
+  | 'undeclared-surface'
+  | 'contradiction'
+  | 'scope-undeterminable'
+  | 'waiver-unresolved';
+
+export interface WiringSymbolResult {
+  symbol: string;
+  kind: WiringGapKind;
+}
+
+export interface WiringTaskResult {
+  taskId: string;
+  contractForm: WiringContractForm;
+  symbols: WiringSymbolResult[];
+}
+
+export interface WiringEvidence {
+  baseSha: string;
+  headSha: string;
+  layer2Applicable: boolean;
+  waiverResolutions: unknown[];
+  tasks: WiringTaskResult[];
+}
+
+const WIRING_CONTRACT_FORMS: WiringContractForm[] = [
+  'declared',
+  'none_no_surface',
+  'inert',
+  'malformed',
+];
+
+const WIRING_GAP_KINDS: WiringGapKind[] = [
+  'no-reference',
+  'orphan',
+  'undeclared-surface',
+  'contradiction',
+  'scope-undeterminable',
+  'waiver-unresolved',
+];
+
+/**
+ * Validate a parsed wiring-reachability evidence object.
+ */
+export function validateWiringEvidence(
+  ev: unknown,
+): { ok: true } | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  const str = (k: string): string | null =>
+    typeof e[k] === 'string' && (e[k] as string).trim() !== '' ? (e[k] as string) : null;
+
+  if (str('baseSha') === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "baseSha" as a non-empty string` };
+  }
+  if (str('headSha') === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "headSha" as a non-empty string` };
+  }
+  if (typeof e.layer2Applicable !== 'boolean') {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} must include "layer2Applicable" as a boolean`,
+    };
+  }
+  if (!Array.isArray(e.waiverResolutions)) {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} must include "waiverResolutions" as an array`,
+    };
+  }
+  if (!Array.isArray(e.tasks)) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "tasks" as an array` };
+  }
+
+  for (const task of e.tasks as unknown[]) {
+    if (typeof task !== 'object' || task === null) {
+      return { ok: false, reason: `${WIRING_EVIDENCE} has a "tasks" entry that is not an object` };
+    }
+    const t = task as Record<string, unknown>;
+    if (typeof t.taskId !== 'string') {
+      return { ok: false, reason: `${WIRING_EVIDENCE} has a task missing a string "taskId"` };
+    }
+    if (
+      typeof t.contractForm !== 'string' ||
+      !WIRING_CONTRACT_FORMS.includes(t.contractForm as WiringContractForm)
+    ) {
+      return {
+        ok: false,
+        reason: `${WIRING_EVIDENCE} task "${t.taskId}" has an unknown contractForm "${t.contractForm as string}"`,
+      };
+    }
+    if (!Array.isArray(t.symbols)) {
+      return {
+        ok: false,
+        reason: `${WIRING_EVIDENCE} task "${t.taskId}" must include "symbols" as an array`,
+      };
+    }
+    for (const symbol of t.symbols as unknown[]) {
+      if (typeof symbol !== 'object' || symbol === null) {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.taskId}" has a "symbols" entry that is not an object`,
+        };
+      }
+      const s = symbol as Record<string, unknown>;
+      if (typeof s.symbol !== 'string') {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.taskId}" has a symbol entry missing a string "symbol"`,
+        };
+      }
+      if (typeof s.kind !== 'string' || !WIRING_GAP_KINDS.includes(s.kind as WiringGapKind)) {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.taskId}" symbol "${s.symbol}" has an unknown kind "${s.kind as string}"`,
+        };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+/**
  * Path to the build_review judgement gate's verdict artifact. Written by the
  * grader dispatched between `build` and `manual_test`; read back by the
  * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
