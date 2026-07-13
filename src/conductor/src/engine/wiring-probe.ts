@@ -184,11 +184,42 @@ export async function extractNewExports(
   anchor: string,
   cwd = '.',
 ): Promise<NewExport[]> {
+  const { newExports } = await runWiringProbe(runGit, anchor, cwd);
+  return newExports;
+}
+
+/** The exact fail-closed gap message surfaced when the base commit cannot be
+ * derived by any rung of the ladder (anchor unreachable, origin ref
+ * unresolvable, and merge-base both attempts failing). This is the
+ * probe-level fail-closed signal: never a silent empty result, never an
+ * unhandled throw. */
+export const WIRING_SCOPE_UNDETERMINABLE = 'wiring scope undeterminable';
+
+export interface WiringProbeResult {
+  newExports: NewExport[];
+  gaps: string[];
+}
+
+/**
+ * Top-level entry point for the diff-extraction stage of the wiring probe.
+ * Derives the base commit via the anchor -> origin-ref-resolve ->
+ * fork-point -> merge-base fallback ladder (`deriveBase`); when every rung
+ * fails, this fails closed with a single named gap
+ * (`WIRING_SCOPE_UNDETERMINABLE`) rather than returning an empty (silently
+ * passing) export list or letting an exception escape uncaught.
+ */
+export async function runWiringProbe(
+  runGit: GitRunner,
+  anchor: string,
+  cwd = '.',
+): Promise<WiringProbeResult> {
   const base = await deriveBase(runGit, anchor, cwd);
-  if (base === null) return [];
+  if (base === null) {
+    return { newExports: [], gaps: [WIRING_SCOPE_UNDETERMINABLE] };
+  }
 
   const diffResult = await runGit(['diff', `${base}...HEAD`], { cwd });
-  return parseDiffForNewExports(diffResult.stdout);
+  return { newExports: parseDiffForNewExports(diffResult.stdout), gaps: [] };
 }
 
 /** Injected file reader — same convention as GitRunner: real fs calls stay out of unit tests. */

@@ -20,6 +20,8 @@ import {
   verifyDeclaredSites,
   orphanBackstop,
   checkContractConsistency,
+  runWiringProbe,
+  WIRING_SCOPE_UNDETERMINABLE,
 } from '../src/engine/wiring-probe.js';
 import type { GitRunner } from '../src/engine/pr-labels.js';
 import type { WiredIntoSite } from '../src/engine/wired-into.js';
@@ -291,6 +293,27 @@ describe('extractNewExports origin-ref resolution ladder', () => {
       ['rev-parse', '--verify', 'origin/master'],
     ]);
     // no merge-base or diff call was ever attempted
+    expect(calls.some((c) => c[0] === 'merge-base' || c[0] === 'diff')).toBe(false);
+  });
+});
+
+// ── Probe-level fail-closed gap ───────────────────────────────────────────────
+
+describe('runWiringProbe fail-closed base derivation', () => {
+  it('returns a single "wiring scope undeterminable" gap (never a silent pass, never a throw) when anchor, origin ref, and merge-base all fail to resolve', async () => {
+    const { git, calls } = fakeGit([
+      new Error('fatal: Needed a single revision'), // anchor unreachable
+      new Error('ref refs/remotes/origin/HEAD is not a symbolic ref'), // origin/HEAD unset
+      new Error('fatal: Needed a single revision'), // origin/main does not exist
+      new Error('fatal: Needed a single revision'), // origin/master does not exist
+    ]);
+
+    const result = await runWiringProbe(git, 'unreachable-anchor', '.');
+
+    expect(result.gaps).toEqual([WIRING_SCOPE_UNDETERMINABLE]);
+    expect(result.gaps[0]).toBe('wiring scope undeterminable');
+    expect(result.newExports).toEqual([]);
+    // no merge-base or diff call was ever attempted — fails closed before them
     expect(calls.some((c) => c[0] === 'merge-base' || c[0] === 'diff')).toBe(false);
   });
 });
