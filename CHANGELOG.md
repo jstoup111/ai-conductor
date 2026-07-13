@@ -64,6 +64,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   reachability gate" and `skills/plan/SKILL.md` §5c for the full grammar.
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
+- New optional `kickback_escalation:` config block (`enabled`, default `true`) — a master
+  on/off switch for the #647 kickback→build no-op escalation (D2, "zero net progress and
+  unchanged gate verdict"). `enabled: false` reverts D2 to the prior re-kick-until-
+  `MAX_KICKBACKS_PER_GATE` behavior. The D1 route-into-no-op guard in `planRemediation` is
+  fail-closed correctness and stays active regardless of this flag. See `README.md` and
+  `src/conductor/README.md` for config details.
 
 ### Changed
 
@@ -82,6 +88,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Kickback→build no longer loops silently when the target task's evidence is already
+  stamped (#647, `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`).
+  `planRemediation` now recomputes build completion after append+re-seed and HALTs with the
+  gap ledger when there is no dispatchable build work (D1), instead of unconditionally
+  routing back to BUILD. And a kickback→build re-entry that ends with zero net progress (no
+  HEAD movement, no resolved-task increase) AND an unchanged gate verdict now HALTs on the
+  first such cycle with a reason naming the unchanged input, instead of silently re-kicking
+  toward `MAX_KICKBACKS_PER_GATE` (D2). The kickback audit trail now distinguishes a
+  genuine self-heal (`kickback_outcome: 'did-work'`) from a kickback resolved without a
+  build ever running (`'derived-already-complete'`) (D3).
 - Owner: markers added to the four 2026-07-13 spec-wave intake docs (session-fresh-verdict-artifacts, park-all-dispatch-paths, kickback-to-build no-op, retry-classify) so the daemon owner-gate can dispatch their builds (#649/#651/#647/#646).
 - Spec landed for #651 (`.docs/{track,complexity,intake,stories,plans}/park-all-dispatch-paths.md`
   + `.docs/decisions/adr-2026-07-13-park-all-dispatch-paths.md`): the daemon pool's fresh-dispatch path

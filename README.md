@@ -408,6 +408,22 @@ build_progress_halt:
 Omit the block entirely to get the defaults above. See `src/conductor/README.md` for the
 implementation details.
 
+**Kickback→build no-op escalation (`kickback_escalation`).** A kickback→build re-entry
+(e.g. from `as-built` review or `prd-audit`) that ends with zero net progress — no HEAD
+movement and no increase in resolved-task count — AND leaves the gate's verdict unchanged
+now HALTs loud on the first such cycle instead of silently re-kicking toward
+`MAX_KICKBACKS_PER_GATE`. Configure via a `kickback_escalation:` block in the project config:
+
+```yaml
+kickback_escalation:
+  enabled: true   # default true; false reverts to the prior re-kick-until-cap behavior
+```
+
+Omit the block entirely to get `enabled: true`. This only gates the zero-progress escalation
+(D2); the route-into-no-op guard that recomputes build completion before routing a kickback
+(D1) is fail-closed correctness and always stays active. See `src/conductor/README.md` for
+implementation details.
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a

@@ -254,6 +254,20 @@ export interface BuildProgressHaltConfig {
 }
 
 /**
+ * Kickback→build no-op escalation config (adr-2026-07-13-kickback-build-no-op-escalation,
+ * D2/Story 4): when a kickback→build re-entry ends with zero net progress
+ * AND the gate's verdict is unchanged, the loop HALTs instead of re-kicking
+ * toward `MAX_KICKBACKS_PER_GATE`. All fields optional — absent block
+ * resolves to `{ enabled: true }`. `enabled: false` reverts to the prior
+ * re-kick-until-cap behavior; D1 (the `planRemediation` route-into-no-op
+ * guard) is fail-closed correctness and is NOT gated by this flag.
+ */
+export interface KickbackEscalationConfig {
+  /** Master on/off switch for the D2 zero-progress/unchanged-verdict escalation. Omitted → true. */
+  enabled?: boolean;
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -360,6 +374,11 @@ export interface HarnessConfig {
    * owned by runtime resolution (not this type). See `BuildProgressHaltConfig`.
    */
   build_progress_halt?: BuildProgressHaltConfig;
+  /**
+   * Kickback→build no-op escalation (D2). Absent block resolves to
+   * `{ enabled: true }`. See `KickbackEscalationConfig`.
+   */
+  kickback_escalation?: KickbackEscalationConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

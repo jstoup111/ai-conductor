@@ -2039,6 +2039,60 @@ other code path change.
 Tests: `test/acceptance/daemon-halts-a-build-that-is-making-forward-progre.acceptance.test.ts`
 (S1–S8), plus the unit-level config validation and sidecar round-trip tests exercised by T1–T12.
 
+### Kickback→build no-op escalation (`kickback_escalation`, #647)
+
+Previously a kickback→build re-entry (e.g. from `as-built` architecture review or
+`prd-audit`) could loop silently: `planRemediation` routed back to BUILD whenever the gate had
+fixes to make, even when the target task's evidence was already stamped and there was no
+dispatchable work — and a build cycle that made zero net progress against an unchanged gate
+verdict would keep re-kicking toward `MAX_KICKBACKS_PER_GATE` instead of surfacing the stall.
+
+**D1 — route-into-no-op guard (`planRemediation`, fail-closed, not gated by config).**
+`planRemediation` recomputes build completion after append+re-seed and HALTs with the gap
+ledger when there is no dispatchable build work, instead of unconditionally routing.
+
+**D2 — zero-progress/unchanged-verdict escalation (kickback→build re-entry).** The daemon
+captures a pre-kickback baseline (HEAD sha, resolved-task count) keyed by the source gate
+immediately before a `navigateBack(..., 'build', ...)`. The next time that same gate fails
+again, `shouldEscalateKickback` (`engine/kickback-escalation.ts`) compares the baseline
+against the post-build state: if the build produced no HEAD movement and no resolved-count
+increase (`classifyBuildProgress` returns `'no-work'`) AND the gate's verdict is unchanged, the
+loop HALTs on the first such cycle with a reason naming the unchanged input, instead of
+re-kicking toward the cap.
+
+**D3 — audit-trail discriminator.** The kickback audit event carries a `kickback_outcome` of
+`'did-work'` or `'derived-already-complete'` so the trail distinguishes a genuine self-heal
+cycle from a kickback resolved without a build ever running.
+
+**Config (`pipeline.yml` / `harness-config.ts` `kickback_escalation:` key):**
+
+```yaml
+kickback_escalation:
+  enabled: true   # default true; false reverts D2 to the pre-#647 re-kick-until-cap behavior
+```
+
+Validation (`engine/config.ts validateConfig`): total, fail-safe resolution mirroring
+`ci_watch` — absent, malformed, non-object, or unknown-key input all resolve to
+`{ enabled: true }` without a warning; only `{ enabled: true|false }` is passed through as
+given.
+
+**Kill switch.** `kickback_escalation.enabled: false` makes the D2 zero-progress escalation
+check in `conductor.ts` (`kickbackEscalationEnabled`) fully inert, reverting to the prior
+re-kick-until-`MAX_KICKBACKS_PER_GATE` behavior. D1 is fail-closed correctness and is never
+gated by this flag — it stays active regardless.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `KickbackEscalationConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `kickback_escalation:` block (total, fail-safe) |
+| `engine/kickback-escalation.ts` | Pure `classifyBuildProgress` / `shouldEscalateKickback` helpers |
+| `engine/conductor.ts` | D1 route-into-no-op guard in `planRemediation`; D2 escalation wiring at kickback→build re-entry; D3 `kickback_outcome` audit-trail discriminator |
+
+Tests: `test/acceptance/kickback-build-noop-escalation.acceptance.test.ts`,
+`test/engine/kickback-escalation.test.ts`, `test/kickback-escalation-config.test.ts`.
+
 Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
 `test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
 
