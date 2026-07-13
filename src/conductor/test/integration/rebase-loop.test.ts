@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -244,6 +244,76 @@ describe('integration/rebase-loop', () => {
     // The rebase step must have rebased feature/foo onto the advanced base, so
     // the base's new commit is now in the feature branch's ancestry.
     expect(await branchContains(baseSha)).toBe(true);
+  });
+
+  // ── Task 14 (RED, #535): both real call sites exercise translateAfterRebase ──
+  //
+  // Once Task 15 wires `performRebase` to invoke `translateAfterRebase(git,
+  // projectRoot, onto, origHead, head)` on a `changed` outcome, BOTH funnel
+  // sites — the finish-time `runRebaseStep` (via `Conductor.run`, exercised
+  // here through `conductorWith`) and the daemon re-kick play-forward
+  // `resumeRebaseFirst` — must invoke the SAME injected capability identically.
+  // `performRebase` receives it via an optional 4th `opts` argument; each call
+  // site plumbs it through similarly to how `resolveRebaseConflict` is already
+  // threaded through `StepRunner`/`resumeRebaseFirst`'s options bag. Neither
+  // site does this yet, so `translateAfterRebase` below is genuinely never
+  // called today (RED).
+  describe('Task 14: translateAfterRebase capability at both call sites', () => {
+    it('runRebaseStep (finish-time, via Conductor.run) invokes translateAfterRebase on a changed rebase', async () => {
+      await initRepoOnFeatureBranch({
+        path: 'src/feature.ts',
+        content: 'export const foo = 1;\n',
+      });
+      await advanceBaseNonConflicting();
+      await writeState(statePath, { ...FRONT_DONE });
+
+      const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+      const ran: string[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+        // Task 15's expected optional capability slot (mirrors
+        // `resolveRebaseConflict`) — ignored by today's `runRebaseStep`.
+        translateAfterRebase,
+      } as unknown as StepRunner;
+
+      await conductorWith(runner).run();
+
+      expect(translateAfterRebase).toHaveBeenCalled();
+    });
+
+    it('resumeRebaseFirst (daemon re-kick, play-forward) invokes translateAfterRebase identically on a changed rebase', async () => {
+      await initRepoOnFeatureBranch({
+        path: 'src/feature.ts',
+        content: 'export const foo = 1;\n',
+      });
+      await advanceBaseNonConflicting();
+
+      const { resumeRebaseFirst, REKICK_SENTINEL } = await import(
+        '../../src/engine/daemon-rekick.js'
+      );
+      await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+
+      const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+      const res = await (resumeRebaseFirst as unknown as (opts: {
+        worktreePath: string;
+        localBase: string;
+        events: ConductorEventEmitter;
+        ranManualTest: boolean;
+        translateAfterRebase?: typeof translateAfterRebase;
+      }) => Promise<string>)({
+        worktreePath: dir,
+        localBase: BASE,
+        events,
+        ranManualTest: true,
+        translateAfterRebase,
+      });
+
+      expect(res).toBe('rebased');
+      expect(translateAfterRebase).toHaveBeenCalled();
+    });
   });
 
   // ── #420: gate-first mechanical re-verify fixtures ──────────────────────

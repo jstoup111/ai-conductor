@@ -622,3 +622,110 @@ Task 1 needs to be done.
     expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
   });
 });
+
+// ── Task 14 (RED): performRebase invokes translateAfterRebase on `changed` ──
+//
+// Story 6/9 (#535, ADR adr-2026-07-12-rebase-evidence-stamp-translation): once
+// Task 15 wires it, a clean rebase that changes code paths must invoke a
+// deterministic `translateAfterRebase(git, projectRoot, onto, origHead, head)`
+// step so sha-anchored evidence citations survive the engine's own rebase.
+// `performRebase` accepts the capability via an optional 4th `opts` argument
+// (mirroring the existing `resolveRebaseConflict`-style optional-capability DI
+// used elsewhere in this module) — today `performRebase(git, projectRoot,
+// localBase)` takes no such argument, so it is silently ignored and these
+// "invoked on changed" assertions are genuinely RED. The "not invoked"
+// assertions are forward-looking regression guards for the no-op/absent case
+// and may already trivially pass.
+describe('engine/rebase — performRebase translateAfterRebase capability (Task 14, real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-xlate-di-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('invokes an injected translateAfterRebase(git, projectRoot, onto, origHead, head) after a `changed` clean rebase', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'feat']);
+
+    const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+    const git = makeGitRunner(repo);
+    const outcome = await (performRebase as unknown as (
+      git: GitRunner,
+      projectRoot: string,
+      localBase: string,
+      opts?: { translateAfterRebase?: typeof translateAfterRebase },
+    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+
+    expect(outcome.kind).toBe('changed');
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    expect(translateAfterRebase).toHaveBeenCalledTimes(1);
+    expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
+  }, 20000);
+
+  it('does NOT invoke translateAfterRebase on a `noop` outcome (branch already current)', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+    const git = makeGitRunner(repo);
+    const outcome = await (performRebase as unknown as (
+      git: GitRunner,
+      projectRoot: string,
+      localBase: string,
+      opts?: { translateAfterRebase?: typeof translateAfterRebase },
+    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+
+    expect(outcome.kind).toBe('noop');
+    expect(translateAfterRebase).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('does NOT invoke translateAfterRebase, and behaves byte-identically to today, when the capability is absent from a `changed` rebase', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const git = makeGitRunner(repo);
+    // No 4th argument — today's exact call shape.
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    // Backward-compat guard: nothing about the outcome changes when the
+    // capability is never supplied.
+    if (outcome.kind === 'changed') {
+      expect(outcome.changedCodePaths.length).toBeGreaterThan(0);
+    }
+  }, 20000);
+});
