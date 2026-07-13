@@ -912,9 +912,26 @@ export class Conductor {
     const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
     const halts = plan.gaps.filter((g) => g.disposition === 'halt');
     if (fixes.length > 0) {
+      const target = earliestRemediationTarget(fixes, steps);
+      // #644: DECIDE is operator-only in daemon mode. An autonomous rewind to a
+      // DECIDE-phase step (architecture_review, plan, …) would re-run the whole
+      // downstream DECIDE tail unattended — HALT to the human instead. Phase is
+      // derived from the step definitions (no hardcoded step list). BUILD-phase
+      // targets (build, acceptance_specs) keep routing so re-audit-after-gap-
+      // close still works. Interactive mode never reaches planRemediation.
+      const targetPhase = steps.find((s) => s.name === target)?.phase;
+      if (this.daemon && targetPhase === 'DECIDE') {
+        return {
+          kind: 'halt',
+          detail:
+            `autonomous remediation would rewind to DECIDE step '${target}' — ` +
+            `human gate required (DECIDE is operator-only in daemon mode). Gaps: ` +
+            fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
+        };
+      }
       return {
         kind: 'route',
-        target: earliestRemediationTarget(fixes, steps),
+        target,
         hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
         evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
       };

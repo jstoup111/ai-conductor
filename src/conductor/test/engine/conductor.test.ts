@@ -977,6 +977,171 @@ describe('engine/conductor', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 
+    it('/remediate: daemon HALTs on a DECIDE-phase target (architecture_review) instead of rewinding (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-1 | DIVERGED | intended-drift | y | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-1',
+            disposition: 'architecture_review',
+            category: null,
+            rationale: 'design drifted from ADR',
+            tasks: [],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // HALT with the gap ledger + the DECIDE target it would have rewound to.
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/DECIDE step 'architecture_review'/);
+      expect(halt).toMatch(/FR-1→architecture_review/);
+      // No rewind: no kickback into the DECIDE tail, DECIDE steps never re-ran.
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(calls.filter((s) => s === 'stories')).toHaveLength(0);
+      expect(calls.filter((s) => s === 'plan')).toHaveLength(0);
+    });
+
+    it('/remediate: daemon HALTs on a DECIDE-phase target (plan) instead of rewinding (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-9 | MISSING | intended-drift | z | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-9',
+            disposition: 'plan',
+            category: null,
+            rationale: 'plan missing the FR entirely',
+            tasks: [],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/DECIDE step 'plan'/);
+      expect(halt).toMatch(/FR-9→plan/);
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'plan')).toHaveLength(0);
+    });
+
+    it('/remediate: daemon still routes BUILD-phase targets (acceptance_specs) — no over-halt (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-2',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'missing spec for FR-2',
+            tasks: [{ id: 'r1', title: 'add FR-2 acceptance spec' }],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // BUILD-phase target keeps routing (re-audit-after-gap-close preserved).
+      expect(
+        kickbacks.some((k) => k.from === 'prd_audit' && k.to === 'acceptance_specs'),
+      ).toBe(true);
+    });
+
+    it('/remediate: interactive (non-daemon) mode is untouched by the DECIDE guard (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-1 | DIVERGED | intended-drift | y | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-1',
+            disposition: 'architecture_review',
+            category: null,
+            rationale: 'design drifted from ADR',
+            tasks: [],
+          },
+        ],
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValue('quit');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive — a human is present
+        daemon: false,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+        maxRetries: 1,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Human-driven path: recovery menu fires; no daemon HALT was written.
+      expect(onRecovery).toHaveBeenCalledWith('prd_audit', true, expect.anything());
+      expect(halted).toBe(false);
+      expect(calls.filter((s) => s === 'architecture_review')).toHaveLength(0);
+    });
+
     it('does NOT auto-route in interactive (non-daemon) mode — uses the recovery menu', async () => {
       await seedToPrdAudit();
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
