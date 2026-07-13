@@ -624,4 +624,38 @@ describe('reconcileHaltPrs (Task 15)', () => {
     await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m) });
     expect(logs2.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
   });
+
+  it('(Task 4) per-run cache ownership: same cache instance across sweeps stays quiet, a fresh cache instance re-logs baseline', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    // Simulates daemon-cli.ts's runDaemonMode: one cache constructed once per
+    // daemon run, reused across every sweep call for the lifetime of the run.
+    const runCache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: fresh cache -> full baseline log.
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache: runCache });
+    expect(logs1.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
+
+    // Sweep 2: SAME cache instance, unchanged conforming PR -> silent (no per-PR line).
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache: runCache });
+    expect(logs2.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(false);
+
+    // A second, independently-constructed fresh cache (simulating a new daemon
+    // run / process restart) must NOT inherit suppression from runCache - proves
+    // the cache is in-memory per-run, not persisted to disk.
+    const freshCache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs3.push(m), cache: freshCache });
+    expect(logs3.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
+  });
 });

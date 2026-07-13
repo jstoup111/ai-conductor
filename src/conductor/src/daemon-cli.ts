@@ -84,7 +84,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
-import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
+import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -396,6 +396,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // Task 16: Transition-only per-slug status logging + resume line
   // Track the last status for each slug so we only emit log lines when status changes
   const lastStatus = new Map<string, string>();
+
+  // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
+  // of this daemon run. Constructed once, outside the sweep loop, and reused on
+  // every startup + idle-poll sweep so steady-state (unchanged) PRs stay silent
+  // instead of re-logging every tick. A fresh daemon run always starts with a
+  // fresh (empty) cache — in-memory only, never persisted across process restarts.
+  const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
   const log = (msg: string) => {
     // Task 16: Parse per-feature log lines and suppress unchanged status
@@ -1234,7 +1241,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // silently no-ops the "ultimate safety net" for halt-PR presentation
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
-        await reconcileHaltPrs({ projectRoot, log });
+        await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
