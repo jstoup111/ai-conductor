@@ -182,6 +182,23 @@ function makeStepRunner(
         );
         return { success: true };
       }
+      if (step === 'wiring_check') {
+        await mkdir(pipelineDir, { recursive: true });
+        const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.root })).stdout.trim();
+        await writeFile(
+          join(pipelineDir, 'wiring-evidence.json'),
+          JSON.stringify({
+            schema: 1,
+            base: head,
+            head,
+            layer2: { applicable: false },
+            waivers: [],
+            tasks: [{ id: '1', contract: 'none (no new production surface)', gaps: [] }],
+          }),
+          'utf-8',
+        );
+        return { success: true };
+      }
       if (step === 'architecture_review_as_built') {
         await mkdir(pipelineDir, { recursive: true });
         await writeFile(

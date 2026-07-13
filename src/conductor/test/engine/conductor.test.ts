@@ -4043,6 +4043,7 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
+      wiring_check: 'done',
     } as ConductState);
 
     const runner = createMockStepRunner();
@@ -4801,6 +4802,7 @@ describe('engine/conductor', () => {
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
+        wiring_check: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',

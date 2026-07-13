@@ -743,39 +743,58 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
 
     const imports = new Set<string>();
 
-    ts.forEachChild(sourceFile, (node) => {
-      let moduleSpecifier: ts.Expression | undefined;
-      if (
-        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-        node.moduleSpecifier
-      ) {
-        moduleSpecifier = node.moduleSpecifier;
-      }
-      if (!moduleSpecifier || !ts.isStringLiteral(moduleSpecifier)) return;
+    // Test-path exclusion: edges originating FROM a test file (per the
+    // same `.test.`/`test/`/`__tests__/` convention as `isTestPath`) are
+    // never added to the graph. A test file importing production code is
+    // normal, but it must never manufacture a false reachability path —
+    // e.g. `foo.test.ts` importing `bar.ts` must not make `bar.ts`
+    // reachable just because some production root happens to import
+    // `foo.test.ts` (or the test runner treats it as an entry point).
+    if (!isTestPath(filePath)) {
+      const addEdge = (moduleSpecifier: ts.Expression) => {
+        if (!ts.isStringLiteral(moduleSpecifier)) return;
+        const resolved = ts.resolveModuleName(
+          moduleSpecifier.text,
+          filePath,
+          compilerOptions,
+          host,
+        );
+        const resolvedFileName = resolved.resolvedModule?.resolvedFileName;
+        if (!resolvedFileName) return;
 
-      // Test-path exclusion: edges originating FROM a test file (per the
-      // same `.test.`/`test/`/`__tests__/` convention as `isTestPath`) are
-      // never added to the graph. A test file importing production code is
-      // normal, but it must never manufacture a false reachability path —
-      // e.g. `foo.test.ts` importing `bar.ts` must not make `bar.ts`
-      // reachable just because some production root happens to import
-      // `foo.test.ts` (or the test runner treats it as an entry point).
-      if (isTestPath(filePath)) return;
+        imports.add(resolvedFileName);
+        if (!visited.has(resolvedFileName)) {
+          queue.push(resolvedFileName);
+        }
+      };
 
-      const resolved = ts.resolveModuleName(
-        moduleSpecifier.text,
-        filePath,
-        compilerOptions,
-        host,
-      );
-      const resolvedFileName = resolved.resolvedModule?.resolvedFileName;
-      if (!resolvedFileName) return;
-
-      imports.add(resolvedFileName);
-      if (!visited.has(resolvedFileName)) {
-        queue.push(resolvedFileName);
-      }
-    });
+      // Recursive walk (not just top-level children): static
+      // import/export declarations are always top-level in a valid ES
+      // module, but a dynamic `import(...)` expression can appear
+      // anywhere — nested inside a function body, an `if`, etc. (e.g.
+      // `src/index.ts`'s lazy `await import('./daemon-cli.js')`, several
+      // levels deep inside its dispatch function). Missing that edge
+      // silently disconnects an entire dynamically-loaded subtree from
+      // every configured root, which is worse than a missed edge: it
+      // makes Layer 2 quietly stop protecting that subtree at all rather
+      // than loudly flagging it.
+      const visit = (node: ts.Node) => {
+        if (
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+          node.moduleSpecifier
+        ) {
+          addEdge(node.moduleSpecifier);
+        } else if (
+          ts.isCallExpression(node) &&
+          node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          node.arguments.length > 0
+        ) {
+          addEdge(node.arguments[0]);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
 
     graph.set(filePath, imports);
   }

@@ -169,6 +169,44 @@ describe('buildImportGraph / reachableFromRoots', () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('follows a dynamic import() edge nested inside a function body, not just top-level static imports', async () => {
+    // Regression for the as-built architecture review (2026-07-13): a root
+    // that reaches a subtree only via `await import('./lazy.js')` (e.g.
+    // src/index.ts's lazy daemon-cli.ts load) must not be structurally
+    // disconnected from the graph — buildImportGraph must recurse into
+    // function bodies/conditionals to find CallExpression-form dynamic
+    // imports, not just forEachChild's top-level declarations.
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-dynamic-import-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(
+        join(tmpDir, 'src', 'root.ts'),
+        [
+          'export async function maybeLoad(flag: boolean) {',
+          '  if (flag) {',
+          "    const { lazyValue } = await import('./lazy.js');",
+          '    return lazyValue;',
+          '  }',
+          '  return null;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      await writeFile(join(tmpDir, 'src', 'lazy.ts'), 'export const lazyValue = 1;\n');
+
+      const rootFile = join(tmpDir, 'src', 'root.ts');
+      const lazyFile = join(tmpDir, 'src', 'lazy.ts');
+      const graph = buildImportGraph([rootFile], tmpDir);
+
+      expect(graph.get(rootFile)).toContain(lazyFile);
+      const result = reachableFromRoots(graph, [rootFile], lazyFile);
+      expect(result.reachable).toBe(true);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('checkExportReachability — orphan islands and test-only edges', () => {

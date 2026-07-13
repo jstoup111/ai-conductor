@@ -64,6 +64,18 @@ attribution_audit_sample_pct: 10
 # invokes conduct-ts. Absent/missing here would degrade Layer 2 to "skipped"
 # for this (a TS) project — see resolveLayer2Applicability in
 # src/conductor/src/engine/wiring-probe.ts.
+#
+# daemon-cli.ts/intake-loop-cli.ts/engineer-cli.ts are listed explicitly too
+# (matching adr-2026-07-12-wiring-check-gate.md's documented default), even
+# though index.ts reaches all three transitively (intake-loop-cli.ts and
+# engineer-cli.ts via static imports; daemon-cli.ts via a lazy
+# `await import('./daemon-cli.js')` that buildImportGraph now follows) — an
+# explicit root is defense-in-depth against a future refactor accidentally
+# dropping that edge, since that would otherwise silently disconnect the
+# daemon-only subtree from Layer 2 with no loud failure.
 wiring:
   entry_points:
     - src/conductor/src/index.ts
+    - src/conductor/src/daemon-cli.ts
+    - src/conductor/src/intake-loop-cli.ts
+    - src/conductor/src/engine/engineer-cli.ts

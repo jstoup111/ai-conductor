@@ -1293,24 +1293,29 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (raw === null) {
       // No pre-existing evidence fixture — compute it live via the
       // injected probe (push-evidence injection, same convention as
-      // ctx.getHeadSha/ctx.isHeadPushed). Absent injector → fail closed
-      // exactly as before Task 18 UNLESS the caller supplied a getHeadSha
-      // that resolves to null — that's the real Conductor's own signal
-      // (completionCtx wires getHeadSha to currentCommitSha(projectRoot))
-      // that projectRoot isn't a git-tracked directory at all, so there is
-      // no wiring-relevant diff to evaluate in the first place (same
-      // "nothing to verify" logic as the freshness check being skipped when
-      // currentHead is indeterminate). A caller that omits getHeadSha
-      // entirely (raw unit/acceptance calls against a real git fixture) is
-      // NOT covered by this — that path still fails closed, matching the
-      // "no evidence file exists at all" acceptance spec.
-      if (!ctx.wiringProbe) {
-        if (ctx.getHeadSha) {
-          const head = await ctx.getHeadSha().catch(() => null);
-          if (head === null) {
-            return { done: true };
-          }
+      // ctx.getHeadSha/ctx.isHeadPushed). A getHeadSha that resolves to
+      // null is the real Conductor's own signal (completionCtx wires
+      // getHeadSha to currentCommitSha(projectRoot)) that projectRoot
+      // isn't a git-tracked directory at all, so there is no
+      // wiring-relevant diff to evaluate in the first place (same
+      // "nothing to verify" logic as the freshness check being skipped
+      // when currentHead is indeterminate) — this must be checked BEFORE
+      // invoking the probe, not only when the probe is absent, or a
+      // non-git projectRoot with wiringProbe wired unconditionally
+      // (the real Conductor, always) falls through into the probe and
+      // fails closed instead of short-circuiting. Absent injector →
+      // fail closed exactly as before Task 18. A caller that omits
+      // getHeadSha entirely (raw unit/acceptance calls against a real
+      // git fixture) is NOT covered by this — that path still fails
+      // closed, matching the "no evidence file exists at all"
+      // acceptance spec.
+      if (ctx.getHeadSha) {
+        const head = await ctx.getHeadSha().catch(() => null);
+        if (head === null) {
+          return { done: true };
         }
+      }
+      if (!ctx.wiringProbe) {
         return {
           done: false,
           reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
