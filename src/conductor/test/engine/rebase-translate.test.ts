@@ -513,3 +513,127 @@ async function mkdirForFixtures(dir: string): Promise<void> {
   const { mkdir } = await import('fs/promises');
   await mkdir(dir, { recursive: true });
 }
+
+// Task 10 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
+//
+// RED spec for `writeResidue`, per adr-2026-07-12-rebase-evidence-stamp-translation.md
+// Story 7: residue shas (dropped/patch-changed pre-image commits from
+// `buildRewriteMap`'s `residue` list) must never be silently repointed. They
+// are surfaced instead — persisted to `.pipeline/rebase-residue.json` with
+// which task ids cited them and why, and announced via a structured
+// `rebase_citation_residue` event (mirrors the `rebase_gate_reverified`
+// event-emission pattern in `src/engine/rebase.ts`'s `emitRebaseEvent`,
+// which takes a `ConductorEventEmitter` and calls `events.emit({ type, ... })`).
+//
+// `writeResidue` does not exist yet in rebase-translate.ts — this import is
+// expected to fail module resolution, which is the correct RED signal for
+// this task. Task 11 (GREEN) implements it.
+//
+// Contract pinned here:
+//   writeResidue(
+//     projectRoot: string,
+//     events: ConductorEventEmitter,
+//     residueEntries: Array<{ sha: string; citingTaskIds: string[]; reason: string }>,
+//   ): Promise<void>
+// @ts-expect-error — Task 11 (GREEN) adds this export; Task 10 (RED) asserts it doesn't exist yet.
+import { writeResidue } from '../../src/engine/rebase-translate.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+describe('writeResidue (RED — not implemented yet, Task 11)', () => {
+  const RESIDUE_SHA_A = 'cccccccccccccccccccccccccccccccccccccccc';
+  const RESIDUE_SHA_B = 'dddddddddddddddddddddddddddddddddddddddd';
+
+  const RESIDUE_ENTRIES = [
+    {
+      sha: RESIDUE_SHA_A,
+      citingTaskIds: ['T4', 'T7'],
+      reason: 'no patch-id match post-rebase (dropped or content changed)',
+    },
+    {
+      sha: RESIDUE_SHA_B,
+      citingTaskIds: ['T9'],
+      reason: 'no patch-id match post-rebase (dropped or content changed)',
+    },
+  ];
+
+  let projectRoot: string;
+  let residuePath: string;
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'write-residue-'));
+    await mkdirForFixtures(join(projectRoot, '.pipeline'));
+    residuePath = join(projectRoot, '.pipeline', 'rebase-residue.json');
+  }, 30_000);
+
+  afterAll(async () => {
+    if (projectRoot) {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes each residue entry with its reason and citing task ids to .pipeline/rebase-residue.json', async () => {
+    const events = new ConductorEventEmitter();
+
+    await writeResidue(projectRoot, events, RESIDUE_ENTRIES);
+
+    const raw = await readFile(residuePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+
+    expect(parsed.residue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sha: RESIDUE_SHA_A,
+          citingTaskIds: ['T4', 'T7'],
+          reason: 'no patch-id match post-rebase (dropped or content changed)',
+        }),
+        expect.objectContaining({
+          sha: RESIDUE_SHA_B,
+          citingTaskIds: ['T9'],
+          reason: 'no patch-id match post-rebase (dropped or content changed)',
+        }),
+      ]),
+    );
+  });
+
+  it('emits a rebase_citation_residue structured event mirroring the rebase_gate_reverified pattern', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: Array<{ type: string; residue?: unknown }> = [];
+
+    events.on('rebase_citation_residue' as never, (e: { type: string; residue?: unknown }) => {
+      seen.push({ type: e.type, residue: e.residue });
+    });
+
+    await writeResidue(projectRoot, events, RESIDUE_ENTRIES);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].type).toBe('rebase_citation_residue');
+    expect(seen[0].residue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sha: RESIDUE_SHA_A, citingTaskIds: ['T4', 'T7'] }),
+        expect.objectContaining({ sha: RESIDUE_SHA_B, citingTaskIds: ['T9'] }),
+      ]),
+    );
+  });
+
+  it('never repoints residue shas into the persisted rewrite map (nothing silently repointed)', async () => {
+    const rewritesPath = join(projectRoot, '.pipeline', 'rebase-rewrites.json');
+
+    // Simulate a real Task-3 persistRewriteMap call for an unrelated,
+    // successfully-matched sha, so the rewrites file exists alongside the
+    // residue file.
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+    await persistRewriteMap(projectRoot, {
+      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    });
+
+    await writeResidue(projectRoot, new ConductorEventEmitter(), RESIDUE_ENTRIES);
+
+    const rewritesRaw = await readFile(rewritesPath, 'utf-8');
+    const rewrites = JSON.parse(rewritesRaw);
+
+    expect(Object.keys(rewrites.map)).not.toContain(RESIDUE_SHA_A);
+    expect(Object.keys(rewrites.map)).not.toContain(RESIDUE_SHA_B);
+    expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_A);
+    expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_B);
+  });
+});
