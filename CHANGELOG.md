@@ -26,7 +26,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
-- Plan-header parsing no longer renumbers task ids mid-flight when a plan uses
+- finish GATE 0 no longer instructs a false-positive rebase check (#634): the skill
+  prose implied that output from `git rev-parse --git-path rebase-merge` indicates a
+  rebase in progress, but `--git-path` prints the path unconditionally — finish
+  sessions bailed at GATE 0 on clean trees, never wrote `.pipeline/finish-choice`,
+  and burned finish retries into a halt. GATE 0 now mandates directory-existence
+  checks (`test -d "$(git rev-parse --git-path rebase-merge)"`), with an explicit
+  warning that `rev-parse` output alone is not evidence. The `/rebase` skill's
+  detection was updated to the same `test -d` form (its old `ls .git/rebase-merge/`
+  probe always failed in linked worktrees, where `.git` is a file). Engine
+  TypeScript (`rebaseStateActive`, git hook assets) already checked existence
+  correctly and is unchanged.
   the bare `### T<N>` header shorthand (ai-conductor#636, the #417 id-grammar
   drift class resurfacing via #615). #615 widened the header regex to accept
   `### T<N> — Title` but normalized the id to a *bare* number (`T3` → `3`),
