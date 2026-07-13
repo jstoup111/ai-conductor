@@ -463,7 +463,9 @@ describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
     );
 
     expect(byId.T1.commit).toBe(NEW_FULL_A);
-    expect(byId.T2.commit).toBe(NEW_FULL_B);
+    // T2's original commit was recorded short-form (OLD_SHORT_B); the fix
+    // preserves that original width when writing back the resolved value.
+    expect(byId.T2.commit).toBe(NEW_SHORT_B);
     expect(byId.T3.commit).toBe(UNMAPPED_FULL);
     expect(byId.T4.commit).toBeUndefined();
   });
@@ -631,10 +633,12 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     const rewritesRaw = await readFile(rewritesPath, 'utf-8');
     const rewrites = JSON.parse(rewritesRaw);
 
-    expect(Object.keys(rewrites.map)).not.toContain(RESIDUE_SHA_A);
-    expect(Object.keys(rewrites.map)).not.toContain(RESIDUE_SHA_B);
-    expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_A);
-    expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_B);
+    // Persisted format is the flat old-sha -> new-sha map (no wrapper
+    // object) — see persistRewriteMap's `serialized` assignment.
+    expect(Object.keys(rewrites)).not.toContain(RESIDUE_SHA_A);
+    expect(Object.keys(rewrites)).not.toContain(RESIDUE_SHA_B);
+    expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_A);
+    expect(Object.values(rewrites)).not.toContain(RESIDUE_SHA_B);
   });
 });
 
