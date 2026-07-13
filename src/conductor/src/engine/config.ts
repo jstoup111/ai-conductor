@@ -412,10 +412,17 @@ export function validateConfig(
           return errVal(`steps.${name}.enforcement is not valid for built-in steps`);
         }
 
-        // Disabling a gating/structural built-in is not allowed.
+        // Disabling a gating/structural built-in is not allowed, unless the
+        // step definition explicitly opts in via `configDisableAllowed`
+        // (per-step, deliberate — an explicit committed config disable is not
+        // the silent-skip failure mode the gating promotion guards against).
+        // Structural steps can never be disabled.
         const def = stepDefs.get(name as StepName);
         if (cfg.disable === true && def) {
-          if (def.enforcement === 'gating' || def.enforcement === 'structural') {
+          if (
+            def.enforcement === 'structural' ||
+            (def.enforcement === 'gating' && def.configDisableAllowed !== true)
+          ) {
             return errVal(
               `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`,
             );
