@@ -12,6 +12,9 @@ import {
 } from "../../src/engine/group-core.js";
 import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
 import type { StepName, ConductState } from "../../src/types/index.js";
+import { mkdtemp, writeFile, mkdir, stat, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("group-core: BranchOutcome constructors", () => {
   it("makeVerdictOutcome builds a kind:'verdict' outcome carrying pass/fail/blocked", () => {
@@ -657,5 +660,54 @@ describe("group-core: abort/SIGINT persistence for in-flight branches (Task 8)",
     expect(outcomes.length).toBeLessThan(3);
     expect(outcomes.some((o) => classifyOutcome(o) === "verdict:pass")).toBe(true);
     expect(runnerC.calls).toHaveLength(0);
+  });
+});
+
+describe("group-core: runGroupBranch per-branch stale-sweep isolation (Task 9)", () => {
+  /** Minimal runner-stub: always succeeds on first dispatch. */
+  function okRunner() {
+    return {
+      run: async (_step: StepName, _state: ConductState, _opts?: StepRunOptions) => ({ success: true }),
+    };
+  }
+
+  it("sweeps ONLY the stale member's own marker, leaving the other member's fresh marker untouched", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "group-core-sweep-"));
+    await mkdir(join(dir, ".pipeline"), { recursive: true });
+
+    const sessionStartedAt = Date.now();
+
+    // Member A's marker (manual_test) predates this session — stale.
+    const staleMarker = join(dir, ".pipeline", "manual-test-results.md");
+    await writeFile(staleMarker, "stale content from a crashed prior run");
+    await utimes(staleMarker, new Date(sessionStartedAt - 60_000), new Date(sessionStartedAt - 60_000));
+
+    // Member B's marker (prd_audit) is fresh — written THIS session.
+    const freshMarker = join(dir, ".pipeline", "prd-audit.md");
+    await writeFile(freshMarker, "fresh content from this session");
+    await utimes(freshMarker, new Date(sessionStartedAt + 60_000), new Date(sessionStartedAt + 60_000));
+
+    const memberA: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+    const memberB: GroupMember = { name: "prd_audit" as unknown as string, skill: "prd-audit", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(
+      memberA,
+      {} as ConductState,
+      { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
+      3,
+    );
+    await runGroupBranch(
+      memberB,
+      {} as ConductState,
+      { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
+      3,
+    );
+
+    // A's stale marker was swept before dispatch.
+    await expect(stat(staleMarker)).rejects.toThrow();
+
+    // B's fresh marker survived untouched.
+    const freshStat = await stat(freshMarker);
+    expect(freshStat).toBeTruthy();
   });
 });

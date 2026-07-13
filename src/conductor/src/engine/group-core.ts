@@ -10,13 +10,16 @@
  * member/result shapes, the exhaustive classify helper, the concurrency
  * semaphore, and the per-branch skill executor (`runGroupBranch`). Abort
  * handling (Task 8) is threaded through both `runWithConcurrency` and
- * `runGroupBranch`. It does NOT yet implement the stale-marker sweep —
- * that is a later task (9).
+ * `runGroupBranch`. Task 9 threads the SERIAL loop's stale-marker sweep
+ * (`sweepStaleReviewArtifacts`, artifacts.ts) through per-member, scoped to
+ * that member's own step name — so sweeping branch A's leftover marker can
+ * never touch branch B's.
  */
 
 import { v4 as uuidv4 } from "uuid";
 import type { StepName, ConductState } from "../types/index.js";
 import type { StepRunResult, StepRunOptions } from "./conductor.js";
+import { sweepStaleReviewArtifacts } from "./artifacts.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -261,6 +264,22 @@ export interface BranchExecutorDeps {
    * recorded outcome to persist a synthetic key for.
    */
   signal?: AbortSignal;
+  /**
+   * Task 9: project root used to scope the stale-marker sweep
+   * (`sweepStaleReviewArtifacts`) to THIS member's own step name before its
+   * first dispatch. Optional: when absent, no sweep is performed (matches
+   * the SERIAL loop's fail-open default for steps outside STALE_SWEEP_STEPS
+   * / missing session timestamps).
+   */
+  projectRoot?: string;
+  /**
+   * Task 9: session start timestamp passed through to
+   * `sweepStaleReviewArtifacts` — an artifact older than this predates the
+   * current session and is swept; a fresher one (e.g. another member's
+   * own in-session marker) is left untouched. Mirrors the SERIAL loop's
+   * `state.session_started_at` (conductor.ts:1577-1590).
+   */
+  sessionStartedAt?: number;
 }
 
 /**
@@ -285,6 +304,15 @@ export async function runGroupBranch(
 ): Promise<BranchOutcome> {
   const mintSessionId = deps.mintSessionId ?? uuidv4;
   let sessionId = mintSessionId();
+
+  // Task 9: sweep THIS member's own stale marker (if any) before its first
+  // dispatch — scoped to member.name so branch A's leftover marker can
+  // never touch branch B's. No-op when projectRoot is not provided, or when
+  // the member's step is outside STALE_SWEEP_STEPS / the artifact is fresh
+  // (see sweepStaleReviewArtifacts, artifacts.ts).
+  if (deps.projectRoot !== undefined) {
+    await sweepStaleReviewArtifacts(deps.projectRoot, member.name as StepName, deps.sessionStartedAt);
+  }
 
   let lastOutput = "";
   let hasRun = false;
