@@ -306,3 +306,145 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     expect(classifyOutcome(outcome)).toBe("no-verdict");
   });
 });
+
+describe("group-core: runGroupBranch rate-limit pass-through into shared episode", () => {
+  /** Minimal runner-spy: captures every (step, opts) call it receives. */
+  function spyRunner(results: StepRunResult[]) {
+    const calls: Array<{ step: StepName; opts?: StepRunOptions }> = [];
+    let i = 0;
+    return {
+      calls,
+      run: async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
+        calls.push({ step, opts });
+        const result = results[i] ?? results.at(-1) ?? { success: true };
+        i += 1;
+        return result;
+      },
+    };
+  }
+
+  /** Fake shared rate-limit episode — spies on enter()/clear() calls. */
+  function fakeEpisode() {
+    const enterCalls: number[] = [];
+    let clearCalls = 0;
+    let latestDeadline: number | null = null;
+    return {
+      enterCalls,
+      get clearCalls() {
+        return clearCalls;
+      },
+      get latestDeadline() {
+        return latestDeadline;
+      },
+      enter: (untilMs: number) => {
+        enterCalls.push(untilMs);
+        if (latestDeadline === null || untilMs > latestDeadline) {
+          latestDeadline = untilMs;
+        }
+      },
+      active: (nowMs?: number) => {
+        const now = nowMs ?? Date.now();
+        return latestDeadline !== null && now < latestDeadline;
+      },
+      clear: async (_signal?: AbortSignal) => {
+        clearCalls += 1;
+      },
+      nextWaitSeconds: (_baseSeconds?: number) => 60,
+    };
+  }
+
+  const fakeState = {} as ConductState;
+
+  it("a rate-limited result calls episode.enter(deadline), awaits episode.clear(), and does NOT burn retry budget", async () => {
+    const deadline = Date.now() + 60_000;
+    const runner = spyRunner([
+      { success: false, rateLimited: true, deadline },
+      { success: true },
+    ]);
+    const episode = fakeEpisode();
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, rateLimitEpisode: episode },
+      2,
+    );
+
+    // Two run() invocations happened (the rate-limited one + the retry that
+    // succeeds), but only ONE counts against the retry budget of 2 — the
+    // rate-limited cycle must not consume an attempt. Since it succeeded on
+    // the very next call, the branch outcome is a pass.
+    expect(runner.calls).toHaveLength(2);
+    expect(classifyOutcome(outcome)).toBe("verdict:pass");
+
+    expect(episode.enterCalls).toEqual([deadline]);
+    expect(episode.clearCalls).toBe(1);
+  });
+
+  it("a rate-limited branch that never gets an extra attempt beyond max_retries still isn't charged for the rate-limit cycle", async () => {
+    // maxRetries=1: a single real attempt is allowed. The FIRST call is
+    // rate-limited (not a real attempt), so the branch gets exactly one
+    // real attempt after that — which fails — producing no-verdict, not
+    // an outcome starved by the rate-limit cycle counting against budget.
+    const runner = spyRunner([
+      { success: false, rateLimited: true, deadline: Date.now() + 1000 },
+      { success: false, output: "real failure" },
+    ]);
+    const episode = fakeEpisode();
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, rateLimitEpisode: episode },
+      1,
+    );
+
+    expect(runner.calls).toHaveLength(2);
+    expect(classifyOutcome(outcome)).toBe("no-verdict");
+    expect(episode.clearCalls).toBe(1);
+  });
+
+  it("two branches hitting rate limits concurrently share ONE episode, with the later deadline winning (extension)", async () => {
+    const earlierDeadline = Date.now() + 30_000;
+    const laterDeadline = Date.now() + 90_000;
+
+    const runnerA = spyRunner([
+      { success: false, rateLimited: true, deadline: earlierDeadline },
+      { success: true },
+    ]);
+    const runnerB = spyRunner([
+      { success: false, rateLimited: true, deadline: laterDeadline },
+      { success: true },
+    ]);
+    const episode = fakeEpisode();
+
+    const memberA: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+    const memberB: GroupMember = { name: "prd_audit" as unknown as string, skill: "prd-audit", outcome: makeSkippedOutcome() };
+
+    await Promise.all([
+      runGroupBranch(memberA, fakeState, { stepRunner: runnerA, rateLimitEpisode: episode }, 2),
+      runGroupBranch(memberB, fakeState, { stepRunner: runnerB, rateLimitEpisode: episode }, 2),
+    ]);
+
+    // Both branches fed their deadlines into the SAME shared episode instance.
+    expect(episode.enterCalls).toContain(earlierDeadline);
+    expect(episode.enterCalls).toContain(laterDeadline);
+    // The episode reflects the extended (later) deadline — later-deadline-wins.
+    expect(episode.latestDeadline).toBe(laterDeadline);
+  });
+
+  it("without a rateLimitEpisode dep, a rate-limited result still retries without burning budget (falls back gracefully)", async () => {
+    const runner = spyRunner([
+      { success: false, rateLimited: true, deadline: Date.now() + 10 },
+      { success: true },
+    ]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 1);
+
+    expect(runner.calls).toHaveLength(2);
+    expect(classifyOutcome(outcome)).toBe("verdict:pass");
+  });
+});

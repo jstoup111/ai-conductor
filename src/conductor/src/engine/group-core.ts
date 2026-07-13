@@ -183,10 +183,31 @@ export interface BranchStepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
 }
 
+/**
+ * The narrow slice of `RateLimitEpisode` the branch executor needs — passed
+ * in (dependency-injected) rather than owned by the branch, so multiple
+ * concurrent branches hitting rate limits share ONE episode instance, with
+ * the later deadline winning (episode extension). Mirrors the semantics of
+ * the SERIAL loop's rate-limit handling in conductor.ts:1717-1755.
+ */
+export interface BranchRateLimitEpisode {
+  enter(untilMs: number): void;
+  clear(signal?: AbortSignal): Promise<void>;
+}
+
 export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
   /** Test seam: override session-id minting instead of importing uuid. */
   mintSessionId?: () => string;
+  /**
+   * Shared rate-limit episode coordinator (Task 6). When a branch's step
+   * result is `rateLimited`, the branch calls `enter(deadline)` on this
+   * shared episode and awaits `clear()` before retrying — WITHOUT burning
+   * the branch's own retry budget, mirroring conductor.ts's SERIAL loop.
+   * Optional: when absent, the branch retries immediately without waiting
+   * (still without burning budget).
+   */
+  rateLimitEpisode?: BranchRateLimitEpisode;
 }
 
 /**
@@ -213,16 +234,37 @@ export async function runGroupBranch(
   const sessionId = mintSessionId();
 
   let lastOutput = "";
+  let hasRun = false;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
-    const resume = attempt > 1;
+    // `resume` is true once this branch's session has ever been dispatched
+    // before — including a prior rate-limited cycle, which still consumed
+    // the fresh (attempt 1) session slot but must not burn retry budget.
+    const resume = hasRun;
     const result = await deps.stepRunner.run(member.name as StepName, state, {
       sessionId,
       resume,
     });
+    hasRun = true;
 
     if (result.success) {
       return makeVerdictOutcome("pass");
     }
+
+    // Rate limit: enter the shared episode with the parsed deadline (or a
+    // default backoff window), await clear(), then retry WITHOUT burning
+    // the branch's retry budget — mirrors conductor.ts:1717-1755.
+    if (result.rateLimited) {
+      const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
+
+      if (deps.rateLimitEpisode) {
+        deps.rateLimitEpisode.enter(deadline);
+        await deps.rateLimitEpisode.clear();
+      }
+
+      attempt -= 1;
+      continue;
+    }
+
     lastOutput = result.output ?? lastOutput;
   }
 
