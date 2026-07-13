@@ -295,6 +295,20 @@ export interface StepRunOptions {
    * produce .docs/plans/*.md".
    */
   retryReason?: string;
+  /**
+   * Concurrent-group branch dispatch only (group-core.ts): a locally-minted
+   * session id that overrides the runner's shared `this.sessionId` so the
+   * branch never touches the main conductor session (adr-2026-07-10-
+   * concurrent-group-core.md). Absent for ordinary serial-loop steps.
+   */
+  sessionId?: string;
+  /**
+   * Concurrent-group branch dispatch only: whether this branch dispatch
+   * should resume `sessionId` above (true on retry) or start it fresh
+   * (false on the branch's first attempt). Absent for ordinary serial-loop
+   * steps, where resume is derived from the runner's own session state.
+   */
+  resume?: boolean;
 }
 
 export interface StepRunner {

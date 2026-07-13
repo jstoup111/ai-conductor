@@ -6,11 +6,17 @@
  * - .docs/decisions/adr-2026-07-10-concurrent-group-core.md
  * - .docs/decisions/adr-2026-07-10-validation-group-join.md
  *
- * This module ONLY defines the branch-outcome discriminated union and the
- * group member/result shapes, plus an exhaustive classify helper. It does
- * NOT implement the semaphore, branch executor, or join/dispatch logic
- * (those live in later tasks).
+ * This module defines the branch-outcome discriminated union, the group
+ * member/result shapes, the exhaustive classify helper, the concurrency
+ * semaphore, and the per-branch skill executor (`runGroupBranch`). It does
+ * NOT yet implement rate-limit episode pass-through, authFailure/
+ * sessionExpired parity, abort handling, or the stale-marker sweep — those
+ * are later tasks (6-9).
  */
+
+import { v4 as uuidv4 } from "uuid";
+import type { StepName, ConductState } from "../types/index.js";
+import type { StepRunResult, StepRunOptions } from "./conductor.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -165,4 +171,60 @@ export function runWithConcurrency<T>(
       launchNext();
     }
   });
+}
+
+/**
+ * The narrow slice of `StepRunner` the branch executor needs — dependency
+ * injected so group-core has no runtime import of the concrete
+ * DefaultStepRunner (mirrors the mock-StepRunner seam used throughout
+ * conductor.test.ts).
+ */
+export interface BranchStepRunner {
+  run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+}
+
+export interface BranchExecutorDeps {
+  stepRunner: BranchStepRunner;
+  /** Test seam: override session-id minting instead of importing uuid. */
+  mintSessionId?: () => string;
+}
+
+/**
+ * Runs a single concurrent-group branch to completion: mints its own fresh
+ * session id (never the shared main-conductor session — adr-2026-07-10-
+ * concurrent-group-core.md), dispatches the member's OWN step/skill name
+ * (not the group name — the bug the ADR calls out), and retries up to
+ * `maxRetries` times, resuming the SAME minted session id on every retry
+ * (only the first attempt uses `resume: false`).
+ *
+ * Returns a `BranchOutcome`: `verdict:pass` on the first successful
+ * dispatch, or `no-verdict` (carrying the last failure's output) once
+ * `maxRetries` is exhausted without success. Rate-limit/authFailure/
+ * sessionExpired handling and verdict parsing beyond pass/fail are out of
+ * scope for this task (Tasks 6-7).
+ */
+export async function runGroupBranch(
+  member: GroupMember,
+  state: ConductState,
+  deps: BranchExecutorDeps,
+  maxRetries: number,
+): Promise<BranchOutcome> {
+  const mintSessionId = deps.mintSessionId ?? uuidv4;
+  const sessionId = mintSessionId();
+
+  let lastOutput = "";
+  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    const resume = attempt > 1;
+    const result = await deps.stepRunner.run(member.name as StepName, state, {
+      sessionId,
+      resume,
+    });
+
+    if (result.success) {
+      return makeVerdictOutcome("pass");
+    }
+    lastOutput = result.output ?? lastOutput;
+  }
+
+  return makeNoVerdictOutcome(lastOutput || "retries exhausted");
 }

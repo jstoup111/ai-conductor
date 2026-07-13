@@ -5,10 +5,13 @@ import {
   makeSkippedOutcome,
   classifyOutcome,
   runWithConcurrency,
+  runGroupBranch,
   type BranchOutcome,
   type GroupMember,
   type GroupResult,
 } from "../../src/engine/group-core.js";
+import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
+import type { StepName, ConductState } from "../../src/types/index.js";
 
 describe("group-core: BranchOutcome constructors", () => {
   it("makeVerdictOutcome builds a kind:'verdict' outcome carrying pass/fail/blocked", () => {
@@ -212,5 +215,94 @@ describe("group-core: runWithConcurrency (capped fan-out semaphore)", () => {
     await expect(
       runWithConcurrency([makeThunk("a", 5), makeThunk("b", 1, true), makeThunk("c", 5)], 3),
     ).rejects.toThrow("b failed");
+  });
+});
+
+describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions)", () => {
+  /** Minimal runner-spy: captures every (step, opts) call it receives. */
+  function spyRunner(results: StepRunResult[]) {
+    const calls: Array<{ step: StepName; opts?: StepRunOptions }> = [];
+    let i = 0;
+    return {
+      // A "shared" session id field, mirroring DefaultStepRunner's private
+      // this.sessionId — the branch executor must never mutate this.
+      sharedSessionId: "SHARED-MAIN-SESSION",
+      calls,
+      run: async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
+        calls.push({ step, opts });
+        const result = results[i] ?? results.at(-1) ?? { success: true };
+        i += 1;
+        return result;
+      },
+    };
+  }
+
+  const fakeState = {} as ConductState;
+
+  it("two members dispatch two invocations with their own step names and two distinct fresh session ids", async () => {
+    const runnerA = spyRunner([{ success: true }]);
+    const runnerB = spyRunner([{ success: true }]);
+
+    const memberA: GroupMember = { name: "manual_test" as StepName as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+    const memberB: GroupMember = { name: "prd_audit" as StepName as unknown as string, skill: "prd-audit", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(memberA, fakeState, { stepRunner: runnerA }, 3);
+    await runGroupBranch(memberB, fakeState, { stepRunner: runnerB }, 3);
+
+    expect(runnerA.calls).toHaveLength(1);
+    expect(runnerB.calls).toHaveLength(1);
+    expect(runnerA.calls[0]!.step).toBe("manual_test");
+    expect(runnerB.calls[0]!.step).toBe("prd_audit");
+
+    const sessionA = runnerA.calls[0]!.opts?.sessionId;
+    const sessionB = runnerB.calls[0]!.opts?.sessionId;
+    expect(sessionA).toBeTruthy();
+    expect(sessionB).toBeTruthy();
+    expect(sessionA).not.toBe(sessionB);
+
+    // First attempt is always a fresh, non-resumed session.
+    expect(runnerA.calls[0]!.opts?.resume).toBe(false);
+    expect(runnerB.calls[0]!.opts?.resume).toBe(false);
+  });
+
+  it("a branch retry reuses ITS session id (resume:true on retry, not a new session)", async () => {
+    const runner = spyRunner([
+      { success: false, output: "transient failure" },
+      { success: true },
+    ]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    expect(runner.calls).toHaveLength(2);
+    const firstSessionId = runner.calls[0]!.opts?.sessionId;
+    const secondSessionId = runner.calls[1]!.opts?.sessionId;
+    expect(firstSessionId).toBeTruthy();
+    expect(secondSessionId).toBe(firstSessionId);
+    expect(runner.calls[0]!.opts?.resume).toBe(false);
+    expect(runner.calls[1]!.opts?.resume).toBe(true);
+    expect(classifyOutcome(outcome)).toBe("verdict:pass");
+  });
+
+  it("the shared runner session id is unchanged after a group run", async () => {
+    const runner = spyRunner([{ success: true }]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    expect(runner.sharedSessionId).toBe("SHARED-MAIN-SESSION");
+  });
+
+  it("exhausting max_retries without success returns a no-verdict outcome", async () => {
+    const runner = spyRunner([
+      { success: false, output: "fail 1" },
+      { success: false, output: "fail 2" },
+    ]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 2);
+
+    expect(runner.calls).toHaveLength(2);
+    expect(classifyOutcome(outcome)).toBe("no-verdict");
   });
 });
