@@ -24,6 +24,12 @@ import type {
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ParallelBranch } from '../types/config.js';
+import {
+  runGroupBranch,
+  runWithConcurrency,
+  type GroupMember,
+  type BranchOutcome,
+} from './group-core.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -1736,9 +1742,9 @@ export class Conductor {
 
         // Execute parallel group (T15 — Promise.all fan-out)
         if (stepCfg?.parallel) {
-          await this.runParallelGroup(step.name, stepCfg.parallel, state);
-          // State keys are already written inside runParallelGroup.
-          // The step's own status is set to 'done' or 'failed' inside runParallelGroup.
+          await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);
+          // State keys are already written inside runParallelGroupViaCore.
+          // The step's own status is set to 'done' or 'failed' inside runParallelGroupViaCore.
           // If it failed (gating branch), we stop here.
           if (state[step.name] === 'failed') {
             await this.events.emit({
@@ -4354,6 +4360,92 @@ export class Conductor {
       await writeState(this.stateFilePath, state);
     }
     return indexOf(decision.step);
+  }
+
+  /**
+   * Execute a config `parallel:` group via the shared GroupCore branch
+   * executor (group-core.ts), re-pointing the DSL onto the same machinery
+   * the SERIAL validation-group fan-out uses. Fixes the bug the ADR calls
+   * out in the old `runParallelGroup`: each branch now dispatches its OWN
+   * name/skill (`branch.name`), never the group's own name.
+   *
+   * Synthetic state keys of the form `<groupName>__<branchName>` are
+   * written to conduct-state.json at JOIN — the single point on the loop's
+   * thread of control that writes state, mirroring `runParallelGroup`'s
+   * existing key format exactly (T16).
+   *
+   * Failure semantics (T18 / T19) are unchanged: advisory=false (default) →
+   * a branch failure fails the whole group; advisory=true → the failure is
+   * logged but the group still completes.
+   *
+   * Concurrency defaults to unbounded (branches.length) — matching the old
+   * executor's Promise.all-style fan-out. Config-driven concurrency caps
+   * (`validation_concurrency`) are wired in a later task.
+   */
+  private async runParallelGroupViaCore(
+    groupName: StepName,
+    branches: ParallelBranch[],
+    state: ConductState,
+  ): Promise<void> {
+    const branchNames = branches.map((b) => b.name);
+    await this.events.emit({ type: 'parallel_started', step: groupName, branches: branchNames });
+
+    const members: GroupMember[] = branches.map((branch) => ({
+      name: branch.name,
+      skill: branch.skill ?? '',
+      outcome: { kind: 'no-verdict', reason: 'not-run' },
+    }));
+
+    const outcomes: BranchOutcome[] = await runWithConcurrency(
+      members.map((member) => async () => {
+        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);
+      }),
+      Math.max(1, branches.length),
+    );
+
+    let groupFailed = false;
+
+    // JOIN: single-writer — the core, on the loop's thread of control,
+    // writes the synthetic keys once every branch has resolved.
+    for (let i = 0; i < branches.length; i += 1) {
+      const branch = branches[i]!;
+      const outcome = outcomes[i];
+      const syntheticKey = `${groupName}__${branch.name}`;
+      const success = outcome?.kind === 'verdict' && outcome.verdict === 'pass';
+
+      if (success) {
+        (state as Record<string, unknown>)[syntheticKey] = 'done';
+        continue;
+      }
+
+      (state as Record<string, unknown>)[syntheticKey] = 'failed';
+      const error =
+        outcome?.kind === 'no-verdict' ? outcome.reason : `branch ${branch.name} failed`;
+      await this.events.emit({
+        type: 'parallel_failure',
+        step: groupName,
+        branch: branch.name,
+        error,
+      });
+      if (!branch.advisory) {
+        groupFailed = true;
+      }
+    }
+
+    await writeState(this.stateFilePath, state);
+
+    if (groupFailed) {
+      await saveStepStatus(this.stateFilePath, groupName, 'failed');
+      state[groupName] = 'failed';
+    } else {
+      await saveStepStatus(this.stateFilePath, groupName, 'done');
+      state[groupName] = 'done';
+      await this.events.emit({
+        type: 'parallel_completed',
+        step: groupName,
+        branches: branchNames,
+      });
+    }
   }
 
   /**

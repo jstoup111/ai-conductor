@@ -449,6 +449,42 @@ describe('parallel: group execution (T15-T22)', () => {
     // All three branches must have been dispatched
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
   });
+
+  it('dispatches each branch under its OWN name/skill, not the group name (GroupCore re-point)', async () => {
+    await seedAllDoneExcept(statePath, 'explore');
+
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: {
+        steps: {
+          explore: {
+            parallel: [
+              { name: 'frontend', skill: 'skills/explore-frontend/SKILL.md' },
+              { name: 'backend', skill: 'skills/explore-backend/SKILL.md' },
+            ],
+          },
+        },
+      },
+      mode: 'auto',
+    });
+
+    await conductor.run();
+
+    const runCalls = (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+    // Each branch must be dispatched under its OWN name — never the group's name.
+    expect(runCalls).toContain('frontend');
+    expect(runCalls).toContain('backend');
+    expect(runCalls).not.toContain('explore');
+  });
 });
 
 describe('config validation: when: and parallel: (T13)', () => {
