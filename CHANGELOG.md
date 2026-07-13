@@ -16,6 +16,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Plan-header parsing no longer renumbers task ids mid-flight when a plan uses
+  the bare `### T<N>` header shorthand (ai-conductor#636, the #417 id-grammar
+  drift class resurfacing via #615). #615 widened the header regex to accept
+  `### T<N> — Title` but normalized the id to a *bare* number (`T3` → `3`),
+  while the pre-existing machinery — `.pipeline/task-status.json` rows, commit
+  `Task: T<N>` trailers, and `.pipeline/task-evidence.json` stamps — used the
+  T-prefixed grammar. The build-completion gate then UPSERTed a second, all-
+  pending set of bare-id rows next to the orphaned T-rows (e.g. 18 rows for a
+  9-task plan), making completion unsatisfiable and orphaning all real
+  progress. Fixes: (1) `parsePlanTasks`/`parsePlanTaskPaths` now emit the id
+  **as written** including the `T` prefix, so it matches the rows/trailers/
+  stamps verbatim; (2) a new `canonicalTaskId` fold (`T<N>` ↔ `<N>`) is applied
+  at every comparison seam — trailer→task matching (`taskTrailerMatches`),
+  evidence-stamp lookup/reconcile (`reconcileStatusFromStamps`), subject
+  matching, and the seed upsert key — so a commit trailer in *either* grammar
+  resolves the same task; (3) `seedTaskStatus` keys rows by the canonical id
+  and merges duplicate `T<N>`/`<N>` rows (keeping the more-advanced row),
+  deterministically repairing any task-status.json that #615 already split.
+  Files: `src/engine/autoheal.ts`, `src/engine/task-seed.ts`.
 - Path corroboration in the build-completion gate no longer rejects valid task
   evidence when a plan task declares its file paths only *inline in prose*
   rather than in a `**Files:**` line or a dedicated `- \`path\`` bullet. The

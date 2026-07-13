@@ -1,7 +1,7 @@
 import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parsePlanTasks, PlanTask } from './autoheal.js';
+import { parsePlanTasks, canonicalTaskId, PlanTask } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { removeBuildStepMarker } from './attribution-enforcement.js';
 
@@ -45,6 +45,49 @@ interface TaskStatusFile {
 interface EngineState {
   activePlanPath?: string;
   [key: string]: unknown;
+}
+
+/** Advancement rank for merging duplicate rows (#636): higher wins. */
+function statusRank(status: string | undefined): number {
+  switch (status) {
+    case 'completed':
+    case 'skipped':
+      return 3;
+    case 'in_progress':
+      return 2;
+    case 'pending':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Merge two task-status rows that fold to the same canonical id (#636).
+ *
+ * When #615's id-grammar drift split one plan task into a `T<N>` row and a bare
+ * `<N>` row, seeding must reunite them without losing progress. The winner is
+ * the more-advanced row by {@link statusRank} (completed/skipped > in_progress
+ * > pending); ties keep the row that carries a `commit`. Whichever row wins,
+ * its `commit`/`skip_reason` are carried across from the loser if the winner
+ * lacks them, so no evidence pointer is dropped in the collapse.
+ */
+function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRecord {
+  const rankA = statusRank(a.status);
+  const rankB = statusRank(b.status);
+  let winner: TaskStatusRecord;
+  let loser: TaskStatusRecord;
+  if (rankB > rankA || (rankB === rankA && !a.commit && !!b.commit)) {
+    winner = b;
+    loser = a;
+  } else {
+    winner = a;
+    loser = b;
+  }
+  const merged: TaskStatusRecord = { ...winner };
+  if (!merged.commit && loser.commit) merged.commit = loser.commit;
+  if (!merged.skip_reason && loser.skip_reason) merged.skip_reason = loser.skip_reason;
+  return merged;
 }
 
 /**
@@ -163,23 +206,57 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     // Load task evidence (sidecar)
     const evidence = await createTaskEvidence(projectRoot);
 
-    // Merge logic
+    // #636: canonical-aware stamp lookup. Evidence stamps may be keyed under
+    // either grammar (`T3` or `3`); fold both to the canonical key so a
+    // T-prefixed plan task finds a bare-keyed stamp and vice versa.
+    const stampFor = (id: string): { sha?: string } | undefined => {
+      const direct = evidence.evidenceStamps.get(id);
+      if (direct) return direct;
+      const canon = canonicalTaskId(id);
+      for (const [k, v] of evidence.evidenceStamps.entries()) {
+        if (canonicalTaskId(k) === canon) return v;
+      }
+      return undefined;
+    };
+    const hasGrandfather = (id: string): boolean => {
+      if (evidence.migrationGrandfather.has(id)) return true;
+      const canon = canonicalTaskId(id);
+      for (const k of evidence.migrationGrandfather) {
+        if (canonicalTaskId(k) === canon) return true;
+      }
+      return false;
+    };
+
+    // Merge logic. The map is keyed by the CANONICAL task id (#636) so a plan
+    // whose header is `### T<N>` and a pre-existing task-status.json that split
+    // into both `T<N>` and bare `<N>` rows (the #615 duplication) collapse to
+    // ONE row per task instead of producing phantom duplicates.
     const taskMap = new Map<string, TaskStatusRecord>();
 
-    // First, preserve existing tasks
+    // First, preserve existing tasks. When two on-disk rows fold to the same
+    // canonical id (the 18-rows-for-9-tasks split), keep the more-advanced row
+    // (completed/skipped > in_progress > pending, tie-broken by having a
+    // commit) so real progress under either grammar survives the merge.
     if (existingStatus.tasks && Array.isArray(existingStatus.tasks)) {
       for (const task of existingStatus.tasks) {
-        if (task.id) {
-          taskMap.set(String(task.id), { ...task });
-        }
+        if (!task.id) continue;
+        const key = canonicalTaskId(String(task.id));
+        const prior = taskMap.get(key);
+        taskMap.set(key, prior ? mergeStatusRows(prior, task) : { ...task });
       }
     }
 
-    // Then, upsert plan tasks
+    // Then, upsert plan tasks (looked up / stored under the canonical key).
     for (const [taskId, planTask] of planTasks.entries()) {
-      const existing = taskMap.get(taskId);
+      const canonicalId = canonicalTaskId(taskId);
+      const existing = taskMap.get(canonicalId);
 
       if (existing) {
+        // Adopt the plan-header grammar as the canonical stored id (#636), so a
+        // surviving phantom bare row ends up keyed `T<N>` to match the plan,
+        // trailers, and evidence stamps.
+        existing.id = taskId;
+
         // Preserve in_progress
         if (existing.status === 'in_progress') {
           // Keep as-is
@@ -191,8 +268,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // retired. Nothing writes new grandfather entries anymore (see Task
         // 8/9) — completion is derived solely from evidence stamps.
         if (existing.status === 'completed' || existing.status === 'skipped') {
-          const stamp = evidence.evidenceStamps.get(taskId);
-          if (stamp || evidence.migrationGrandfather.has(taskId)) {
+          if (stampFor(taskId) || hasGrandfather(taskId)) {
             continue;
           }
         }
@@ -202,7 +278,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         existing.status = 'pending';
       } else {
         // Task doesn't exist in current status file. Check evidence to see if it should be restored.
-        const stamp = evidence.evidenceStamps.get(taskId);
+        const stamp = stampFor(taskId);
         if (stamp) {
           // Has evidence stamp — restore as completed
           const restoredTask: TaskStatusRecord = {
@@ -214,7 +290,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
           if (stamp.sha) {
             restoredTask.commit = stamp.sha;
           }
-          taskMap.set(taskId, restoredTask);
+          taskMap.set(canonicalId, restoredTask);
         } else {
           // No evidence — create as pending
           const newTask: TaskStatusRecord = {
@@ -222,15 +298,17 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
             name: planTask.name,
             status: 'pending',
           };
-          taskMap.set(taskId, newTask);
+          taskMap.set(canonicalId, newTask);
         }
       }
     }
 
-    // Rebuild tasks array in consistent order (by numeric ID)
+    // Rebuild tasks array in consistent order. Sort by the canonical numeric id
+    // (#636) so T-prefixed ids (`T1`) order alongside bare numerics rather than
+    // collapsing to NaN → 0.
     const tasks = Array.from(taskMap.values()).sort((a, b) => {
-      const idA = parseInt(String(a.id || 0), 10);
-      const idB = parseInt(String(b.id || 0), 10);
+      const idA = parseInt(canonicalTaskId(String(a.id || 0)), 10);
+      const idB = parseInt(canonicalTaskId(String(b.id || 0)), 10);
       return idA - idB;
     });
 

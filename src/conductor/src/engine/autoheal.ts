@@ -85,6 +85,18 @@ export function taskTrailerMatches(trailerValues: string[], taskId: string, plan
     return true;
   }
 
+  // #636: T<N> ↔ <N> grammar alias. A plan header written `### T<N>` yields a
+  // T-prefixed task id, but implementation commits (and pre-#615 machinery)
+  // may carry either the T-prefixed or the bare-numeric `Task:` trailer.
+  // Fold both sides to the canonical numeric key so `Task: 0` resolves a `T0`
+  // task and `Task: T3` resolves a `3` task. Non-numeric ids are unaffected
+  // (canonicalTaskId is a no-op for them), so this never widens matching for
+  // `task-7` / `rem-adr-001`.
+  const canonicalId = canonicalTaskId(taskId);
+  if (trailerValues.some((v) => canonicalTaskId(v) === canonicalId)) {
+    return true;
+  }
+
   // Check guarded alias: if `task-${taskId}` is in trailerValues
   const aliasForm = `task-${taskId}`;
   if (trailerValues.includes(aliasForm)) {
@@ -972,6 +984,27 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 /**
+ * Canonical task-id key (#636).
+ *
+ * Folds a leading `T`/`t` that is immediately followed by a digit down to the
+ * bare numeric form, so a plan's `### T<N>` header, a `Task: T<N>` commit
+ * trailer, an evidence stamp keyed `T<N>`, and a bare `<N>` row/trailer all
+ * resolve to ONE task. Non-T ids (`task-7`, `rem-adr-001`, `A8`) and a bare
+ * `T`/`Task` word (no following digit) are returned unchanged — the fold is
+ * scoped to the `T<digits>` shorthand only.
+ *
+ * This is the alias seam that repairs the #615 id-grammar drift: #615 widened
+ * the header regex to accept `### T<N> —` but normalized it to a bare number,
+ * stranding the T-prefixed rows/trailers/stamps that predate it (the #417
+ * evidence-gate id-grammar class). The parsers now emit the id AS WRITTEN
+ * (keeping the T), and every comparison seam folds through this function so
+ * both grammars match the same task.
+ */
+export function canonicalTaskId(id: string): string {
+  return id.replace(/^[Tt](?=\d)/, '');
+}
+
+/**
  * Fast-feedback, single-commit evidence check (ADR post-landing amendment:
  * post-commit-derive-feedback.sh invokes this via the `derive-feedback`
  * CLI dispatch instead of a bare bash regex). Advisory only — never writes
@@ -1040,8 +1073,13 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   // Supports numeric (1, 18, 100), dotted (1.2), alphanumeric with separators (task_1, rem-adr-001)
   // Terminator accepts a colon or a whitespace-preceded em-dash/en-dash separator
   // (the authoring convention: `### Task N — Title`)
+  // The T<N> alternative captures WITH the leading `T` (`### T1` → `T1`, not
+  // `1`) so the emitted id matches the plan header verbatim and the
+  // pre-existing T-prefixed task-status rows / `Task: T<N>` trailers / evidence
+  // stamps (#636). Cross-grammar matching (`Task: 1` ↔ `T1`) is handled at the
+  // comparison seams via canonicalTaskId, not by mangling the id here.
   const taskHeader = new RegExp(
-    `^#{1,6}\\s+(?:Task\\s+(${TASK_ID_PATTERN})|T(\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
+    `^#{1,6}\\s+(?:Task\\s+(${TASK_ID_PATTERN})|(T\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
   );
 
   for (const line of lines) {
@@ -1133,8 +1171,15 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
   // separator (any id grammar, including `rem-adr-001` / `A8`) or is a
   // bare title-less id with a digit in it (`### Task 2`, `### Task t1`,
   // `### T0`) — never a bare `Task <digitless-word>`.
+  //
+  // The two `T<N>` alternatives capture WITH the leading `T` (`### T0` → `T0`,
+  // not `0`) so the emitted id matches the plan header verbatim and the
+  // pre-existing T-prefixed rows / `Task: T<N>` trailers / evidence stamps
+  // (#636 — #615 stripped the `T`, orphaning all of that as the #417
+  // id-grammar-drift class). Cross-grammar matching (`Task: 0` ↔ `T0`) is
+  // handled at the comparison seams via canonicalTaskId, not by mangling here.
   const taskHeader =
-    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|T(\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|T(\d[A-Za-z0-9._,-]*)\s*$)/;
+    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {
@@ -1303,7 +1348,12 @@ async function findMatchingCommit(
 }
 
 function matchSubject(subject: string, task: TaskRecord): { idMatch: boolean; nameMatch: boolean } {
-  const idRe = new RegExp(`(?:^|[^0-9A-Za-z])(?:T${escapeRegex(task.id)}|#${escapeRegex(task.id)})(?![0-9A-Za-z])`);
+  // #636: canonicalize the id before prefixing `T`/`#`, so a T-prefixed row id
+  // (`T1`) yields a `T1` subject probe rather than `TT1`. Both the raw and the
+  // canonical form are accepted, so `### T1`-derived rows and bare `1` rows
+  // both match a `T1`/`#1` mention in the subject line.
+  const canonicalId = canonicalTaskId(task.id);
+  const idRe = new RegExp(`(?:^|[^0-9A-Za-z])(?:T${escapeRegex(canonicalId)}|#${escapeRegex(canonicalId)})(?![0-9A-Za-z])`);
   const idMatch = idRe.test(subject);
 
   let nameMatch = false;
@@ -1374,8 +1424,13 @@ export async function reconcileStatusFromStamps(
 
     // For each evidence stamp, try to advance the matching task row
     for (const [taskId, stamp] of evidence.evidenceStamps.entries()) {
-      // Find the matching task row
-      const task = status.tasks.find((t) => t.id === taskId);
+      // Find the matching task row. #636: match under the canonical id fold so
+      // a bare-keyed stamp (`3`) advances a T-prefixed row (`T3`) and vice
+      // versa — the two grammars name the same task.
+      const canonicalStampId = canonicalTaskId(taskId);
+      const task =
+        status.tasks.find((t) => t.id === taskId) ??
+        status.tasks.find((t) => canonicalTaskId(t.id) === canonicalStampId);
       if (!task) continue; // No row for this stamp — will be tracked as orphan later
 
       stampIdsWithMatches.add(taskId);
@@ -1391,7 +1446,9 @@ export async function reconcileStatusFromStamps(
         task.rawEntry.commit = stamp.sha.slice(0, 7);
       }
 
-      result.synced.push(taskId);
+      // Report the matched ROW id (the plan-grammar id) so callers surface the
+      // canonical task, not the stamp's incidental grammar.
+      result.synced.push(task.id);
       wroteAnything = true;
     }
 

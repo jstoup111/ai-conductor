@@ -106,10 +106,13 @@ always-run section of \`install()\`.
     await git('add', '.');
     await git('commit', '-q', '-m', 'docs: plan');
 
+    // #636: the `### T3` header keys the task under `T3` (id as written), while
+    // the commit carries the bare `Task: 3` trailer — the canonical alias folds
+    // `3` → `T3` so the bare trailer still resolves the T-prefixed task.
     await commitFile('bin/install', '#!/usr/bin/env bash\necho hi\n', '3');
 
     const result = await derive(planPath);
-    expect(result['3']?.completed).toBe(true);
+    expect(result['T3']?.completed).toBe(true);
   });
 
   it('regression: a dedicated file-list bullet + disjoint commit STILL rejects (#425 lock)', async () => {
