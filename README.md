@@ -386,6 +386,28 @@ BLOCKED as-built architecture review (`.pipeline/architecture-review-as-built.md
 each fixable gap back to the right step with concrete tasks, reserving the HALT for gaps that
 genuinely need a human decision (architectural clarity or product scope).
 
+**Progress-aware build halt (`build_progress_halt`).** A build step that keeps resolving
+tasks on every attempt — but hasn't yet cleared the completion gate — is no longer halted
+just because it exceeded `max_retries`. As long as the resolved-task count keeps advancing,
+the retry loop keeps re-dispatching (bounded by `attempt_ceiling`, default 30) instead of
+marking the step `failed` at the fixed retry budget. A build that parked or halted while
+still making progress is also eligible for a re-kick on the next daemon idle tick even if
+`origin/main` hasn't advanced, bounded by `dispatch_ceiling` (default 20) per spec; once
+that ceiling is hit the spec stops being progress-re-kicked (with an explicit logged reason)
+but stays eligible for the normal base-advance `rekickSweep` or a manual operator unpark. A
+true zero-progress build (no advancing resolved count) still parks at the existing threshold —
+unchanged. Configure via a `build_progress_halt:` block in the project config:
+
+```yaml
+build_progress_halt:
+  enabled: true          # default true; false reproduces the pre-change fixed-budget halt exactly
+  attempt_ceiling: 30    # absolute per-dispatch backstop for a progressing build (must be >= max_retries)
+  dispatch_ceiling: 20   # per-spec cap on cross-dispatch progress-gated re-kicks
+```
+
+Omit the block entirely to get the defaults above. See `src/conductor/README.md` for the
+implementation details.
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a

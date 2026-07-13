@@ -1857,6 +1857,77 @@ SIGINT/SIGTERM handlers trigger a best-effort flush within this bound.
 | `engine/otel/transport.ts` | OTLP HTTP, gRPC, and file exporters |
 | `engine/otel/resource.ts` | OTel Resource with conductor attributes |
 
+### Progress-aware build halt (`build_progress_halt`, #280)
+
+Previously the build retry loop halted a step purely on a fixed attempt budget
+(`stepMaxRetries`), even when each attempt was resolving additional tasks — a build making
+real forward progress could be marked `failed`/parked at the same threshold as a build that
+was completely wedged. The retry loop now treats the forward-progress delta as the primary
+continue/halt signal, with the attempt ceiling kept as an absolute backstop.
+
+**Ground truth.** Per-attempt progress is read from `task-status.json` (via the existing
+`countResolvedTasks` / `task-progress.ts countFromParsed` helpers) and persisted across
+dispatches as `lastResolvedCount` on the `TaskEvidence` sidecar (`task-evidence.ts`),
+stamped at every build-step exit path (success, park, ceiling) so a later dispatch or daemon
+tick can tell whether the run advanced since it last looked. Both reads degrade tolerantly —
+a missing/corrupt `task-status.json` or sidecar (`readLastResolvedCount`) is treated as zero
+progress / no change rather than throwing, so a bad artifact routes to the existing
+zero-progress path instead of crashing the loop or the daemon tick.
+
+**Within-dispatch progress-bypass gate** (`conductor.ts`, build branch of the retry loop).
+When an attempt's completion-gate miss coincides with `resolvedTasksAfter >
+resolvedTasksBefore`, the loop re-dispatches without counting the attempt toward
+`stepMaxRetries` halt/park, and resets `noEvidenceAttempts` as it already did. A separate
+bounded progress-attempt counter (distinct from `stepMaxRetries`) tracks these attempts; once
+it reaches `attempt_ceiling` the run parks with an explicit reason ("build progressing but
+hit absolute attempt ceiling N") rather than the misleading zero-progress "tasks not
+completed" wording. The zero-progress branch (`resolvedTasksAfter <= resolvedTasksBefore`) is
+untouched — `noEvidenceAttempts` still increments and `checkAndAutoPark` still parks at the
+same threshold as before this change.
+
+**Cross-dispatch progress-gated re-kick** (`daemon.ts` idle/poll tick). A parked/halted build
+whose sidecar shows the last dispatch ended with a higher resolved count than it started
+(`lastResolvedCount` progress) becomes re-kick-eligible even without a base-sha advance,
+dispatched through the same idle-loop path — no parallel wake mechanism. This is bounded per
+spec by `dispatch_ceiling`; once a spec's progress-gated re-kick count reaches the ceiling,
+re-kicking stops with a distinct logged reason, but the spec is left otherwise untouched —
+it's still eligible for the normal base-advance `rekickSweep` or a manual operator unpark. The
+re-kick path is routed through the existing `started`/`parked`/`isParked`/`isHalted` guards
+(`daemon.ts`), so a slug already live in the `started` set is never double-dispatched.
+
+**Config (`pipeline.yml` / `harness-config.ts` `build_progress_halt:` key):**
+
+```yaml
+build_progress_halt:
+  enabled: true        # default true; false is an exact revert to the pre-#280 fixed-budget halt
+  attempt_ceiling: 30   # default 30; must be >= the resolved max_retries (validated)
+  dispatch_ceiling: 20  # default 20; per-spec cap on cross-dispatch progress-gated re-kicks
+```
+
+Validation (`engine/config.ts validateConfig` / `validateBuildProgressHaltBlock`): unknown
+keys are rejected; `enabled` must be boolean; `attempt_ceiling`/`dispatch_ceiling` must be
+positive integers; `attempt_ceiling` below the resolved `max_retries` is rejected (an
+attempt-ceiling that undercuts a step's own retry budget could fire the halt/park decision
+before a single step exhausted its retries). Defaults live in
+`BUILD_PROGRESS_HALT_DEFAULTS` (`engine/config.ts`).
+
+**Kill switch.** `build_progress_halt.enabled: false` makes the progress-bypass gate and the
+progress-gated re-kick fully inert — behavior is exactly today's fixed-budget halt, with no
+other code path change.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `BuildProgressHaltConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `build_progress_halt:` block, `BUILD_PROGRESS_HALT_DEFAULTS` |
+| `engine/task-evidence.ts` | `lastResolvedCount` sidecar field, tolerant `readLastResolvedCount` accessor |
+| `engine/conductor.ts` | Within-dispatch progress-bypass gate + attempt-ceiling backstop; stamps `lastResolvedCount` at every build-step exit path |
+| `engine/daemon.ts` | Cross-dispatch progress-gated re-kick eligibility, per-spec `dispatch_ceiling` bound, double-dispatch guard integration |
+
+Tests: `test/acceptance/daemon-halts-a-build-that-is-making-forward-progre.acceptance.test.ts`
+(S1–S8), plus the unit-level config validation and sidecar round-trip tests exercised by T1–T12.
+
 Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
 `test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
 
