@@ -53,7 +53,7 @@ const KEY_SEP = '\x00';
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
 function ledgerPath(opts: AuthoredLedgerOpts = {}): string {
-  const dir = opts.engineerDir ?? resolveEngineerDir({ home: opts.home, env: opts.env });
+  const dir = assertLedgerBase(opts.engineerDir ?? resolveEngineerDir({ home: opts.home, env: opts.env }));
   return join(dir, LEDGER_FILE);
 }
 

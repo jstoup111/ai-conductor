@@ -148,4 +148,24 @@ describe('authored-keys ledger', () => {
       expect(cwdEntries).not.toContain('undefined');
     });
   });
+
+  // ── fail-closed base directory guard applies to the read path too ────────
+  describe('rejects an invalid ledger base directory on read (fail-closed)', () => {
+    it.each([
+      ['sentinel "undefined"', 'undefined'],
+      ['sentinel "null"', 'null'],
+      ['blank string', ''],
+      ['whitespace-only string', '   '],
+      ['relative path', 'engineer'],
+    ])('rejects %s', async (_label, base) => {
+      await expect(readAuthoredKeys({ engineerDir: base })).rejects.toThrow(
+        /authored-keys\.json/,
+      );
+    });
+
+    it('does not reject a valid absolute base and still returns [] on ENOENT', async () => {
+      const keys = await readAuthoredKeys({ engineerDir: tempDir });
+      expect(keys).toEqual([]);
+    });
+  });
 });
