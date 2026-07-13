@@ -48,6 +48,43 @@ describe('pickEligible — no head-of-line blocking (FR-4 negative)', () => {
   });
 });
 
+// Task 8 (progress-gated cross-dispatch re-kick, D2) — a parked slug whose
+// HALT marker is still live (no base advance cleared it) becomes eligible
+// again when the injected `isProgressReKickEligible` reports the last
+// dispatch made forward progress. Additive to the existing isHalted-cleared
+// path — it never bypasses the started/parked bookkeeping itself.
+describe('pickEligible — progress-gated re-kick eligibility (D2 happy)', () => {
+  it('re-admits a parked slug whose HALT marker is still live but isProgressReKickEligible reports progress', async () => {
+    const items: BacklogItem[] = [{ slug: 'progressing-spec' }];
+    const result = await pickEligible(
+      { items },
+      {
+        inFlight: new Set(),
+        parked: new Set(['progressing-spec']),
+        started: new Set(['progressing-spec']),
+        isHalted: async () => true, // still parked — no base advance cleared it
+        isProgressReKickEligible: async (slug) => slug === 'progressing-spec',
+      },
+    );
+    expect(result?.slug).toBe('progressing-spec');
+  });
+
+  it('leaves a parked slug ineligible when isProgressReKickEligible reports no progress', async () => {
+    const items: BacklogItem[] = [{ slug: 'stalled-spec' }];
+    const result = await pickEligible(
+      { items },
+      {
+        inFlight: new Set(),
+        parked: new Set(['stalled-spec']),
+        started: new Set(['stalled-spec']),
+        isHalted: async () => true,
+        isProgressReKickEligible: async () => false,
+      },
+    );
+    expect(result).toBeUndefined();
+  });
+});
+
 // Task 7 (operator-park) — dispatch eligibility: a `.daemon/parked/<slug>`
 // operator-park marker sits beside the `isHalted` consult and makes the slug
 // permanently ineligible for dispatch — independent of the in-run
