@@ -1311,6 +1311,80 @@ describe('engine/artifacts', () => {
           expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
         });
       });
+
+      // Regression (#620): #615's widened presence-gate regex
+      // (`Task\s+[A-Za-z0-9._-]+`) accepts any word as an "id" with no
+      // terminator requirement, so a structural heading like `## Task Graph`
+      // or `## Task Dependency Graph` — present in many committed plans,
+      // e.g. .docs/plans/2026-06-30-engineer-worktree-isolation.md — is
+      // misread as evidence the plan has a real task. Downstream, the same
+      // over-wide id grammar in parsePlanTaskPaths/parsePlanTasks seeds a
+      // phantom task ("Graph"/"Dependency") that can never be completed,
+      // making build completion permanently unsatisfiable.
+      describe('regression #620: structural "## Task Graph" / "## Task Dependency Graph" headings are not real task presence', () => {
+        it('a plan with ONLY a "## Task Graph" heading (no real ### Task N) is still "empty"', async () => {
+          await writePlan(
+            '# Implementation Plan: Graph-only\n\n' +
+            '## Task Graph\n\n' +
+            'Task 1 -> Task 2\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+
+        it('a plan with ONLY a "## Task Dependency Graph" heading (no real ### Task N) is still "empty"', async () => {
+          await writePlan(
+            '# Implementation Plan: Dependency-graph-only\n\n' +
+            '## Task Dependency Graph\n\n' +
+            'Task 1 -> Task 2\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+
+        it('a plan with real ### Task N headings PLUS a "## Task Dependency Graph" section still recognizes real task presence', async () => {
+          await writePlan(
+            '# Implementation Plan: Real-plus-graph\n\n' +
+            '### Task 1: Real work\n' +
+            '**Files:** `src/real.ts`\n\n' +
+            '## Task Dependency Graph\n\n' +
+            'Task 1 -> done\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          // Not the empty/missing-plan false-negative; may still be
+          // "pending" for lack of git evidence in this test.
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+        });
+
+        it('#620 guard: bare title-less headers with a digit in the id ("### Task 1", "### Task t1") still count as task presence', async () => {
+          // The #620 tightening must only reject DIGITLESS bare ids
+          // (Graph/Breakdown/Dependency), never the widely-used bare
+          // title-less shapes whose ids contain a digit.
+          await writePlan(
+            '# Implementation Plan: Bare digit headers\n\n' +
+            '### Task 1\n' +
+            '**Files:** `src/a.ts`\n\n' +
+            '### Task t2\n' +
+            '**Files:** `src/b.ts`\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+        });
+      });
     });
   });
 

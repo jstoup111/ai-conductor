@@ -696,9 +696,26 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // including the bare `T<N>` shorthand with no "Task" word — #578) —
       // the old `^### Task \d+` form rejected h2 headings and every
       // remediation id (`rem-…`), reading real plans as "empty".
+      //
+      // A pure-alpha id requires an explicit terminator (colon, or a
+      // whitespace-preceded em/en-dash) immediately after it; only an id
+      // CONTAINING A DIGIT may stand bare at end-of-line (#620 fix).
+      // Without that restriction, #615's widened id grammar
+      // (`[A-Za-z0-9._-]+`, any word) let structural headings like
+      // `## Task Graph` / `## Task Dependency Graph` — present in many
+      // committed plans — read as "the plan has a task", and downstream
+      // the same over-wide grammar in parsePlanTaskPaths seeded a phantom
+      // task ("Graph"/"Dependency") that can never be completed, making
+      // build completion permanently unsatisfiable. Real headers are
+      // either separator-terminated (`### Task rem-adr-001: x`,
+      // `### Task A8 — x`) or bare title-less with a digit in the id
+      // (`### Task 2`, `### Task t1`, `### T0`) — never a bare
+      // `Task <digitless-word>`.
       if (
         !planText.trim() ||
-        !/^#{1,6}\s+(?:Task\s+[A-Za-z0-9._-]+|T\d[A-Za-z0-9._-]*)/im.test(planText)
+        !/^#{1,6}\s+(?:Task\s+[A-Za-z0-9._-]+(?::|\s[—–])|Task\s+[A-Za-z._-]*\d[A-Za-z0-9._-]*\s*$|T\d[A-Za-z0-9._-]*(?::|\s[—–])|T\d[A-Za-z0-9._-]*\s*$)/im.test(
+          planText,
+        )
       ) {
         return {
           done: false,

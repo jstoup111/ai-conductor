@@ -865,6 +865,157 @@ More prose.
       const pathsResult = mod.parsePlanTaskPaths(planText);
       expect(pathsResult.size).toBe(0);
     });
+
+    // Regression (#620): #615 widened the header regexes to accept bare
+    // `T<digits>` headers, but parsePlanTaskPaths's terminator also accepted
+    // a bare end-of-line (no colon, no dash) as a valid header close. A
+    // structural heading like `## Task Graph` or `## Task Dependency Graph`
+    // (present in many committed plans, e.g.
+    // .docs/plans/2026-07-12-rtk-hook-preservation.md) then parsed as a
+    // phantom task with id "Graph"/"Dependency" — a task that can never be
+    // completed, making the build-completion gate permanently unsatisfiable.
+    it('regression #620: does not treat "## Task Graph" heading as a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Tasks
+
+### Task 1: Real work
+**Files:** \`src/real.ts\`
+
+## Task Graph
+
+Task 1 → done
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Graph')).toBe(false);
+      expect(tasksResult.size).toBe(1);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Graph')).toBe(false);
+      expect(pathsResult.size).toBe(1);
+    });
+
+    it('regression #620: does not treat "## Task Dependency Graph" heading as a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Tasks
+
+### Task 1: Foundation
+**Files:** \`src/foundation.ts\`
+
+### Task 2: Build on it
+**Files:** \`src/build.ts\`
+
+## Task Dependency Graph
+
+Task 1 → Task 2
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Dependency')).toBe(false);
+      expect(tasksResult.size).toBe(2);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Dependency')).toBe(false);
+      expect(pathsResult.size).toBe(2);
+    });
+
+    it('regression #620: "## Task Breakdown" prose heading is never a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Task Breakdown
+
+### Task 1: Real work
+**Files:** \`src/real.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Breakdown')).toBe(false);
+      expect(tasksResult.size).toBe(1);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Breakdown')).toBe(false);
+      expect(pathsResult.size).toBe(1);
+    });
+
+    it('#578/#615 shapes still parse: "### Task 3 — Title" (em-dash) and "### T0 — Title" (bare T)', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 3 — Em-dash title
+**Files:** \`src/em.ts\`
+
+### T0 — Bare T shorthand
+**Files:** \`src/bare.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('3')).toBe(true);
+      expect(tasksResult.get('3')!.name).toBe('Em-dash title');
+      expect(tasksResult.has('0')).toBe(true);
+      expect(tasksResult.get('0')!.name).toBe('Bare T shorthand');
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('3')).toBe(true);
+      expect(pathsResult.has('0')).toBe(true);
+    });
+
+    it('#620 guard: bare title-less headers with a digit in the id ("### Task 2", "### Task t1", "### T3") still parse in parsePlanTaskPaths', async () => {
+      // Widely used fixture/plan shape (e.g. task-status-gate-recompute and
+      // gate-loop integration tests): a task header that is just
+      // `### Task <id>` with no colon, dash, or title. The #620 tightening
+      // must only reject DIGITLESS bare ids (Graph/Breakdown/Dependency),
+      // never ids containing a digit.
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 1
+**Files:** \`src/a.ts\`
+
+### Task 2
+**Files:** \`src/b.ts\`
+
+### T3
+**Files:** \`src/c.ts\`
+
+### Task t4
+**Files:** \`src/d.ts\`
+`;
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('1')).toBe(true);
+      expect(pathsResult.get('1')!.has('src/a.ts')).toBe(true);
+      expect(pathsResult.has('2')).toBe(true);
+      expect(pathsResult.get('2')!.has('src/b.ts')).toBe(true);
+      expect(pathsResult.has('3')).toBe(true);
+      expect(pathsResult.get('3')!.has('src/c.ts')).toBe(true);
+      expect(pathsResult.has('t4')).toBe(true);
+      expect(pathsResult.get('t4')!.has('src/d.ts')).toBe(true);
+    });
+
+    it('#620: non-digit remediation/alpha ids still parse ("Task rem-adr-001", "Task A8")', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task rem-adr-001: Remediation task
+**Files:** \`src/rem.ts\`
+
+### Task A8: Resolver warnings
+**Files:** \`src/a8.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('rem-adr-001')).toBe(true);
+      expect(tasksResult.has('A8')).toBe(true);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('rem-adr-001')).toBe(true);
+      expect(pathsResult.has('A8')).toBe(true);
+    });
   });
 });
 

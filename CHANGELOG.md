@@ -53,6 +53,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   moved, so SKILL.md `model:` pins are untouched; regenerated the HARNESS.md
   table via `bin/generate-model-table`. No config-schema, hook, symlink, or
   `bin/conduct` CLI change — no migration block required.
+- Fixed a regression of the above #578 fix (#620): the widened task-header
+  id grammar (`Task\s+[A-Za-z0-9._-]+` / `T\d[A-Za-z0-9._-]*`) matched any
+  word as an id, so structural headings like `## Task Graph` and `## Task
+  Dependency Graph` — present in many committed plans — parsed as a
+  phantom task (e.g. id `Graph`) that can never be completed, making a
+  fully-completed build's completion gate permanently unsatisfiable
+  (`N/N+1 tasks pending`). Tightened the presence-check gate
+  (`src/engine/artifacts.ts`) and `parsePlanTaskPaths`
+  (`src/engine/autoheal.ts`): a pure-alpha id now requires an explicit
+  colon/em-dash/en-dash separator immediately after it; only an id
+  containing a digit (`Task 2`, `Task t1`, `T0`) may stand bare at
+  end-of-line. `parsePlanTasks` already required a separator and was
+  unaffected. All legitimate shapes keep parsing: `### Task 3 — Title`,
+  `### T0 — Title`, `### Task rem-adr-001: x`, `### Task A8: x`, and
+  title-less bare headers (`### Task 2`, `### Task t1`, `### T3`);
+  prose/structural headings (`## Task Graph`, `## Task Dependency Graph`,
+  `## Task Breakdown`, `## Tasks`, `### Testing`, `### Team sync`) never
+  parse as tasks.
 
 ### Changed
 
