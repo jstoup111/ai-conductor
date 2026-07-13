@@ -20,7 +20,7 @@ import { saveStepStatus } from './state.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[]): Promise<GitResult>;
+  (args: string[], opts?: { input?: string }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -31,7 +31,7 @@ export interface GitResult {
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[]): Promise<GitResult> => {
+  return async (args: string[], opts?: { input?: string }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
@@ -42,6 +42,7 @@ export function makeGitRunner(cwd: string): GitRunner {
         cwd,
         reject: false,
         ...(isCommit ? { env: withEngineCommitEnv() } : {}),
+        ...(opts?.input !== undefined ? { input: opts.input } : {}),
       });
       // Tolerate odd/mocked results (no object, no exitCode) → treat as failure.
       if (!r || typeof r !== 'object') {
@@ -358,10 +359,30 @@ export type RebaseOutcome =
  *   changelog_resolved → CHANGELOG-only conflict auto-resolved (FR-7).
  *   conflict_halt      → any other / mixed conflict (FR-8); rebase left paused.
  */
+/** Optional capabilities injectable into `performRebase` (Task 15). */
+export interface PerformRebaseOpts {
+  /**
+   * Post-rebase evidence-citation translation (adr-2026-07-12-rebase-evidence-
+   * stamp-translation.md), invoked on ANY clean rebase that actually ran
+   * (commit shas are rewritten by every real rebase, independent of whether
+   * the diff is code-classified as `changed` or `noop`), BEFORE the caller
+   * applies rebase verdicts. Absent -> today's behavior, byte-identical no-op
+   * (legacy/unit-test callers that don't pass a 4th argument).
+   */
+  translateAfterRebase?: (
+    git: GitRunner,
+    projectRoot: string,
+    onto: string,
+    origHead: string,
+    head: string,
+  ) => Promise<void>;
+}
+
 export async function performRebase(
   git: GitRunner,
   projectRoot: string,
   localBase: string,
+  opts?: PerformRebaseOpts,
 ): Promise<RebaseOutcome> {
   // No usable git work tree (e.g. a non-repo fixture, or git unavailable):
   // degrade to a no-op so the feature still completes (FR-3 spirit) rather
@@ -411,7 +432,18 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
-    return classifyClean(git, preTree);
+    const outcome = await classifyClean(git, preTree);
+    // Every clean rebase that reaches here rewrites commit shas (the parent
+    // changed), regardless of whether classifyClean's code-path heuristic
+    // calls it `changed` or `noop` — a docs/config-only rebase still orphans
+    // any evidence citation pinned to the pre-rebase shas. Translate
+    // unconditionally on any real rebase, not gated on that heuristic.
+    if (opts?.translateAfterRebase) {
+      const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
+      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
+    }
+    return outcome;
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.

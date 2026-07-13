@@ -659,10 +659,14 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
 
     await g(['checkout', '-q', '-b', 'feat']);
-    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     await writeFile(join(repo, 'a.ts'), 'a1\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'feat: a1']);
+    // The real pre-rebase tip (what git's own ORIG_HEAD resolves to once the
+    // rebase below runs) — captured AFTER the feature commit, not before it,
+    // so buildRewriteMap's `rev-list onto..origHead` sees the actual feature
+    // commit range.
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
 
     await g(['checkout', '-q', 'main']);
     await writeFile(join(repo, 'unrelated.ts'), 'main1\n');

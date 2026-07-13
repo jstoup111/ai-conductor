@@ -12,7 +12,9 @@ import {
   writeHalt,
   type RebaseOutcome,
   type RebaseResolver,
+  type GitRunner,
 } from './rebase.js';
+import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { checkMergedPrGuard } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -327,6 +329,19 @@ export async function resumeRebaseFirst(opts: {
   resolveAttempts?: number;
   /** Resolver dispatched per attempt — the daemon wires DefaultStepRunner's `/rebase`. */
   resolveConflict?: RebaseResolver;
+  /**
+   * Post-rebase evidence-citation translation capability (Task 15,
+   * adr-2026-07-12-rebase-evidence-stamp-translation.md). Optional purely for
+   * DI/test override — absent defaults to the real `rebase-translate.ts`
+   * implementation bound to `opts.events`, so real re-kicks always translate.
+   */
+  translateAfterRebase?: (
+    git: GitRunner,
+    projectRoot: string,
+    onto: string,
+    origHead: string,
+    head: string,
+  ) => Promise<void>;
   /** Optional: gh runner for merged-PR guard (ADR-2026-07-09). Absent → no guard. */
   runGh?: GhRunner;
   /** Optional: recorded PR URL for merged-PR guard. Absent → no guard. */
@@ -356,9 +371,18 @@ export async function resumeRebaseFirst(opts: {
   }
 
   const git = makeGitRunner(opts.worktreePath);
+  const translateAfterRebase =
+    opts.translateAfterRebase ??
+    ((
+      g: GitRunner,
+      projectRoot: string,
+      onto: string,
+      origHead: string,
+      head: string,
+    ): Promise<void> => defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, opts.events));
   let outcome: RebaseOutcome;
   try {
-    outcome = await performRebase(git, opts.worktreePath, opts.localBase);
+    outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
   } catch (err) {
     outcome = {
       kind: 'conflict_halt',
