@@ -505,7 +505,7 @@ export interface ResolveWaiverRefResult {
 export async function resolveWaiverRef(
   ref: InertRef,
   fileExists: FileExistsChecker,
-  _gh: GhRunner,
+  gh: GhRunner,
 ): Promise<ResolveWaiverRefResult> {
   if (ref.form === 'path') {
     const exists = await fileExists(ref.path);
@@ -515,9 +515,36 @@ export async function resolveWaiverRef(
     return { status: 'gap', message: `inert waiver ref ${ref.path} not found` };
   }
 
-  // Issue-form resolution is Task 20 — fail closed rather than assuming waived.
+  const slug = `${ref.owner}/${ref.repo}#${ref.number}`;
+  let stdout: string;
+  try {
+    const result = await gh(['issue', 'view', slug, '--json', 'state']);
+    stdout = result.stdout;
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    const firstLine = raw.split('\n')[0];
+    return {
+      status: 'gap',
+      message: `inert waiver ref #${ref.number} unverifiable (gh error: ${firstLine})`,
+    };
+  }
+
+  let state: string;
+  try {
+    state = String(JSON.parse(stdout).state ?? '').toUpperCase();
+  } catch {
+    return {
+      status: 'gap',
+      message: `inert waiver ref #${ref.number} unverifiable (gh error: unparseable gh response)`,
+    };
+  }
+
+  if (state === 'OPEN') {
+    return { status: 'waived', evidence: '(gh: open)' };
+  }
+
   return {
     status: 'gap',
-    message: `inert waiver ref ${ref.owner}/${ref.repo}#${ref.number}: issue-form resolution not yet implemented`,
+    message: `inert waiver ref ${slug} is ${state.toLowerCase() || 'unknown'}`,
   };
 }

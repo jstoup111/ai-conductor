@@ -56,3 +56,44 @@ describe('resolveWaiverRef — path-form', () => {
     expect(calls.length).toBe(0);
   });
 });
+
+describe('resolveWaiverRef — issue-form', () => {
+  const fileExists = async (_path: string) => false;
+  const ref: InertRef = { form: 'issue', owner: 'acme', repo: 'widgets', number: 42 };
+
+  it('resolves as waived when gh reports the issue is open', async () => {
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      return { stdout: JSON.stringify({ state: 'OPEN' }) };
+    };
+
+    const result = await resolveWaiverRef(ref, fileExists, gh);
+
+    expect(result.status).toBe('waived');
+    expect(result.evidence).toContain('(gh: open)');
+    expect(calls[0]).toContain('acme/widgets#42');
+  });
+
+  it('reports a gap naming the closed state when gh reports the issue is closed', async () => {
+    const gh: GhRunner = async () => ({ stdout: JSON.stringify({ state: 'CLOSED' }) });
+
+    const result = await resolveWaiverRef(ref, fileExists, gh);
+
+    expect(result.status).toBe('gap');
+    expect(result.message).toBe('inert waiver ref acme/widgets#42 is closed');
+  });
+
+  it('fails closed with a gap when the gh runner errors', async () => {
+    const gh: GhRunner = async () => {
+      throw new Error('HTTP 401: Bad credentials (gh error)\nsome extra detail');
+    };
+
+    const result = await resolveWaiverRef(ref, fileExists, gh);
+
+    expect(result.status).toBe('gap');
+    expect(result.message).toBe(
+      'inert waiver ref #42 unverifiable (gh error: HTTP 401: Bad credentials (gh error))',
+    );
+  });
+});
