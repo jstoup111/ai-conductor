@@ -27,6 +27,7 @@ import {
   setReady,
   defaultSleep,
   HALT_PR_BANNER_SENTINEL,
+  HALT_PR_BANNER_LINES,
 } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
@@ -252,6 +253,129 @@ export async function ensureShipReady(
     return 'partial';
   } catch (err) {
     logFn(`[halt-pr-rehab] ensureShipReady(${prUrl}) error: ${err}`);
+    return 'partial';
+  }
+}
+
+/**
+ * Fail-open presentation read analog of {@link readStaleHaltTitle}, but for
+ * the body banner signal instead of the title prefix. Returns
+ * `HALT_PR_BANNER_SENTINEL` when a SUCCESSFUL read shows the recorded PR
+ * body still contains the engine-authored halt banner; returns null both
+ * when the body is clean AND on any gh read error (network never blocks a
+ * ship — the caller treats null as pass).
+ */
+export async function readStaleHaltBanner(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<string | null> {
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+    return body.includes(HALT_PR_BANNER_SENTINEL) ? HALT_PR_BANNER_SENTINEL : null;
+  } catch (err) {
+    log?.(`[halt-pr-rehab] gate read failed for ${prUrl} — fail-open: ${err}`);
+    return null;
+  }
+}
+
+export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial';
+
+/**
+ * Deterministic body floor (Task 2, companion to {@link retitleFloor}).
+ *
+ * Strips the engine-authored halt banner lines from a reused halt PR's
+ * body, collapses the resulting blank-line runs, and — if no `## Summary`
+ * heading survives — prepends a minimal rehabilitation summary block (with
+ * an optional test-evidence checklist item). A body with no halt banner is
+ * left completely untouched (zero `gh` mutation calls). All gh failures are
+ * warn-only and folded into the 'partial' outcome; the write is verified by
+ * a re-read with the same bounded-retry/backoff shape as
+ * {@link ensureShipReady}.
+ */
+export async function bodyFloor(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  opts: { featureDesc?: string; sourceRef?: string | null; testEvidenceLine?: string } = {},
+  log?: (msg: string) => void,
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<BodyFloorOutcome> {
+  const logFn = log ?? (() => {});
+
+  let body = '';
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+  } catch (err) {
+    logFn(`[halt-pr-rehab] bodyFloor gh pr view failed for ${prUrl} — skipping: ${err}`);
+    return 'partial';
+  }
+
+  if (!body.includes(HALT_PR_BANNER_SENTINEL)) {
+    return 'not-halt-body';
+  }
+
+  const bannerLines: readonly string[] = HALT_PR_BANNER_LINES;
+  const stripped = body
+    .split('\n')
+    .filter((line) => !bannerLines.includes(line));
+
+  // Collapse runs of 2+ consecutive blank lines down to a single blank line.
+  const collapsed: string[] = [];
+  for (const line of stripped) {
+    if (line.trim() === '' && collapsed.length > 0 && collapsed[collapsed.length - 1].trim() === '') {
+      continue;
+    }
+    collapsed.push(line);
+  }
+
+  // Trim leading/trailing blank lines.
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed[start].trim() === '') start++;
+  while (end > start && collapsed[end - 1].trim() === '') end--;
+  const remainingBody = collapsed.slice(start, end).join('\n');
+
+  let newBody = remainingBody;
+  if (!remainingBody.includes('## Summary')) {
+    const featureDesc = opts.featureDesc?.trim() || 'rehabilitated PR';
+    let floorBlock =
+      `## Summary\n\n${featureDesc}\n\n` +
+      '_Rehabilitated from a reused needs-remediation halt PR; halt history is preserved in the PR comments._';
+    const testEvidenceLine = opts.testEvidenceLine?.trim();
+    if (testEvidenceLine) {
+      floorBlock += `\n\n## Test evidence\n\n- [x] ${testEvidenceLine}`;
+    }
+    newBody = remainingBody ? `${floorBlock}\n\n${remainingBody}` : floorBlock;
+  }
+
+  const maxAttempts = 3;
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+
+      const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+      const verifyBody = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+      if (!verifyBody.includes(HALT_PR_BANNER_SENTINEL)) {
+        return 'floored';
+      }
+
+      if (attempt < maxAttempts) {
+        const backoffMs = attempt * 100;
+        logFn(
+          `[halt-pr-rehab] bodyFloor(${prUrl}): banner still present after attempt ${attempt}, retrying in ${backoffMs}ms`,
+        );
+        await sleep(backoffMs);
+      }
+    }
+
+    logFn(`[halt-pr-rehab] bodyFloor(${prUrl}): banner still present after ${maxAttempts} attempts — non-fatal`);
+    return 'partial';
+  } catch (err) {
+    logFn(`[halt-pr-rehab] bodyFloor(${prUrl}) error: ${err}`);
     return 'partial';
   }
 }
