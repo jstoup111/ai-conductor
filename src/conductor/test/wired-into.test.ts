@@ -66,7 +66,7 @@ describe('parseWiredIntoLine', () => {
     if (result.kind !== 'malformed') throw new Error('unreachable');
     expect(result.message).toContain('fix it later');
     expect(result.message).toContain('declared site(s)');
-    expect(result.message).toContain('same as Task N');
+    expect(result.message).not.toContain('same as Task N');
     expect(result.message).toContain('none (no new production surface)');
     expect(result.message).toContain('none (inert until <ref>)');
   });

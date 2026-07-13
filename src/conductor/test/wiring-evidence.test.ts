@@ -157,6 +157,32 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
 
     expect(result.done).toBe(false);
     expect(result.reason).toBeDefined();
+    // The fixture's real, specific gap message (as computed by wiring-probe.ts's
+    // gap-producing functions) must appear verbatim in the kickback reason —
+    // not just have its taskId/symbol/kind substrings present.
+    expect(result.reason).toContain(gapMessage);
+  });
+
+  it('gap without a message field falls back to a synthesized description naming task/symbol/kind', async () => {
+    const ev = {
+      baseSha: 'base123',
+      headSha: 'head456',
+      layer2Applicable: true,
+      waiverResolutions: [],
+      tasks: [
+        {
+          taskId: '7',
+          contractForm: 'declared',
+          symbols: [{ symbol: 'doThing', kind: 'no-reference' }],
+        },
+      ],
+    };
+    await writeEvidence(ev);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
+
+    expect(result.done).toBe(false);
     expect(result.reason).toContain('doThing');
     expect(result.reason).toContain('no-reference');
     expect(result.reason).toContain('7');

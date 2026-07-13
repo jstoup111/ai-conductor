@@ -72,6 +72,9 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   build: ['.pipeline/task-status.json'],
   build_review: ['.pipeline/build-review.json'],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
+  // committed, same convention as build_review/manual_test above.
+  wiring_check: ['.pipeline/wiring-evidence.json'],
+  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
   // rebase. `.pipeline/` is already gitignored in consumer repos, so the gate
@@ -558,6 +561,15 @@ export type WiringGapKind =
 export interface WiringSymbolResult {
   symbol: string;
   kind: WiringGapKind;
+  /**
+   * The specific, human-readable gap message computed by the wiring-probe
+   * gap-producing functions (e.g. `orphanBackstop`, `verifyDeclaredSites`).
+   * Optional because not every gap-producing path in wiring-probe.ts attaches
+   * a per-symbol message yet (e.g. `verifyDeclaredSites` currently emits
+   * plain strings, not structured per-symbol results) — when absent, callers
+   * fall back to a synthesized description.
+   */
+  message?: string;
 }
 
 export interface WiringTaskResult {
@@ -674,6 +686,12 @@ export function validateWiringEvidence(
         return {
           ok: false,
           reason: `${WIRING_EVIDENCE} task "${t.taskId}" symbol "${s.symbol}" has an unknown kind "${s.kind as string}"`,
+        };
+      }
+      if (s.message !== undefined && typeof s.message !== 'string') {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.taskId}" symbol "${s.symbol}" has a non-string "message"`,
         };
       }
     }
@@ -1273,7 +1291,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const gapMessages: string[] = [];
     for (const task of evidence.tasks) {
       for (const s of task.symbols) {
-        gapMessages.push(`task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`);
+        const detail = s.message ?? `task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`;
+        gapMessages.push(detail);
       }
     }
     if (gapMessages.length > 0) {

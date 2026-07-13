@@ -52,10 +52,14 @@ export interface WiredIntoMalformed {
   message: string;
 }
 
-/** The four accepted forms, used verbatim in malformed-line error messages. */
+/**
+ * The currently-implemented accepted forms, used verbatim in malformed-line
+ * error messages. `same as Task N` (inheritance shorthand) is not listed
+ * here — it is not implemented yet (Task 4's scope), so the error message
+ * must not claim it is accepted.
+ */
 const ACCEPTED_FORMS = [
   'declared site(s) (e.g. `path/to/file.ts#symbol`, comma-separated)',
-  '`same as Task N`',
   '`none (no new production surface)`',
   '`none (inert until <ref>)`',
 ];
