@@ -417,7 +417,9 @@ async function derivePendingTaskIds(projectRoot: string): Promise<string[]> {
 /**
  * Orchestrates post-rebase evidence-citation translation
  * (adr-2026-07-12-rebase-evidence-stamp-translation.md), called by
- * `performRebase` on a `changed` outcome, BEFORE `applyRebaseVerdicts`:
+ * `performRebase` on any clean rebase that moved HEAD — including a
+ * `classifyClean` `noop` (docs/config-only base advance), since the replay
+ * still rewrites every feature commit's sha — BEFORE `applyRebaseVerdicts`:
  *
  *   1. Build the old->new sha map by patch-id correspondence.
  *   2. Persist it transitively to `.pipeline/rebase-rewrites.json`.
