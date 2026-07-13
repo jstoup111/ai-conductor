@@ -1116,19 +1116,34 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
   // parses to zero ids → the build gate reports "no tasks in plan" → false
   // `empty/missing plan` auto-park of a completed build (#578, live-fire
   // 2026-07-12 on `2026-07-12-rtk-hook-preservation`, headers T0..T5).
-  // Terminator accepts a colon, a whitespace-preceded em-dash/en-dash title
-  // separator (`### Task N — Title`, the authoring convention), or end-of-line.
-  // Without the dash alternative, em-dash headings parse to zero ids → the build
-  // gate reports "no tasks in plan" → false `empty/missing plan` auto-park of a
+  // Terminator accepts a colon, or a whitespace-preceded em-dash/en-dash title
+  // separator (`### Task N — Title`, the authoring convention). Without the
+  // dash alternative, em-dash headings parse to zero ids → the build gate
+  // reports "no tasks in plan" → false `empty/missing plan` auto-park of a
   // completed build (#578).
-  const taskHeader = /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)|T(\d[A-Za-z0-9._,\s-]*?))(?::|\s[—–]|$)/;
+  //
+  // The bare end-of-line terminator requires an id CONTAINING A DIGIT
+  // (#620 fix): under #615's widened grammar, a pure-alpha id at
+  // end-of-line let structural headings like `## Task Graph` /
+  // `## Task Dependency Graph` (present in many committed plans) parse as
+  // a phantom task ("Graph"/"Dependency") that can never be completed —
+  // making build completion permanently unsatisfiable (live incident
+  // #620: a 4/4-complete build halted demanding a fifth task named
+  // "Graph"). A real task header either carries an explicit colon/dash
+  // separator (any id grammar, including `rem-adr-001` / `A8`) or is a
+  // bare title-less id with a digit in it (`### Task 2`, `### Task t1`,
+  // `### T0`) — never a bare `Task <digitless-word>`.
+  const taskHeader =
+    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|T(\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|T(\d[A-Za-z0-9._,-]*)\s*$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {
     const headerMatch = line.match(taskHeader);
     if (headerMatch) {
       current = {
-        ids: expandTaskIds(headerMatch[1] ?? headerMatch[2]),
+        ids: expandTaskIds(
+          headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+        ),
         filesPaths: new Set(),
         sameRef: null,
         hasFilesLine: false,
