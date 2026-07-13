@@ -427,6 +427,12 @@ export interface HarnessConfig {
    */
   rebase_resolution_attempts?: number;
   /**
+   * Maximum number of validation-phase tasks the engine fans out
+   * concurrently. Absent → engine default. Non-numeric values are rejected
+   * at validation time (see validateConfig).
+   */
+  validation_concurrency?: number;
+  /**
    * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
    * activation override + per-gate toggles. Absent → auto-detect, all gates on
    * (the safe default). Scoped to harness self-builds; no effect on other repos.

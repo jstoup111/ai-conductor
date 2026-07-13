@@ -128,6 +128,32 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('accepts validation_concurrency as a known top-level key', () => {
+      const result = validateConfig({ validation_concurrency: 3 });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a typo of validation_concurrency as an unknown top-level key', () => {
+      const result = validateConfig({ validation_concurency: 3 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('validation_concurency');
+    });
+
+    it('passes when validation_concurrency is absent', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.validation_concurrency).toBeUndefined();
+    });
+
+    it('rejects validation_concurrency when not a number', () => {
+      const result = validateConfig({ validation_concurrency: 'three' as unknown as number });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('validation_concurrency');
+    });
+
     it('rejects disabling a gating step', () => {
       const result = validateConfig({
         steps: { stories: { disable: true } },

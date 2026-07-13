@@ -182,6 +182,8 @@ export function validateConfig(
     'attribution_audit_sample_pct',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
+    // Bounds the validation-phase fan-out concurrency.
+    'validation_concurrency',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
     'harness_self_host',
     // Model availability fallback ladder.
@@ -579,6 +581,14 @@ export function validateConfig(
   } else {
     // Absent → default to 10
     obj.attribution_audit_sample_pct = 10;
+  }
+
+  // validation_concurrency — bounds the validation-phase fan-out. Absent →
+  // engine default (no override). Numeric type required.
+  if (obj.validation_concurrency !== undefined) {
+    if (typeof obj.validation_concurrency !== 'number') {
+      return errVal('validation_concurrency must be a number');
+    }
   }
 
   // harness_self_host — self-host guardrail activation override + per-gate
