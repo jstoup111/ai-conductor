@@ -1240,6 +1240,51 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
+  // Wiring-reachability gate: satisfied only by a fresh evidence artifact at
+  // WIRING_EVIDENCE recorded for the CURRENT HEAD, with zero gap symbols
+  // across every task. Missing file, malformed/invalid evidence, or a stale
+  // (prior-HEAD) evidence file all keep the gate unsatisfied (fail-closed).
+  // When any task's symbols array is non-empty, every gap's full message is
+  // surfaced verbatim in the reason so the kickback tells build exactly what
+  // is unreachable/undeclared.
+  wiring_check: async (dir, ctx): Promise<CompletionResult> => {
+    const path = join(dir, WIRING_EVIDENCE);
+    let raw: string;
+    try {
+      raw = await readFile(path, 'utf-8');
+    } catch {
+      return {
+        done: false,
+        reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
+      };
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { done: false, reason: `invalid JSON in ${WIRING_EVIDENCE}` };
+    }
+    const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
+    const validated = validateWiringEvidence(parsed, currentHead);
+    if (!validated.ok) {
+      return { done: false, reason: validated.reason };
+    }
+    const evidence = parsed as WiringEvidence;
+    const gapMessages: string[] = [];
+    for (const task of evidence.tasks) {
+      for (const s of task.symbols) {
+        gapMessages.push(`task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`);
+      }
+    }
+    if (gapMessages.length > 0) {
+      return {
+        done: false,
+        reason: `wiring-reachability gaps found:\n${gapMessages.join('\n')}`,
+      };
+    }
+    return { done: true };
+  },
+
   // Retro passes when a fresh retro file exists for THIS feature. Filename
   // should contain the slug per skills/retro/SKILL.md ("Save to
   // .docs/retros/YYYY-MM-DD-<feature-name>.md"). Falls back to "any retro

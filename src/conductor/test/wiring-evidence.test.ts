@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   WIRING_EVIDENCE,
   validateWiringEvidence,
+  CUSTOM_COMPLETION_PREDICATES,
   type WiringEvidence,
 } from '../src/engine/artifacts.js';
 
@@ -93,5 +97,77 @@ describe('validateWiringEvidence — validator for wiring-reachability evidence 
     const result = validateWiringEvidence(ev);
 
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step completion gate', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'wiring-check-'));
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeEvidence(ev: unknown): Promise<void> {
+    await writeFile(join(dir, WIRING_EVIDENCE), JSON.stringify(ev, null, 2), 'utf-8');
+  }
+
+  it('valid, fresh evidence with zero gaps across all tasks is satisfied', async () => {
+    const ev: WiringEvidence = {
+      baseSha: 'base123',
+      headSha: 'head456',
+      layer2Applicable: true,
+      waiverResolutions: [],
+      tasks: [
+        { taskId: '1', contractForm: 'declared', symbols: [] },
+        { taskId: '2', contractForm: 'none_no_surface', symbols: [] },
+      ],
+    };
+    await writeEvidence(ev);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
+
+    expect(result.done).toBe(true);
+  });
+
+  it('evidence with at least one gap is unsatisfied and the kickback reason carries the gap message verbatim', async () => {
+    const gapMessage = 'symbol "doThing" has no-reference — task 7 never wires it into a reachable surface';
+    const ev = {
+      baseSha: 'base123',
+      headSha: 'head456',
+      layer2Applicable: true,
+      waiverResolutions: [],
+      tasks: [
+        {
+          taskId: '7',
+          contractForm: 'declared',
+          symbols: [{ symbol: 'doThing', kind: 'no-reference', message: gapMessage }],
+        },
+      ],
+    };
+    await writeEvidence(ev);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain('doThing');
+    expect(result.reason).toContain('no-reference');
+    expect(result.reason).toContain('7');
+  });
+
+  it('missing evidence file is unsatisfied, fail-closed, with a named reason', async () => {
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain('wiring evidence not found');
   });
 });
