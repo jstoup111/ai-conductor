@@ -41,6 +41,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Spec landed for #647 (`.docs/{track,complexity,intake,stories,plans}/kickback-to-build-no-op-when-target-evidence-stamped.md`
+  + `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`): a remediation kickback→build
+  that cannot produce real rework will fail loud and fast instead of looping silently. When
+  `planRemediation` resolves a build route but build completion recomputed from disk is already
+  satisfied (empty tasks, or an idempotent upsert onto an already-complete `rem-*` task), the engine
+  will HALT with the gap ledger rather than route into a 23s no-op; and when a build entered via a
+  kickback ends with zero net progress (unchanged head sha AND unchanged `lastResolvedCount`) while the
+  reviewer verdict is unchanged, the engine will HALT with both artifacts instead of re-kicking —
+  capping the legitimate reviewer-wrong case on the first cycle. An optional `kickback_escalation.enabled`
+  toggle (default true) reverts the escalation. Fixes the identical-BLOCKED no-op loop observed on
+  `adr-2026-07-12-wiring-check-gate→build` (2026-07-13). Non-goal: literal per-task stamp invalidation
+  (kickbacks carry FR/ADR ids, not plan-task ids; completion is trailer-authoritative). Implementation
+  tracked separately; this entry documents the queued fix.
 - Daemon no longer autonomously rewinds to DECIDE-phase steps on remediation routing (#644):
   `planRemediation()` in `src/conductor/src/engine/conductor.ts` now guards the single
   `earliestRemediationTarget` choke point — in daemon mode, a remediation target whose step
