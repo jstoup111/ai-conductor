@@ -56,6 +56,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Spec landed for #651 (`.docs/{track,complexity,intake,stories,plans}/park-all-dispatch-paths.md`
+  + `.docs/decisions/adr-2026-07-13-park-all-dispatch-paths.md`): the daemon pool's fresh-dispatch path
+  will consult the operator-park predicate **immediately before dispatch** (a new `guardedDispatch`
+  wrapper around `deps.runFeature`), not only at `pickEligible` selection time — closing the
+  selection→dispatch race where a slug parked during the `rebuildAndMaybeRestartForStaleEngine` await was
+  started anyway (2026-07-13 20:43Z incident). A park-skipped dispatch will log one line naming the marker
+  path; a grep-derived regression test will enumerate every build-start call site so a future entry point
+  cannot silently skip the check. Store location (main-repo `.daemon/parked/`) is unchanged — the fix is
+  consumer-side, distinct from #534/#486's marker-store cwd work. No kill-switch (park is a safety
+  invariant). Implementation tracked separately; this entry documents the queued fix.
 - Spec landed for #649 (`.docs/{track,complexity,intake,stories,plans}/session-fresh-verdict-artifacts.md`
   + `.docs/decisions/adr-2026-07-13-session-fresh-verdict-artifacts.md`): the three SHIP-tail verdict
   completion checks (`architecture_review_as_built`, `prd_audit`, `build_review`) will require their
