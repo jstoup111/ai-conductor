@@ -1831,6 +1831,27 @@ no action needed — the token requirement is skipped.
 - Auto-park decisions are contradiction-checked against completion evidence; a
   build with completed-task evidence is never parked as `empty/missing plan`
   (#612).
+- Engine-owned rebases (`performRebase`, used by both the finish-time
+  rebase-on-latest step and the daemon re-kick's play-forward rebase) no
+  longer orphan sha-anchored evidence citations. Previously, any rebase that
+  rewrote commits left `task-evidence.json` (`sha`, `citedShas[]`,
+  `verdictAnchor`), `task-status.json` (`commit`), and the
+  `attribution-memo.json` judged-stamp memo pointing at pre-rebase shas that
+  no longer existed on the branch, silently dangling verified work.
+  `performRebase` now builds a `git patch-id --stable` old-sha→new-sha map on
+  any commit-changing rebase, persists it to `.pipeline/rebase-rewrites.json`
+  (transitive across repeated rebases), rewrites the three file-backed stores
+  in place, and resolves satisfied-by trailer citations through the map at
+  read time (`validateCitations`, autoheal's satisfied-by resolver) without
+  ever rewriting commit message text. Pre-rebase commits that can't be
+  matched by patch-id (dropped, or conflict-modified) are surfaced to
+  `.pipeline/rebase-residue.json` with a `rebase_citation_residue` event
+  instead of dangling silently. No-laundering is preserved: a citation is
+  only ever resolved through a sha that was a genuine key in git's own
+  pre-image→post-image map for that rebase; forged or unrelated shas still
+  fail the existing ancestry check. No new CLI flag, config, or consumer
+  action is required — this activates automatically at both call sites. See
+  `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
 
 ## Migration
 

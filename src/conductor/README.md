@@ -380,6 +380,51 @@ no-op (branch now current), and converges to the PR. If you clear HALT without f
 rebase, the daemon detects the still-stale/in-progress state and re-parks rather than shipping
 a half-rebased branch.
 
+#### Evidence citation translation across rebases (#535)
+
+Both engine-owned rebases (`performRebase`, the underlying function used by both
+the rebase-on-latest step above and `resumeRebaseFirst`'s re-kick play-forward
+rebase) rewrite commit SHAs when the rebase actually changes commits. Previously
+this orphaned every sha-anchored evidence citation that pointed at a pre-rebase
+commit — the `task-evidence.json` sidecar (`sha`, `citedShas[]`, `verdictAnchor`),
+the `task-status.json` `commit` field, and the `attribution-memo.json` judged-stamp
+memo (keyed by the old HEAD) all kept referencing shas that no longer existed on
+the branch, and satisfied-by trailer citations dangled or failed ancestry checks
+that had lingering pre-rebase objects to fall back on.
+
+`performRebase` now translates these stores automatically whenever a rebase
+changes commits — no new CLI flag or config, and no action required at either
+call site:
+
+- **`.pipeline/rebase-rewrites.json`** — the persisted old-sha → new-sha map,
+  built by matching pre- and post-rebase commits via `git patch-id --stable`
+  (both full and 7-char short-sha forms are indexed). The map is transitive
+  across repeated rebases, so a chain of rebases still resolves back to the
+  current HEAD. `task-evidence.json`, `task-status.json`, and
+  `attribution-memo.json` (including its `verdictAnchor` and its
+  `${headSha}:${residueIds}` memo key) are rewritten in place through this map
+  immediately after the rebase. Satisfied-by trailer text in commit messages is
+  never rewritten (that would require re-rewriting commits); instead, citation
+  consumers (`validateCitations` in `attribution-validate.ts`, and the autoheal
+  satisfied-by resolver) resolve every cited sha through the persisted map
+  before doing ancestry checks.
+- **`.pipeline/rebase-residue.json`** — commits from the pre-rebase history that
+  couldn't be matched by patch-id (dropped during the rebase, or conflict-
+  modified so their diff changed) are written here with the citing task ids and
+  a reason, paired with a `rebase_citation_residue` event. Residue is not a
+  failure to be silently swallowed — a conflict-modified commit landing in
+  residue is the correct outcome, since its diff changed and the citation
+  genuinely needs re-verification.
+- **No-laundering guarantee:** a citation's sha is only ever resolved through
+  the map if it is a real key in git's own pre-image → post-image
+  correspondence for that rebase. A forged or unrelated sha, or one that was
+  never part of the branch before the rebase, is left unchanged and then still
+  fails the existing `merge-base --is-ancestor` ancestry check — it is refused,
+  never silently repointed onto a live commit.
+
+See `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md` and
+`src/engine/rebase-translate.ts`.
+
 ### Rate-Limit Episode Coordinator
 
 The `RateLimitEpisode` coordinator (`engine/rate-limit-episode.ts`) manages coordinated backoff

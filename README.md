@@ -1614,6 +1614,19 @@ dedicated test coverage (950+ tests). See the feature comparison in
   exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**, and opens no PR.
   The gated resolution loop is daemon-only; the `/rebase` skill is also manually invokable by
   an operator. Resume: resolve → `git rebase --continue` → `rm .pipeline/HALT` → re-queue.
+- **Evidence citation translation across rebases** (#535): whenever either engine-owned rebase
+  (rebase-on-latest above, or the daemon re-kick's play-forward rebase) actually rewrites
+  commits, the engine automatically translates every sha-anchored evidence citation so rebases
+  no longer orphan them — no new flag or config. It builds a `git patch-id --stable`
+  old-sha→new-sha map, persists it to `.pipeline/rebase-rewrites.json`, rewrites
+  `task-evidence.json`/`task-status.json`/`attribution-memo.json` sha references and the memo
+  key in place, and resolves satisfied-by trailer citations through the map at read time
+  (trailer text itself is never rewritten). Pre-rebase commits that can't be matched (dropped,
+  or conflict-modified so their diff changed) are written to `.pipeline/rebase-residue.json`
+  with a `rebase_citation_residue` event — a loud signal to re-verify, never a silent dangle.
+  A sha that was never genuinely part of the rebase's pre-image is never laundered through the
+  map; it still fails the existing ancestry check. See
+  `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
