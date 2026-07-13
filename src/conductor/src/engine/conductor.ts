@@ -126,7 +126,9 @@ import {
   type ResolutionAttempt,
   type SetupFailureContext,
   type SetupFailureAttempt,
+  type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
   type EscalateBuildFailureOpts,
@@ -310,6 +312,21 @@ export interface StepRunner {
    * degrades gracefully to a conflict HALT.
    */
   resolveRebaseConflict?(ctx: ResolutionContext): Promise<ResolutionAttempt>;
+  /**
+   * Post-rebase evidence-citation translation capability (Task 15,
+   * adr-2026-07-12-rebase-evidence-stamp-translation.md), threaded into
+   * `performRebase`'s `opts.translateAfterRebase`. Optional purely for DI/test
+   * override — production wiring defaults to the real
+   * `rebase-translate.ts#translateAfterRebase` when this is absent (see
+   * `runRebaseStep`), so real daemon runs always translate.
+   */
+  translateAfterRebase?(
+    git: RebaseGitRunner,
+    projectRoot: string,
+    onto: string,
+    origHead: string,
+    head: string,
+  ): Promise<void>;
   /**
    * Dispatch a semantic attribution verifier session for spot-audit sampling.
    * Called by the conductor's build-gate post-green dispatch (Task 15).
@@ -4033,9 +4050,24 @@ export class Conductor {
       return { success: true };
     }
 
+    // Task 15: post-rebase evidence-citation translation. The StepRunner may
+    // override for tests/DI; production always falls back to the real
+    // rebase-translate.ts implementation, bound to this conductor's events
+    // emitter (never absent for a real daemon run).
+    const translateAfterRebase = (
+      g: RebaseGitRunner,
+      projectRoot: string,
+      onto: string,
+      origHead: string,
+      head: string,
+    ): Promise<void> =>
+      this.stepRunner.translateAfterRebase
+        ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head)
+        : defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, this.events);
+
     let outcome: RebaseOutcome;
     try {
-      outcome = await performRebase(git, this.projectRoot, localBase);
+      outcome = await performRebase(git, this.projectRoot, localBase, { translateAfterRebase });
     } catch (err) {
       // A truly unexpected git failure parks for a human rather than shipping
       // an unverified branch.

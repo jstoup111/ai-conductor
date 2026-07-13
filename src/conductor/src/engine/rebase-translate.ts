@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { rekeyMemoAfterRebase } from './attribution-lane.js';
 
 // Task 3 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
 //
@@ -348,4 +349,115 @@ export async function writeResidue(
     type: 'rebase_citation_residue',
     residue: residueEntries,
   });
+}
+
+/**
+ * Best-effort derivation of the task ids that cite `residueShas` from the
+ * task-evidence sidecar (`evidenceStamps` keyed by task id, per Story 7's
+ * fixture shape). Missing/corrupt sidecar -> empty citing list per sha
+ * (never throws; residue is still surfaced with an empty `citingTaskIds`).
+ */
+async function citingTaskIdsFor(
+  projectRoot: string,
+  residueShas: string[],
+): Promise<Map<string, string[]>> {
+  const result = new Map<string, string[]>(residueShas.map((sha) => [sha, []]));
+  if (residueShas.length === 0) return result;
+
+  const evidencePath = join(projectRoot, '.pipeline', 'task-evidence.json');
+  try {
+    const raw = await readFile(evidencePath, 'utf-8');
+    const parsed = JSON.parse(raw) as SerializedEvidenceDataLike;
+    if (!parsed || typeof parsed !== 'object' || !parsed.evidenceStamps) return result;
+
+    for (const [taskId, stamp] of Object.entries(parsed.evidenceStamps)) {
+      if (!stamp || typeof stamp !== 'object') continue;
+      const shas = new Set<string>();
+      if (typeof stamp.sha === 'string') shas.add(stamp.sha);
+      if (Array.isArray(stamp.citedShas)) {
+        for (const s of stamp.citedShas) shas.add(s);
+      }
+      for (const residueSha of residueShas) {
+        if (shas.has(residueSha)) {
+          result.get(residueSha)!.push(taskId);
+        }
+      }
+    }
+  } catch {
+    // Missing/corrupt sidecar — every residue sha keeps an empty citing list.
+  }
+
+  return result;
+}
+
+/**
+ * Best-effort derivation of the #520 attribution-lane `residueIds` (pending
+ * task ids, per `attribution-lane.ts`'s `computeMemoKey`/`runAttributionLane`
+ * usage) from the current `.pipeline/task-status.json`. Used only to attempt
+ * a memo re-key onto the new HEAD (`rekeyMemoAfterRebase`) — if the derived
+ * set does not match what the memo was originally keyed with, the re-key is
+ * a graceful no-op (a cache miss, identical to pre-translation behavior),
+ * never a hard failure.
+ */
+async function derivePendingTaskIds(projectRoot: string): Promise<string[]> {
+  const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+  try {
+    const raw = await readFile(statusPath, 'utf-8');
+    const parsed = JSON.parse(raw) as TaskStatusFileLike;
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.tasks)) return [];
+    return parsed.tasks
+      .filter((t) => t && t.status !== 'completed' && t.status !== 'skipped')
+      .map((t) => t.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Orchestrates post-rebase evidence-citation translation
+ * (adr-2026-07-12-rebase-evidence-stamp-translation.md), called by
+ * `performRebase` on a `changed` outcome, BEFORE `applyRebaseVerdicts`:
+ *
+ *   1. Build the old->new sha map by patch-id correspondence.
+ *   2. Persist it transitively to `.pipeline/rebase-rewrites.json`.
+ *   3. Rewrite the file-backed stores (`task-evidence.json`,
+ *      `task-status.json`) in place through the map.
+ *   4. Best-effort re-key the #520 judged-stamp memo onto the new HEAD.
+ *   5. Surface residue (patch-id-unmatched pre-image commits) loudly to
+ *      `.pipeline/rebase-residue.json` + a structured event — never a
+ *      silent dangle.
+ *
+ * All git access goes through the injected `GitRunner`. Never throws for a
+ * missing/corrupt sidecar or memo — those degrade to no-ops per each
+ * sub-step's own contract.
+ */
+export async function translateAfterRebase(
+  git: GitRunner,
+  projectRoot: string,
+  onto: string,
+  origHead: string,
+  head: string,
+  events?: ConductorEventEmitter,
+): Promise<void> {
+  const { map, residue } = await buildRewriteMap(git, onto, origHead, head);
+
+  await persistRewriteMap(projectRoot, map);
+  await applyMapToStores(projectRoot, map);
+
+  // Best-effort memo re-key (Story 4 / Task 7): skip entirely when the memo
+  // has no entry for the pending-task residue derived here, or when a judged
+  // commit it cites is itself in the rebase residue set — both cases already
+  // handled inside `rekeyMemoAfterRebase` (cache miss / leave-alone).
+  const pendingTaskIds = await derivePendingTaskIds(projectRoot);
+  await rekeyMemoAfterRebase(projectRoot, map, origHead, head, pendingTaskIds);
+
+  if (residue.length > 0 && events) {
+    const citingBySha = await citingTaskIdsFor(projectRoot, residue);
+    const residueEntries: ResidueEntry[] = residue.map((sha) => ({
+      sha,
+      citingTaskIds: citingBySha.get(sha) ?? [],
+      reason: 'no patch-id match post-rebase (dropped or conflict-modified)',
+    }));
+    await writeResidue(projectRoot, events, residueEntries);
+  }
 }
