@@ -17,6 +17,7 @@ import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
 import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
+import { FALLBACK_RETRIES } from './resolved-config.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -193,6 +194,8 @@ export function validateConfig(
     'build_review',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
+    // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
+    'build_progress_halt',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -691,6 +694,17 @@ export function validateConfig(
     obj.ci_watch = { enabled: true };
   }
 
+  // build_progress_halt — progress-aware build halt/park decision.
+  {
+    const resolvedMaxRetries =
+      typeof (obj.defaults as Record<string, unknown> | undefined)?.max_retries === 'number'
+        ? ((obj.defaults as Record<string, unknown>).max_retries as number)
+        : FALLBACK_RETRIES;
+    const err = validateBuildProgressHaltBlock(obj.build_progress_halt, resolvedMaxRetries);
+    if (err) return { ok: false, error: err };
+    obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+  }
+
   return { ok: true, config: obj as HarnessConfig, warnings };
 }
 
@@ -946,6 +960,83 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   }
 
   return null;
+}
+
+export const BUILD_PROGRESS_HALT_DEFAULTS = {
+  enabled: true,
+  attempt_ceiling: 30,
+  dispatch_ceiling: 20,
+} as const;
+
+/**
+ * Validate the `build_progress_halt:` block (progress-aware build halt/park
+ * decision knobs). `resolvedMaxRetries` is the config's effective max_retries
+ * (from `defaults.max_retries`, falling back to the same `FALLBACK_RETRIES`
+ * used by step resolution) — `attempt_ceiling` must never sit below it, or
+ * the halt/park decision could fire before a single step exhausted its own
+ * retry budget.
+ */
+function validateBuildProgressHaltBlock(
+  raw: unknown,
+  resolvedMaxRetries: number,
+): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'build_progress_halt must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled', 'attempt_ceiling', 'dispatch_ceiling']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in build_progress_halt: "${k}"` };
+    }
+  }
+
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'build_progress_halt.enabled must be a boolean' };
+  }
+
+  for (const field of ['attempt_ceiling', 'dispatch_ceiling'] as const) {
+    const value = obj[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+      return {
+        type: 'validation_error',
+        message: `build_progress_halt.${field} must be a positive integer`,
+      };
+    }
+  }
+
+  if (
+    typeof obj.attempt_ceiling === 'number' &&
+    obj.attempt_ceiling < resolvedMaxRetries
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_progress_halt.attempt_ceiling (${obj.attempt_ceiling}) must not be below the resolved max_retries (${resolvedMaxRetries})`,
+    };
+  }
+
+  return null;
+}
+
+function resolveBuildProgressHaltBlock(raw: unknown): {
+  enabled: boolean;
+  attempt_ceiling: number;
+  dispatch_ceiling: number;
+} {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : BUILD_PROGRESS_HALT_DEFAULTS.enabled,
+    attempt_ceiling:
+      typeof obj.attempt_ceiling === 'number'
+        ? obj.attempt_ceiling
+        : BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling,
+    dispatch_ceiling:
+      typeof obj.dispatch_ceiling === 'number'
+        ? obj.dispatch_ceiling
+        : BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling,
+  };
 }
 
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
