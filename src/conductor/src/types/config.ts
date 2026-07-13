@@ -453,6 +453,26 @@ export interface HarnessConfig {
    * Malformed values also resolve to enabled without throwing.
    */
   ci_watch?: CiWatchConfig;
+  /**
+   * Wiring-reachability gate configuration (Layer 2: TS import-graph
+   * reachability). Absent → Layer 2 degrades: skipped (with reason) for TS
+   * projects, not-applicable for non-TS projects. See `resolveLayer2Applicability`
+   * in engine/wiring-probe.ts.
+   */
+  wiring?: WiringConfig;
+}
+
+/**
+ * Wiring-reachability gate configuration.
+ */
+export interface WiringConfig {
+  /**
+   * Repo-relative paths to TS import-graph entry points (e.g. CLI/bin
+   * scripts, package `main`/`index.ts`). Layer 2 walks the import graph from
+   * each root to check that changed files are reachable. Absent/missing →
+   * Layer 2 skipped for TS projects (see `resolveLayer2Applicability`).
+   */
+  entry_points?: string[];
 }
 
 /**

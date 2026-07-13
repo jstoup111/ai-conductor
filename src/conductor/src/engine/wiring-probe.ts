@@ -16,8 +16,11 @@
  * `origin/master`, and fails closed (returns no exports) if none resolve.
  */
 
+import { access } from 'fs/promises';
+import { join } from 'path';
 import type { GitRunner } from './pr-labels.js';
 import type { InertRef, WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
+import type { HarnessConfig } from '../types/config.js';
 
 export interface NewExport {
   file: string;
@@ -600,4 +603,84 @@ export async function checkInertContractContradiction(
   }
 
   return gaps;
+}
+
+/**
+ * Layer 2 (TS import-graph reachability) applicability/degradation result.
+ * Exactly one of three degraded shapes, or the applicable shape carrying the
+ * resolved entry-point roots:
+ *
+ *   - not-applicable: the project has no TS markers (tsconfig.json/
+ *     package.json) at all — Layer 2 cannot ever apply here.
+ *   - skipped: the project IS a TS project but `wiring.entry_points` is not
+ *     configured — Layer 2 could apply but is opted out. Never affects
+ *     Layer 1's pass/fail; it carries no `satisfied` verdict of its own.
+ *   - bad-root: `wiring.entry_points` is configured but names a path that
+ *     does not exist on disk — a real gap, distinct from the two degradation
+ *     modes above, so it does carry `satisfied: false`.
+ */
+export type Layer2ApplicabilityResult =
+  | { applicable: true; roots: string[] }
+  | { applicable: false; reason: 'not-applicable' }
+  | { applicable: false; reason: 'skipped'; message: string }
+  | { applicable: false; reason: 'bad-root'; satisfied: false; message: string };
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves whether Layer 2 (TS import-graph reachability) applies to this
+ * project, and if so, the configured entry-point roots to walk from.
+ *
+ * Degradation ladder:
+ *   1. No tsconfig.json AND no package.json in projectRoot → not-applicable
+ *      (the tech stack doesn't support this layer at all).
+ *   2. TS project markers present but `wiring.entry_points` absent/unset →
+ *      skipped (could apply, but isn't configured). This is purely a
+ *      degradation classification and must never influence Layer 1's
+ *      pass/fail verdict.
+ *   3. `wiring.entry_points` configured but a listed root does not exist on
+ *      disk → bad-root, a real gap naming the offending path.
+ *   4. Otherwise → applicable, with the configured roots (repo-relative
+ *      paths, unmodified) for the caller to walk.
+ */
+export async function resolveLayer2Applicability(
+  config: HarnessConfig,
+  projectRoot: string,
+): Promise<Layer2ApplicabilityResult> {
+  const hasTsMarkers =
+    (await pathExists(join(projectRoot, 'tsconfig.json'))) ||
+    (await pathExists(join(projectRoot, 'package.json')));
+
+  if (!hasTsMarkers) {
+    return { applicable: false, reason: 'not-applicable' };
+  }
+
+  const entryPoints = config.wiring?.entry_points;
+  if (!entryPoints || entryPoints.length === 0) {
+    return {
+      applicable: false,
+      reason: 'skipped',
+      message: 'Layer 2 skipped: wiring.entry_points not configured',
+    };
+  }
+
+  for (const root of entryPoints) {
+    if (!(await pathExists(join(projectRoot, root)))) {
+      return {
+        applicable: false,
+        reason: 'bad-root',
+        satisfied: false,
+        message: `wiring.entry_points root "${root}" does not exist`,
+      };
+    }
+  }
+
+  return { applicable: true, roots: entryPoints };
 }
