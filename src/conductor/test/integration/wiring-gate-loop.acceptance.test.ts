@@ -111,6 +111,8 @@ describe('acceptance: wiring_check joins the gate loop between build_review and 
         join(dir, '.pipeline/manual-test-results.md'),
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
+    } else if (step === 'prd_audit') {
+      await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\nNo FRs to audit.\n');
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
     }
@@ -192,7 +194,21 @@ describe('acceptance: wiring_check joins the gate loop between build_review and 
           await writeFile(
             join(dir, '.pipeline/wiring-evidence.json'),
             JSON.stringify({
-              gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
+              schema: 1,
+              base: 'base-sha',
+              head: 'head-sha',
+              layer2: { applicable: false, reason: 'no TS project detected' },
+              waivers: [],
+              tasks: [
+                {
+                  id: 't1',
+                  contract: 'foo#bar',
+                  gaps:
+                    wiringRuns === 1
+                      ? [{ kind: 'orphan-export', message: 'foo unreachable' }]
+                      : [],
+                },
+              ],
             }),
           );
           return wiringRuns === 1 ? { success: false, error: 'wiring gap' } : { success: true };
