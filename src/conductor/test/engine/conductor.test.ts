@@ -1309,6 +1309,90 @@ describe('engine/conductor', () => {
       expect(calls[0][0]).toBe('build');
     });
 
+    it('daemon: empty-plan gate miss with contradicting completion evidence refuses immediate park and emits auto_park_contradiction (#612)', async () => {
+      await seedToBuildGate(0);
+      // Don't create a plan file — empty/missing plan condition per the gate,
+      // but seed run evidence that contradicts it: summary.json records
+      // completed work.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'summary.json'),
+        JSON.stringify({ tasks_completed: 5 }),
+      );
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      const contradictionEvents: unknown[] = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+      events.on('auto_park_contradiction', (e) => {
+        contradictionEvents.push(e);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      // No immediate empty-plan park — the contradiction guard stripped the reason.
+      expect(parkEvents.find((e) => e.reason === 'empty/missing plan')).toBeUndefined();
+
+      // The refusal was logged loudly.
+      expect(contradictionEvents).toHaveLength(1);
+      const contradiction = contradictionEvents[0] as Record<string, unknown>;
+      expect(contradiction).toMatchObject({
+        type: 'auto_park_contradiction',
+        slug: 'feat',
+        verdict: 'empty/missing plan',
+        evidence: {
+          summaryTasksCompleted: 5,
+        },
+      });
+    });
+
+    it('daemon: genuine empty plan (all signals zero) still parks with "empty/missing plan" and emits NO contradiction event (#612)', async () => {
+      await seedToBuildGate(0);
+      // Don't create a plan file, and don't seed any completion evidence.
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      const contradictionEvents: unknown[] = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+      events.on('auto_park_contradiction', (e) => {
+        contradictionEvents.push(e);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toBe('empty/missing plan');
+      expect(contradictionEvents).toHaveLength(0);
+    });
+
     it('daemon: auto-park event is emitted to logging/telemetry', async () => {
       const N = 3;
       await seedToBuildGate(N - 1, true);
