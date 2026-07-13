@@ -123,8 +123,8 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | bootstrap | sonnet | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
 | memory | haiku | low | Read/write files, update index — mechanical. |
 | assess | sonnet | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
-| explore | fable | xhigh | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; Fable's cheaper generation wins, but mistakes here cascade downstream. |
-| prd | fable | xhigh | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase. |
+| explore | fable | medium | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 5-retry budget. Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). |
+| prd | fable | medium | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need. |
 | complexity | sonnet | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
 | stories | sonnet | low (S), medium (M), high (L) | Pattern-following from design doc, structured output. |
 | conflict-check | sonnet (S/M), fable (L) | medium | Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L. |
@@ -149,7 +149,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | code-review | opus |  | Multi-dimensional analysis (spec, quality, domain). |
 | debugging | fable |  | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes. |
 | simplify | sonnet |  | Pattern matching for duplication and complexity — structured checklist work. |
-| engineer | fable |  | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration. |
+| engineer | fable |  | Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus). |
 | intake | inherits caller |  | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | haiku |  | Artifact checking and status reporting — mechanical. |
 | pr | sonnet |  | Diff analysis and structured PR body — templated output. |
