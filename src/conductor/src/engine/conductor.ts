@@ -27,6 +27,8 @@ import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
   runWithConcurrency,
+  makeSkippedOutcome,
+  makeNoVerdictOutcome,
   type GroupMember,
   type BranchOutcome,
 } from './group-core.js';
@@ -65,7 +67,9 @@ import {
   shouldSkipForBootstrapMode,
   shouldSkipForUpstreamSkip,
   getGroupForStep,
+  getStepDefinition,
 } from './steps.js';
+import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
@@ -1784,6 +1788,22 @@ export class Conductor {
             step: step.name,
             branches: builtinGroup.members,
           });
+
+          // Membership resolution (Task 15): reuse the existing skip cascade
+          // per member. When every member would skip, the group itself is
+          // skipped and NO branch (including the entry-point step below)
+          // dispatches — real fan-out of the still-dispatchable members lands
+          // in later tasks (16+).
+          const groupTrack = await this.resolveTrack(state);
+          const membership = resolveGroupMembership(builtinGroup, state, groupTrack, this.config);
+          if (membership.allSkipped) {
+            for (const member of membership.members) {
+              await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
+              state[member.name as StepName] = 'skipped';
+              await this.events.emit({ type: 'config_skip', step: member.name as StepName });
+            }
+            continue;
+          }
         }
 
         // Check gate: all prerequisites must be satisfied
@@ -4814,6 +4834,47 @@ export function findResumeIndex(
   }
 
   return lastDoneIndex + 1;
+}
+
+/**
+ * Resolve which members of a built-in concurrent group (e.g.
+ * `VALIDATION_GROUP`) are actually dispatchable, reusing the SAME per-step
+ * skip predicates the pre-existing serial walk already applies
+ * (tier/track/upstream-skip/config-disable) rather than reinventing skip
+ * logic for the group. A member that would skip under the serial walk gets
+ * a `SkippedOutcome` here too — never silently omitted, and never a
+ * `VerdictOutcome`/`NoVerdictOutcome` that could fail the group.
+ *
+ * When every member skips, `allSkipped` is true and `dispatchable` is
+ * empty — the caller marks the group itself skipped and dispatches nothing,
+ * rather than dispatching a group of zero branches.
+ */
+export function resolveGroupMembership(
+  group: StepGroup,
+  state: ConductState,
+  track: Track,
+  config?: HarnessConfig,
+): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
+  const tier = state.complexity_tier ?? 'L';
+  const members: GroupMember[] = group.members.map((name) => {
+    const stepDef = getStepDefinition(name);
+    const resolved = resolveStepConfig(stepDef.name, stepDef.phase, config, {
+      tier: state.complexity_tier,
+    });
+    const skip =
+      stepDef.skippableForTiers.includes(tier) ||
+      (stepDef.skippableForTracks ?? []).includes(track) ||
+      shouldSkipForUpstreamSkip(stepDef, state) ||
+      shouldSkipForBootstrapMode(stepDef.name, state.bootstrap_mode) ||
+      resolved.disabled;
+    return {
+      name,
+      skill: stepDef.skillName ?? '',
+      outcome: skip ? makeSkippedOutcome() : makeNoVerdictOutcome('not-run'),
+    };
+  });
+  const dispatchable = members.filter((m) => m.outcome.kind !== 'skipped');
+  return { members, dispatchable, allSkipped: dispatchable.length === 0 };
 }
 
 /**

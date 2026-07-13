@@ -49,6 +49,7 @@ import {
   buildRetryHint,
   appendRemediationTasks,
   findResumeIndex,
+  resolveGroupMembership,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -4417,6 +4418,137 @@ describe('engine/conductor', () => {
           .some((e) => e.type === 'parallel_started'),
       ).toBe(false);
       expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
+    });
+  });
+
+  describe('validation group membership resolution (Task 15)', () => {
+    it('width 3: no skip conditions active — all three members are dispatchable', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+      expect(result.members.every((m) => m.outcome.kind !== 'skipped')).toBe(true);
+    });
+
+    it('width 2: technical track skips prd_audit (no PRD to audit)', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: S tier + technical track skip both prd_audit and architecture_review_as_built', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: architecture_review itself skipped upstream cascades to architecture_review_as_built', () => {
+      const state = {
+        complexity_tier: 'M',
+        architecture_review: 'skipped',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+    });
+
+    it('width 0: manual_test disabled by config plus S tier + technical track — the group itself is skipped, nothing dispatchable', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
+        typeof resolveGroupMembership
+      >[3];
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', config);
+
+      expect(result.allSkipped).toBe(true);
+      expect(result.dispatchable).toHaveLength(0);
+      expect(result.members).toHaveLength(3);
+      // Every member — including manual_test — still gets a SkippedOutcome,
+      // never a silently-omitted entry.
+      for (const m of result.members) {
+        expect(m.outcome).toEqual({ kind: 'skipped' });
+      }
+    });
+
+    it('a skipped member never contributes a verdict and can never fail the group', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      // Must be the dedicated SkippedOutcome variant — never a VerdictOutcome
+      // (e.g. a placeholder "pass") and never a NoVerdictOutcome (which fails
+      // the group through the normal step-failure path).
+      expect(prdAudit.outcome.kind).toBe('skipped');
+      expect(prdAudit.outcome.kind).not.toBe('verdict');
+      expect(prdAudit.outcome.kind).not.toBe('no-verdict');
+      // Skipped members are excluded from the dispatchable set entirely, so
+      // downstream join logic (Task 17+) can never observe them as failing.
+      expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+    });
+
+    it('width 0 at the conductor.run() level: the group entry point (manual_test) is never dispatched and every member is marked skipped in state', async () => {
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'S',
+        track: 'technical',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        build: 'done',
+        build_review: 'done',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: { steps: { manual_test: { disable: true } } } as unknown as ConstructorParameters<
+          typeof Conductor
+        >[0]['config'],
+      });
+
+      await conductor.run();
+
+      // No branch executor call for ANY validation-group member.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).not.toContain('manual_test');
+      expect(calledSteps).not.toContain('prd_audit');
+      expect(calledSteps).not.toContain('architecture_review_as_built');
+
+      const finalState = await readState(statePath);
+      expect(finalState.ok && finalState.value.manual_test).toBe('skipped');
+      expect(finalState.ok && finalState.value.prd_audit).toBe('skipped');
+      expect(finalState.ok && finalState.value.architecture_review_as_built).toBe('skipped');
     });
   });
 
