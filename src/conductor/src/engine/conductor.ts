@@ -932,12 +932,23 @@ export class Conductor {
       }
     }
 
+    // Tracks whether the append attempt (when one was needed) actually ran
+    // and succeeded — used below to gate the D1 no-op guard. When there was
+    // nothing to append (`allTasks.length === 0`) there is nothing the
+    // guard could have missed, so it stays eligible. When append WAS
+    // needed but could not run (no active plan path recorded) or failed,
+    // we have no evidence either way about new dispatchable work — the
+    // guard must fail open (route) rather than risk permanently blocking a
+    // legitimate self-heal on an unrelated append plumbing gap.
+    let appendAttempted = allTasks.length === 0;
+
     if (allTasks.length > 0) {
       // Append remediation tasks to the plan
       const planPath = await this.getActivePlanPath();
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
         if (appendResult.success) {
+          appendAttempted = true;
           // Re-seed task-status.json with the appended tasks marked as pending
           try {
             await seedTaskStatus(this.projectRoot, planPath);
@@ -967,6 +978,27 @@ export class Conductor {
             `human gate required (DECIDE is operator-only in daemon mode). Gaps: ` +
             fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
         };
+      }
+      // #647 D1: a remediation route into `build` can be a guaranteed no-op
+      // when the appended/upserted rem-* task(s) are already evidence-
+      // complete (e.g. the append derived an id that collides with a
+      // completed row, or task-status.json is otherwise already
+      // all-complete). Recompute build completion from disk — the same
+      // predicate the build gate itself uses — right after append+re-seed;
+      // if there is nothing left to dispatch, HALT with the gap ledger
+      // instead of re-entering a build that cannot produce real rework.
+      if (target === 'build' && appendAttempted) {
+        const ctx = await this.completionCtx(state);
+        const result = await checkStepCompletion(this.projectRoot, 'build', ctx);
+        if (result.done) {
+          return {
+            kind: 'halt',
+            detail:
+              fixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
+              ' — remediation produced no dispatchable build work; the implicated task(s) ' +
+              'are already evidence-complete — human needed',
+          };
+        }
       }
       return {
         kind: 'route',
