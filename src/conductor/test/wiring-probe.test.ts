@@ -5,10 +5,13 @@
  * symbols (with their defining file) from a feature's git diff.
  *
  * All tests use FAKE git runners that record calls; no real `git` binary is
- * required. Base-commit derivation reuses the anchor -> fork-point ->
- * merge-base fallback ladder (mirrored from getEvidenceRange in autoheal.ts,
- * adapted here to the injected-GitRunner convention used by
- * headPushedToUpstream in push-evidence.ts).
+ * required. Base-commit derivation reuses the anchor -> origin-ref-resolve ->
+ * fork-point -> merge-base fallback ladder (mirrored from
+ * getEvidenceRange/resolveOriginRef in autoheal.ts, adapted here to the
+ * injected-GitRunner convention used by headPushedToUpstream in
+ * push-evidence.ts). The origin ref is never hardcoded to `origin/main` — it
+ * is resolved via `origin/HEAD`, falling back to probing `origin/main` then
+ * `origin/master`.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -155,6 +158,7 @@ describe('extractNewExports base derivation ladder', () => {
     const result = await extractNewExports(git, 'unreachable-anchor');
 
     expect(result).toContainEqual({ file: 'src/fork.ts', symbol: 'fromForkPoint' });
+    expect(calls[1]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
     expect(calls[2]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
     expect(calls[3]).toEqual(['diff', 'fork-point-sha...HEAD']);
   });
@@ -195,7 +199,94 @@ describe('extractNewExports base derivation ladder', () => {
     const result = await extractNewExports(git, '');
 
     expect(result).toContainEqual({ file: 'src/empty-anchor.ts', symbol: 'fromEmptyAnchor' });
+    expect(calls[0]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
     expect(calls[1]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
+  });
+});
+
+// ── Origin ref resolution ladder ──────────────────────────────────────────────
+
+describe('extractNewExports origin-ref resolution ladder', () => {
+  it('resolves origin/HEAD and uses it as the origin ref for the merge-base ladder', async () => {
+    const diff = [
+      DIFF_HEADER('src/head.ts'),
+      '+export function fromOriginHead() {}',
+    ].join('\n');
+
+    const { git, calls } = fakeGit([
+      { stdout: 'refs/remotes/origin/develop\n' }, // symbolic-ref origin/HEAD -> develop
+      { stdout: 'fork-point-sha\n' }, // merge-base --fork-point origin/develop HEAD
+      { stdout: diff },
+    ]);
+
+    const result = await extractNewExports(git, '');
+
+    expect(result).toContainEqual({ file: 'src/head.ts', symbol: 'fromOriginHead' });
+    expect(calls[0]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    expect(calls[1]).toEqual(['merge-base', '--fork-point', 'origin/develop', 'HEAD']);
+  });
+
+  it('falls back to probing origin/main when origin/HEAD is absent', async () => {
+    const diff = [
+      DIFF_HEADER('src/probe-main.ts'),
+      '+export function fromProbedMain() {}',
+    ].join('\n');
+
+    const { git, calls } = fakeGit([
+      new Error('ref refs/remotes/origin/HEAD is not a symbolic ref'), // origin/HEAD unset
+      { stdout: 'abc123\n' }, // rev-parse --verify origin/main succeeds
+      { stdout: 'fork-point-sha\n' }, // merge-base --fork-point origin/main HEAD
+      { stdout: diff },
+    ]);
+
+    const result = await extractNewExports(git, '');
+
+    expect(result).toContainEqual({ file: 'src/probe-main.ts', symbol: 'fromProbedMain' });
+    expect(calls[0]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    expect(calls[1]).toEqual(['rev-parse', '--verify', 'origin/main']);
+    expect(calls[2]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
+  });
+
+  it('falls back to probing origin/master when origin/HEAD and origin/main are both absent', async () => {
+    const diff = [
+      DIFF_HEADER('src/probe-master.ts'),
+      '+export function fromProbedMaster() {}',
+    ].join('\n');
+
+    const { git, calls } = fakeGit([
+      new Error('ref refs/remotes/origin/HEAD is not a symbolic ref'), // origin/HEAD unset
+      new Error('fatal: Needed a single revision'), // origin/main does not exist
+      { stdout: 'def456\n' }, // rev-parse --verify origin/master succeeds
+      { stdout: 'fork-point-sha\n' }, // merge-base --fork-point origin/master HEAD
+      { stdout: diff },
+    ]);
+
+    const result = await extractNewExports(git, '');
+
+    expect(result).toContainEqual({ file: 'src/probe-master.ts', symbol: 'fromProbedMaster' });
+    expect(calls[0]).toEqual(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    expect(calls[1]).toEqual(['rev-parse', '--verify', 'origin/main']);
+    expect(calls[2]).toEqual(['rev-parse', '--verify', 'origin/master']);
+    expect(calls[3]).toEqual(['merge-base', '--fork-point', 'origin/master', 'HEAD']);
+  });
+
+  it('fails closed (returns no exports, does not guess origin/main) when origin/HEAD, origin/main, and origin/master all fail to resolve', async () => {
+    const { git, calls } = fakeGit([
+      new Error('ref refs/remotes/origin/HEAD is not a symbolic ref'), // origin/HEAD unset
+      new Error('fatal: Needed a single revision'), // origin/main does not exist
+      new Error('fatal: Needed a single revision'), // origin/master does not exist
+    ]);
+
+    const result = await extractNewExports(git, '');
+
+    expect(result).toEqual([]);
+    expect(calls).toEqual([
+      ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+      ['rev-parse', '--verify', 'origin/main'],
+      ['rev-parse', '--verify', 'origin/master'],
+    ]);
+    // no merge-base or diff call was ever attempted
+    expect(calls.some((c) => c[0] === 'merge-base' || c[0] === 'diff')).toBe(false);
   });
 });
 
