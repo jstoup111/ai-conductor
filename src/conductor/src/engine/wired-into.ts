@@ -23,11 +23,15 @@ export interface WiredIntoSite {
  * - `inert`: `none (inert until <ref>)` — the surface exists but is not
  *   yet reachable; `ref` points at what will activate it (a tracking
  *   issue or a repo-relative path).
+ * - `malformed`: the line's content doesn't match any of the accepted
+ *   forms; `message` names the offending text and lists the accepted
+ *   forms so the author can fix it.
  */
 export type WiredIntoParseResult =
   | WiredIntoDeclared
   | WiredIntoNoNewSurface
-  | WiredIntoInert; // | WiredIntoMalformed | WiredIntoInherited (future kinds)
+  | WiredIntoInert
+  | WiredIntoMalformed; // | WiredIntoInherited (future kind)
 
 export interface WiredIntoDeclared {
   kind: 'declared';
@@ -41,6 +45,26 @@ export interface WiredIntoNoNewSurface {
 export interface WiredIntoInert {
   kind: 'inert';
   ref: InertRef;
+}
+
+export interface WiredIntoMalformed {
+  kind: 'malformed';
+  message: string;
+}
+
+/** The four accepted forms, used verbatim in malformed-line error messages. */
+const ACCEPTED_FORMS = [
+  'declared site(s) (e.g. `path/to/file.ts#symbol`, comma-separated)',
+  '`same as Task N`',
+  '`none (no new production surface)`',
+  '`none (inert until <ref>)`',
+];
+
+function malformed(text: string): WiredIntoMalformed {
+  return {
+    kind: 'malformed',
+    message: `**Wired-into:** value "${text}" does not match any accepted form. Accepted forms are: ${ACCEPTED_FORMS.join('; ')}.`,
+  };
 }
 
 /** A GitHub issue reference: `owner/repo#number`. */
@@ -107,9 +131,34 @@ export function parseWiredIntoLine(line: string): WiredIntoParseResult {
     const token = raw.trim();
     if (!token) continue;
     const entryMatch = token.match(SITE_ENTRY);
-    if (!entryMatch) continue;
+    if (!entryMatch) {
+      return malformed(rest);
+    }
     sites.push({ path: entryMatch[1], symbol: entryMatch[2] });
   }
 
   return { kind: 'declared', sites };
+}
+
+/**
+ * Render a parsed **Wired-into:** result back to its canonical line text.
+ * Round-trips with `parseWiredIntoLine`: `parseWiredIntoLine(serializeWiredInto(x))`
+ * reproduces an equivalent parse of `x` for any well-formed result.
+ */
+export function serializeWiredInto(result: WiredIntoParseResult): string {
+  switch (result.kind) {
+    case 'declared':
+      return `**Wired-into:** ${result.sites.map((s) => `${s.path}#${s.symbol}`).join(', ')}`;
+    case 'no_new_surface':
+      return '**Wired-into:** none (no new production surface)';
+    case 'inert': {
+      const refText =
+        result.ref.form === 'issue'
+          ? `${result.ref.owner}/${result.ref.repo}#${result.ref.number}`
+          : result.ref.path;
+      return `**Wired-into:** none (inert until ${refText})`;
+    }
+    case 'malformed':
+      return `**Wired-into:** ${result.message}`;
+  }
 }
