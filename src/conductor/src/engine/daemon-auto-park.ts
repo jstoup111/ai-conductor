@@ -56,6 +56,48 @@ export async function readCompletionSignals(
   return { summaryTasksCompleted };
 }
 
+export interface DetectParkContradictionOpts {
+  /** Number of tasks the plan currently records as resolved. */
+  resolvedTasks: number;
+  /** Number of task-evidence stamps written for this run. */
+  evidenceStampCount: number;
+}
+
+export interface ParkContradiction {
+  summaryTasksCompleted: number;
+  evidenceStamps: number;
+  resolvedTasks: number;
+}
+
+/**
+ * Pure decision function (#612): refuses an `empty/missing plan` auto-park
+ * when the run's own completion evidence disagrees. Composes
+ * `readCompletionSignals` with the caller-supplied resolved-task count and
+ * evidence-stamp count. Returns `null` only when all three signals are
+ * genuinely zero (a truly empty plan); otherwise returns a non-null
+ * contradiction descriptor. No marker writes, no events emitted.
+ */
+export async function detectParkContradiction(
+  projectRoot: string,
+  opts: DetectParkContradictionOpts,
+): Promise<ParkContradiction | null> {
+  const { summaryTasksCompleted } = await readCompletionSignals(projectRoot);
+
+  if (
+    summaryTasksCompleted === 0 &&
+    opts.evidenceStampCount === 0 &&
+    opts.resolvedTasks === 0
+  ) {
+    return null;
+  }
+
+  return {
+    summaryTasksCompleted,
+    evidenceStamps: opts.evidenceStampCount,
+    resolvedTasks: opts.resolvedTasks,
+  };
+}
+
 export interface CheckAndAutoParkOpts {
   /** Park once the durable no-evidence counter reaches this many attempts. */
   maxAttempts: number;
