@@ -11,19 +11,74 @@ export interface WiredIntoSite {
 }
 
 /**
- * Result of parsing a **Wired-into:** line. Only the `declared` kind is
- * implemented today (an ordered list of path#symbol sites). This is
- * deliberately a discriminated union — not a bare object — so follow-up
- * kinds (e.g. explicit "none" forms, malformed declarations, or
- * inheritance shorthand like plan `same as Task N`) can be added as new
- * `kind` variants without reshaping callers, which should already be
- * switching on `.kind`.
+ * Result of parsing a **Wired-into:** line. This is deliberately a
+ * discriminated union — not a bare object — so follow-up kinds (e.g.
+ * malformed declarations, or inheritance shorthand like plan
+ * `same as Task N`) can be added as new `kind` variants without reshaping
+ * callers, which should already be switching on `.kind`.
+ *
+ * - `declared`: an ordered list of path#symbol call sites.
+ * - `no_new_surface`: `none (no new production surface)` — the task adds
+ *   no new reachable surface, so there is nothing to wire in.
+ * - `inert`: `none (inert until <ref>)` — the surface exists but is not
+ *   yet reachable; `ref` points at what will activate it (a tracking
+ *   issue or a repo-relative path).
  */
-export type WiredIntoParseResult = WiredIntoDeclared; // | WiredIntoNone | WiredIntoMalformed | WiredIntoInherited (future kinds)
+export type WiredIntoParseResult =
+  | WiredIntoDeclared
+  | WiredIntoNoNewSurface
+  | WiredIntoInert; // | WiredIntoMalformed | WiredIntoInherited (future kinds)
 
 export interface WiredIntoDeclared {
   kind: 'declared';
   sites: WiredIntoSite[];
+}
+
+export interface WiredIntoNoNewSurface {
+  kind: 'no_new_surface';
+}
+
+export interface WiredIntoInert {
+  kind: 'inert';
+  ref: InertRef;
+}
+
+/** A GitHub issue reference: `owner/repo#number`. */
+export interface InertIssueRef {
+  form: 'issue';
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+/** A repo-relative path reference — anything not shaped like an issue ref. */
+export interface InertPathRef {
+  form: 'path';
+  path: string;
+}
+
+export type InertRef = InertIssueRef | InertPathRef;
+
+/** `none (no new production surface)`, case-insensitive. */
+const NO_NEW_SURFACE = /^none\s*\(\s*no new production surface\s*\)$/i;
+
+/** `none (inert until <ref>)`, case-insensitive; captures the ref text. */
+const INERT_UNTIL = /^none\s*\(\s*inert until\s+(.+?)\s*\)$/i;
+
+/** `owner/repo#number`, e.g. `jstoup111/ai-conductor#999`. */
+const ISSUE_REF = /^([^\s/]+)\/([^\s/#]+)#(\d+)$/;
+
+function classifyInertRef(text: string): InertRef {
+  const issueMatch = text.match(ISSUE_REF);
+  if (issueMatch) {
+    return {
+      form: 'issue',
+      owner: issueMatch[1],
+      repo: issueMatch[2],
+      number: Number(issueMatch[3]),
+    };
+  }
+  return { form: 'path', path: text };
 }
 
 /** One `path#symbol` entry, optionally wrapped in backticks. */
@@ -37,6 +92,15 @@ const SITE_ENTRY = /^`?([^`#\s]+)#([^`\s]+?)`?$/;
 export function parseWiredIntoLine(line: string): WiredIntoParseResult {
   const match = line.match(WIRED_INTO_LINE);
   const rest = match ? match[1].trim() : line.trim();
+
+  if (NO_NEW_SURFACE.test(rest)) {
+    return { kind: 'no_new_surface' };
+  }
+
+  const inertMatch = rest.match(INERT_UNTIL);
+  if (inertMatch) {
+    return { kind: 'inert', ref: classifyInertRef(inertMatch[1].trim()) };
+  }
 
   const sites: WiredIntoSite[] = [];
   for (const raw of rest.split(',')) {

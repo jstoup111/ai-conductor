@@ -31,4 +31,32 @@ describe('parseWiredIntoLine', () => {
       sites: [{ path: 'src/a.ts', symbol: 'foo' }],
     });
   });
+
+  it('parses "none (no new production surface)" as no_new_surface', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (no new production surface)'),
+    ).toEqual({ kind: 'no_new_surface' });
+  });
+
+  it('parses "none (inert until owner/repo#number)" as an inert issue ref', () => {
+    expect(
+      parseWiredIntoLine(
+        '**Wired-into:** none (inert until jstoup111/ai-conductor#999)',
+      ),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'issue', owner: 'jstoup111', repo: 'ai-conductor', number: 999 },
+    });
+  });
+
+  it('parses "none (inert until path)" as an inert path ref', () => {
+    expect(
+      parseWiredIntoLine(
+        '**Wired-into:** none (inert until path/to/some-file.ts)',
+      ),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'path', path: 'path/to/some-file.ts' },
+    });
+  });
 });
