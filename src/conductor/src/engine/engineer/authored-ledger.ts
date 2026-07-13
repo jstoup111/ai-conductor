@@ -21,7 +21,7 @@
  */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { resolveEngineerDir } from '../engineer-store.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
@@ -61,6 +61,25 @@ function pairKey(project: string, feature: string): string {
   return `${project}${KEY_SEP}${feature}`;
 }
 
+/**
+ * Guard against writing the ledger under a bogus base directory. A caller
+ * that fails to resolve the engineer dir (e.g. an unset env var stringified
+ * to `"undefined"`, or a blank/relative path) must NOT silently fall through
+ * to `mkdir`/`writeFile`, which would create `authored-keys.json` under
+ * whatever `process.cwd()` happens to be at call time — a silent,
+ * hard-to-diagnose data-location bug. Fail closed instead: throw a clear
+ * error naming the bad base and the file it would have written.
+ */
+function assertLedgerBase(dir: string): string {
+  if (!dir || dir.trim() === '' || dir === 'undefined' || dir === 'null' || !isAbsolute(dir)) {
+    throw new Error(
+      `recordAuthoredKey: refusing to write authored-keys.json under invalid base directory ${JSON.stringify(dir)} — ` +
+        'expected a non-empty absolute path',
+    );
+  }
+  return dir;
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -86,7 +105,7 @@ export async function recordAuthoredKey(
   }
 
   // Resolve the engineer dir once; derive both the mkdir target and file path from it.
-  const dir = opts.engineerDir ?? resolveEngineerDir({ home: opts.home, env: opts.env });
+  const dir = assertLedgerBase(opts.engineerDir ?? resolveEngineerDir({ home: opts.home, env: opts.env }));
   const path = join(dir, LEDGER_FILE);
   await mkdir(dir, { recursive: true });
 

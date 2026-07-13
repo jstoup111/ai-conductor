@@ -125,4 +125,27 @@ describe('authored-keys ledger', () => {
       /feature.*empty|empty.*feature/i,
     );
   });
+
+  // ── fail-closed base directory guard (invalid engineerDir) ───────────────
+  describe('rejects an invalid ledger base directory (fail-closed)', () => {
+    it.each([
+      ['sentinel "undefined"', 'undefined'],
+      ['sentinel "null"', 'null'],
+      ['blank string', ''],
+      ['whitespace-only string', '   '],
+      ['relative path', 'engineer'],
+    ])('rejects %s', async (_label, base) => {
+      const cwdBefore = process.cwd();
+      await expect(
+        recordAuthoredKey('my-project', 'feature-x', { engineerDir: base }),
+      ).rejects.toThrow(/authored-keys\.json/);
+
+      // No stray "undefined/" (or similarly-named) directory should have been
+      // created under process.cwd() as a side effect of the rejected write.
+      const cwdEntries = await import('node:fs/promises').then((fs) =>
+        fs.readdir(cwdBefore).catch(() => [] as string[]),
+      );
+      expect(cwdEntries).not.toContain('undefined');
+    });
+  });
 });
