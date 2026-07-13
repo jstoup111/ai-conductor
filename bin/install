@@ -491,20 +491,6 @@ install_dependencies() {
     fi
   fi
 
-  # rtk init — install Claude Code hook for transparent command rewriting
-  if command -v rtk &>/dev/null; then
-    if [ -f "${HOME}/.claude/hooks/rtk-rewrite.sh" ]; then
-      ok "rtk hook already initialized"
-    else
-      info "Initializing rtk for Claude Code..."
-      if rtk init -g --auto-patch 2>/dev/null; then
-        ok "rtk initialized (restart Claude Code to activate)"
-      else
-        warn "rtk init failed — run 'rtk init -g' manually"
-      fi
-    fi
-  fi
-
   # @modelcontextprotocol/server-puppeteer — MCP server for browser automation
   if command -v node &>/dev/null; then
     if npm list -g @modelcontextprotocol/server-puppeteer &>/dev/null; then
@@ -1158,6 +1144,20 @@ install() {
   local settings_file="${HOME}/.claude/settings.json"
   configure_permissions "$settings_file" || warn "Permissions configuration incomplete — continuing"
   configure_hooks "$settings_file" || warn "Hooks configuration incomplete — continuing"
+
+  # 4b. rtk init — (re)install Claude Code hook for transparent command rewriting.
+  # Runs on every install AND every --update (unlike install_dependencies, which
+  # is skipped on --update): the RTK binary bootstrap is one-time, but the hook
+  # itself can be dropped by an update and must be re-asserted every run. Idempotent
+  # — safe to call repeatedly — so no "already initialized" short-circuit is needed.
+  if command -v rtk &>/dev/null; then
+    info "Initializing rtk for Claude Code..."
+    if rtk init -g --auto-patch 2>/dev/null; then
+      ok "rtk initialized (restart Claude Code to activate)"
+    else
+      warn "rtk init failed — run 'rtk init -g' manually"
+    fi
+  fi
 
   # 5. Check PATH (pure bash — no external tools, so it can never abort)
   if [[ ":$PATH:" == *".local/bin"* ]]; then
