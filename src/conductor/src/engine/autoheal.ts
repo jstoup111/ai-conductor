@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
+import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -648,16 +649,44 @@ async function deriveCompletionInternal(
       );
 
       if (satisfiedByTrailer) {
-        // Extract the sha from "satisfied-by <sha>"
-        const sha = satisfiedByTrailer.slice('satisfied-by '.length).trim();
+        // Extract the sha from "satisfied-by <sha>" — this is the immutable
+        // citation TEXT, never rewritten in place by a rebase.
+        const citedSha = satisfiedByTrailer.slice('satisfied-by '.length).trim();
 
-        // Validate the sha exists in git
+        // Resolve through the persisted rewrite map (Task 9,
+        // adr-2026-07-12-rebase-evidence-stamp-translation.md): a sanctioned
+        // engine rebase may have moved the cited commit to a new sha. A sha
+        // that was never a rewrite-map key (unrelated/forged) resolves to
+        // itself, so this can never launder an off-branch citation.
+        const rewriteMap = await loadRewriteMap(projectRoot);
+        const sha = resolveThroughMap(citedSha, rewriteMap);
+
+        // Validate the (resolved) sha both exists AND is an ancestor of
+        // HEAD — existence alone is too soft: a pruned/dangling sha that
+        // happens to still resolve via a stale ref must not pass.
         const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
           cwd: projectRoot,
           reject: false,
         });
 
+        let isAncestor = false;
         if (shaCheck.exitCode === 0) {
+          const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
+            cwd: projectRoot,
+            reject: false,
+          });
+          if (headCheck.exitCode === 0) {
+            const headSha = headCheck.stdout.trim();
+            const ancestorCheck = await execa(
+              'git',
+              ['merge-base', '--is-ancestor', sha, headSha],
+              { cwd: projectRoot, reject: false },
+            );
+            isAncestor = ancestorCheck.exitCode === 0;
+          }
+        }
+
+        if (shaCheck.exitCode === 0 && isAncestor) {
           // Valid sha: mark task completed
           result[taskId].completed = true;
           result[taskId].evidencedBy = sha;
