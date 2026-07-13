@@ -1691,6 +1691,17 @@ no action needed — the token requirement is skipped.
   the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
   rebase stamps `state.rebase` instead of leaving it silently unmarked.
 - Judged attribution verdicts now advance the build gate in-cycle, not requiring a second loop iteration (#581).
+- Harness install/update was dropping the operator's RTK Claude Code hook: `rtk init
+  -g --auto-patch` only ran during first-time dependency bootstrap in `install_dependencies`,
+  a step `bin/install --update` skips entirely, so any operator running `--update` would lose
+  their RTK hook entry (and never regain it, since the stale `--check` "hook initialized"
+  sub-check only inspected a deprecated `~/.claude/hooks/rtk-rewrite.sh` script file rather
+  than the actual settings entry, so `--check` reported health even after the entry was
+  lost). `rtk init -g --auto-patch` now runs on every install *and* update path (idempotent,
+  guarded by `command -v rtk`), and the misleading `--check` sub-check was removed. Existing
+  installs self-heal automatically the next time they run `bin/install` or `bin/install
+  --update` — see `.docs/release-waivers/2026-07-12-rtk-hook-preservation.md` for why no
+  separate migration step is required.
 
 ## Migration
 
