@@ -2509,27 +2509,42 @@ export class Conductor {
                   // if still failing, fall into the normal recovery menu.
                   // Skipped in auto mode — there's no human to break the stall,
                   // so we fall straight through to the (auto) failure handling.
-                  if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
-                    await this.stepRunner.runInteractive(step.name);
-                  }
-                  const recheck = await checkStepCompletion(
-                    this.projectRoot,
-                    step.name,
-                    await this.completionCtx(state),
-                  );
-                  if (recheck.done) {
-                    succeeded = true;
-                    successOutput = result.output;
-
-                    // Task 12: If the interactive REPL resolved the issue and the gate
-                    // now passes, reset the counter since progress was made.
-                    if (this.taskEvidence) {
-                      this.taskEvidence.noEvidenceAttempts = 0;
-                      this.taskEvidence.noEvidenceReasons = [];
-                      await this.taskEvidence.write();
+                  //
+                  // Daemon + no_task_progress (not halt_marker) is the
+                  // exception: there is no human to hand off to, AND the
+                  // durable no-evidence counter (checked via checkAndAutoPark
+                  // above, every attempt) already owns the halt decision for
+                  // this exact condition. Breaking the retry loop here
+                  // unconditionally capped the counter at 2 increments per
+                  // run — the park threshold (3) could only ever be reached
+                  // by a SEPARATE re-kicked run, never within one generous
+                  // (e.g. maxRetries: 10) run. Falling through instead lets
+                  // the normal retry accounting keep going so the counter can
+                  // reach its threshold, or the step's own maxRetries budget,
+                  // within a single run.
+                  if (!(this.daemon && stalled === 'no_task_progress')) {
+                    if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
+                      await this.stepRunner.runInteractive(step.name);
                     }
+                    const recheck = await checkStepCompletion(
+                      this.projectRoot,
+                      step.name,
+                      await this.completionCtx(state),
+                    );
+                    if (recheck.done) {
+                      succeeded = true;
+                      successOutput = result.output;
+
+                      // Task 12: If the interactive REPL resolved the issue and the gate
+                      // now passes, reset the counter since progress was made.
+                      if (this.taskEvidence) {
+                        this.taskEvidence.noEvidenceAttempts = 0;
+                        this.taskEvidence.noEvidenceReasons = [];
+                        await this.taskEvidence.write();
+                      }
+                    }
+                    break;
                   }
-                  break;
                 }
                 resolvedTasksBefore = resolvedTasksAfter;
               }
