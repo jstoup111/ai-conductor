@@ -4,6 +4,167 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
 
+// Task 2 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
+//
+// RED spec for `buildRewriteMap`, the pure old-sha->new-sha correspondence
+// builder described in adr-2026-07-12-rebase-evidence-stamp-translation.md.
+// `src/engine/rebase-translate.ts` does not exist yet — this import is
+// expected to fail module resolution, which is the correct RED signal for
+// this task. Task 3 (GREEN) creates the module and makes these pass.
+//
+// Contract pinned here (mirrors the injected-GitRunner pattern of
+// `src/engine/rebase.ts`'s `GitRunner`/`makeGitRunner`, but adds an optional
+// `input` for the `git patch-id --stable` plumbing, which reads a diff on
+// stdin and has no non-stdin invocation form):
+//
+//   buildRewriteMap(git, onto, origHead, head): Promise<{
+//     map: Record<string, string>;   // old sha (full AND 7-char short) -> new full sha
+//     residue: string[];             // full pre-image shas with no patch-id match post-rebase
+//   }>
+//
+// Git calls buildRewriteMap is expected to make, in this shape:
+//   git(['rev-list', `${onto}..${origHead}`])          -> pre-image sha list (newline-separated)
+//   git(['rev-list', `${onto}..${head}`])               -> post-image sha list (newline-separated)
+//   git(['show', sha])                                  -> diff text, per sha in both lists
+//   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
+import type { GitResult } from '../../src/engine/rebase.js';
+import { buildRewriteMap } from '../../src/engine/rebase-translate.js';
+
+interface FakeGitOptions {
+  input?: string;
+}
+
+/** Builds a fake GitRunner-shaped function from canned per-command responses. */
+function makeFakeGit(opts: {
+  revList: Record<string, string[]>; // `${onto}..${ref}` -> sha list (newest first)
+  show: Record<string, string>; // sha -> diff text
+  patchId: Record<string, string>; // diff text -> patch-id
+}): (args: string[], gitOpts?: FakeGitOptions) => Promise<GitResult> {
+  return async (args: string[], gitOpts?: FakeGitOptions): Promise<GitResult> => {
+    const [cmd, ...rest] = args;
+
+    if (cmd === 'rev-list') {
+      const range = rest[0];
+      const shas = opts.revList[range];
+      if (shas === undefined) {
+        throw new Error(`unexpected rev-list range in fake git: ${range}`);
+      }
+      return { exitCode: 0, stdout: shas.join('\n') + (shas.length ? '\n' : ''), stderr: '' };
+    }
+
+    if (cmd === 'show') {
+      const sha = rest[0];
+      const diff = opts.show[sha];
+      if (diff === undefined) {
+        throw new Error(`unexpected show sha in fake git: ${sha}`);
+      }
+      return { exitCode: 0, stdout: diff, stderr: '' };
+    }
+
+    if (cmd === 'patch-id') {
+      const diff = gitOpts?.input ?? '';
+      const id = opts.patchId[diff];
+      if (id === undefined) {
+        throw new Error(`unexpected patch-id input in fake git: ${JSON.stringify(diff)}`);
+      }
+      return { exitCode: 0, stdout: `${id} deadbeef\n`, stderr: '' };
+    }
+
+    throw new Error(`unexpected git command in fake git: ${args.join(' ')}`);
+  };
+}
+
+const ONTO = 'onto-sha';
+
+describe('buildRewriteMap (RED — module does not exist yet)', () => {
+  it('maps each pre-image sha to its post-image sha by matching patch-id (1:1 unconflicted)', async () => {
+    const origHead = 'orig-head';
+    const head = 'new-head';
+
+    const preFull = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const postFull = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    const git = makeFakeGit({
+      revList: {
+        [`${ONTO}..${origHead}`]: [preFull],
+        [`${ONTO}..${head}`]: [postFull],
+      },
+      show: {
+        [preFull]: 'diff --git a/x b/x\n+one line changed\n',
+        [postFull]: 'diff --git a/x b/x\n+one line changed\n',
+      },
+      patchId: {
+        'diff --git a/x b/x\n+one line changed\n': 'patchid-shared',
+      },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, origHead, head);
+
+    expect(map[preFull]).toBe(postFull);
+    expect(residue).toEqual([]);
+  });
+
+  it('lists a pre-image sha as residue when its patch-id has no post-image match', async () => {
+    const origHead = 'orig-head';
+    const head = 'new-head';
+
+    const preDropped = 'cccccccccccccccccccccccccccccccccccccccc';
+    const preKept = 'dddddddddddddddddddddddddddddddddddddddd';
+    const postKept = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'.slice(0, 40);
+
+    const git = makeFakeGit({
+      revList: {
+        [`${ONTO}..${origHead}`]: [preKept, preDropped],
+        [`${ONTO}..${head}`]: [postKept],
+      },
+      show: {
+        [preDropped]: 'diff --git a/dropped b/dropped\n+content that changed during rebase\n',
+        [preKept]: 'diff --git a/kept b/kept\n+unchanged content\n',
+        [postKept]: 'diff --git a/kept b/kept\n+unchanged content\n',
+      },
+      patchId: {
+        'diff --git a/dropped b/dropped\n+content that changed during rebase\n': 'patchid-dropped-preimage',
+        'diff --git a/kept b/kept\n+unchanged content\n': 'patchid-kept',
+      },
+    });
+
+    const { map, residue } = await buildRewriteMap(git, ONTO, origHead, head);
+
+    expect(map[preKept]).toBe(postKept);
+    expect(map[preDropped]).toBeUndefined();
+    expect(residue).toEqual([preDropped]);
+  });
+
+  it('indexes both the full 40-char sha and its 7-char short form to the same mapped value', async () => {
+    const origHead = 'orig-head';
+    const head = 'new-head';
+
+    const preFull = 'ffffffffffffffffffffffffffffffffffffffff';
+    const preShort = preFull.slice(0, 7);
+    const postFull = '1111111111111111111111111111111111111111'.slice(0, 40);
+
+    const git = makeFakeGit({
+      revList: {
+        [`${ONTO}..${origHead}`]: [preFull],
+        [`${ONTO}..${head}`]: [postFull],
+      },
+      show: {
+        [preFull]: 'diff --git a/short b/short\n+short-sha probe\n',
+        [postFull]: 'diff --git a/short b/short\n+short-sha probe\n',
+      },
+      patchId: {
+        'diff --git a/short b/short\n+short-sha probe\n': 'patchid-short-probe',
+      },
+    });
+
+    const { map } = await buildRewriteMap(git, ONTO, origHead, head);
+
+    expect(map[preFull]).toBe(postFull);
+    expect(map[preShort]).toBe(postFull);
+    expect(map[preFull]).toBe(map[preShort]);
+  });
+});
+
 // Task 1 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
 //
 // This test pins two real-git-behavior assumptions the whole feature's design
