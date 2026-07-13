@@ -283,19 +283,35 @@ export const POST_DISPATCH_HOOK = [
 /**
  * PreToolUse mutation gate (Surface B of #505 inline build-work attribution
  * enforcement). Wired with matcher `Edit|Write|NotebookEdit|Bash`. Blocks
- * unstamped mutation attempts while a build step is active:
+ * unstamped mutation attempts while a build step is active, AND (independent of
+ * stamp) any attempt to mutate the engine-owned `.pipeline` machinery.
+ *
+ * NOTE ON LAYERING (#627): daemon build sessions run with
+ * `--dangerously-skip-permissions` (step-runners.ts / claude-provider.ts), which
+ * bypasses Claude Code's declarative permission engine entirely — only PreToolUse
+ * *hooks* still fire. That is why this enforcement is a hook and not a
+ * settings.json `deny` rule: a permission rule would be inert in the exact
+ * sessions that must be gated.
  *
  * - `.pipeline/build-step-active` marker ABSENT → enforcement inactive,
  *   pass through (exit 0) regardless of tool or stamp.
  * - Marker present + `.pipeline/current-task` absent/empty + tool is
  *   Edit/Write/NotebookEdit → exit 2 with the ADR redirect message.
  * - Marker present + stamp present → pass through (exit 0); the mutation is
- *   happening inside a stamped Agent dispatch.
- * - Bash: a minimal `git commit` invocation scan blocks unstamped commit
+ *   happening inside a stamped Agent dispatch — UNLESS it targets an
+ *   engine-owned path (below).
+ * - Engine-owned `.pipeline` paths (`current-task`, `build-step-active`,
+ *   `task-evidence`, `attribution-verdict`) are written ONLY by the engine.
+ *   Any agent write to them — via Edit/Write/NotebookEdit OR via Bash
+ *   (redirect/heredoc/tee/rm/sed -i, or an interpreter inline write such as
+ *   `python3 -c "open(...,'w')"` that hides the path inside quotes) — is
+ *   refused exit-2 REGARDLESS of stamp (#627: closes the Bash bypass and the
+ *   "agent forges its own stamp" bypass). The set is deliberately tight:
+ *   `task-status.json` and `HALT`, which skills legitimately write, are NOT
+ *   protected here (precision over breadth — do not break normal workflows).
+ * - Bash + unstamped: a `git commit` invocation scan blocks unstamped commit
  *   attempts (precedent: hooks/claude/block-destructive-git.sh quote-span
- *   scanning). Tasks 11-12 tighten this to invocation-position matching and
- *   add the mention-only/negative rows; this is intentionally a coarse first
- *   pass here.
+ *   scanning).
  * - Unparseable payload → fail-open (exit 0), matching the #494 degradation
  *   rule and the PRE/POST dispatch hooks' behavior above.
  */
@@ -323,29 +339,36 @@ export const MUTATION_GATE_HOOK = [
   'fi',
   '',
   'REDIRECT_MSG="implementation happens inside a stamped Agent dispatch — dispatch with \\"Task: <id>\\" line 1, or use \\"Task: none\\" for non-implementation work"',
+  'ENGINE_MSG="refused: .pipeline/{current-task,build-step-active,task-evidence,attribution-verdict} are engine-owned attribution/gate state (#433/#302) — agent sessions must never write them; only the engine manages these files"',
   '',
-  '# Write surface: block-or-pass needs NO payload — the matcher already',
-  '# proves this is a file mutation. Fail CLOSED on a missing stamp even if',
-  '# the host never delivers hook stdin (the payload-dependent path below',
-  '# would otherwise fail open on an undelivered payload).',
-  'if [ "$SURFACE" = "write" ]; then',
-  '  if [ -z "$STAMP" ]; then',
-  '    echo "$REDIRECT_MSG" >&2',
-  '    exit 2',
-  '  fi',
-  '  exit 0',
+  '# Engine-owned .pipeline machinery — written ONLY by the engine. Kept tight',
+  '# on purpose: task-status.json and HALT (which skills legitimately write) are',
+  '# NOT included, so normal build/TDD workflows are not over-blocked. The',
+  '# trailing class rejects a match on a longer sibling name (e.g. current-task2).',
+  "ENGINE_OWNED_RE='[.]pipeline/(current-task|build-step-active|task-evidence|attribution-verdict)([^A-Za-z0-9_-]|$)'",
+  '',
+  '# Write surface fail-CLOSED short-circuit: a missing stamp blocks WITHOUT',
+  '# needing the payload — the matcher already proves this is a file mutation,',
+  '# so we still refuse even if the host never delivers hook stdin. (A stamped',
+  '# write falls through to the payload parse below, where an engine-owned',
+  '# file_path is still refused.)',
+  'if [ "$SURFACE" = "write" ] && [ -z "$STAMP" ]; then',
+  '  echo "$REDIRECT_MSG" >&2',
+  '  exit 2',
   'fi',
   '',
-  '# Bound stdin read to 1MiB to avoid hanging or OOMing on a runaway payload',
-  '# timeout 3: never hang the session if the host holds hook stdin open —',
-  '# a timed-out (empty/partial) payload falls through the fail-open path',
-  '# (bash surface only: blocking ALL unstamped Bash would break test runs).',
+  '# Bound stdin read to 1MiB to avoid hanging or OOMing on a runaway payload.',
+  '# timeout 3: never hang the session if the host holds hook stdin open — a',
+  '# timed-out (empty/partial) payload falls through the fail-open path. For a',
+  '# stamped write with an undelivered payload we cannot see file_path, so we',
+  '# pass (the Bash arm and git hook still guard the engine-owned set).',
   'PAYLOAD="$(timeout 3 head -c 1048576 2>/dev/null || true)"',
   '',
-  '# Extract tool_name and (for Bash) tool_input.command via a bounded node',
-  '# JSON parse, joined with a tab so bash can split it in one read. A',
-  '# malformed/unparseable payload yields an empty PARSED, which falls',
-  '# through to the fail-open branch below.',
+  '# Extract tool_name, tool_input.command (Bash), and tool_input.file_path /',
+  '# notebook_path (write tools) via a bounded node JSON parse, tab-joined so',
+  '# bash can split in one read. Tabs/newlines in fields are flattened to spaces',
+  '# so the tab join stays unambiguous. An unparseable payload yields empty',
+  '# PARSED, which falls through to the fail-open branch below.',
   'PARSED="$(printf \'%s\' "$PAYLOAD" | node -e \'',
   'let data = "";',
   'process.stdin.on("data", (chunk) => { data += chunk; });',
@@ -353,8 +376,11 @@ export const MUTATION_GATE_HOOK = [
   '  try {',
   '    const payload = JSON.parse(data);',
   '    const toolName = typeof payload.tool_name === "string" ? payload.tool_name : "";',
-  '    const command = payload && payload.tool_input && typeof payload.tool_input.command === "string" ? payload.tool_input.command : "";',
-  '    process.stdout.write(toolName + "\\t" + command.replace(/\\n/g, " "));',
+  '    const ti = payload && payload.tool_input ? payload.tool_input : {};',
+  '    const command = typeof ti.command === "string" ? ti.command : "";',
+  '    const filePath = typeof ti.file_path === "string" ? ti.file_path : (typeof ti.notebook_path === "string" ? ti.notebook_path : "");',
+  '    const clean = (s) => s.replace(/[\\t\\n]/g, " ");',
+  '    process.stdout.write(toolName + "\\t" + clean(command) + "\\t" + clean(filePath));',
   '  } catch (err) {',
   '    // Malformed/unparseable payload — fail open: emit a diagnostic on',
   '    // stderr and nothing on stdout, so the caller falls through to the',
@@ -372,11 +398,20 @@ export const MUTATION_GATE_HOOK = [
   '  exit 0',
   'fi',
   '',
+  '# Split the three tab-delimited fields (exactly two tabs from the parser).',
   'TOOL_NAME="${PARSED%%$\'\\t\'*}"',
-  'COMMAND="${PARSED#*$\'\\t\'}"',
+  'REST="${PARSED#*$\'\\t\'}"',
+  'COMMAND="${REST%%$\'\\t\'*}"',
+  'FILE_PATH="${REST##*$\'\\t\'}"',
   '',
   'case "$TOOL_NAME" in',
   '  Edit|Write|NotebookEdit)',
+  '    # Engine-owned target is refused even inside a stamped dispatch — the',
+  '    # engine owns these files, not the agent.',
+  '    if [ -n "$FILE_PATH" ] && printf \'%s\' "$FILE_PATH" | grep -qE "$ENGINE_OWNED_RE"; then',
+  '      echo "$ENGINE_MSG" >&2',
+  '      exit 2',
+  '    fi',
   '    if [ -z "$STAMP" ]; then',
   '      echo "$REDIRECT_MSG" >&2',
   '      exit 2',
@@ -384,15 +419,35 @@ export const MUTATION_GATE_HOOK = [
   '    exit 0',
   '    ;;',
   '  Bash)',
+  '    # (1) Engine-owned path WRITE — refused regardless of stamp. This closes',
+  '    # the heredoc/tee/redirect/python-c bypass around the Edit|Write block.',
+  '    # Detection A (mention-safe): strip quoted spans so a path named inside a',
+  '    # commit message / echo is not a false positive, then look for a',
+  '    # redirection or a file-mutating command targeting the engine-owned set.',
+  '    SCAN=$(printf \'%s\' "$COMMAND" | sed -E "s/\'[^\']*\'//g; s/\\"[^\\"]*\\"//g")',
+  '    if printf \'%s\' "$SCAN" | grep -qE "(>>?|>\\|)[[:space:]]*$ENGINE_OWNED_RE"; then',
+  '      echo "$ENGINE_MSG" >&2',
+  '      exit 2',
+  '    fi',
+  '    if printf \'%s\' "$SCAN" | grep -qE "(^|[;&|([:space:]])(tee|rm|mv|cp|truncate|dd|install|ln|sed)[[:space:]].*$ENGINE_OWNED_RE"; then',
+  '      echo "$ENGINE_MSG" >&2',
+  '      exit 2',
+  '    fi',
+  '    # Detection B: an interpreter inline script (python3 -c, node -e, perl -e,',
+  '    # ruby -e, php -r) hides the path inside quotes, so Detection A\\047s',
+  '    # quote-strip would drop it — scan the RAW command instead. An interpreter',
+  '    # -c/-e/-r invocation referencing an engine-owned path is refused (reading',
+  '    # these machinery files this way is not a supported workflow either).',
+  '    if printf \'%s\' "$COMMAND" | grep -qE "(python3?|perl|ruby|node|php)[[:space:]]+-[cer][[:space:]]" && printf \'%s\' "$COMMAND" | grep -qE "$ENGINE_OWNED_RE"; then',
+  '      echo "$ENGINE_MSG" >&2',
+  '      exit 2',
+  '    fi',
+  '    # (2) Unstamped `git commit` — blocked at invocation position only.',
   '    if [ -z "$STAMP" ]; then',
-  '      # Scannable copy: drop quoted spans so a mention inside a commit',
-  '      # message/echo/grep pattern is not a false positive.',
-  '      SCAN=$(printf \'%s\' "$COMMAND" | sed -E "s/\'[^\']*\'//g; s/\\"[^\\"]*\\"//g")',
-  '      # Split on command separators (&&, ||, ;, |, () so each resulting',
-  '      # line represents a distinct invocation position. Anchoring the',
-  '      # match at line-start means `git commit` is only detected when it is',
-  '      # the invoked command itself — a substring appearing later in an',
-  '      # argument (e.g. `run git commit`) does not trigger a false block.',
+  '      # Split on command separators (&&, ||, ;, |, () so each resulting line',
+  '      # represents a distinct invocation position. Anchoring the match at',
+  '      # line-start means `git commit` is only detected when it is the invoked',
+  '      # command itself — a substring later in an argument does not false-block.',
   '      SCAN_LINES=$(printf \'%s\' "$SCAN" | sed -E "s/(&&|\\|\\||[;|]|\\()/\\n/g")',
   '      if echo "$SCAN_LINES" | grep -qE \'^[[:space:]]*git[[:space:]]+commit\\b\'; then',
   '        echo "$REDIRECT_MSG" >&2',
