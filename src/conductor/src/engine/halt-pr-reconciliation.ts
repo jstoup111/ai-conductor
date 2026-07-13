@@ -90,8 +90,10 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, cache }: Recon
         const result = await ensureHaltPresentation(gh, projectRoot, pr.url, log);
         if (result === 'confirmed') {
           log?.(`[halt-pr-reconciliation] ${pr.url} healed (confirmed)`);
+          outcomeCache.set(pr.url, 'healed');
         } else {
           log?.(`[halt-pr-reconciliation] ${pr.url} heal unconfirmed (will retry on next tick)`);
+          outcomeCache.set(pr.url, 'unconfirmed');
         }
       } catch (err) {
         // Per-PR exception: log + skip, continue with other PRs
