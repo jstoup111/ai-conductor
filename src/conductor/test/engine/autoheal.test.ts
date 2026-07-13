@@ -806,11 +806,15 @@ Add a reusable test helper.
 `;
       const result = mod.parsePlanTasks(planText);
 
-      expect(result.has('0')).toBe(true);
-      expect(result.get('0')!.name).toBe('Confirm edit sites');
+      // #636: the id is emitted AS WRITTEN (T-prefix kept), so a `### T0`
+      // header yields `T0`, matching the plan's `Task: T0` trailers and its
+      // pre-existing T-prefixed task-status rows. Cross-grammar matching
+      // (`Task: 0` ↔ `T0`) is handled at the comparison seams.
+      expect(result.has('T0')).toBe(true);
+      expect(result.get('T0')!.name).toBe('Confirm edit sites');
 
-      expect(result.has('1')).toBe(true);
-      expect(result.get('1')!.name).toBe('Mocked rtk test fixture');
+      expect(result.has('T1')).toBe(true);
+      expect(result.get('T1')!.name).toBe('Mocked rtk test fixture');
     });
 
     it('parsePlanTaskPaths: parses bare T-prefixed headers and their paths', async () => {
@@ -826,11 +830,12 @@ Add a reusable test helper.
 `;
       const result = mod.parsePlanTaskPaths(planText);
 
-      expect(result.has('0')).toBe(true);
-      expect(result.get('0')!.has('bin/install')).toBe(true);
+      // #636: T-prefix kept as written.
+      expect(result.has('T0')).toBe(true);
+      expect(result.get('T0')!.has('bin/install')).toBe(true);
 
-      expect(result.has('1')).toBe(true);
-      expect(result.get('1')!.has('test/test_rtk_hook_reinit.sh')).toBe(true);
+      expect(result.has('T1')).toBe(true);
+      expect(result.get('T1')!.has('test/test_rtk_hook_reinit.sh')).toBe(true);
     });
 
     it('parsePlanTaskPaths: extracts the real 2026-07-12-rtk-hook-preservation.md fixture tasks (T0-T5)', async () => {
@@ -843,7 +848,9 @@ Add a reusable test helper.
 
       const result = mod.parsePlanTaskPaths(planText);
 
-      for (const id of ['0', '1', '2', '3', '4', '5']) {
+      // #636: T-prefixed headers keep the T (T0..T5), matching the plan's
+      // trailers and rows.
+      for (const id of ['T0', 'T1', 'T2', 'T3', 'T4', 'T5']) {
         expect(result.has(id)).toBe(true);
       }
     });
@@ -954,14 +961,16 @@ Task 1 → Task 2
 **Files:** \`src/bare.ts\`
 `;
       const tasksResult = mod.parsePlanTasks(planText);
+      // `### Task 3` (the "Task" word) → bare `3`; `### T0` (bare T shorthand)
+      // → `T0` as written (#636).
       expect(tasksResult.has('3')).toBe(true);
       expect(tasksResult.get('3')!.name).toBe('Em-dash title');
-      expect(tasksResult.has('0')).toBe(true);
-      expect(tasksResult.get('0')!.name).toBe('Bare T shorthand');
+      expect(tasksResult.has('T0')).toBe(true);
+      expect(tasksResult.get('T0')!.name).toBe('Bare T shorthand');
 
       const pathsResult = mod.parsePlanTaskPaths(planText);
       expect(pathsResult.has('3')).toBe(true);
-      expect(pathsResult.has('0')).toBe(true);
+      expect(pathsResult.has('T0')).toBe(true);
     });
 
     it('#620 guard: bare title-less headers with a digit in the id ("### Task 2", "### Task t1", "### T3") still parse in parsePlanTaskPaths', async () => {
@@ -991,8 +1000,10 @@ Task 1 → Task 2
       expect(pathsResult.get('1')!.has('src/a.ts')).toBe(true);
       expect(pathsResult.has('2')).toBe(true);
       expect(pathsResult.get('2')!.has('src/b.ts')).toBe(true);
-      expect(pathsResult.has('3')).toBe(true);
-      expect(pathsResult.get('3')!.has('src/c.ts')).toBe(true);
+      // `### T3` (bare T shorthand) keeps the T (#636); `### Task t4` (the
+      // "Task" word) stays `t4`.
+      expect(pathsResult.has('T3')).toBe(true);
+      expect(pathsResult.get('T3')!.has('src/c.ts')).toBe(true);
       expect(pathsResult.has('t4')).toBe(true);
       expect(pathsResult.get('t4')!.has('src/d.ts')).toBe(true);
     });
