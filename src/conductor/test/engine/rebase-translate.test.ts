@@ -29,6 +29,8 @@ import { execa } from 'execa';
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
 import { buildRewriteMap } from '../../src/engine/rebase-translate.js';
+// @ts-expect-error — Task 5 (GREEN) adds this export; Task 4 (RED) asserts it doesn't exist yet.
+import { applyMapToStores } from '../../src/engine/rebase-translate.js';
 
 interface FakeGitOptions {
   input?: string;
@@ -334,3 +336,180 @@ describe('rebase evidence-stamp translation — pinned git assumptions', () => {
     );
   });
 });
+
+// Task 4 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
+//
+// RED spec for `applyMapToStores`, the in-place rewrite of
+// `.pipeline/task-evidence.json` (EvidenceStamp `sha`, `citedShas[]`,
+// `verdictAnchor`) and `.pipeline/task-status.json` (TaskStatusRecord
+// `commit`, both full 40-char and 7-char short forms) through a persisted
+// rewrite map, per adr-2026-07-12-rebase-evidence-stamp-translation.md.
+// `applyMapToStores` does not exist yet — the import above is expected to
+// fail module resolution, which is the correct RED signal for this task.
+// Task 5 (GREEN) implements it.
+//
+// Contract pinned here:
+//   applyMapToStores(projectRoot: string, map: Record<string, string>): Promise<void>
+// Reads `.pipeline/task-evidence.json` and `.pipeline/task-status.json` from
+// `projectRoot`, rewrites every sha occurrence that is a key in `map` to its
+// mapped value, and writes both files back in place. Fields/shas that are
+// NOT keys in the map are left byte-identical.
+describe('applyMapToStores (RED — not implemented yet, Task 5)', () => {
+  const OLD_FULL_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const NEW_FULL_A = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const OLD_SHORT_A = OLD_FULL_A.slice(0, 7);
+  const NEW_SHORT_A = NEW_FULL_A.slice(0, 7);
+
+  const OLD_FULL_B = 'cccccccccccccccccccccccccccccccccccccccc'.slice(0, 40);
+  const NEW_FULL_B = 'dddddddddddddddddddddddddddddddddddddddd'.slice(0, 40);
+  const OLD_SHORT_B = OLD_FULL_B.slice(0, 7);
+  const NEW_SHORT_B = NEW_FULL_B.slice(0, 7);
+
+  // A sha that is NOT a key in the rewrite map — must be left untouched
+  // wherever it appears in either fixture.
+  const UNMAPPED_FULL = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'.slice(0, 40);
+  const UNMAPPED_SHORT = UNMAPPED_FULL.slice(0, 7);
+
+  const REWRITE_MAP: Record<string, string> = {
+    [OLD_FULL_A]: NEW_FULL_A,
+    [OLD_SHORT_A]: NEW_FULL_A,
+    [OLD_FULL_B]: NEW_FULL_B,
+    [OLD_SHORT_B]: NEW_FULL_B,
+  };
+
+  function evidenceFixture() {
+    return {
+      evidenceStamps: {
+        'T1': {
+          sha: OLD_FULL_A,
+          form: 'commit',
+          citedShas: [OLD_FULL_A, UNMAPPED_FULL],
+          verdictAnchor: OLD_SHORT_B,
+        },
+        'T2': {
+          sha: UNMAPPED_FULL,
+          form: 'evidence:satisfied-by',
+          citedShas: [OLD_SHORT_A, UNMAPPED_SHORT],
+        },
+      },
+      noEvidenceAttempts: 0,
+      noEvidenceReasons: [],
+      migrationGrandfather: [],
+    };
+  }
+
+  function statusFixture() {
+    return {
+      plan_ref: 'some-plan.md',
+      tasks: [
+        { id: 'T1', name: 'first task', status: 'completed', commit: OLD_FULL_A },
+        { id: 'T2', name: 'second task', status: 'completed', commit: OLD_SHORT_B },
+        { id: 'T3', name: 'third task', status: 'completed', commit: UNMAPPED_FULL },
+        { id: 'T4', name: 'unstarted task', status: 'pending' },
+      ],
+    };
+  }
+
+  let projectRoot: string;
+  let pipelineDir: string;
+  let evidencePath: string;
+  let statusPath: string;
+  let evidenceBefore: string;
+  let statusBefore: string;
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'apply-map-to-stores-'));
+    pipelineDir = join(projectRoot, '.pipeline');
+    await mkdirForFixtures(pipelineDir);
+
+    evidencePath = join(pipelineDir, 'task-evidence.json');
+    statusPath = join(pipelineDir, 'task-status.json');
+
+    evidenceBefore = JSON.stringify(evidenceFixture(), null, 2);
+    statusBefore = JSON.stringify(statusFixture(), null, 2);
+
+    await writeFile(evidencePath, evidenceBefore);
+    await writeFile(statusPath, statusBefore);
+  }, 30_000);
+
+  afterAll(async () => {
+    if (projectRoot) {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rewrites every mapped sha occurrence in task-evidence.json (sha, citedShas[], verdictAnchor)', async () => {
+    await applyMapToStores(projectRoot, REWRITE_MAP);
+
+    const raw = await readFile(evidencePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+
+    expect(parsed.evidenceStamps.T1.sha).toBe(NEW_FULL_A);
+    expect(parsed.evidenceStamps.T1.citedShas).toEqual([NEW_FULL_A, UNMAPPED_FULL]);
+    expect(parsed.evidenceStamps.T1.verdictAnchor).toBe(NEW_FULL_B);
+
+    expect(parsed.evidenceStamps.T2.sha).toBe(UNMAPPED_FULL);
+    expect(parsed.evidenceStamps.T2.citedShas).toEqual([NEW_FULL_A, UNMAPPED_SHORT]);
+  });
+
+  it('rewrites every mapped sha occurrence in task-status.json (commit, full and short forms)', async () => {
+    await applyMapToStores(projectRoot, REWRITE_MAP);
+
+    const raw = await readFile(statusPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+
+    const byId = Object.fromEntries(
+      (parsed.tasks as Array<{ id: string; commit?: string }>).map((t) => [t.id, t]),
+    );
+
+    expect(byId.T1.commit).toBe(NEW_FULL_A);
+    expect(byId.T2.commit).toBe(NEW_FULL_B);
+    expect(byId.T3.commit).toBe(UNMAPPED_FULL);
+    expect(byId.T4.commit).toBeUndefined();
+  });
+
+  it('before/after diff shows every mapped sha updated and no unmapped sha changed', async () => {
+    await applyMapToStores(projectRoot, REWRITE_MAP);
+
+    const evidenceAfter = await readFile(evidencePath, 'utf-8');
+    const statusAfter = await readFile(statusPath, 'utf-8');
+
+    expect(evidenceAfter).not.toBe(evidenceBefore);
+    expect(statusAfter).not.toBe(statusBefore);
+
+    expect(evidenceAfter).not.toContain(OLD_FULL_A);
+    expect(evidenceAfter).not.toContain(OLD_SHORT_B);
+    expect(statusAfter).not.toContain(OLD_FULL_A);
+    expect(statusAfter).not.toContain(OLD_SHORT_B);
+
+    // Unmapped shas appear identically before and after.
+    expect(evidenceAfter).toContain(UNMAPPED_FULL);
+    expect(evidenceAfter).toContain(UNMAPPED_SHORT);
+    expect(statusAfter).toContain(UNMAPPED_FULL);
+  });
+
+  it('leaves fields/shas not present as map keys completely untouched (byte-identical fixture aside from mapped shas)', async () => {
+    await applyMapToStores(projectRoot, REWRITE_MAP);
+
+    const evidenceAfter = JSON.parse(await readFile(evidencePath, 'utf-8'));
+    const statusAfter = JSON.parse(await readFile(statusPath, 'utf-8'));
+
+    // Non-sha fields are untouched.
+    expect(evidenceAfter.noEvidenceAttempts).toBe(0);
+    expect(evidenceAfter.noEvidenceReasons).toEqual([]);
+    expect(evidenceAfter.migrationGrandfather).toEqual([]);
+    expect(evidenceAfter.evidenceStamps.T1.form).toBe('commit');
+    expect(evidenceAfter.evidenceStamps.T2.form).toBe('evidence:satisfied-by');
+
+    expect(statusAfter.plan_ref).toBe('some-plan.md');
+    const t4 = (statusAfter.tasks as Array<{ id: string; status?: string }>).find(
+      (t) => t.id === 'T4',
+    );
+    expect(t4?.status).toBe('pending');
+  });
+});
+
+async function mkdirForFixtures(dir: string): Promise<void> {
+  const { mkdir } = await import('fs/promises');
+  await mkdir(dir, { recursive: true });
+}
