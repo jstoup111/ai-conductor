@@ -843,9 +843,14 @@ export async function applyRebaseVerdicts(
   // verdict. Included unconditionally: even if build_review is disabled
   // for this project the verdict file is inert, but when it IS enabled the
   // stale state must exist before manual_test is re-selectable.
+  //
+  // wiring_check (Task 6) sits between build_review and manual_test — it
+  // asserts new code is actually reachable from an entry point, which a
+  // file-changing rebase can falsify just as easily as build_review's
+  // grading, so it must be invalidated the same way (Task 11).
   const targets: StepName[] = ranManualTest
-    ? ['build', 'build_review', 'manual_test']
-    : ['build', 'build_review'];
+    ? ['build', 'build_review', 'wiring_check', 'manual_test']
+    : ['build', 'build_review', 'wiring_check'];
   for (const target of targets) {
     // Skip build if it was pre-verified (already wrote verdict above).
     if (target === 'build' && buildReVerified) {
