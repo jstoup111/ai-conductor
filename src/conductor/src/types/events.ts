@@ -208,6 +208,22 @@ export type ConductorEvent =
       slug: string;
       reason: string;
     }
+  | {
+      /**
+       * The daemon REFUSED an `empty/missing plan` auto-park because the
+       * run's own completion evidence contradicts it (#612 contradiction
+       * guard). Named loudly so the refusal is impossible to miss in the
+       * daemon log.
+       */
+      type: 'auto_park_contradiction';
+      slug: string;
+      verdict: 'empty/missing plan';
+      evidence: {
+        summaryTasksCompleted: number;
+        evidenceStamps: number;
+        resolvedTasks: number;
+      };
+    }
   // ── #505 TS-15: zero-work-product detection ──
   | {
       /**

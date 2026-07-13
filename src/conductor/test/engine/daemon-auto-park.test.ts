@@ -16,6 +16,8 @@ import {
   readCompletionSignals,
   detectParkContradiction,
 } from '../../src/engine/daemon-auto-park.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import type { ConductorEvent } from '../../src/types/index.js';
 
 describe('readCompletionSignals', () => {
   let dir: string;
@@ -144,5 +146,32 @@ describe('detectParkContradiction', () => {
       evidenceStamps: 0,
       resolvedTasks: 4,
     });
+  });
+});
+
+describe('auto_park_contradiction event (Task 3, #612)', () => {
+  it('is accepted by the ConductorEvent union and renders a loud human-readable line', () => {
+    const event: ConductorEvent = {
+      type: 'auto_park_contradiction',
+      slug: 'org/repo',
+      verdict: 'empty/missing plan',
+      evidence: {
+        summaryTasksCompleted: 5,
+        evidenceStamps: 2,
+        resolvedTasks: 3,
+      },
+    };
+
+    const out: string[] = [];
+    renderDaemonEvent(event, (m) => out.push(m));
+
+    expect(out).toHaveLength(1);
+    const line = out[0];
+    expect(line).toContain('auto_park_contradiction');
+    expect(line).toContain('org/repo');
+    expect(line).toContain('empty/missing plan');
+    expect(line).toContain('5');
+    expect(line).toContain('2');
+    expect(line).toContain('3');
   });
 });

@@ -1586,6 +1586,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
       );
       break;
+    case 'auto_park_contradiction': {
+      // Loud refusal line (#612): a would-be `empty/missing plan` auto-park
+      // was refused because the run's own evidence disagrees — surface the
+      // slug, verdict, and the disagreeing evidence counts unmissably.
+      const { summaryTasksCompleted, evidenceStamps, resolvedTasks } = event.evidence;
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(
+          `auto_park_contradiction[${event.slug}]: refused verdict="${event.verdict}" — evidence: summaryTasksCompleted=${summaryTasksCompleted} evidenceStamps=${evidenceStamps} resolvedTasks=${resolvedTasks}`,
+        )}`,
+      );
+      break;
+    }
     default:
       break;
   }
