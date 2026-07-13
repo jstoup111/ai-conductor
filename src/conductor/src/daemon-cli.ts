@@ -386,9 +386,10 @@ export function createRestartRequester(
  * possibly-drifting default living in two places.
  *
  * Eligibility per slug: the live resolved-task count in that slug's worktree
- * (`countResolvedTasks`, reads `.pipeline/task-status.json`) strictly exceeds
- * the count its last build-step dispatch stamped to the `TaskEvidence`
- * sidecar (`readLastResolvedCount`, reads `.pipeline/task-evidence.json`) —
+ * (`countResolvedTasks`, reads the pipeline task-status sidecar) strictly
+ * exceeds the count its last build-step dispatch stamped to the
+ * `TaskEvidence` sidecar (`readLastResolvedCount`, reads
+ * `.pipeline/task-evidence.json`) —
  * i.e. forward progress happened since the dispatch that halted/parked it.
  * Both readers are tolerant of a missing/corrupt file (read as 0), so an
  * absent worktree degrades to "no progress" rather than throwing.
