@@ -311,4 +311,73 @@ describe('reconcileHaltPrs (Task 15)', () => {
     expect(finishedPr.labels).not.toContain('needs-remediation'); // no re-label
     expect(finishedPr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER); // marker still gone
   });
+
+  it('(Task 1) warm cache holding conforming for all marked PRs → sweep logs zero per-PR conforming lines', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>([[PR_URL_CONFORMING, 'conforming']]);
+
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log, cache });
+
+    expect(logs.some((msg) => msg.includes('already conforming'))).toBe(false);
+  });
+
+  it('(Task 1) fresh cache → conforming PR logged once, second sweep with same cache logs zero', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache });
+    expect(logs1.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache });
+    expect(logs2.filter((msg) => msg.includes('already conforming'))).toHaveLength(0);
+  });
+
+  it('(Task 1) PR removed from list has cache entry pruned, re-appearing PR logged again as first-seen', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const { gh: gh1 } = makeFakeGhForReconciliation([conforming]);
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh1, log: (m) => logs1.push(m), cache });
+    expect(logs1.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+    expect(cache.get(PR_URL_CONFORMING)).toBe('conforming');
+
+    const { gh: gh2 } = makeFakeGhForReconciliation([]);
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh2, log: (m) => logs2.push(m), cache });
+    expect(cache.has(PR_URL_CONFORMING)).toBe(false);
+
+    const { gh: gh3 } = makeFakeGhForReconciliation([conforming]);
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh3, log: (m) => logs3.push(m), cache });
+    expect(logs3.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+  });
 });

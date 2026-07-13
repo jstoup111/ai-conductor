@@ -21,10 +21,13 @@ interface GhPrListItem {
   labels?: Array<{ name?: string }>;
 }
 
+export type PrSweepOutcome = 'conforming' | 'healed' | 'unconfirmed';
+
 interface ReconcileOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  cache?: Map<string, PrSweepOutcome>;
 }
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
@@ -40,8 +43,9 @@ interface ReconcileOpts {
  * - Best-effort / non-throwing (errors logged but never re-thrown)
  * - Returns void
  */
-export async function reconcileHaltPrs({ projectRoot, log, runGh }: ReconcileOpts): Promise<void> {
+export async function reconcileHaltPrs({ projectRoot, log, runGh, cache }: ReconcileOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const outcomeCache = cache ?? new Map<string, PrSweepOutcome>();
 
   try {
     // ── Step 1: enumerate open PRs ─────────────────────────────────────────
@@ -74,7 +78,10 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh }: ReconcileOpt
 
         // If already conforming (draft + labeled), skip (idempotent no-op)
         if (isDraft && hasLabel) {
-          log?.(`[halt-pr-reconciliation] ${pr.url} already conforming (draft+labeled), skipping`);
+          if (outcomeCache.get(pr.url) !== 'conforming') {
+            log?.(`[halt-pr-reconciliation] ${pr.url} already conforming (draft+labeled), skipping`);
+          }
+          outcomeCache.set(pr.url, 'conforming');
           continue;
         }
 
@@ -89,6 +96,14 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh }: ReconcileOpt
       } catch (err) {
         // Per-PR exception: log + skip, continue with other PRs
         log?.(`[halt-pr-reconciliation] error healing ${pr.url}: ${err}`);
+      }
+    }
+
+    // Prune cache entries for PRs no longer in the marked set (merged/closed)
+    const markedUrls = new Set(markedPrs.map((pr) => pr.url));
+    for (const url of outcomeCache.keys()) {
+      if (!markedUrls.has(url)) {
+        outcomeCache.delete(url);
       }
     }
   } catch (err) {
