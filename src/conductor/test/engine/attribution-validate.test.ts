@@ -427,3 +427,63 @@ describe('validateCitations resolves citations through a persisted rebase rewrit
     expect(verdictEntry.citations[0].sha).toBe(oldWorkSha);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 12 of rebase-orphans-every-sha-anchored-evidence-citatio.md (Story 8):
+// no-laundering invariant.
+//
+// The persisted rewrite map only ever contains keys for shas that were
+// genuinely part of a pre-image commit set the engine itself rewrote via a
+// sanctioned rebase (Task 9's `resolveThroughMap` gate). A forged/unrelated
+// sha that was never a pre-image commit — i.e. never a key in the map — must
+// NOT be "laundered" into passing validation. `resolveThroughMap` must return
+// such a sha completely unchanged (identity), and `validateCitations` must
+// still refuse it via the ordinary ancestry/existence check, exactly as it
+// would have before this feature existed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validateCitations does not launder unrelated/forged citations through the rewrite map (Task 12)', () => {
+  it('a sha that was never a key in the persisted rewrite map resolves to itself and is still refused', async () => {
+    const mod = await loadAttributionValidate();
+    const { resolveThroughMap, persistRewriteMap, loadRewriteMap } = await import('../../src/engine/rebase-translate.js');
+    const repo = await initRepo();
+
+    // A real rebase happened for an UNRELATED commit (oldWorkSha -> newWorkSha),
+    // so the persisted map is non-empty — but the forged sha below was never
+    // part of that pre-image set and is not a key in the map.
+    const baseSha = await getCurrentHead(repo);
+    const oldWorkSha = await commitFile(repo, 'src/widget.ts', 'export const widget = 1;', 'feat: add widget');
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: repo.root });
+    await commitFile(repo, 'UPSTREAM.md', 'upstream change\n', 'chore: upstream commit (onto)');
+    await execa('git', ['cherry-pick', oldWorkSha], { cwd: repo.root });
+    const newWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.root })).stdout.trim();
+    const head = newWorkSha;
+
+    await persistRewriteMap(repo.root, { [oldWorkSha]: newWorkSha });
+
+    // A forged sha: 40 hex chars, syntactically valid, but never committed in
+    // this repo at all — never a key in the rewrite map.
+    const forgedSha = 'deadbeef'.repeat(5);
+    expect(forgedSha).toHaveLength(40);
+
+    // 1. resolveThroughMap must return the forged sha unchanged (identity) —
+    //    it is not a key in the map.
+    const persistedMap = await loadRewriteMap(repo.root);
+    expect(persistedMap[forgedSha]).toBeUndefined();
+    expect(resolveThroughMap(forgedSha, persistedMap)).toBe(forgedSha);
+
+    // 2. validateCitations must still refuse the forged citation via the
+    //    normal ancestry/existence check.
+    const verdictEntry = {
+      taskId: '1',
+      verdict: 'satisfied' as const,
+      citations: [{ sha: forgedSha, rationale: 'forged citation' }],
+    };
+    const taskPaths = new Set(['src/widget.ts']);
+
+    const result = await mod.validateCitations(repo.git, { taskId: '1', paths: taskPaths }, verdictEntry, head);
+
+    expect(result.valid).toBe(false);
+    expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});
