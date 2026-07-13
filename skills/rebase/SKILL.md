@@ -30,8 +30,13 @@ Verify a rebase is actually in progress before touching anything:
 
 ```bash
 git status
-ls .git/rebase-merge/ 2>/dev/null || ls .git/rebase-apply/ 2>/dev/null
+test -d "$(git rev-parse --git-path rebase-merge)" || test -d "$(git rev-parse --git-path rebase-apply)"
 ```
+
+(`--git-path` resolves the state dir correctly in linked worktrees, where `.git`
+is a file and `ls .git/rebase-merge/` always fails. Note that `rev-parse
+--git-path` prints the path unconditionally — only `test -d` on it proves a
+rebase is in progress.)
 
 If no rebase is in progress, emit `{"resolved": false, "reason": "no rebase in progress"}` and stop.
 
