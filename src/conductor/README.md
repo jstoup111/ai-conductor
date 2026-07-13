@@ -2221,9 +2221,17 @@ places a different provenance marker and serves a different purpose (manual hold
 are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
 (machine-triggered after N attempts) while operator park is human-triggered.
 
+**Contradiction guard (#612):** Before honoring an `'empty plan'` trigger, the daemon
+cross-checks the run's own completion evidence — `summary.json` `tasks_completed`,
+task-evidence stamps, or resolved tasks. If that evidence is non-zero, the empty/missing
+plan reading contradicts what the run itself already recorded, so the daemon refuses the
+immediate empty-plan park, emits a `ConductorEvent` of type `auto_park_contradiction`
+(with a loud log line), and falls back to the durable no-evidence-attempts counter instead
+of trusting the potentially-stale plan-emptiness signal.
+
 Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
-trigger check), `engine/daemon-park-cli.ts` (unpark subcommand), `daemon-dashboard.ts`
-(provenance display).
+trigger check + contradiction guard), `engine/daemon-park-cli.ts` (unpark subcommand),
+`daemon-dashboard.ts` (provenance display).
 
 ### Remediation (agentic gap routing)
 
