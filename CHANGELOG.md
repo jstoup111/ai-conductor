@@ -11,6 +11,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- Spec landed for #646 (`.docs/{track,complexity,intake,stories,plans}/retry-classify-rerun-vs-route.md`
+  + `.docs/decisions/adr-2026-07-13-retry-classify-rerun-vs-route.md`): a deterministic rerun-vs-route
+  classifier will decide, BEFORE burning a retry, whether a SHIP-tail verdict step's completion-gate
+  miss (`architecture_review_as_built`, `prd_audit`, `build_review`) is route-class — a fresh adverse
+  verdict that names a route (route on try 1), or a byte-identical failure on unchanged inputs (HEAD sha
+  + verdict-artifact mtimes unchanged; route on try 2) — and engage the existing `planRemediation`/
+  kickback path immediately instead of exhausting the per-step retry budget. Missing/stale/changed-input
+  failures still rerun. A per-retry `retry_decision` audit event records rerun-vs-route + signal for
+  success-% comparison; routed halts name the unchanged input rather than "retries exhausted". New
+  optional `retry_routing:` config block (`enabled`, default true); `enabled: false` is an exact revert
+  to the pre-#646 behaviour (prd_audit's existing try-1 short-circuit preserved; as-built/build_review
+  burn retries then route at step_failed as before). Composes with #644 (DECIDE-target routes still
+  HALT), #648 (kickback re-entry escalation engages sooner through the same path), #649/#652 (fresh-
+  verdict floor feeds the route-vs-rerun signal), and leaves #280's build budgets untouched (the `build`
+  step is out of scope). Implementation tracked separately; this entry documents the queued fix.
 - Progress-aware build halt (#280): the build retry loop no longer halts/parks a step at a
   fixed attempt budget while it's still resolving additional tasks each attempt — a
   within-dispatch progress-bypass gate re-dispatches on positive resolved-task delta, bounded
