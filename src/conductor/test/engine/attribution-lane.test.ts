@@ -5,7 +5,16 @@ import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
-import { dispatchAttributionVerifier, runAttributionLane } from '../../src/engine/attribution-lane.js';
+import {
+  dispatchAttributionVerifier,
+  runAttributionLane,
+  computeMemoKey,
+  readMemo,
+  writeMemo,
+  // Task 6 (RED) — not implemented until Task 7. Importing this makes the
+  // whole suite fail to load, which is the expected RED failure mode.
+  rekeyMemoAfterRebase,
+} from '../../src/engine/attribution-lane.js';
 
 // ── Fresh-session verifier dispatch (Task 7) ──────────────────────────────
 //
@@ -881,5 +890,79 @@ Implement task 3.
       const parsed = JSON.parse(evidenceRaw);
       expect(parsed.evidenceStamps ?? {}).toEqual({});
     }
+  });
+});
+
+// ── Memo re-key after rebase (Task 6, RED — Story 4) ──────────────────────
+//
+// Per .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md Task 6
+// and adr-2026-07-12-rebase-evidence-stamp-translation.md: an unconflicted
+// rebase changes HEAD's sha, which orphans the attribution memo (keyed on the
+// old HEAD via `computeMemoKey`) even though every judged commit it cites
+// still exists post-rebase (just under new shas, per `buildRewriteMap`).
+// `rekeyMemoAfterRebase` must translate the memo's cached entry onto the new
+// HEAD (recomputing the key, translating `anchor.head`) so `readMemo` HITS
+// for the new HEAD instead of forcing an unnecessary re-judge.
+//
+// `rekeyMemoAfterRebase` does not exist yet (Task 7 implements it) — the
+// import above fails module resolution, which is the expected RED failure.
+describe('rekeyMemoAfterRebase (RED — not implemented until Task 7)', () => {
+  let dir: string;
+  let memoPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-memo-rekey-'));
+    memoPath = join(dir, '.pipeline', 'attribution-memo.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('re-keys an unconflicted rebase: readMemo hits on the new HEAD and anchor.head is translated', async () => {
+    const oldHead = 'a'.repeat(40);
+    const newHead = 'b'.repeat(40);
+    const judgedCommitOld = 'c'.repeat(40);
+    const judgedCommitNew = 'd'.repeat(40);
+    const residueIds = ['1', '2'];
+
+    // Existing memo entry written for the OLD head, citing a judged commit
+    // that survives the rebase (present as a map key -> not in residue).
+    const oldKey = computeMemoKey(oldHead, residueIds);
+    const cachedVerdict = {
+      schema: 1,
+      anchor: { head: oldHead, residue: residueIds },
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: judgedCommitOld, rationale: 'implements the sweep feature' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+    await writeMemo(memoPath, oldKey, JSON.stringify(cachedVerdict));
+
+    // Rewrite map from buildRewriteMap: judgedCommitOld -> judgedCommitNew,
+    // oldHead -> newHead. All judged commits cited in the memo are present
+    // as map keys, so nothing here is residue.
+    const map: Record<string, string> = {
+      [oldHead]: newHead,
+      [judgedCommitOld]: judgedCommitNew,
+    };
+
+    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds);
+
+    // The NEW key must now HIT.
+    const newKey = computeMemoKey(newHead, residueIds);
+    const hit = await readMemo(memoPath, newKey);
+    expect(hit).toBeDefined();
+
+    const parsed = JSON.parse(hit as string);
+    expect(parsed.results[0].taskId).toBe('1');
+    expect(parsed.results[0].citations[0].sha).toBe(judgedCommitOld);
+
+    // The entry's verdictAnchor (anchor.head) is translated to the new HEAD.
+    expect(parsed.anchor.head).toBe(newHead);
   });
 });
