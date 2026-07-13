@@ -12,8 +12,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractNewExports } from '../src/engine/wiring-probe.js';
+import { extractNewExports, verifyDeclaredSites, orphanBackstop } from '../src/engine/wiring-probe.js';
 import type { GitRunner } from '../src/engine/pr-labels.js';
+import type { WiredIntoSite } from '../src/engine/wired-into.js';
+import type { ReferenceSearchRunner } from '../src/engine/wiring-probe.js';
 
 // ── Fake GitRunner factory ────────────────────────────────────────────────────
 
@@ -145,6 +147,7 @@ describe('extractNewExports base derivation ladder', () => {
 
     const { git, calls } = fakeGit([
       new Error('unknown revision or path not in the working tree'), // anchor unreachable
+      { stdout: 'refs/remotes/origin/main\n' }, // symbolic-ref origin/HEAD resolves
       { stdout: 'fork-point-sha\n' }, // merge-base --fork-point succeeds
       { stdout: diff }, // git diff fork-point-sha...HEAD
     ]);
@@ -152,8 +155,8 @@ describe('extractNewExports base derivation ladder', () => {
     const result = await extractNewExports(git, 'unreachable-anchor');
 
     expect(result).toContainEqual({ file: 'src/fork.ts', symbol: 'fromForkPoint' });
-    expect(calls[1]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
-    expect(calls[2]).toEqual(['diff', 'fork-point-sha...HEAD']);
+    expect(calls[2]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
+    expect(calls[3]).toEqual(['diff', 'fork-point-sha...HEAD']);
   });
 
   it('falls back to plain merge-base when both anchor and fork-point fail', async () => {
@@ -164,6 +167,7 @@ describe('extractNewExports base derivation ladder', () => {
 
     const { git, calls } = fakeGit([
       new Error('unknown revision or path not in the working tree'), // anchor unreachable
+      { stdout: 'refs/remotes/origin/main\n' }, // symbolic-ref origin/HEAD resolves
       { stdout: '' }, // fork-point returns empty (no result)
       { stdout: 'merge-base-sha\n' }, // plain merge-base succeeds
       { stdout: diff }, // git diff merge-base-sha...HEAD
@@ -172,8 +176,8 @@ describe('extractNewExports base derivation ladder', () => {
     const result = await extractNewExports(git, 'unreachable-anchor');
 
     expect(result).toContainEqual({ file: 'src/merge.ts', symbol: 'fromMergeBase' });
-    expect(calls[2]).toEqual(['merge-base', 'origin/main', 'HEAD']);
-    expect(calls[3]).toEqual(['diff', 'merge-base-sha...HEAD']);
+    expect(calls[3]).toEqual(['merge-base', 'origin/main', 'HEAD']);
+    expect(calls[4]).toEqual(['diff', 'merge-base-sha...HEAD']);
   });
 
   it('derives the base directly via the ladder when no anchor is given (empty string)', async () => {
@@ -183,6 +187,7 @@ describe('extractNewExports base derivation ladder', () => {
     ].join('\n');
 
     const { git, calls } = fakeGit([
+      { stdout: 'refs/remotes/origin/main\n' }, // symbolic-ref origin/HEAD resolves
       { stdout: 'fork-point-sha\n' }, // merge-base --fork-point succeeds directly
       { stdout: diff },
     ]);
@@ -190,6 +195,117 @@ describe('extractNewExports base derivation ladder', () => {
     const result = await extractNewExports(git, '');
 
     expect(result).toContainEqual({ file: 'src/empty-anchor.ts', symbol: 'fromEmptyAnchor' });
-    expect(calls[0]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
+    expect(calls[1]).toEqual(['merge-base', '--fork-point', 'origin/main', 'HEAD']);
+  });
+});
+
+// ── verifyDeclaredSites ────────────────────────────────────────────────────
+
+function fakeReader(files: Record<string, string>): (path: string) => Promise<string> {
+  return async (path: string) => {
+    if (!(path in files)) {
+      const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    }
+    return files[path];
+  };
+}
+
+describe('verifyDeclaredSites', () => {
+  it('passes a declared site whose file contains a non-test reference to the new symbol', async () => {
+    const sites: WiredIntoSite[] = [{ path: 'src/x.ts', symbol: 'foo' }];
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const readFile = fakeReader({
+      'src/x.ts': "import { foo } from './foo.js';\nfoo(1);\n",
+    });
+
+    const result = await verifyDeclaredSites(sites, newExports, readFile);
+
+    expect(result.gaps).toEqual([]);
+    expect(result.evidence).toContainEqual({
+      site: 'src/x.ts#foo',
+      symbol: 'foo',
+      matchedLine: "import { foo } from './foo.js';",
+    });
+  });
+
+  it('reports a gap for a declared site whose file has no reference to the symbol', async () => {
+    const sites: WiredIntoSite[] = [{ path: 'src/x.ts', symbol: 'foo' }];
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const readFile = fakeReader({
+      'src/x.ts': "export const unrelated = 1;\n",
+    });
+
+    const result = await verifyDeclaredSites(sites, newExports, readFile);
+
+    expect(result.gaps).toEqual([
+      'declared call site src/x.ts#foo has no non-test reference to «foo» (searched: src/x.ts)',
+    ]);
+    expect(result.evidence).toEqual([]);
+  });
+
+  it('reports a named gap for a declared site whose file does not exist', async () => {
+    const sites: WiredIntoSite[] = [{ path: 'src/x.ts', symbol: 'foo' }];
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const readFile = fakeReader({});
+
+    const result = await verifyDeclaredSites(sites, newExports, readFile);
+
+    expect(result.gaps).toEqual(['declared call site src/x.ts#foo: file not found']);
+    expect(result.evidence).toEqual([]);
+  });
+});
+
+// ── Orphan backstop ────────────────────────────────────────────────────────────
+
+function fakeSearch(responses: Record<string, string[]>): ReferenceSearchRunner {
+  return async (symbol: string) => responses[symbol] ?? [];
+}
+
+describe('orphanBackstop', () => {
+  it('passes an export with at least one non-test reference outside its own defining file', async () => {
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const search = fakeSearch({ foo: ['src/foo.ts', 'src/caller.ts'] });
+
+    const results = await orphanBackstop(newExports, search);
+
+    expect(results).toEqual([
+      { file: 'src/foo.ts', symbol: 'foo', status: 'ok', evidence: ['src/caller.ts'] },
+    ]);
+  });
+
+  it('reports a gap when an export is referenced only in test files', async () => {
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const search = fakeSearch({
+      foo: ['src/foo.ts', 'src/foo.test.ts', 'test/other-thing.ts'],
+    });
+
+    const results = await orphanBackstop(newExports, search);
+
+    expect(results).toEqual([
+      {
+        file: 'src/foo.ts',
+        symbol: 'foo',
+        status: 'gap',
+        message: 'foo exported but referenced by no production code (2 test-only references excluded)',
+      },
+    ]);
+  });
+
+  it('reports a gap when an export is referenced only within its own defining file (self-reference)', async () => {
+    const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
+    const search = fakeSearch({ foo: ['src/foo.ts'] });
+
+    const results = await orphanBackstop(newExports, search);
+
+    expect(results).toEqual([
+      {
+        file: 'src/foo.ts',
+        symbol: 'foo',
+        status: 'gap',
+        message: 'foo exported but referenced only within its own defining file (no external wiring)',
+      },
+    ]);
   });
 });
