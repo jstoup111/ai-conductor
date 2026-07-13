@@ -270,3 +270,18 @@ export async function readNoEvidenceAttempts(projectRoot: string): Promise<numbe
   const evidence = await createTaskEvidence(projectRoot);
   return evidence.noEvidenceAttempts;
 }
+
+/**
+ * Read `lastResolvedCount` from the sidecar (Task 11 — tolerant reads).
+ *
+ * Thin delegate over `createTaskEvidence`, which already tolerates a
+ * missing or corrupt/unparseable `.pipeline/task-evidence.json` by
+ * returning empty state (`lastResolvedCount: 0`). Never throws: a
+ * corrupt/missing sidecar reads as zero progress, so the progress-delta
+ * computation (`resolvedCount - lastResolvedCount`) degrades to "no
+ * progress" rather than crashing the daemon tick.
+ */
+export async function readLastResolvedCount(projectRoot: string): Promise<number> {
+  const evidence = await createTaskEvidence(projectRoot);
+  return evidence.lastResolvedCount;
+}
