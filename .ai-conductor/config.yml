@@ -55,3 +55,27 @@ attribution_judge_cutover: "2026-07-11T18:30:00Z"
 # Spot-audit sampling percentage for judged-vs-mechanical agreement measurement
 # (defaults to 10 when the judge cutover is armed; explicit here for visibility).
 attribution_audit_sample_pct: 10
+
+# Wiring-reachability gate Layer 2 (TS import-graph reachability, Task 22).
+# entry_points are the roots the import graph is walked from to check that
+# changed files are reachable. src/conductor/src/index.ts is the engine's
+# actual runtime entry point: bin/conduct-ts execs
+# src/conductor/dist/index.js (built from this file), and bin/conduct itself
+# invokes conduct-ts. Absent/missing here would degrade Layer 2 to "skipped"
+# for this (a TS) project — see resolveLayer2Applicability in
+# src/conductor/src/engine/wiring-probe.ts.
+#
+# daemon-cli.ts/intake-loop-cli.ts/engineer-cli.ts are listed explicitly too
+# (matching adr-2026-07-12-wiring-check-gate.md's documented default), even
+# though index.ts reaches all three transitively (intake-loop-cli.ts and
+# engineer-cli.ts via static imports; daemon-cli.ts via a lazy
+# `await import('./daemon-cli.js')` that buildImportGraph now follows) — an
+# explicit root is defense-in-depth against a future refactor accidentally
+# dropping that edge, since that would otherwise silently disconnect the
+# daemon-only subtree from Layer 2 with no loud failure.
+wiring:
+  entry_points:
+    - src/conductor/src/index.ts
+    - src/conductor/src/daemon-cli.ts
+    - src/conductor/src/intake-loop-cli.ts
+    - src/conductor/src/engine/engineer-cli.ts

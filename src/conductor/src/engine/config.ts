@@ -196,6 +196,8 @@ export function validateConfig(
     'ci_watch',
     // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
     'build_progress_halt',
+    // Wiring-reachability gate Layer 2 (TS import-graph reachability).
+    'wiring',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -588,6 +590,25 @@ export function validateConfig(
     for (const entry of obj.model_fallback_ladder) {
       if (typeof entry !== 'string' || entry === '') {
         return errVal('model_fallback_ladder must contain only non-empty strings');
+      }
+    }
+  }
+
+  // wiring — Layer 2 (TS import-graph reachability) entry points. Must be an
+  // object with an optional entry_points array of non-empty strings.
+  if (obj.wiring !== undefined) {
+    if (!isPlainObject(obj.wiring)) {
+      return errVal('wiring must be an object');
+    }
+    const wiring = obj.wiring as Record<string, unknown>;
+    if (wiring.entry_points !== undefined) {
+      if (!Array.isArray(wiring.entry_points)) {
+        return errVal('wiring.entry_points must be an array of strings');
+      }
+      for (const entry of wiring.entry_points) {
+        if (typeof entry !== 'string' || entry === '') {
+          return errVal('wiring.entry_points must contain only non-empty strings');
+        }
       }
     }
   }

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
+import { WIRED_INTO_LINE } from './wired-into.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -1276,6 +1277,15 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
         continue;
       }
       inFilesBlock = false;
+    }
+
+    // A **Wired-into:** line is a distinct authoring-time declaration (the
+    // wiring reachability gate) — NOT a **Files:** corroboration source.
+    // It must be consumed and skipped here, BEFORE the legacy backtick
+    // prose-fallback below, or its `path#symbol` site(s) would otherwise be
+    // harvested as phantom **Files:** corroboration paths.
+    if (WIRED_INTO_LINE.test(line)) {
+      continue;
     }
 
     // Legacy fallback source: backtick path tokens in a section that has no

@@ -74,6 +74,9 @@ import {
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
   validateBuildReviewVerdict,
+  WIRING_EVIDENCE,
+  validateWiringEvidence,
+  type WiringEvidence,
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
@@ -139,6 +142,7 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
+import { computeWiringEvidence } from './wiring-probe.js';
 import {
   createTaskEvidence,
   type TaskEvidence,
@@ -712,6 +716,24 @@ export class Conductor {
       planPath,
       gh: this.gh,
       repairFinishPr,
+      // Live wiring-reachability probe (Task 18): computes fresh
+      // WiringEvidence via wiring-probe.ts's orchestrator when the
+      // wiring_check predicate finds no pre-existing evidence fixture,
+      // mirroring the isHeadPushed injection above (real work behind a
+      // thin closure over this.git/this.projectRoot/this.config). No
+      // plan anchor is threaded through completionCtx elsewhere in this
+      // engine, so '' is passed — computeWiringEvidence's base-derivation
+      // ladder falls through to the origin-ref/fork-point/merge-base
+      // rungs, same as every other anchor-less caller of runWiringProbe.
+      wiringProbe: () =>
+        computeWiringEvidence({
+          runGit: this.git,
+          projectRoot: this.projectRoot,
+          planPath,
+          config: this.config,
+          gh: (args: string[]) => this.gh(args, { cwd: this.projectRoot }),
+          anchor: '',
+        }),
     };
   }
 
@@ -2851,6 +2873,113 @@ export class Conductor {
               }
             }
 
+            // wiring_check kickback (Task 10 / Task 18): a gap-carrying
+            // evidence file at WIRING_EVIDENCE means newly-built code isn't
+            // reachable/wired in yet — an implementation gap by definition,
+            // same shape as a build_review FAIL. Route back to BUILD with the
+            // gap messages as the retry hint. Uses the shared `kickbackCounts`
+            // map keyed by 'wiring_check' (the same anti-ping-pong mechanism
+            // the gate-driven tail uses for other gates), bounded by
+            // MAX_KICKBACKS_PER_GATE like the other self-heal loops — kickback
+            // only, never an unconditional HALT until the cap is exceeded.
+            //
+            // NOT daemon-gated (unlike build_review's otherwise-identical
+            // block): the wiring-reachability-gate acceptance spec
+            // (test/integration/wiring-gate-loop.acceptance.test.ts) drives a
+            // plain mode:'auto' non-daemon Conductor and asserts the kickback
+            // fires there too — wiring_check's evidence is deterministically
+            // computed (no LLM grader session to gate behind daemon
+            // autonomy), so there's no reason to withhold the self-heal in
+            // interactive/non-daemon runs the way build_review's judgement
+            // gate does.
+            if (step.name === 'wiring_check') {
+              let evidenceRaw: unknown = null;
+              try {
+                evidenceRaw = JSON.parse(
+                  await readFile(join(this.projectRoot, WIRING_EVIDENCE), 'utf-8'),
+                );
+              } catch {
+                /* missing/unreadable — falls through to generic HALT below */
+              }
+              const validated =
+                evidenceRaw !== null ? validateWiringEvidence(evidenceRaw) : null;
+              const evidence = evidenceRaw as WiringEvidence | null;
+              // Prefer the fully-validated schema (real evidence written by
+              // the wiring_check predicate/probe); fall back to a lenient
+              // top-level "gaps" array read when the file doesn't parse as a
+              // complete WiringEvidence but still names gap messages — the
+              // kickback's job is to surface whatever gap text is on disk,
+              // not to re-enforce full artifact validity (that's the
+              // completion predicate's job).
+              let gapMessages: string[] = [];
+              if (validated?.ok && evidence) {
+                gapMessages = evidence.tasks.flatMap((task) => task.gaps.map((g) => g.message));
+              } else if (
+                evidenceRaw !== null &&
+                typeof evidenceRaw === 'object' &&
+                Array.isArray((evidenceRaw as Record<string, unknown>).gaps)
+              ) {
+                gapMessages = ((evidenceRaw as Record<string, unknown>).gaps as unknown[])
+                  .filter(
+                    (g): g is { message: string } =>
+                      typeof g === 'object' && g !== null && typeof (g as { message?: unknown }).message === 'string',
+                  )
+                  .map((g) => g.message);
+              }
+              if (gapMessages.length > 0) {
+                const count = (kickbackCounts.get('wiring_check') ?? 0) + 1;
+                if (count <= MAX_KICKBACKS_PER_GATE) {
+                  kickbackCounts.set('wiring_check', count);
+                  const evidenceText = gapMessages.join('\n');
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'wiring_check',
+                    to: 'build',
+                    evidence: evidenceText,
+                    count,
+                  });
+                  pendingRetryHints.set(
+                    'build',
+                    `wiring_check found unreachable/undeclared code:\n${evidenceText}\nFix ` +
+                      `the flagged gap(s) in build, then COMMIT — wiring_check re-runs after ` +
+                      `this build.`,
+                  );
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; wiring_check
+                  // is `failed` here, so restage it (and manual_test) explicitly
+                  // for the tail.
+                  (state as Record<string, unknown>).wiring_check = 'stale';
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${gapMessages[0] ?? 'no reasons recorded'}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
             // Task 8: Stall remediation with error handling for degraded exits.
             // When a build stall is detected (stallQuestion is set), attempt to dispatch
             // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
@@ -3655,15 +3784,18 @@ export class Conductor {
         return 'halt';
       }
       // FR-5: a file-changing rebase invalidated build (+build_review,
-      // +manual_test) via kickback-shaped verdicts. Those gates aren't
-      // `kickbackTarget` steps, so emit the kickback event(s) here; the
-      // selector below routes back to them. build_review sits between build
-      // and manual_test in the tail (Task 18) — it grades the diff that the
-      // rebase just changed, so it must re-verify before manual_test is
-      // selectable again, same as build and manual_test.
+      // +wiring_check, +manual_test) via kickback-shaped verdicts. Those
+      // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
+      // here; the selector below routes back to them. build_review sits
+      // between build and manual_test in the tail (Task 18) — it grades the
+      // diff that the rebase just changed, so it must re-verify before
+      // manual_test is selectable again, same as build and manual_test.
+      // wiring_check (Task 6) sits between build_review and manual_test —
+      // it re-verifies reachability of the diff, invalidated the same way
+      // on a file-changing rebase (Task 11).
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
-        for (const target of ['build', 'build_review', 'manual_test'] as StepName[]) {
+        for (const target of ['build', 'build_review', 'wiring_check', 'manual_test'] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             await this.events.emit({

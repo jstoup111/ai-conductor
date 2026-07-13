@@ -1162,6 +1162,72 @@ selection table in `HARNESS.md`) in a fresh session — it is deliberately not c
 it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
 cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
 
+#### Wiring reachability gate (`wiring_check`)
+
+`wiring_check` is a **gating**, always-on built-in that sits strictly between `build_review`
+and `manual_test` in the SHIP-phase gate loop (`build → build_review → wiring_check →
+manual_test → retro → rebase → finish`), present at every complexity tier (`skippableForTiers:
+[]`). It exists to catch the class of bug where a build produces new code that is never
+actually called — a feature that compiles and even passes tests but is orphaned, so a
+manual-test pass would exercise nothing new.
+
+**The `Wired-into:` contract.** At plan time, each task that adds production surface declares
+a `**Wired-into:** ` line naming where it's called from — one of four forms (declared call
+site(s), `same as Task N` inheritance, `none (no new production surface)`, or a waiver `none
+(inert until <ref>)`). Full grammar and derivation rules live in `skills/plan/SKILL.md` §5c;
+this gate is the build-time enforcement of that contract.
+
+**What it checks (`engine/wiring-probe.ts`).**
+
+- **Layer 1 (universal, all languages).** Extracts new exports from the feature diff, verifies
+  each declared call site actually references the symbol, and runs an "orphan backstop" that
+  flags any new export with zero non-test external references even when no `Wired-into:` line
+  declared it. Contradiction checks catch a task that declares `none` but whose diff adds
+  exports, or declares `inert` but whose diff adds a real (non-waived) reference. If the diff
+  base can't be derived, the gate fails closed with `wiring scope undeterminable` rather than
+  silently passing.
+- **Layer 2 (TypeScript projects only, opt-in).** When `wiring.entry_points` is configured
+  (below), builds a real import graph via the TypeScript compiler API rooted at those entry
+  points and checks that new exports are transitively reachable from them — catching orphan
+  islands and test-only import edges that Layer 1's reference scan alone would miss. Degrades
+  explicitly rather than silently: `Layer 2 skipped: wiring.entry_points not configured` (TS
+  project, no config), `Layer 2 not applicable` (non-TS project), or a named bad-root gap when
+  a configured entry point doesn't resolve.
+
+**Legacy advisory disposition.** A plan with **zero** `Wired-into:` lines anywhere predates the
+convention; the gate treats it as legacy and any findings are **advisory-only** — they surface
+but never block. The moment a plan carries even one `Wired-into:` line it's contract-bearing
+and the gate is fully blocking for that plan.
+
+**Waiver resolution (`inert` refs).** A `none (inert until <ref>)` waiver resolves two ways: a
+path-form ref (e.g. `until src/foo.ts exists`) is checked for on-disk existence, no network
+call; an issue-form ref (e.g. `until #123`) resolves via `gh issue view` — open means still
+waived, closed means the waiver has expired (gap), and a `gh` error fails closed as a gap.
+`gh` is never invoked for path-form refs.
+
+**Evidence.** The probe's findings are written to `.pipeline/wiring-evidence.json`
+(`WiringEvidence` schema) with a freshness check — a stale HEAD sha invalidates the evidence
+and forces a re-check. `CompletionContext.wiringProbe` is the injection seam the completion
+predicate uses to invoke the probe live and durably write evidence.
+
+**Config.**
+
+```yaml
+# .ai-conductor/config.yml
+wiring:
+  entry_points:
+    - src/index.ts   # TS import-graph roots for Layer 2; omit to leave Layer 2 skipped
+```
+
+**Post-rebase invalidation.** `wiring_check` joins `build`, `build_review`, and `manual_test`
+in the unconditionally-invalidated set after a file-changing rebase (see "Rebase-on-latest"
+above) — a rebase that touches code always forces re-verification of wiring, never carries
+forward a stale verdict.
+
+**Backward compatibility.** A state dir whose `manual_test` verdict predates `wiring_check`
+being added to the step topology re-derives the topology on resume rather than crashing or
+skipping the new gate outright — a pre-existing in-flight run upgrades cleanly.
+
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
 Two GitHub labels give a human operator an at-a-glance signal on the daemon's PRs without

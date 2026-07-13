@@ -152,6 +152,20 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
+    // Wiring reachability gate: sits strictly between build_review and
+    // manual_test, verifying newly-built code is actually reachable/wired
+    // in before manual test exercises it. Gating loop member like its
+    // upstream neighbor build_review.
+    name: 'wiring_check',
+    label: 'Wiring Check',
+    phase: 'BUILD',
+    enforcement: 'gating',
+    prerequisites: ['build_review'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    loopGate: true,
+  },
+  {
     name: 'manual_test',
     label: 'Manual Test',
     phase: 'SHIP',
@@ -160,7 +174,7 @@ export const ALL_STEPS: StepDefinition[] = [
     // one of the two false-ship paths behind incident PR #364. Matches the
     // enforcement the manual-test SKILL.md frontmatter has always declared.
     enforcement: 'gating',
-    prerequisites: ['build_review'],
+    prerequisites: ['wiring_check'],
     skippableForTiers: [],
     isCheckpoint: true,
     skillName: 'manual-test',

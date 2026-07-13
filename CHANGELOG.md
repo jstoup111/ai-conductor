@@ -36,6 +36,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   block (`enabled`, `attempt_ceiling`, `dispatch_ceiling`); `enabled: false` is an exact revert
   to the previous fixed-budget halt. The true zero-progress park path is unchanged. See
   `README.md` and `src/conductor/README.md` for config details.
+- New `wiring_check` gate (gating, always-on, all complexity tiers) sits between
+  `build_review` and `manual_test` in the SHIP-phase gate loop, verifying that new
+  production surface declared via a plan task's `**Wired-into:** ` line is actually
+  reachable — catching orphaned code that compiles and passes tests but is never called.
+  Two verification layers: a universal diff/reference-scan Layer 1 (declared-call-site
+  verification, an orphan backstop, and contradiction checks for `none`/`inert`
+  declarations), and an opt-in TypeScript import-graph reachability Layer 2 (rooted at
+  configured `wiring.entry_points`). Plans predating the `Wired-into:` convention (zero
+  such lines) get advisory-only findings; contract-bearing plans are fully blocking.
+  `inert` waivers resolve on-disk (path form, no network) or via `gh issue view` (issue
+  form, fail-closed on error). Evidence is written to `.pipeline/wiring-evidence.json`
+  with HEAD-sha freshness invalidation, and `wiring_check` joins the post-rebase
+  invalidation set alongside `build`/`build_review`/`manual_test`. This repo's own
+  `.ai-conductor/config.yml` now sets `wiring.entry_points: [src/conductor/src/index.ts]`
+  to enable Layer 2 on self-host builds. See `src/conductor/README.md` → "Wiring
+  reachability gate" and `skills/plan/SKILL.md` §5c for the full grammar.
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
 

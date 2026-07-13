@@ -31,6 +31,13 @@ export interface SelectorInput {
    * satisfied and the selector lands on `build`.
    */
   regionStart: StepName;
+  /**
+   * Resume clamp mode: only scan loopGates (steps with loopGate: true).
+   * The main loop tail scans all gates; resume entry only re-enters the looped
+   * region (build onward), skipping DECIDE-phase kickback targets.
+   * Defaults to false (scan all gates).
+   */
+  loopGatesOnly?: boolean;
 }
 
 export type SelectorDecision =
@@ -73,9 +80,12 @@ function isSkipped(step: StepDefinition, state: ConductState): boolean {
  * Internal scan helper: find the index of the earliest unsatisfied, non-skipped
  * gate at or after `regionStart`. Returns -1 when every gate in the region is
  * satisfied.
+ *
+ * If loopGatesOnly is true, only scan steps with loopGate: true (resume clamp mode).
+ * Otherwise, scan all gates (loop tail mode).
  */
 function findNextGateInRegion(input: SelectorInput): number {
-  const { steps, state, verdicts, regionStart } = input;
+  const { steps, state, verdicts, regionStart, loopGatesOnly } = input;
   const startIdx = steps.findIndex((s) => s.name === regionStart);
   if (startIdx === -1) {
     throw new Error(
@@ -85,6 +95,7 @@ function findNextGateInRegion(input: SelectorInput): number {
 
   for (let i = startIdx; i < steps.length; i++) {
     const step = steps[i];
+    if (loopGatesOnly && !step.loopGate) continue;
     if (isSkipped(step, state)) continue;
     if (gateSatisfied(step.name, state, verdicts)) continue;
     return i;

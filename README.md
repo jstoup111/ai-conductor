@@ -1587,6 +1587,19 @@ dedicated test coverage (950+ tests). See the feature comparison in
   reasons (bounded retries, then HALT); absent config preserves the legacy
   `build → manual_test` topology unchanged. See `src/conductor/README.md` → "Judgement gate
   at the build → manual_test seam" for config, cap/HALT behavior, and the cost trade-off.
+- **Wiring reachability gate** (`wiring_check`, gating, always-on, all tiers): sits strictly
+  between `build_review` and `manual_test` (`build → build_review → wiring_check →
+  manual_test → ...`), verifying that new production surface is actually *called*, not just
+  built and tested. Each plan task declares a `**Wired-into:** ` line (declared call
+  site(s), `same as Task N`, `none (no new production surface)`, or a waived `none (inert
+  until <ref>)` — full grammar in `skills/plan/SKILL.md` §5c); the gate cross-references
+  those declarations against the diff's new exports (universal reference-scan Layer 1,
+  plus an opt-in TypeScript import-graph reachability Layer 2 via `wiring.entry_points`
+  config). Plans with zero `Wired-into:` lines predate the convention and get
+  advisory-only findings; contract-bearing plans (one or more `Wired-into:` lines) are
+  fully blocking. `inert` waivers resolve against on-disk paths (no network) or `gh issue
+  view` for issue refs (open = waived, closed or `gh` error = fail-closed gap). See
+  `src/conductor/README.md` → "Wiring reachability gate" for the full breakdown.
 - **Manual-test FAIL routing + whitewash guard** (#367): `manual_test` is gating (locked —
   overrides and config disables are rejected) so a failing manual test can never be silently
   skipped. In daemon runs a manual_test that keeps FAILing kicks back to `build` with the

@@ -249,11 +249,30 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 ## Complexity
 ## Alignment
 ## Domain Integrity
+## Wiring Surface (required for Medium/Large tier — see below; omit for Small)
 ## Risks
 ## ADRs Created
 ## Conditions (if APPROVED WITH CONDITIONS)
 ## Blocking Issues (if BLOCKED)
 ```
+
+**Wiring Surface (design-time, Medium/Large tier only):** For each new production surface
+the feature introduces (exported function/module, hook script, config key, emitted event,
+scheduled job, CLI subcommand, etc.), state at design time where/how it will be called from
+in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
+`conduct-ts`'s CLI command table," "consumed by the existing event bus subscriber in
+`src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
+required yet since the code doesn't exist. It is the precursor `/plan` later derives its
+`Wired-into:` contract from for each task.
+
+This is **DESIGN-TIME ONLY**. It does not affect, duplicate, or substitute for the §12
+As-Built Compliance Gate's production reachability sweep, which independently verifies the
+*shipped* code against real `file:line` callers after implementation. Leave §12 untouched —
+the two checks run at different phases against different evidence (a stated intent here vs.
+an observed caller there).
+
+Not required for **Small** tier features (architecture-review is skipped entirely for Small
+per the Lightweight Mode section above).
 
 ### 9. Verdict Enforcement
 
@@ -403,6 +422,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] Alignment checked against .docs/decisions/ and CLAUDE.md
 - [ ] Domain integrity pre-checked
 - [ ] Risk register populated
+- [ ] **Medium/Large tier:** `## Wiring Surface` section present, naming where each new
+      production surface will be called from — BLOCKS approval if missing (not required
+      for Small; design-time only, does not affect §12 as-built reachability sweep)
 - [ ] ADR created for every architectural decision made
 - [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)

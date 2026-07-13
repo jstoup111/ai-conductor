@@ -203,20 +203,27 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
   });
 
-  it('changed → rebase satisfied + build/manual_test kicked back (from rebase)', async () => {
+  it('changed → rebase satisfied + build/build_review/wiring_check/manual_test kicked back (from rebase)', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
+    // wiring_check (Task 6) sits between build_review and manual_test and
+    // must be invalidated the same way — a file-changing rebase can falsify
+    // reachability evidence just as easily as build_review's grading
+    // (Task 11).
+    const wiringCheck = await readVerdict(dir, 'wiring_check');
+    expect(wiringCheck?.satisfied).toBe(false);
+    expect(wiringCheck?.kickback?.from).toBe('rebase');
   });
 
   it('changed but manual_test did not run → only build kicked back', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
   });
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
@@ -240,7 +247,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true, undefined);
     // Verify existing behavior is unchanged (byte-identical)
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     // Verify new field is present and empty when preVerify is absent
     expect(r.reverified).toEqual([]);
     const build = await readVerdict(dir, 'build');
@@ -271,7 +278,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is reverified, NOT in kickedBack
-    expect(r.kickedBack).toEqual(['build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -305,7 +312,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is kicked back, NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback (byte-identical to today)
@@ -341,7 +348,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is kicked back (fail-closed), NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with fail-closed kickback
@@ -376,7 +383,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is reverified (not in kickedBack), build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build_review']);
+    expect(r.kickedBack).toEqual(['build_review', 'wiring_check']);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -409,7 +416,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build and build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback
