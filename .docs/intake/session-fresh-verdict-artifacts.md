@@ -1,6 +1,7 @@
 # Intake: Step completion checks consume a stale verdict artifact across retries (#649)
 
 Source: jstoup111/ai-conductor#649
+Owner: jstoup111
 Size (filed): S
 Labels: bug, priority: critical
 

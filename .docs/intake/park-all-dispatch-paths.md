@@ -1,6 +1,7 @@
 # Intake: Fresh-dispatch backlog scan ignores operator park markers (#651)
 
 Source: jstoup111/ai-conductor#651
+Owner: jstoup111
 Size (filed): S
 Labels: bug, priority: high
 
