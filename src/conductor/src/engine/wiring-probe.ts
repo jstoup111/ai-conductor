@@ -423,6 +423,50 @@ export function checkContractConsistency(
   return gaps;
 }
 
+// ── Plan-level disposition (legacy advisory-only vs. contract-bearing gating) ─
+
+/** The exact advisory reason surfaced when a plan carries zero `Wired-into:`
+ * lines anywhere: the wiring gate is a no-op for such plans (pre-dates the
+ * Wired-into convention), so any Layer-1 findings are demoted from blocking
+ * gaps to informational advisories rather than silently discarded. */
+export const LEGACY_ADVISORY_REASON =
+  'legacy plan (pre-Wired-into contract): wiring gate advisory-only';
+
+export interface PlanWiringDispositionResult {
+  satisfied: boolean;
+  reason?: string;
+  gaps: string[];
+  advisories: string[];
+}
+
+/**
+ * Plan-level disposition switch for the wiring-reachability gate.
+ *
+ * Mirrors the `planIsContractBearing` check in `checkContractConsistency`:
+ * a plan is contract-bearing the moment ANY task carries a `Wired-into:`
+ * line (even a single one) — that flips the WHOLE plan into full gating,
+ * it does not selectively exempt tasks that happen to lack a line.
+ *
+ * - Zero `Wired-into:` lines anywhere in the plan: legacy plan, predates the
+ *   convention. The gate never blocks such a plan — `satisfied: true` with
+ *   `LEGACY_ADVISORY_REASON`, and every Layer-1 finding passed in via `gaps`
+ *   is demoted to an advisory (surfaced for visibility, never blocking).
+ * - One or more `Wired-into:` lines anywhere: normal full gating — `gaps`
+ *   pass through unchanged and `satisfied` reflects whether any exist.
+ */
+export function evaluatePlanWiringDisposition(
+  tasks: TaskWiringContract[],
+  gaps: string[],
+): PlanWiringDispositionResult {
+  const planIsContractBearing = tasks.some((task) => task.parseResult !== null);
+
+  if (!planIsContractBearing) {
+    return { satisfied: true, reason: LEGACY_ADVISORY_REASON, gaps: [], advisories: gaps };
+  }
+
+  return { satisfied: gaps.length === 0, gaps, advisories: [] };
+}
+
 // ── Waiver ref resolution (inert `Wired-into:` declarations) ──────────────────
 
 /**

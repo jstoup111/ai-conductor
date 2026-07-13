@@ -21,6 +21,8 @@ import {
   orphanBackstop,
   checkContractConsistency,
   runWiringProbe,
+  evaluatePlanWiringDisposition,
+  LEGACY_ADVISORY_REASON,
   WIRING_SCOPE_UNDETERMINABLE,
 } from '../src/engine/wiring-probe.js';
 import type { GitRunner } from '../src/engine/pr-labels.js';
@@ -487,5 +489,48 @@ describe('checkContractConsistency', () => {
     expect(gaps).toEqual([
       'task 2: undeclared new-export surface — diff adds new export(s): newThing but task has no Wired-into declaration',
     ]);
+  });
+});
+
+// ── evaluatePlanWiringDisposition ───────────────────────────────────────────
+
+describe('evaluatePlanWiringDisposition', () => {
+  it('treats a plan with zero Wired-into lines as legacy advisory-only, demoting gaps to advisories', () => {
+    const tasks: TaskWiringContract[] = [
+      { taskId: '1', files: ['src/a.ts'], parseResult: null },
+      { taskId: '2', files: ['src/b.ts'], parseResult: null },
+    ];
+    const layer1Gaps = [
+      'newThing exported but referenced only within its own defining file (no external wiring)',
+    ];
+
+    const result = evaluatePlanWiringDisposition(tasks, layer1Gaps);
+
+    expect(result.satisfied).toBe(true);
+    expect(result.reason).toContain(LEGACY_ADVISORY_REASON);
+    expect(result.reason).toContain('legacy plan (pre-Wired-into contract): wiring gate advisory-only');
+    expect(result.gaps).toEqual([]);
+    expect(result.advisories).toEqual(layer1Gaps);
+  });
+
+  it('fully gates a plan with exactly one Wired-into line anywhere — legacy disposition does not apply', () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '1',
+        files: ['src/a.ts'],
+        parseResult: { kind: 'declared', sites: [{ path: 'src/b.ts', symbol: 'used' }] },
+      },
+      { taskId: '2', files: ['src/c.ts'], parseResult: null },
+    ];
+    const layer1Gaps = [
+      'task 2: undeclared new-export surface — diff adds new export(s): newThing but task has no Wired-into declaration',
+    ];
+
+    const result = evaluatePlanWiringDisposition(tasks, layer1Gaps);
+
+    expect(result.satisfied).toBe(false);
+    expect(result.reason).toBeUndefined();
+    expect(result.gaps).toEqual(layer1Gaps);
+    expect(result.advisories).toEqual([]);
   });
 });
