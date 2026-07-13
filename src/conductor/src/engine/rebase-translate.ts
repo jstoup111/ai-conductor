@@ -116,10 +116,6 @@ export function resolveThroughMap(sha: string, map: Record<string, string>): str
   return current;
 }
 
-interface SerializedRewriteMap {
-  map: Record<string, string>;
-}
-
 interface EvidenceStampLike {
   sha?: string;
   citedShas?: string[];
@@ -217,7 +213,8 @@ export async function applyMapToStores(
     if (parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks)) {
       for (const task of parsed.tasks) {
         if (task && typeof task.commit === 'string') {
-          task.commit = resolveThroughMap(task.commit, map);
+          const resolved = resolveThroughMap(task.commit, map);
+          task.commit = resolved.slice(0, task.commit.length);
         }
       }
 
@@ -242,9 +239,9 @@ export async function loadRewriteMap(projectRoot: string): Promise<Record<string
 
   try {
     const raw = await readFile(rewritesPath, 'utf-8');
-    const parsed = JSON.parse(raw) as SerializedRewriteMap;
-    if (parsed && typeof parsed === 'object' && parsed.map && typeof parsed.map === 'object') {
-      return parsed.map;
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
     }
     return {};
   } catch {
@@ -272,9 +269,9 @@ export async function persistRewriteMap(
   try {
     const raw = await readFile(rewritesPath, 'utf-8');
     try {
-      const parsed = JSON.parse(raw) as SerializedRewriteMap;
-      if (parsed && typeof parsed === 'object' && parsed.map && typeof parsed.map === 'object') {
-        existing = parsed.map;
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      if (parsed && typeof parsed === 'object') {
+        existing = parsed;
       }
     } catch (parseErr) {
       console.warn(
@@ -298,7 +295,11 @@ export async function persistRewriteMap(
 
   await mkdir(pipelineDir, { recursive: true });
 
-  const serialized: SerializedRewriteMap = { map: closed };
+  // Persisted directly as the flat old-sha -> new-sha map (no wrapper
+  // object): read-time consumers (`loadRewriteMap`) and every direct-file
+  // acceptance/consumer assertion index the file by sha key at the top
+  // level.
+  const serialized: Record<string, string> = closed;
 
   const tempFile = join(
     pipelineDir,
