@@ -79,3 +79,21 @@ wiring:
     - src/conductor/src/daemon-cli.ts
     - src/conductor/src/intake-loop-cli.ts
     - src/conductor/src/engine/engineer-cli.ts
+
+# Per-step overrides.
+#
+# manual_test is disabled for this repo's self-host builds (operator order,
+# 2026-07-13). The harness's own features are engine/CLI changes covered by
+# vitest + the integrity suite; a dispatched manual-test session adds cost
+# without signal here. The step is marked `skipped`, which satisfies the
+# downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
+# the pipeline flows build → build_review (opt-in, currently off) → prd_audit
+# (skipped on technical track) → architecture_review_as_built → rebase →
+# finish. manual_test is the only gating step whose definition opts into
+# config-disable (`configDisableAllowed`); structural steps can never be
+# disabled. Read per conduct run; new builds pick it up once the engine
+# supporting `configDisableAllowed` is deployed (rebuild + daemon reload) —
+# an OLDER engine rejects this key as "Cannot disable gating step".
+steps:
+  manual_test:
+    disable: true

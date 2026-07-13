@@ -875,7 +875,10 @@ steps:
     effort: max
     max_retries: 1
 
-  # Disable a built-in step (gating/structural steps cannot be disabled)
+  # Disable a built-in step. Gating/structural steps cannot be disabled,
+  # except gating steps whose StepDefinition opts in via `configDisableAllowed`
+  # (currently only manual_test). A disabled step is marked `skipped`, which
+  # satisfies downstream prerequisites and the gate-loop selector.
   assess:
     disable: true
 

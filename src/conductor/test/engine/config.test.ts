@@ -138,6 +138,13 @@ complexity:
       expect(result.error.message).toContain('stories');
     });
 
+    it('accepts steps.manual_test.disable: true — manual_test opts into config-disable', () => {
+      const result = validateConfig({
+        steps: { manual_test: { disable: true } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects disabling a structural step', () => {
       const result = validateConfig({
         steps: { build: { disable: true } },

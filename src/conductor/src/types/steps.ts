@@ -85,4 +85,13 @@ export interface StepDefinition {
    * selector and by the conductor's linear + looped-region skip passes.
    */
   skipWhenSkipped?: StepName;
+  /**
+   * This gating step may be disabled per-project via `steps.<name>.disable:
+   * true` in config.yml. By default `validateConfig()` rejects disabling
+   * gating/structural built-ins (a partial config must never silently drop a
+   * guardrail); this flag is the step definition's explicit opt-in for an
+   * explicit, committed, validated config disable. Structural steps ignore it
+   * — they can never be disabled. Built-ins: manual_test.
+   */
+  configDisableAllowed?: boolean;
 }

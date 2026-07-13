@@ -11,6 +11,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
+  lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
+  `.ai-conductor/config.yml`; `validateConfig()` still rejects disabling every other
+  gating step and all structural steps (fail-closed default unchanged). `manual_test`
+  is the only step that opts in. This repo's self-host config now sets
+  `steps.manual_test.disable: true` — harness features are engine/CLI changes covered
+  by vitest + the integrity suite, so a dispatched manual-test session adds cost
+  without signal. A disabled step is marked `skipped`, which satisfies downstream
+  prerequisites (prd_audit, rebase) and the SHIP-tail selector, so the pipeline chain
+  is unaffected.
 - Spec landed for #646 (`.docs/{track,complexity,intake,stories,plans}/retry-classify-rerun-vs-route.md`
   + `.docs/decisions/adr-2026-07-13-retry-classify-rerun-vs-route.md`): a deterministic rerun-vs-route
   classifier will decide, BEFORE burning a retry, whether a SHIP-tail verdict step's completion-gate

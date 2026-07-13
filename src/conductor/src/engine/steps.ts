@@ -179,6 +179,12 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: true,
     skillName: 'manual-test',
     loopGate: true,
+    // Opt-in to per-project config disable (`steps.manual_test.disable: true`).
+    // Unlike the #367 silent auto-skip this guards against, a committed config
+    // key is explicit, validated, and visible in review. A disabled step is
+    // marked `skipped`, which satisfies downstream prerequisites (prd_audit,
+    // rebase) and the selector, so the tail chain is unaffected.
+    configDisableAllowed: true,
   },
   {
     // SHIP-tail compliance gate: audits the shipped implementation against the
