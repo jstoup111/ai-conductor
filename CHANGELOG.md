@@ -63,6 +63,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   DECIDE tail unattended. BUILD-phase targets (`build`, `acceptance_specs`) still route, the
   deterministic `classifyPrdAuditGaps` fallback is untouched, and interactive mode is
   unchanged. Pure engine logic — no migration needed.
+- Evidence-gate path corroboration now checks the SET of `Task: <id>`-trailered commits
+  per task instead of only the newest one (#548): a follow-up commit (e.g. a test-fix)
+  reusing a task's trailer no longer shadows an earlier feature commit that overlaps the
+  plan's declared paths — a task is corroborated if ANY reachable trailered commit
+  overlaps. Stale/unreachable candidate SHAs (including a dangling `Evidence:
+  satisfied-by` pointer) are skipped as candidates rather than terminally rejecting the
+  task when another satisfying candidate exists. (`src/conductor/src/engine/autoheal.ts`,
+  `deriveCompletionInternal`)
 - finish GATE 0 no longer instructs a false-positive rebase check (#634): the skill
   prose implied that output from `git rev-parse --git-path rebase-merge` indicates a
   rebase in progress, but `--git-path` prints the path unconditionally — finish

@@ -454,18 +454,17 @@ describe('acceptance: escape-corpus replay through the judged lane (Story 12)', 
 
     const before = await deriveAndApply(repo, planPath);
     void before;
-    // The mono-trailer bug's actual mechanical effect: `deriveCompletion`
-    // finds only ONE commit per task id via `commits.find` (the first
-    // trailer match in git-log order, i.e. the MOST RECENT "Task: 1"
-    // commit — task 15's own commit). That commit's changed file
-    // (`src/f15.ts`) fails path corroboration against every other task's
-    // declared path, INCLUDING task 1's own (`src/f1.ts`) — so nothing
-    // resolves mechanically, not even task 1. All 16 tasks stay residue;
-    // this is the faithful #519/#520 mono-dispatch shape, not a partial one.
+    // The mono-trailer bug's mechanical effect under #548 any-candidate
+    // corroboration: `deriveCompletion` now considers the SET of "Task: 1"
+    // trailered commits for task 1, so task 1 resolves mechanically via its
+    // own `feat: task 1 work` commit (trailer + declared-path overlap) —
+    // the most-recent "Task: 1" candidate (task 15's diff) no longer
+    // shadows it. Tasks 2-16 have no matching trailer at all and stay
+    // residue for the judged lane.
     const rowsBefore = await readStatusRows(repo);
     const residueBefore = unresolvedIds(rowsBefore);
     expect(residueBefore.sort()).toEqual(
-      Array.from({ length: 16 }, (_, i) => String(i + 1)).sort(),
+      Array.from({ length: 15 }, (_, i) => String(i + 2)).sort(),
     );
 
     const lane = await loadAttributionLane();
@@ -495,10 +494,11 @@ describe('acceptance: escape-corpus replay through the judged lane (Story 12)', 
     });
 
     const stamped = (result as { stampedTaskIds: string[] }).stampedTaskIds;
-    // Split attribution: 15 distinct tasks (1-15), each with its own
+    // Split attribution: 14 distinct tasks (2-15), each with its own
     // citation, resolved out of a single mono-trailered dispatch group.
+    // Task 1 already resolved mechanically (#548) and is not residue.
     expect(stamped.sort()).toEqual(
-      Array.from({ length: 15 }, (_, i) => String(i + 1)).sort(),
+      Array.from({ length: 14 }, (_, i) => String(i + 2)).sort(),
     );
     expect(stamped).not.toContain('16');
   });

@@ -663,38 +663,45 @@ async function deriveCompletionInternal(
           result[taskId].evidencedBy = sha;
           result[taskId].status = 'completed';
           evidence.evidenceStamps.set(taskId, { sha, form: 'evidence:satisfied-by' });
-        } else {
-          // Dangling sha: log audit entry, leave incomplete
-          result[taskId].auditEntry = `Task ${taskId}: Evidence: satisfied-by ${sha.slice(0, 7)} is dangling (unreachable SHA)`;
-          console.warn(
-            `[autoheal] Task ${taskId}: dangling satisfied-by sha ${sha.slice(0, 7)}`,
-          );
+          continue;
         }
-        continue;
-      }
 
-      // Check for Evidence: skipped form
-      const skippedTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
-        e.startsWith('skipped '),
-      );
+        // Dangling sha: log audit entry, but do NOT terminally reject the
+        // task (#548/#535 stale-SHA variant) — fall through to trailer-based
+        // derivation below, which may find another satisfying candidate.
+        result[taskId].auditEntry = `Task ${taskId}: Evidence: satisfied-by ${sha.slice(0, 7)} is dangling (unreachable SHA)`;
+        console.warn(
+          `[autoheal] Task ${taskId}: dangling satisfied-by sha ${sha.slice(0, 7)}`,
+        );
+      } else {
+        // Check for Evidence: skipped form
+        const skippedTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
+          e.startsWith('skipped '),
+        );
 
-      if (skippedTrailer) {
-        // Extract the reason from "skipped <reason>"
-        const reason = skippedTrailer.slice('skipped '.length).trim();
-        result[taskId].status = 'skipped';
-        result[taskId].skipReason = reason;
-        result[taskId].completed = false;
-        continue;
+        if (skippedTrailer) {
+          // Extract the reason from "skipped <reason>"
+          const reason = skippedTrailer.slice('skipped '.length).trim();
+          result[taskId].status = 'skipped';
+          result[taskId].skipReason = reason;
+          result[taskId].completed = false;
+          continue;
+        }
       }
     }
 
-    // Look for a commit with Task: <taskId> trailer
-    const matchingCommit = commits.find((c) => {
+    // Collect ALL commits carrying a matching Task: <taskId> trailer (#548).
+    // A single-candidate `find` here (newest-first git order) let a follow-up
+    // commit — e.g. a test-fix reusing the trailer — shadow an earlier
+    // feature commit that DOES overlap the plan's declared paths, terminally
+    // rejecting an evidenced task. Correct semantics: a task is corroborated
+    // if ANY reachable trailered commit satisfies the path check.
+    const matchingCommits = commits.filter((c) => {
       const taskTrailers = c.trailers['Task'] || [];
       return taskTrailerMatches(taskTrailers, taskId, planIds);
     });
 
-    if (!matchingCommit) {
+    if (matchingCommits.length === 0) {
       // No current evidence found; check if task has a pinned evidence stamp in sidecar
       if (evidence.evidenceStamps.has(taskId)) {
         // Task was previously completed and evidenced; preserve that status to prevent demotion
@@ -711,58 +718,77 @@ async function deriveCompletionInternal(
       continue;
     }
 
-    // Check if the commit is empty (no files changed)
-    const filesInCommit = await filesForCommit(projectRoot, matchingCommit.sha);
-    const isEmptyCommit = filesInCommit.length === 0;
-
-    // Empty commits with only Task: trailer (no Evidence:) do not complete tasks
-    if (isEmptyCommit) {
-      result[taskId].auditEntry = `Task ${taskId}: empty commit with Task: trailer but no Evidence: form (incomplete)`;
-      continue;
-    }
-
-    // Found a commit with the Task: trailer and file changes
     const taskPaths = planPaths.get(taskId);
     const hasPlanFiles = !!(taskPaths && taskPaths.size > 0);
 
-    if (!hasPlanFiles) {
-      // Task has no specific paths; trailer alone is enough
-      result[taskId].completed = true;
-      result[taskId].status = 'completed';
-      result[taskId].evidencedBy = matchingCommit.sha;
-      evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
-      continue;
-    }
+    // Iterate the candidate SET (newest first). Accept the first candidate
+    // that satisfies: non-empty AND (no declared plan paths OR path overlap).
+    // Empty candidates are skipped, not terminal: an empty diff also covers
+    // the stale/unreachable-SHA variant (#535 adjacent) because
+    // filesForCommit returns [] when git cannot resolve the sha — such
+    // candidates must never mask a reachable satisfying one.
+    let satisfyingSha: string | null = null;
+    let newestNonEmpty: { sha: string; files: string[] } | null = null;
+    for (const candidate of matchingCommits) {
+      const filesInCommit = await filesForCommit(projectRoot, candidate.sha);
+      if (filesInCommit.length === 0) continue;
+      if (!newestNonEmpty) newestNonEmpty = { sha: candidate.sha, files: filesInCommit };
 
-    // Task has paths; verify commit touches at least one
-    const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
-
-    if (overlap.length === 0) {
-      // Path mismatch: a semantic-verified evidence stamp (judge lane)
-      // outranks the trailer/path-overlap heuristic — the judge has
-      // already confirmed intent against the actual diff.
-      const stamp = evidence.evidenceStamps.get(taskId);
-      if (stamp?.form === 'semantic-verified') {
-        result[taskId].completed = true;
-        result[taskId].status = 'completed';
-        result[taskId].evidencedBy = stamp.sha;
-        continue;
+      if (!hasPlanFiles) {
+        // Task has no specific paths; trailer alone is enough
+        satisfyingSha = candidate.sha;
+        break;
       }
 
-      // Path mismatch: log audit entry
-      result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
-      warnOnce(
-        `${projectRoot}:pathcorr:${taskId}:${matchingCommit.sha}`,
-        `[autoheal] Path corroboration failed for task ${taskId}: trailer ${matchingCommit.sha.slice(0, 7)} has no overlap with plan paths`,
-      );
+      const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
+      if (overlap.length > 0) {
+        satisfyingSha = candidate.sha;
+        break;
+      }
+    }
+
+    if (satisfyingSha) {
+      result[taskId].completed = true;
+      result[taskId].status = 'completed';
+      result[taskId].evidencedBy = satisfyingSha;
+      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: 'trailer' });
       continue;
     }
 
-    // Path overlap confirmed; mark completed
-    result[taskId].completed = true;
-    result[taskId].status = 'completed';
-    result[taskId].evidencedBy = matchingCommit.sha;
-    evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
+    if (!newestNonEmpty) {
+      // Every candidate was empty (or unreachable): trailer-only empty
+      // commits without an Evidence: form do not complete tasks. Append to
+      // (never overwrite) an earlier audit entry — e.g. a dangling
+      // satisfied-by note from the fall-through above.
+      const emptyEntry = `Task ${taskId}: empty commit with Task: trailer but no Evidence: form (incomplete)`;
+      result[taskId].auditEntry = result[taskId].auditEntry
+        ? `${result[taskId].auditEntry}; ${emptyEntry}`
+        : emptyEntry;
+      continue;
+    }
+
+    // No candidate overlapped: a semantic-verified evidence stamp (judge
+    // lane) outranks the trailer/path-overlap heuristic — the judge has
+    // already confirmed intent against the actual diff.
+    const stamp = evidence.evidenceStamps.get(taskId);
+    if (stamp?.form === 'semantic-verified') {
+      result[taskId].completed = true;
+      result[taskId].status = 'completed';
+      result[taskId].evidencedBy = stamp.sha;
+      continue;
+    }
+
+    // Path mismatch across ALL candidates: log audit entry (report the
+    // newest non-empty candidate, as before), appending to — never
+    // overwriting — any earlier entry (e.g. dangling satisfied-by note)
+    const mismatchEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${newestNonEmpty.sha.slice(0, 7)} touched [${newestNonEmpty.files.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths!).slice(0, 3).join(', ')}...]`;
+    result[taskId].auditEntry = result[taskId].auditEntry
+      ? `${result[taskId].auditEntry}; ${mismatchEntry}`
+      : mismatchEntry;
+    warnOnce(
+      `${projectRoot}:pathcorr:${taskId}:${newestNonEmpty.sha}`,
+      `[autoheal] Path corroboration failed for task ${taskId}: trailer ${newestNonEmpty.sha.slice(0, 7)} has no overlap with plan paths`,
+    );
   }
 
   // Write evidence to sidecar
