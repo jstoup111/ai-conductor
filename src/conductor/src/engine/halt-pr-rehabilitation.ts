@@ -9,7 +9,9 @@
  * here; the finish completion gate enforces it (Decision 3).
  *
  * Detection is stateless (Decision 4): halt signal = title prefixed
- * `needs-remediation:` OR the `needs-remediation` label. Draft status alone is
+ * `needs-remediation:` OR the `needs-remediation` label OR the engine-authored
+ * halt banner sentinel in the body (`HALT_PR_BANNER_SENTINEL`, issue #632) —
+ * three independent, purely-observable signals. Draft status alone is
  * NOT a halt signal — `pr_timing: early-draft` opens legitimate clean-titled
  * draft PRs (#199).
  *
@@ -19,7 +21,13 @@
  */
 
 import type { GhRunner } from './pr-labels.js';
-import { cleanupHaltPresentation, readHaltPresentation, setReady, defaultSleep } from './pr-labels.js';
+import {
+  cleanupHaltPresentation,
+  readHaltPresentation,
+  setReady,
+  defaultSleep,
+  HALT_PR_BANNER_SENTINEL,
+} from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
 export const NEEDS_REMEDIATION_TITLE_PREFIX = 'needs-remediation:';
@@ -88,7 +96,8 @@ export async function rehabilitateHaltPr(
 
   const hasHaltTitle = view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX);
   const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
-  if (!hasHaltTitle && !hasHaltLabel) return 'not-halt-pr';
+  const hasHaltBanner = (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL);
+  if (!hasHaltTitle && !hasHaltLabel && !hasHaltBanner) return 'not-halt-pr';
 
   // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
   // which retries each mutation (bounded, with backoff) and re-reads to

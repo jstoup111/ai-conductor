@@ -520,6 +520,19 @@ export const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -
  */
 export const OWNER_GATED_MARKER = '<!-- conductor:owner-gated -->';
 
+/**
+ * First line of the engine-authored halt PR body (build-failure-escalation.ts).
+ * Stable sentinel: its presence in a PR body is a stateless halt signal
+ * (issue #632).
+ */
+export const HALT_PR_BANNER_SENTINEL =
+  'This PR was opened automatically after an irrecoverable daemon HALT.';
+export const HALT_PR_BANNER_LINES = [
+  HALT_PR_BANNER_SENTINEL,
+  'Manual remediation is required to unblock this feature.',
+  'See the comment below for the failure reason.',
+] as const;
+
 interface ParsedCommentRef {
   owner: string;
   repo: string;

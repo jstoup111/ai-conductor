@@ -24,6 +24,8 @@ import {
   upsertComment,
   ensureHaltPresentation,
   NEEDS_REMEDIATION_MARKER,
+  HALT_PR_BANNER_SENTINEL,
+  HALT_PR_BANNER_LINES,
 } from './pr-labels.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -152,12 +154,7 @@ export async function escalateBuildFailure(
       base,
       draft: true,
       title: `needs-remediation: ${branch} — manual remediation required`,
-      body: [
-        'This PR was opened automatically after an irrecoverable daemon HALT.',
-        '',
-        'Manual remediation is required to unblock this feature.',
-        'See the comment below for the failure reason.',
-      ].join('\n'),
+      body: [HALT_PR_BANNER_SENTINEL, '', ...HALT_PR_BANNER_LINES.slice(1)].join('\n'),
     },
     log,
   );
