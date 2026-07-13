@@ -82,7 +82,7 @@ interface AttributionMemo {
  * @param residueIds - Task IDs to sort and join
  * @returns Memoization key
  */
-function computeMemoKey(headSha: string, residueIds: string[]): string {
+export function computeMemoKey(headSha: string, residueIds: string[]): string {
   const sorted = [...residueIds].sort();
   return `${headSha}:${sorted.join(',')}`;
 }
@@ -109,7 +109,7 @@ async function getCurrentHeadSha(git: GitRunner): Promise<string> {
  * @param expectedKey - Expected memoization key
  * @returns Memoized result or undefined
  */
-async function readMemo(memoPath: string, expectedKey: string): Promise<string | undefined> {
+export async function readMemo(memoPath: string, expectedKey: string): Promise<string | undefined> {
   try {
     const content = await readFile(memoPath, 'utf-8');
     const memo: AttributionMemo = JSON.parse(content);
@@ -130,7 +130,7 @@ async function readMemo(memoPath: string, expectedKey: string): Promise<string |
  * @param key - Memoization key
  * @param result - Verifier output
  */
-async function writeMemo(memoPath: string, key: string, result: string): Promise<void> {
+export async function writeMemo(memoPath: string, key: string, result: string): Promise<void> {
   const pipelineDir = dirname(memoPath);
   try {
     await mkdir(pipelineDir, { recursive: true });
