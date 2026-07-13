@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# update — Standalone self-update/channel CLI for the harness, ported out of
+# bin/conduct's update block (see .docs/plans/port-self-update-flow.md and
+# .docs/stories/port-self-update-flow.md). bin/conduct still retains its own
+# copy of the update flow until #226 removes it.
+#
+# Usage:
+#   update --check
+#   update --apply
+#   update --channel <stable|beta|dev>
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=bin/lib/harness-common.sh
+source "${HARNESS_DIR}/bin/lib/harness-common.sh"
+
+# Functions implemented in later tasks (check/apply/channel dispatch) are
+# intentionally not defined yet — this task only wires up the skeleton and
+# shared helpers.
