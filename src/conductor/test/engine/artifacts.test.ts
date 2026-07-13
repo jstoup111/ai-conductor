@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
 import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
@@ -1231,6 +1234,81 @@ describe('engine/artifacts', () => {
 
           // Verify the reason mentions empty-plan trigger
           expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+      });
+
+      // Regression (#578 live-fire follow-up, 2026-07-12): a real build
+      // (`2026-07-12-rtk-hook-preservation`) used `### T0 — Title` shorthand
+      // headers (no literal "Task" word, ids start at T0 not T1). The
+      // already-shipped em-dash fix (Task 1/#590) still requires the literal
+      // word "Task" before the id, so this plan parsed to zero task ids and
+      // the daemon auto-parked a fully-completed 5/5 build as "empty/missing
+      // plan". Uses the actual incident plan file as a fixture.
+      describe('regression: bare "T<N>" shorthand headings (### T0 — Title) are not false-positives for empty-plan', () => {
+        it('Story 1: T-prefix plan (headers start at T0, no "Task" word) with evidence is "done", not "empty"', async () => {
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+          const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-tprefix-origin-'));
+          await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+          await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+          await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+          // Mirrors the real incident plan's authoring convention:
+          // `### T0 — Title` (no "Task" word, starts at T0 not T1).
+          await writePlan(
+            '# Implementation Plan: T-prefix Test\n\n' +
+            '### T0 — First T-prefix task\n' +
+            '**Story:** 1\n' +
+            '**Files:** `src/t0.ts`\n\n' +
+            '### T1 — Second T-prefix task\n' +
+            '**Story:** 2\n' +
+            '**Files:** `src/t1.ts`\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add T-prefix plan'], { cwd: dir });
+
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/t0.ts'), 'export const t0 = true;\n');
+          await execa('git', ['add', 'src/t0.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement T0\n\nTask: 0\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/t1.ts'), 'export const t1 = true;\n');
+          await execa('git', ['add', 'src/t1.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement T1\n\nTask: 1\n'], { cwd: dir });
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result).toEqual({ done: true });
+
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/empty|no tasks in plan|plan is empty/i);
+          }
+
+          await rm(bareDir, { recursive: true, force: true });
+        });
+
+        it('Story 2: real 2026-07-12-rtk-hook-preservation.md incident fixture is not "no tasks in plan" (presence gate)', async () => {
+          // The presence-check gate (artifacts.ts) must recognize the real
+          // incident plan as non-empty, independent of evidence/completion.
+          const fixturePath = join(
+            __dirname,
+            '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+          );
+          const fixtureText = await readFile(fixturePath, 'utf-8');
+          await writePlan(fixtureText);
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          // Must not be the empty/missing-plan false-positive (may still be
+          // "pending" since there's no evidence in this test — that's fine).
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
         });
       });
     });

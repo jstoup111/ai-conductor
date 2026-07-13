@@ -16,6 +16,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Daemon build-completion gate no longer false-parks a fully-completed build as
+  "empty/missing plan" when the plan's task headings use the bare `### T<N> —
+  Title` shorthand (no "Task" word, ids starting at `T0`) — the form used by
+  the real `2026-07-12-rtk-hook-preservation` plan that fired this live: the
+  presence-check gate (`checkStepCompletion` in `src/engine/artifacts.ts`) and
+  `parsePlanTaskPaths`/`parsePlanTasks` (`src/engine/autoheal.ts`) now accept a
+  `T<digits>` header as an alias for `Task <id>`, alongside the existing
+  colon/em-dash/en-dash forms, so `T<N>` plans parse their task ids, evidence
+  is stamped, and the build passes the gate instead of auto-parking
+  (ai-conductor#578).
 - Corrected a Fable-pricing doc error and re-reviewed model selection on the
   right economics. Fable 5 is the **premium** tier ($10/$50 per 1M — ~2x Opus
   4.8's $5/$25, 3-5x Sonnet), not "cheaper generation" as the `explore`, `prd`,

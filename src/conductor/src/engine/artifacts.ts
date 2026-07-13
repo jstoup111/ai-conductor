@@ -692,10 +692,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
 
       // Quick check: plan must have at least one task block. The header match
-      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar) — the
-      // old `^### Task \d+` form rejected h2 headings and every remediation
-      // id (`rem-…`), reading real plans as "empty".
-      if (!planText.trim() || !/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+/im.test(planText)) {
+      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar,
+      // including the bare `T<N>` shorthand with no "Task" word — #578) —
+      // the old `^### Task \d+` form rejected h2 headings and every
+      // remediation id (`rem-…`), reading real plans as "empty".
+      if (
+        !planText.trim() ||
+        !/^#{1,6}\s+(?:Task\s+[A-Za-z0-9._-]+|T\d[A-Za-z0-9._-]*)/im.test(planText)
+      ) {
         return {
           done: false,
           reason: 'plan is empty or contains no tasks (### Task <id> headings required)',

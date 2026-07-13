@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for taskTrailerMatches (Task 1, alias helper with ambiguity guard).
@@ -781,6 +784,87 @@ Setup with en-dash separator.
 
     expect(result.has('1')).toBe(true);
     expect(result.get('1')!.name).toBe('Initialize with en-dash');
+  });
+
+  // Regression (#578 live-fire follow-up, 2026-07-12): the already-shipped
+  // em-dash fix requires the literal word "Task" before the id. A real build
+  // (`2026-07-12-rtk-hook-preservation`) used the shorthand `### T0 — Title`
+  // heading form (no "Task" word, starts at T0 not T1) — those headers parsed
+  // to zero ids under the old regex, so the build-completion gate reported
+  // "no tasks in plan" and the daemon auto-parked a fully-completed 5/5 build.
+  describe('bare "T<N>" shorthand headers (### T0 — Title, no "Task" word)', () => {
+    it('parsePlanTasks: parses bare T-prefixed headers starting at T0', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### T0 — Confirm edit sites
+Re-read the install script.
+
+### T1 — Mocked rtk test fixture
+Add a reusable test helper.
+`;
+      const result = mod.parsePlanTasks(planText);
+
+      expect(result.has('0')).toBe(true);
+      expect(result.get('0')!.name).toBe('Confirm edit sites');
+
+      expect(result.has('1')).toBe(true);
+      expect(result.get('1')!.name).toBe('Mocked rtk test fixture');
+    });
+
+    it('parsePlanTaskPaths: parses bare T-prefixed headers and their paths', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### T0 — Confirm edit sites
+**Files:** \`bin/install\`
+
+### T1 — Mocked rtk test fixture
+**Files:** \`test/test_rtk_hook_reinit.sh\`
+`;
+      const result = mod.parsePlanTaskPaths(planText);
+
+      expect(result.has('0')).toBe(true);
+      expect(result.get('0')!.has('bin/install')).toBe(true);
+
+      expect(result.has('1')).toBe(true);
+      expect(result.get('1')!.has('test/test_rtk_hook_reinit.sh')).toBe(true);
+    });
+
+    it('parsePlanTaskPaths: extracts the real 2026-07-12-rtk-hook-preservation.md fixture tasks (T0-T5)', async () => {
+      const mod = await loadAutoheal();
+      const fixturePath = join(
+        __dirname,
+        '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+      );
+      const planText = await readFile(fixturePath, 'utf-8');
+
+      const result = mod.parsePlanTaskPaths(planText);
+
+      for (const id of ['0', '1', '2', '3', '4', '5']) {
+        expect(result.has(id)).toBe(true);
+      }
+    });
+
+    it('over-capture guard: does not treat "T" in ordinary words (Testing, Team) as a task header', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Testing infrastructure notes
+Prose that starts with a capital T word but is not a task header.
+
+### Team sync
+More prose.
+`;
+      const result = mod.parsePlanTasks(planText);
+      expect(result.size).toBe(0);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.size).toBe(0);
+    });
   });
 });
 
