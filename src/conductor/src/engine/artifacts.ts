@@ -1,4 +1,4 @@
-import { access, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -381,6 +381,18 @@ export interface CompletionContext {
    * If repair throws, a warning is logged and Phase 2 proceeds (warn-only, not fatal).
    */
   repairFinishPr?: (prUrl: string) => Promise<void>;
+  /**
+   * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
+   * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
+   * `checkContractConsistency` orchestration into the gate live). When the
+   * wiring_check predicate finds no pre-existing evidence file, it invokes
+   * this to COMPUTE fresh evidence (rather than only reading a pre-written
+   * `.pipeline/wiring-evidence.json` fixture), then durably writes the
+   * result so subsequent reads (and audit trail) see the same evidence.
+   * Absent → predicate falls back to the pre-Task-18 read-only behavior
+   * (fail-closed "evidence not found" when no fixture exists).
+   */
+  wiringProbe?: () => Promise<WiringEvidence>;
 }
 
 /**
@@ -1267,20 +1279,43 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // is unreachable/undeclared.
   wiring_check: async (dir, ctx): Promise<CompletionResult> => {
     const path = join(dir, WIRING_EVIDENCE);
-    let raw: string;
+    let raw: string | null;
     try {
       raw = await readFile(path, 'utf-8');
     } catch {
-      return {
-        done: false,
-        reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
-      };
+      raw = null;
     }
+
     let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return { done: false, reason: `invalid JSON in ${WIRING_EVIDENCE}` };
+    if (raw === null) {
+      // No pre-existing evidence fixture — compute it live via the
+      // injected probe (push-evidence injection, same convention as
+      // ctx.getHeadSha/ctx.isHeadPushed). Absent injector → fail closed
+      // exactly as before Task 18.
+      if (!ctx.wiringProbe) {
+        return {
+          done: false,
+          reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
+        };
+      }
+      let computed: WiringEvidence;
+      try {
+        computed = await ctx.wiringProbe();
+      } catch (err) {
+        return {
+          done: false,
+          reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(path, JSON.stringify(computed, null, 2));
+      parsed = computed;
+    } else {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { done: false, reason: `invalid JSON in ${WIRING_EVIDENCE}` };
+      }
     }
     const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const validated = validateWiringEvidence(parsed, currentHead);

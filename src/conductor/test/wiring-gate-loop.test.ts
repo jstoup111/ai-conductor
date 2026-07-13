@@ -20,7 +20,7 @@
  *     — a migration/backward-compat check at the selector level.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, access, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -38,6 +38,8 @@ import { ConductorEventEmitter } from '../src/ui/events.js';
 import { readState, writeState } from '../src/engine/state.js';
 import { Conductor } from '../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../src/engine/conductor.js';
+import { checkStepCompletion } from '../src/engine/artifacts.js';
+import type { WiringEvidence } from '../src/engine/artifacts.js';
 
 function frontDone(): ConductState {
   return {
@@ -320,5 +322,93 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build').length).toBeGreaterThan(0);
     expect(halted).toBe(true);
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+  });
+});
+
+describe('wiring_check predicate — live probe invocation via ctx.wiringProbe (Task 18)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'wiring-gate-loop-probe-'));
+    // Intentionally do NOT pre-create .pipeline/ — the predicate must
+    // ensure-dir before writing evidence when no pre-existing fixture exists.
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('invokes the injected probe, writes .pipeline/wiring-evidence.json (creating .pipeline/ first), and reports satisfied when the probe finds zero gaps', async () => {
+    const evidence: WiringEvidence = {
+      baseSha: 'base',
+      headSha: 'head',
+      layer2Applicable: false,
+      waiverResolutions: [],
+      tasks: [{ taskId: 't1', contractForm: 'declared', symbols: [] }],
+    };
+    let probeCalls = 0;
+    const result = await checkStepCompletion(dir, 'wiring_check', {
+      getHeadSha: async () => 'head',
+      wiringProbe: async () => {
+        probeCalls++;
+        return evidence;
+      },
+    });
+
+    expect(probeCalls).toBe(1);
+    expect(result.done).toBe(true);
+
+    const written = await readFile(join(dir, '.pipeline/wiring-evidence.json'), 'utf-8');
+    expect(JSON.parse(written)).toEqual(evidence);
+  });
+
+  it('invokes the injected probe and reports unsatisfied with the gap message when the probe finds a real gap', async () => {
+    const evidence: WiringEvidence = {
+      baseSha: 'base',
+      headSha: 'head',
+      layer2Applicable: false,
+      waiverResolutions: [],
+      tasks: [
+        {
+          taskId: 't1',
+          contractForm: 'inert',
+          symbols: [{ symbol: 'foo', kind: 'orphan', message: 'foo unreachable' }],
+        },
+      ],
+    };
+    const result = await checkStepCompletion(dir, 'wiring_check', {
+      getHeadSha: async () => 'head',
+      wiringProbe: async () => evidence,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain('foo unreachable');
+
+    const written = await readFile(join(dir, '.pipeline/wiring-evidence.json'), 'utf-8');
+    expect(JSON.parse(written)).toEqual(evidence);
+  });
+
+  it('does not invoke the probe when a pre-existing fresh evidence file is already present', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/wiring-evidence.json'),
+      JSON.stringify({
+        baseSha: 'base',
+        headSha: 'head',
+        layer2Applicable: false,
+        waiverResolutions: [],
+        tasks: [{ taskId: 't1', contractForm: 'declared', symbols: [] }],
+      }),
+    );
+    let probeCalls = 0;
+    const result = await checkStepCompletion(dir, 'wiring_check', {
+      getHeadSha: async () => 'head',
+      wiringProbe: async () => {
+        probeCalls++;
+        throw new Error('should not be called');
+      },
+    });
+
+    expect(probeCalls).toBe(0);
+    expect(result.done).toBe(true);
   });
 });
