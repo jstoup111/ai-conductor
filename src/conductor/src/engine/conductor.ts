@@ -919,7 +919,7 @@ export class Conductor {
     hintSource: { source: string; evidenceFile: string },
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-    | { kind: 'halt'; detail: string }
+    | { kind: 'halt'; detail: string; kickbackOutcome?: string }
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
@@ -1002,6 +1002,10 @@ export class Conductor {
               fixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
               ' — remediation produced no dispatchable build work; the implicated task(s) ' +
               'are already evidence-complete — human needed',
+            // #647 D3: this HALT is specifically the D1 no-op guard (target
+            // was already evidence-complete before build ever ran) — the
+            // discriminator the audit trail surfaces via the 'kickback' event.
+            kickbackOutcome: 'derived-already-complete',
           };
         }
       }
@@ -1506,7 +1510,7 @@ export class Conductor {
      */
     const checkKickbackToBuildEscalation = async (
       sourceGate: StepName,
-    ): Promise<ShouldEscalateKickbackResult> => {
+    ): Promise<ShouldEscalateKickbackResult & { kickbackOutcome?: string }> => {
       const ctx = kickbackToBuildContext.get(sourceGate);
       if (!ctx) return { halt: false };
       kickbackToBuildContext.delete(sourceGate);
@@ -1522,12 +1526,26 @@ export class Conductor {
       });
       // The gate is failing again right now (that's why this is being
       // consulted), so nextVerdict is always false/unsatisfied here.
-      return shouldEscalateKickback({
+      const result = shouldEscalateKickback({
         progress,
         priorVerdict: ctx.priorVerdict,
         nextVerdict: false,
         enabled: kickbackEscalationEnabled,
       });
+      // #647 D3: when the intervening build DID make progress (so D2 never
+      // fires), surface that classification for the audit trail's next
+      // 'kickback' event — the commit range + resolved-count delta is the
+      // evidence that this cycle was productive, not a no-op.
+      if (progress === 'did-work') {
+        const before = ctx.headBefore ? ctx.headBefore.slice(0, 7) : 'unknown';
+        const after = headAfter ? headAfter.slice(0, 7) : 'unknown';
+        const resolvedDelta = resolvedAfter - ctx.resolvedBefore;
+        return {
+          ...result,
+          kickbackOutcome: `did-work (commits ${before}..${after} / resolved +${resolvedDelta})`,
+        };
+      }
+      return result;
     };
 
     try {
@@ -3446,6 +3464,12 @@ export class Conductor {
                   to: outcome.target,
                   evidence: outcome.evidence,
                   count: remediationRounds,
+                  // #647 D3: when checkKickbackToBuildEscalation classified the
+                  // prior build cycle as productive (it did not halt for THAT
+                  // reason), tag this re-kickback with the same discriminator.
+                  ...(gateEscalation.kickbackOutcome
+                    ? { kickback_outcome: gateEscalation.kickbackOutcome }
+                    : {}),
                 });
                 pendingRetryHints.set(outcome.target, outcome.hint);
 
@@ -3473,6 +3497,22 @@ export class Conductor {
                 const reason =
                   `${finishGate ? 'finish' : 'as-built architecture review'} halted: ` +
                   `needs human DECIDE — ${outcome.detail}`;
+                // #647 D3: the D1 no-op guard (planRemediation stamps
+                // kickbackOutcome='derived-already-complete' when the target
+                // was already evidence-complete) — emit a 'kickback' audit
+                // event carrying that discriminator so the audit trail
+                // distinguishes this from a productive kickback, even though
+                // no route/re-entry into build actually happens.
+                if (outcome.kickbackOutcome) {
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: step.name,
+                    to: 'build',
+                    evidence: outcome.detail,
+                    count: remediationRounds,
+                    kickback_outcome: outcome.kickbackOutcome,
+                  });
+                }
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
                 );

@@ -245,6 +245,49 @@ describe('engine/audit-trail', () => {
     expect(record.cause).toBe('conflict_check evidence: missing seam');
   });
 
+  it('subscribe() carries kickback_outcome onto the record when present (#647 D3 did-work)', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'kickback',
+      from: 'architecture_review_as_built',
+      to: 'build',
+      evidence: 'test:as-built-gap→build',
+      count: 1,
+      kickback_outcome: 'did-work (commits abc1234..def5678 / resolved +1)',
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.kickback_outcome).toBe('did-work (commits abc1234..def5678 / resolved +1)');
+  });
+
+  it('subscribe() omits kickback_outcome from the record when the event carries none (#647 D3)', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'kickback',
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const lines = contents.split('\n').filter((line) => line.length > 0);
+    const record = JSON.parse(lines[0]) as AuditRecord;
+    expect(record.kickback_outcome).toBeUndefined();
+  });
+
   it('subscribe() maps step_retry to a retry record with attempt and reason', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

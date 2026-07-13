@@ -138,6 +138,15 @@ export type ConductorEvent =
       evidence?: string;
       /** How many times this gate has been re-opened this feature. */
       count: number;
+      /**
+       * #647 D3 (adr-2026-07-13-kickback-build-no-op-escalation): audit
+       * discriminator distinguishing a kickback that produced real build
+       * progress (`'did-work (commits N..M / resolved +K)'`, derived from
+       * `classifyBuildProgress`) from one whose target was already
+       * evidence-complete before build ever ran (`'derived-already-complete'`).
+       * Absent when neither classification has been computed for this event.
+       */
+      kickback_outcome?: string;
     }
   | {
       /** The gate loop stopped without converging (kickback/stuck cap). */
