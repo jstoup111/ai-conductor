@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 // Task 3 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
 //
@@ -309,4 +310,42 @@ export async function persistRewriteMap(
     await rm(tempFile, { force: true }).catch(() => {});
     throw err;
   }
+}
+
+/** One residue entry: a pre-image sha with no patch-id match post-rebase. */
+export interface ResidueEntry {
+  sha: string;
+  citingTaskIds: string[];
+  reason: string;
+}
+
+interface SerializedResidue {
+  residue: ResidueEntry[];
+}
+
+/**
+ * Writes `residueEntries` to `.pipeline/rebase-residue.json` and emits a
+ * `rebase_citation_residue` structured event, mirroring the
+ * `rebase_gate_reverified` event-emission pattern in `src/engine/rebase.ts`'s
+ * `emitRebaseEvent`. Per adr-2026-07-12-rebase-evidence-stamp-translation.md
+ * Story 7, residue shas (dropped/patch-changed pre-image commits) must never
+ * be silently repointed — `writeResidue` only ever writes to
+ * `rebase-residue.json`; it never touches `.pipeline/rebase-rewrites.json`.
+ */
+export async function writeResidue(
+  projectRoot: string,
+  events: ConductorEventEmitter,
+  residueEntries: ResidueEntry[],
+): Promise<void> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const residuePath = join(pipelineDir, 'rebase-residue.json');
+
+  const serialized: SerializedResidue = { residue: residueEntries };
+
+  await atomicWriteJson(pipelineDir, residuePath, 'rebase-residue', serialized);
+
+  await events.emit({
+    type: 'rebase_citation_residue',
+    residue: residueEntries,
+  });
 }

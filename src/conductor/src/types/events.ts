@@ -182,6 +182,15 @@ export type ConductorEvent =
       reason: string;
       conflicts: string[];
     }
+  | {
+      /**
+       * Residue: pre-image shas cited by evidence but with no patch-id
+       * match post-rebase (dropped or content-changed). Surfaced instead of
+       * silently repointed — see `writeResidue` in engine/rebase-translate.ts.
+       */
+      type: 'rebase_citation_residue';
+      residue: Array<{ sha: string; citingTaskIds: string[]; reason: string }>;
+    }
   // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
   | {
       /** One attempt at auto-resolving a conflict; index is 1-based, cap is the total budget. */
