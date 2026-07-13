@@ -4812,6 +4812,105 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('FAIL verdict waits for siblings (Task 19)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Fails fast: no delay, never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            // Slow sibling — must be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 50));
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            // Slower sibling — must also be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 80));
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // The group ultimately halts (manual_test never produced a verdict) —
+      // but only AFTER both slower siblings ran to completion, not before.
+      expect(haltCount).toBeGreaterThan(0);
+
+      // Proof the slow siblings were never aborted/cancelled when the fast
+      // branch failed: their own completion markers exist on disk by the
+      // time conductor.run() resolves. If the executor had cancelled
+      // in-flight branches on the fast failure, these setTimeout-guarded
+      // writes would not have happened yet.
+      const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
+      expect(prdAuditMarker).toBe(PRD_AUDIT_PASS);
+      const asBuiltMarker = await readFile(
+        join(dir, '.pipeline/architecture-review-as-built.md'),
+        'utf-8',
+      );
+      expect(asBuiltMarker).toBe(AS_BUILT_APPROVED);
+
+      // All three members were in fact dispatched — none were skipped or
+      // starved by the fast failure.
+      expect(runner.run).toHaveBeenCalledWith(
+        'manual_test',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
+      expect(runner.run).toHaveBeenCalledWith(
+        'architecture_review_as_built',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
   describe('validation group membership resolution (Task 15)', () => {
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
