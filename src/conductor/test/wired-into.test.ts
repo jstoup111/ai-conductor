@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseWiredIntoLine, serializeWiredInto } from '../src/engine/wired-into';
+import {
+  parseWiredIntoLine,
+  serializeWiredInto,
+  resolveWiredInto,
+  combineWiredInto,
+  type WiredIntoParseResult,
+} from '../src/engine/wired-into';
 
 describe('parseWiredIntoLine', () => {
   it('parses a single declared site', () => {
@@ -66,7 +72,7 @@ describe('parseWiredIntoLine', () => {
     if (result.kind !== 'malformed') throw new Error('unreachable');
     expect(result.message).toContain('fix it later');
     expect(result.message).toContain('declared site(s)');
-    expect(result.message).not.toContain('same as Task N');
+    expect(result.message).toContain('same as Task N');
     expect(result.message).toContain('none (no new production surface)');
     expect(result.message).toContain('none (inert until <ref>)');
   });
@@ -93,4 +99,64 @@ describe('serializeWiredInto round-trip', () => {
       expect(reparsed).toEqual(parsed);
     });
   }
+});
+
+describe('resolveWiredInto (inheritance)', () => {
+  it('resolves "same as Task N" against a task map', () => {
+    const taskMap = new Map<string, WiredIntoParseResult>([
+      ['3', { kind: 'declared', sites: [{ path: 'src/a.ts', symbol: 'foo' }] }],
+    ]);
+    const result = resolveWiredInto('**Wired-into:** same as Task 3', taskMap);
+    expect(result).toEqual({
+      kind: 'declared',
+      sites: [{ path: 'src/a.ts', symbol: 'foo' }],
+    });
+  });
+
+  it('errors with a named message when the inheritance target is absent', () => {
+    const taskMap = new Map<string, WiredIntoParseResult>();
+    const result = resolveWiredInto('**Wired-into:** same as Task 99', taskMap);
+    expect(result.kind).toBe('malformed');
+    if (result.kind !== 'malformed') throw new Error('unreachable');
+    expect(result.message).toContain('inheritance target Task 99 not found');
+  });
+
+  it('falls through to normal parsing for non-inheritance lines', () => {
+    const taskMap = new Map<string, WiredIntoParseResult>();
+    const result = resolveWiredInto(
+      '**Wired-into:** src/a.ts#foo',
+      taskMap,
+    );
+    expect(result).toEqual({
+      kind: 'declared',
+      sites: [{ path: 'src/a.ts', symbol: 'foo' }],
+    });
+  });
+});
+
+describe('combineWiredInto (multi-line accumulation)', () => {
+  it('accumulates two declared results into one, preserving order', () => {
+    const first: WiredIntoParseResult = {
+      kind: 'declared',
+      sites: [{ path: 'src/a.ts', symbol: 'foo' }],
+    };
+    const second: WiredIntoParseResult = {
+      kind: 'declared',
+      sites: [{ path: 'src/b.ts', symbol: 'bar' }],
+    };
+    expect(combineWiredInto(first, second)).toEqual({
+      kind: 'declared',
+      sites: [
+        { path: 'src/a.ts', symbol: 'foo' },
+        { path: 'src/b.ts', symbol: 'bar' },
+      ],
+    });
+  });
+
+  it('propagates a malformed result from either side', () => {
+    const declared: WiredIntoParseResult = { kind: 'declared', sites: [] };
+    const bad: WiredIntoParseResult = { kind: 'malformed', message: 'bad' };
+    expect(combineWiredInto(declared, bad)).toEqual(bad);
+    expect(combineWiredInto(bad, declared)).toEqual(bad);
+  });
 });

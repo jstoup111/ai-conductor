@@ -54,14 +54,13 @@ export interface WiredIntoMalformed {
 
 /**
  * The currently-implemented accepted forms, used verbatim in malformed-line
- * error messages. `same as Task N` (inheritance shorthand) is not listed
- * here — it is not implemented yet (Task 4's scope), so the error message
- * must not claim it is accepted.
+ * error messages.
  */
 const ACCEPTED_FORMS = [
   'declared site(s) (e.g. `path/to/file.ts#symbol`, comma-separated)',
   '`none (no new production surface)`',
   '`none (inert until <ref>)`',
+  '`same as Task N` (inheritance shorthand)',
 ];
 
 function malformed(text: string): WiredIntoMalformed {
@@ -165,4 +164,64 @@ export function serializeWiredInto(result: WiredIntoParseResult): string {
     case 'malformed':
       return `**Wired-into:** ${result.message}`;
   }
+}
+
+// Task id grammar — kept in lockstep with autoheal.ts's TASK_ID_PATTERN
+// ([A-Za-z0-9._-]+), the same grammar used elsewhere in this repo (e.g.
+// the `same` shorthand in autoheal.ts) for task-id references.
+const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+
+/** `same as Task N` inheritance shorthand, case-insensitive. */
+const SAME_AS_TASK = new RegExp(`^same\\s+as\\s+task\\s+(${TASK_ID_PATTERN})$`, 'i');
+
+/**
+ * Parse a **Wired-into:** line, resolving `same as Task N` inheritance
+ * shorthand against `taskMap` (keyed by bare task id). Lines that don't use
+ * the inheritance shorthand fall through to `parseWiredIntoLine`.
+ */
+export function resolveWiredInto(
+  line: string,
+  taskMap: Map<string, WiredIntoParseResult>,
+): WiredIntoParseResult {
+  const match = line.match(WIRED_INTO_LINE);
+  const rest = match ? match[1].trim() : line.trim();
+
+  const sameAsMatch = rest.match(SAME_AS_TASK);
+  if (sameAsMatch) {
+    const targetId = sameAsMatch[1];
+    const target = taskMap.get(targetId);
+    if (!target) {
+      return {
+        kind: 'malformed',
+        message: `**Wired-into:** inheritance target Task ${targetId} not found`,
+      };
+    }
+    return target;
+  }
+
+  return parseWiredIntoLine(line);
+}
+
+/**
+ * Combine two parsed **Wired-into:** results for the same task into one,
+ * accumulating `declared` sites in order. If either side is `malformed`,
+ * that result propagates (first malformed side wins). Non-`declared` kinds
+ * on the non-malformed side are otherwise passed through unchanged when the
+ * other side contributes no sites.
+ */
+export function combineWiredInto(
+  a: WiredIntoParseResult,
+  b: WiredIntoParseResult,
+): WiredIntoParseResult {
+  if (a.kind === 'malformed') return a;
+  if (b.kind === 'malformed') return b;
+
+  const aSites = a.kind === 'declared' ? a.sites : [];
+  const bSites = b.kind === 'declared' ? b.sites : [];
+
+  if (a.kind !== 'declared' && b.kind !== 'declared') {
+    return b;
+  }
+
+  return { kind: 'declared', sites: [...aSites, ...bSites] };
 }
