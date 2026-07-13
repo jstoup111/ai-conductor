@@ -99,3 +99,70 @@ export function classifyOutcome(outcome: BranchOutcome): string {
 function assertNever(x: never): never {
   throw new Error(`group-core: unhandled BranchOutcome kind: ${JSON.stringify(x)}`);
 }
+
+/**
+ * Runs a set of async thunks with concurrency capped at `limit` (a small
+ * promise-based semaphore, no external deps). Results are returned in the
+ * same order as the input thunks, regardless of completion order. A cap of
+ * 1 yields strictly sequential execution — the mechanism validation-group
+ * fan-out relies on for `validation_concurrency: 1`.
+ *
+ * If any thunk rejects, the returned promise rejects with that error (the
+ * first rejection observed); other in-flight thunks are not cancelled, but
+ * no further thunks past those already started/queued are newly launched
+ * once rejection has been recorded for the caller's promise chain.
+ */
+export function runWithConcurrency<T>(
+  thunks: Array<() => Promise<T>>,
+  limit: number,
+): Promise<T[]> {
+  if (limit < 1) {
+    throw new Error(`group-core: runWithConcurrency limit must be >= 1, got ${limit}`);
+  }
+
+  return new Promise<T[]>((resolve, reject) => {
+    const results: T[] = new Array(thunks.length);
+    let nextIndex = 0;
+    let inFlight = 0;
+    let completed = 0;
+    let settled = false;
+
+    if (thunks.length === 0) {
+      resolve(results);
+      return;
+    }
+
+    const launchNext = () => {
+      if (settled) return;
+      if (nextIndex >= thunks.length) return;
+
+      const index = nextIndex;
+      nextIndex += 1;
+      inFlight += 1;
+
+      thunks[index]!()
+        .then((value) => {
+          results[index] = value;
+          completed += 1;
+          inFlight -= 1;
+          if (completed === thunks.length) {
+            settled = true;
+            resolve(results);
+            return;
+          }
+          launchNext();
+        })
+        .catch((err) => {
+          inFlight -= 1;
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+    };
+
+    for (let i = 0; i < limit && i < thunks.length; i += 1) {
+      launchNext();
+    }
+  });
+}
