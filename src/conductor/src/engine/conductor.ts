@@ -74,6 +74,9 @@ import {
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
   validateBuildReviewVerdict,
+  WIRING_EVIDENCE,
+  validateWiringEvidence,
+  type WiringEvidence,
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
@@ -2833,6 +2836,91 @@ export class Conductor {
                 const reason =
                   `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${parsed.reasons?.[0] ?? 'no reasons recorded'}`;
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  reason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(reason);
+                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                return;
+              }
+            }
+
+            // wiring_check kickback (daemon only, Task 10): a gap-carrying
+            // evidence file at WIRING_EVIDENCE means newly-built code isn't
+            // reachable/wired in yet — an implementation gap by definition,
+            // same shape as a build_review FAIL. Route back to BUILD with the
+            // gap messages as the retry hint. Uses the shared `kickbackCounts`
+            // map keyed by 'wiring_check' (the same anti-ping-pong mechanism
+            // the gate-driven tail uses for other gates), bounded by
+            // MAX_KICKBACKS_PER_GATE like the other self-heal loops — kickback
+            // only, never an unconditional HALT until the cap is exceeded.
+            if (this.daemon && step.name === 'wiring_check') {
+              let evidenceRaw: unknown = null;
+              try {
+                evidenceRaw = JSON.parse(
+                  await readFile(join(this.projectRoot, WIRING_EVIDENCE), 'utf-8'),
+                );
+              } catch {
+                /* missing/unreadable — falls through to generic HALT below */
+              }
+              const validated =
+                evidenceRaw !== null ? validateWiringEvidence(evidenceRaw) : null;
+              const evidence = evidenceRaw as WiringEvidence | null;
+              const gapMessages: string[] =
+                validated?.ok && evidence
+                  ? evidence.tasks.flatMap((task) =>
+                      task.symbols.map(
+                        (s) =>
+                          s.message ??
+                          `task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`,
+                      ),
+                    )
+                  : [];
+              if (validated?.ok && gapMessages.length > 0) {
+                const count = (kickbackCounts.get('wiring_check') ?? 0) + 1;
+                if (count <= MAX_KICKBACKS_PER_GATE) {
+                  kickbackCounts.set('wiring_check', count);
+                  const evidenceText = gapMessages.join('\n');
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: 'wiring_check',
+                    to: 'build',
+                    evidence: evidenceText,
+                    count,
+                  });
+                  pendingRetryHints.set(
+                    'build',
+                    `wiring_check found unreachable/undeclared code:\n${evidenceText}\nFix ` +
+                      `the flagged gap(s) in build, then COMMIT — wiring_check re-runs after ` +
+                      `this build.`,
+                  );
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+                  const nav = navigateBack(state, 'build', steps);
+                  state = nav.state;
+                  // markDownstreamStale only restages `done` steps; wiring_check
+                  // is `failed` here, so restage it (and manual_test) explicitly
+                  // for the tail.
+                  (state as Record<string, unknown>).wiring_check = 'stale';
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on build
+                  continue;
+                }
+                const reason =
+                  `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${gapMessages[0] ?? 'no reasons recorded'}`;
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
                 );
