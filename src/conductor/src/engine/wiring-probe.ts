@@ -16,12 +16,19 @@
  * `origin/master`, and fails closed (returns no exports) if none resolve.
  */
 
-import { access } from 'fs/promises';
+import { access, readFile as readFileFs } from 'fs/promises';
 import { join } from 'path';
 import * as ts from 'typescript';
 import type { GitRunner } from './pr-labels.js';
-import type { InertRef, WiredIntoParseResult, WiredIntoSite } from './wired-into.js';
+import {
+  extractWiredIntoContracts,
+  type InertRef,
+  type WiredIntoParseResult,
+  type WiredIntoSite,
+} from './wired-into.js';
+import { parsePlanTaskPaths } from './autoheal.js';
 import type { HarnessConfig } from '../types/config.js';
+import type { WiringEvidence, WiringGap, WiringGapKind, WiringTaskResult } from './artifacts.js';
 
 export interface NewExport {
   file: string;
@@ -74,7 +81,7 @@ async function resolveOriginRef(runGit: GitRunner, cwd: string): Promise<string 
  *   4. Otherwise, fall back to plain `merge-base <originRef> HEAD`.
  *   5. If all of the above fail, return null (caller fails closed).
  */
-async function deriveBase(runGit: GitRunner, anchor: string, cwd: string): Promise<string | null> {
+export async function deriveBase(runGit: GitRunner, anchor: string, cwd: string): Promise<string | null> {
   if (anchor.trim() !== '') {
     try {
       await runGit(['rev-parse', '--verify', `${anchor}^{commit}`], { cwd });
@@ -867,4 +874,264 @@ export function checkExportReachability(
       message: `«${newExport.symbol}» exported but unreachable from any entry point (roots: ${roots.join(', ')})`,
     };
   });
+}
+
+// ── Top-level orchestrator (composes every primitive above into one WiringEvidence) ──
+
+const UNSCOPED_TASK_ID = '(unscoped)';
+
+/** Renders a task's parsed `Wired-into:` contract (or its absence) to the
+ * freeform `WiringTaskResult.contract` string. */
+function describeContract(parseResult: WiredIntoParseResult | null): string {
+  if (parseResult === null) return 'undeclared (no Wired-into line)';
+  switch (parseResult.kind) {
+    case 'declared':
+      return parseResult.sites.map((s) => `${s.path}#${s.symbol}`).join(', ') || '(empty)';
+    case 'no_new_surface':
+      return 'none (no new production surface)';
+    case 'inert': {
+      const ref = parseResult.ref;
+      const refText = ref.form === 'issue' ? `${ref.owner}/${ref.repo}#${ref.number}` : ref.path;
+      return `none (inert until ${refText})`;
+    }
+    case 'malformed':
+      return parseResult.message;
+  }
+}
+
+function pushGap(map: Map<string, WiringGap[]>, taskId: string, kind: WiringGapKind, message: string): void {
+  const existing = map.get(taskId);
+  if (existing) {
+    existing.push({ kind, message });
+  } else {
+    map.set(taskId, [{ kind, message }]);
+  }
+}
+
+/** Finds the task (by id) that owns a given repo-relative file path, i.e. the
+ * task whose `**Files:**`-derived path set includes it. Returns
+ * `UNSCOPED_TASK_ID` when no task claims the file (plan missing/absent, or a
+ * file genuinely untouched by any declared task section). */
+function ownerTaskId(file: string, tasks: TaskWiringContract[]): string {
+  for (const task of tasks) {
+    if (task.files.includes(file)) return task.taskId;
+  }
+  return UNSCOPED_TASK_ID;
+}
+
+export interface ComputeWiringEvidenceParams {
+  runGit: GitRunner;
+  projectRoot: string;
+  planPath: string | undefined;
+  config: HarnessConfig;
+  gh: GhRunner;
+  anchor: string;
+}
+
+/**
+ * Top-level orchestrator for the wiring-reachability gate (Task 18): composes
+ * every Layer-1/Layer-2 primitive in this module (plus `wired-into.ts`'s
+ * `extractWiredIntoContracts` and `autoheal.ts`'s `parsePlanTaskPaths` for
+ * per-task file scoping) into one `WiringEvidence` object matching
+ * `validateWiringEvidence` in artifacts.ts.
+ *
+ * Fails closed WITHOUT throwing for expected degraded inputs (missing plan,
+ * scope-undeterminable base commit, no new exports); a genuine unexpected
+ * failure (e.g. a git command erroring mid-probe) propagates as a thrown
+ * exception — the wiring_check predicate already catches that and reports
+ * "wiring probe failed: <msg>".
+ */
+export async function computeWiringEvidence(
+  params: ComputeWiringEvidenceParams,
+): Promise<WiringEvidence> {
+  const { runGit, projectRoot, planPath, config, gh, anchor } = params;
+
+  const headResult = await runGit(['rev-parse', 'HEAD'], { cwd: projectRoot });
+  const head = headResult.stdout.trim();
+
+  const { newExports, gaps: probeGaps } = await runWiringProbe(runGit, anchor, projectRoot);
+
+  if (probeGaps.length > 0) {
+    // Base commit could not be derived by any rung of the ladder — fail
+    // closed with a single scope-undeterminable gap, never a silent pass.
+    return {
+      schema: 1,
+      base: '',
+      head,
+      tasks: [
+        {
+          id: UNSCOPED_TASK_ID,
+          contract: 'unresolved (wiring scope undeterminable)',
+          gaps: probeGaps.map((g) => ({ kind: 'scope-undeterminable' as WiringGapKind, message: g })),
+        },
+      ],
+      layer2: { applicable: false, reason: 'scope undeterminable' },
+      waivers: [],
+    };
+  }
+
+  const base = (await deriveBase(runGit, anchor, projectRoot)) ?? '';
+
+  // ── Plan text + per-task contracts/file-scoping ──────────────────────────
+  let planText = '';
+  if (planPath !== undefined) {
+    try {
+      planText = await readFileFs(planPath, 'utf-8');
+    } catch {
+      // Missing/unreadable plan — fail closed to "no contracts resolved",
+      // never throw. planText stays '' (same as planPath === undefined).
+      planText = '';
+    }
+  }
+
+  const wiredIntoMap = extractWiredIntoContracts(planText);
+  const taskPathsMap = parsePlanTaskPaths(planText);
+
+  const taskIds = new Set<string>([...wiredIntoMap.keys(), ...taskPathsMap.keys()]);
+  const tasks: TaskWiringContract[] = [...taskIds].map((id) => ({
+    taskId: id,
+    files: [...(taskPathsMap.get(id) ?? [])],
+    parseResult: wiredIntoMap.get(id) ?? null,
+  }));
+
+  const gapsByTask = new Map<string, WiringGap[]>();
+
+  // ── FileReader / ReferenceSearchRunner / FileExistsChecker / GhRunner adapters ──
+  const readFile: FileReader = (path: string) => readFileFs(join(projectRoot, path), 'utf-8');
+  const searchReferences: ReferenceSearchRunner = async (symbol: string) => {
+    try {
+      const result = await runGit(['grep', '-l', '-w', symbol], { cwd: projectRoot });
+      return result.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
+    } catch {
+      // `git grep` exits non-zero when nothing matches — no references found.
+      return [];
+    }
+  };
+  const fileExists: FileExistsChecker = async (path: string) => {
+    try {
+      await access(join(projectRoot, path));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // ── verifyDeclaredSites (per task, so gaps attribute to the owning task) ──
+  for (const task of tasks) {
+    if (task.parseResult?.kind !== 'declared') continue;
+    const { gaps } = await verifyDeclaredSites(task.parseResult.sites, newExports, readFile);
+    for (const message of gaps) {
+      pushGap(gapsByTask, task.taskId, 'unreferenced-site', message);
+    }
+  }
+
+  // ── orphanBackstop (attribute each gap to the owning task by file, or unscoped) ──
+  const orphanResults = await orphanBackstop(newExports, searchReferences);
+  for (const result of orphanResults) {
+    if (result.status !== 'gap') continue;
+    const owner = ownerTaskId(result.file, tasks);
+    pushGap(gapsByTask, owner, 'orphan-export', result.message ?? `${result.symbol} is orphaned`);
+  }
+
+  // ── checkContractConsistency (global call for plan-wide contract-bearing flag,
+  //    gaps attributed back to their task via the `task <id>:` message prefix) ──
+  const consistencyGaps = checkContractConsistency(tasks, newExports);
+  for (const message of consistencyGaps) {
+    const match = message.match(/^task ([^:]+): declared 'no new production surface'/);
+    const kind: WiringGapKind = match ? 'contradiction' : 'undeclared-surface';
+    const idMatch = message.match(/^task ([^:]+):/);
+    const owner = idMatch ? idMatch[1] : UNSCOPED_TASK_ID;
+    pushGap(gapsByTask, owner, kind, message);
+  }
+
+  // ── resolveWaiverRef / checkInertContractContradiction (inert declarations) ──
+  const waivers: unknown[] = [];
+  for (const task of tasks) {
+    if (task.parseResult?.kind !== 'inert') continue;
+    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh);
+    waivers.push({ taskId: task.taskId, ref: task.parseResult.ref, status: resolution.status });
+    if (resolution.status !== 'waived') {
+      pushGap(
+        gapsByTask,
+        task.taskId,
+        'waiver-unresolved',
+        resolution.message ?? `task ${task.taskId}: inert waiver could not be resolved`,
+      );
+    }
+  }
+
+  const contradictionGaps = await checkInertContractContradiction(
+    tasks,
+    newExports,
+    searchReferences,
+    fileExists,
+    gh,
+  );
+  for (const message of contradictionGaps) {
+    const idMatch = message.match(/^task ([^:]+):/);
+    const owner = idMatch ? idMatch[1] : UNSCOPED_TASK_ID;
+    pushGap(gapsByTask, owner, 'contradiction', message);
+  }
+
+  // ── Layer 2: TS import-graph reachability ────────────────────────────────
+  const layer2Applicability = await resolveLayer2Applicability(config, projectRoot);
+  let layer2: WiringEvidence['layer2'];
+  if (layer2Applicability.applicable) {
+    layer2 = { applicable: true };
+    const reachabilityResults = checkExportReachability(
+      newExports,
+      layer2Applicability.roots,
+      projectRoot,
+    );
+    for (const result of reachabilityResults) {
+      if (result.reachable) continue;
+      const owner = ownerTaskId(result.file, tasks);
+      pushGap(
+        gapsByTask,
+        owner,
+        'orphan-export',
+        result.message ?? `${result.symbol} unreachable from any entry point`,
+      );
+    }
+  } else if (layer2Applicability.reason === 'bad-root') {
+    layer2 = { applicable: false, reason: layer2Applicability.message };
+    pushGap(gapsByTask, UNSCOPED_TASK_ID, 'scope-undeterminable', layer2Applicability.message);
+  } else if (layer2Applicability.reason === 'skipped') {
+    layer2 = { applicable: false, reason: layer2Applicability.message };
+  } else {
+    layer2 = { applicable: false, reason: 'not-applicable' };
+  }
+
+  // ── Legacy advisory demotion: a plan with zero Wired-into lines anywhere
+  //    never blocks — every Layer-1 finding collected above is demoted to an
+  //    advisory (dropped from the blocking gaps surfaced in evidence). ──────
+  const flatGapMessages = [...gapsByTask.values()].flat().map((g) => g.message);
+  const disposition = evaluatePlanWiringDisposition(tasks, flatGapMessages);
+  const isLegacyAdvisory = disposition.reason === LEGACY_ADVISORY_REASON;
+
+  const taskResults: WiringTaskResult[] = tasks.map((task) => ({
+    id: task.taskId,
+    contract: describeContract(task.parseResult),
+    gaps: isLegacyAdvisory ? [] : gapsByTask.get(task.taskId) ?? [],
+  }));
+
+  // Any gaps attributed to files/tasks outside the known task set (unscoped)
+  // surface as their own synthetic task entry, so they are never silently
+  // dropped from the evidence.
+  const unscopedGaps = gapsByTask.get(UNSCOPED_TASK_ID);
+  if (unscopedGaps && unscopedGaps.length > 0 && !isLegacyAdvisory) {
+    taskResults.push({ id: UNSCOPED_TASK_ID, contract: 'unresolved', gaps: unscopedGaps });
+  }
+
+  return {
+    schema: 1,
+    base,
+    head,
+    tasks: taskResults,
+    layer2,
+    waivers,
+  };
 }

@@ -14,7 +14,10 @@
  * `origin/master`.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   extractNewExports,
   verifyDeclaredSites,
@@ -22,12 +25,18 @@ import {
   checkContractConsistency,
   runWiringProbe,
   evaluatePlanWiringDisposition,
+  computeWiringEvidence,
   LEGACY_ADVISORY_REASON,
   WIRING_SCOPE_UNDETERMINABLE,
 } from '../src/engine/wiring-probe.js';
 import type { GitRunner } from '../src/engine/pr-labels.js';
 import type { WiredIntoSite } from '../src/engine/wired-into.js';
-import type { ReferenceSearchRunner, TaskWiringContract } from '../src/engine/wiring-probe.js';
+import type {
+  ReferenceSearchRunner,
+  TaskWiringContract,
+  GhRunner,
+} from '../src/engine/wiring-probe.js';
+import type { HarnessConfig } from '../src/types/config.js';
 
 // ── Fake GitRunner factory ────────────────────────────────────────────────────
 
@@ -532,5 +541,136 @@ describe('evaluatePlanWiringDisposition', () => {
     expect(result.reason).toBeUndefined();
     expect(result.gaps).toEqual(layer1Gaps);
     expect(result.advisories).toEqual([]);
+  });
+});
+
+// ── computeWiringEvidence (Task 18 orchestrator) ────────────────────────────
+
+interface FakeGitRouterOpts {
+  head?: string;
+  originRef?: 'origin/main' | null;
+  base?: string | null;
+  diff?: string;
+  failRevParseHead?: boolean;
+}
+
+function fakeGitRouter(opts: FakeGitRouterOpts): GitRunner {
+  return async (args: string[]) => {
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+      if (opts.failRevParseHead) throw new Error('git rev-parse HEAD failed (simulated)');
+      return { stdout: opts.head ?? 'headsha0000' };
+    }
+    if (args[0] === 'symbolic-ref') {
+      if (opts.originRef) return { stdout: `refs/remotes/${opts.originRef}` };
+      throw new Error('origin/HEAD unset');
+    }
+    if (args[0] === 'rev-parse' && args.includes('--verify')) {
+      const candidate = args[args.length - 1];
+      if (opts.originRef && candidate.startsWith(opts.originRef)) return { stdout: '' };
+      throw new Error(`${candidate} not found`);
+    }
+    if (args[0] === 'merge-base') {
+      if (opts.base) return { stdout: opts.base };
+      throw new Error('no merge base');
+    }
+    if (args[0] === 'diff') {
+      return { stdout: opts.diff ?? '' };
+    }
+    if (args[0] === 'grep') {
+      return { stdout: '' };
+    }
+    return { stdout: '' };
+  };
+}
+
+const NEVER_CALLED_GH: GhRunner = async () => {
+  throw new Error('gh should not be called in this test');
+};
+
+describe('computeWiringEvidence', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'wiring-evidence-'));
+  });
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('produces fail-closed evidence (not a throw) when planPath is undefined', async () => {
+    const git = fakeGitRouter({
+      head: 'headsha1',
+      originRef: 'origin/main',
+      base: 'basesha1',
+      diff: '',
+    });
+
+    const evidence = await computeWiringEvidence({
+      runGit: git,
+      projectRoot,
+      planPath: undefined,
+      config: {} as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    expect(evidence.schema).toBe(1);
+    expect(evidence.head).toBe('headsha1');
+    expect(evidence.base).toBe('basesha1');
+    // No plan to resolve contracts from — no tasks, no exports, no gaps.
+    expect(evidence.tasks).toEqual([]);
+  });
+
+  it('rejects (throws) when a git command fails mid-probe', async () => {
+    const git = fakeGitRouter({ failRevParseHead: true });
+
+    await expect(
+      computeWiringEvidence({
+        runGit: git,
+        projectRoot,
+        planPath: undefined,
+        config: {} as HarnessConfig,
+        gh: NEVER_CALLED_GH,
+        anchor: '',
+      }),
+    ).rejects.toThrow(/simulated/);
+  });
+
+  it('surfaces a waiver-unresolved gap kind (not a silent pass) when gh is unreachable for an issue-form inert waiver', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add thing',
+        '**Files:** src/a.ts',
+        '**Wired-into:** none (inert until owner/repo#42)',
+        '',
+      ].join('\n'),
+    );
+
+    const git = fakeGitRouter({
+      head: 'headsha2',
+      originRef: 'origin/main',
+      base: 'basesha2',
+      diff: '',
+    });
+
+    const flakyGh: GhRunner = async () => {
+      throw new Error('gh: connection reset (simulated outage)');
+    };
+
+    const evidence = await computeWiringEvidence({
+      runGit: git,
+      projectRoot,
+      planPath,
+      config: {} as HarnessConfig,
+      gh: flakyGh,
+      anchor: '',
+    });
+
+    const task1 = evidence.tasks.find((t) => t.id === '1');
+    expect(task1).toBeDefined();
+    expect(task1?.gaps.some((g) => g.kind === 'waiver-unresolved')).toBe(true);
+    expect(task1?.gaps.some((g) => g.message.includes('unverifiable'))).toBe(true);
   });
 });
