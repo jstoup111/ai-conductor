@@ -286,12 +286,15 @@ export const POST_DISPATCH_HOOK = [
  * unstamped mutation attempts while a build step is active, AND (independent of
  * stamp) any attempt to mutate the engine-owned `.pipeline` machinery.
  *
- * NOTE ON LAYERING (#627): daemon build sessions run with
- * `--dangerously-skip-permissions` (step-runners.ts / claude-provider.ts), which
- * bypasses Claude Code's declarative permission engine entirely — only PreToolUse
- * *hooks* still fire. That is why this enforcement is a hook and not a
- * settings.json `deny` rule: a permission rule would be inert in the exact
- * sessions that must be gated.
+ * NOTE ON LAYERING (#627, docs-verified): daemon build sessions run with
+ * `--dangerously-skip-permissions` (step-runners.ts / claude-provider.ts).
+ * Per current Claude Code docs (permission-modes.md, semantics documented for
+ * v2.1.200+), permissions.deny rules AND PreToolUse hooks both still apply in
+ * that mode — so worktree-prepare wires ENGINE_OWNED_DENY_RULES (below) as a
+ * declarative second layer. This hook remains the PRIMARY control because
+ * deny rules only match declared tool inputs (file_path); they cannot see
+ * into a Bash heredoc/tee/interpreter inline write, which is exactly the
+ * bypass observed live.
  *
  * - `.pipeline/build-step-active` marker ABSENT → enforcement inactive,
  *   pass through (exit 0) regardless of tool or stamp.
@@ -315,6 +318,42 @@ export const POST_DISPATCH_HOOK = [
  * - Unparseable payload → fail-open (exit 0), matching the #494 degradation
  *   rule and the PRE/POST dispatch hooks' behavior above.
  */
+/**
+ * Engine-owned `.pipeline` machinery files — written ONLY by the engine, never
+ * by agent sessions (#433 current-task attribution, #302 engine-owned status,
+ * #627 bypass hardening). Single source of truth for BOTH enforcement layers:
+ * the mutation-gate hook's ENGINE_OWNED_RE and the declarative
+ * permissions.deny rules wired by worktree-prepare. Deliberately tight:
+ * task-status.json and HALT, which skills legitimately write, are excluded.
+ */
+export const ENGINE_OWNED_PIPELINE_FILES = [
+  'current-task',
+  'build-step-active',
+  'task-evidence',
+  'attribution-verdict',
+] as const;
+
+/**
+ * Declarative permissions.deny rules for the engine-owned set (#627
+ * defense-in-depth). Docs-verified (permission-modes.md, semantics documented
+ * for v2.1.200+): deny rules apply in EVERY mode, including
+ * bypassPermissions / --dangerously-skip-permissions — so this layer IS live
+ * in daemon builds. The PreToolUse mutation-gate hook remains the PRIMARY
+ * control: deny rules match declared tool inputs (file_path), so they cannot
+ * see into a Bash heredoc/tee/interpreter inline write; the hook covers that
+ * surface. task-evidence/attribution-verdict get a trailing `*` because
+ * variants exist on disk (e.g. task-evidence.json); current-task and
+ * build-step-active are exact so a sibling name is not over-blocked.
+ */
+export const ENGINE_OWNED_DENY_RULES: string[] = (
+  ['Edit', 'Write', 'NotebookEdit'] as const
+).flatMap((tool) => [
+  `${tool}(.pipeline/current-task)`,
+  `${tool}(.pipeline/build-step-active)`,
+  `${tool}(.pipeline/task-evidence*)`,
+  `${tool}(.pipeline/attribution-verdict*)`,
+]);
+
 export const MUTATION_GATE_HOOK = [
   '#!/bin/bash',
   'set -e',

@@ -2,7 +2,12 @@ import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
-import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK, MUTATION_GATE_HOOK } from './session-hook-assets.js';
+import {
+  PRE_DISPATCH_HOOK,
+  POST_DISPATCH_HOOK,
+  MUTATION_GATE_HOOK,
+  ENGINE_OWNED_DENY_RULES,
+} from './session-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -202,6 +207,25 @@ async function wireSessionHookSettings(
       'mutation-gate.sh',
       { matcher: 'Bash', hooks: [{ type: 'command', command: `${mutationGatePath} bash` }] },
     );
+
+    // #627 defense-in-depth: declarative deny rules for the engine-owned
+    // .pipeline set. Docs-verified: permissions.deny applies in EVERY mode,
+    // including bypassPermissions / --dangerously-skip-permissions (semantics
+    // documented for v2.1.200+), so this layer is live in daemon builds. The
+    // mutation-gate hook above stays PRIMARY — deny rules only see declared
+    // tool inputs (file_path) and cannot inspect Bash heredoc/tee/interpreter
+    // writes. Merge-preserve: existing deny rules are kept, ours are appended
+    // deduped (idempotent across re-provisioning).
+    const permissions =
+      settings.permissions && typeof settings.permissions === 'object'
+        ? (settings.permissions as Record<string, unknown>)
+        : {};
+    settings.permissions = permissions;
+    const deny = Array.isArray(permissions.deny) ? (permissions.deny as unknown[]) : [];
+    for (const rule of ENGINE_OWNED_DENY_RULES) {
+      if (!deny.includes(rule)) deny.push(rule);
+    }
+    permissions.deny = deny;
 
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
     log?.('session hook settings: wired into .claude/settings.local.json');

@@ -15,6 +15,7 @@ import {
   PRE_DISPATCH_HOOK,
   POST_DISPATCH_HOOK,
   MUTATION_GATE_HOOK,
+  ENGINE_OWNED_DENY_RULES,
 } from '../../src/engine/session-hook-assets.js';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
@@ -336,9 +337,69 @@ describe('engine/worktree-prepare', () => {
       const raw = await readFile(settingsPath(dir), 'utf-8');
       const settings = JSON.parse(raw);
 
-      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
+      // Pre-existing allow rules survive untouched; the #627 engine-owned deny
+      // rules are merged in alongside them.
+      expect(settings.permissions.allow).toEqual(['Bash(ls:*)']);
+      for (const rule of ENGINE_OWNED_DENY_RULES) {
+        expect(settings.permissions.deny).toContain(rule);
+      }
       expect(findEntry(settings.hooks.PreToolUse, 'pre-dispatch.sh')).toBeDefined();
       expect(findEntry(settings.hooks.PostToolUse, 'post-dispatch.sh')).toBeDefined();
+    });
+
+    // #627 defense-in-depth: the generated settings carry permissions.deny
+    // rules for the engine-owned .pipeline set. Deny rules apply in EVERY
+    // permission mode, including --dangerously-skip-permissions (docs-verified,
+    // v2.1.200+ semantics), so this layer is live in daemon builds; the
+    // mutation-gate hook stays primary (deny rules cannot see into Bash
+    // heredoc/tee/interpreter writes).
+    it('writes permissions.deny rules for the engine-owned .pipeline set (#627)', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      expect(Array.isArray(settings.permissions?.deny)).toBe(true);
+      for (const tool of ['Edit', 'Write', 'NotebookEdit']) {
+        expect(settings.permissions.deny).toContain(`${tool}(.pipeline/current-task)`);
+        expect(settings.permissions.deny).toContain(`${tool}(.pipeline/build-step-active)`);
+        expect(settings.permissions.deny).toContain(`${tool}(.pipeline/task-evidence*)`);
+        expect(settings.permissions.deny).toContain(`${tool}(.pipeline/attribution-verdict*)`);
+      }
+      // Exactly the exported set, matching the mutation-gate hook's protected
+      // paths — and NOT task-status.json / HALT, which skills legitimately write.
+      expect(settings.permissions.deny).toEqual(ENGINE_OWNED_DENY_RULES);
+      const denyStr = JSON.stringify(settings.permissions.deny);
+      expect(denyStr).not.toContain('task-status');
+      expect(denyStr).not.toContain('HALT');
+    });
+
+    it('preserves pre-existing deny rules and appends engine-owned rules deduped (#627)', async () => {
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      const preExisting = {
+        permissions: {
+          deny: ['WebFetch', 'Edit(.pipeline/current-task)'],
+        },
+      };
+      await writeFile(settingsPath(dir), JSON.stringify(preExisting), 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      // User rule preserved, engine rules present, no duplicate for the
+      // already-present engine rule.
+      expect(settings.permissions.deny).toContain('WebFetch');
+      for (const rule of ENGINE_OWNED_DENY_RULES) {
+        expect(settings.permissions.deny).toContain(rule);
+      }
+      expect(
+        (settings.permissions.deny as string[]).filter(
+          (r) => r === 'Edit(.pipeline/current-task)',
+        ).length,
+      ).toBe(1);
     });
 
     it('is idempotent across repeated provisioning runs', async () => {
@@ -586,17 +647,20 @@ describe('engine/worktree-prepare', () => {
       const content = await readFile(settingsPath, 'utf-8');
       const settings = JSON.parse(content);
 
-      // User-provided keys survive
-      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)', 'Bash(grep:*)'] });
+      // User-provided keys survive (permissions.deny additionally gains the
+      // #627 engine-owned rules; allow is untouched)
+      expect(settings.permissions.allow).toEqual(['Bash(ls:*)', 'Bash(grep:*)']);
+      expect(settings.permissions.deny).toEqual(ENGINE_OWNED_DENY_RULES);
       expect(settings.customKey).toBe('should-survive');
       expect(settings.nested).toEqual({ data: 'preserve-me' });
 
-      // Re-provision: user keys still survive
+      // Re-provision: user keys still survive; deny rules do not duplicate
       await prepareWorktree(worktreeDir);
       const content2 = await readFile(settingsPath, 'utf-8');
       const settings2 = JSON.parse(content2);
 
-      expect(settings2.permissions).toEqual({ allow: ['Bash(ls:*)', 'Bash(grep:*)'] });
+      expect(settings2.permissions.allow).toEqual(['Bash(ls:*)', 'Bash(grep:*)']);
+      expect(settings2.permissions.deny).toEqual(ENGINE_OWNED_DENY_RULES);
       expect(settings2.customKey).toBe('should-survive');
       expect(settings2.nested).toEqual({ data: 'preserve-me' });
     });
@@ -744,7 +808,8 @@ describe('engine/worktree-prepare', () => {
       const raw = await readFile(settingsPath(dir), 'utf-8');
       const settings = JSON.parse(raw);
 
-      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
+      expect(settings.permissions.allow).toEqual(['Bash(ls:*)']);
+      expect(settings.permissions.deny).toEqual(ENGINE_OWNED_DENY_RULES);
       expect(findEntry(settings.hooks.PreToolUse, 'SomeOtherTool', 'own-hook.sh')).toBeDefined();
       expect(findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh')).toBeDefined();
       expect(findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh')).toBeDefined();

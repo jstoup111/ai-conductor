@@ -30,10 +30,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   so an agent can no longer forge its own stamp or delete the gate marker.
   Reads, source-file heredocs under a stamp, scratchpad writes, and the
   `.pipeline/task-status.json` writes that skills legitimately perform are not
-  blocked (precision over breadth). The set is enforced by the PreToolUse hook
-  rather than a settings.json `deny` rule because daemon builds run
-  `--dangerously-skip-permissions`, under which the permission engine is
-  bypassed and only hooks fire.
+  blocked (precision over breadth). Defense-in-depth: `prepareWorktree` now
+  also merges declarative `permissions.deny` rules for the same engine-owned
+  set (Edit/Write/NotebookEdit; `ENGINE_OWNED_DENY_RULES`) into the worktree's
+  untracked `.claude/settings.local.json` — docs-verified, deny rules apply in
+  EVERY permission mode including `--dangerously-skip-permissions` (semantics
+  documented for Claude Code v2.1.200+). The PreToolUse hook remains the
+  primary control because deny rules only match declared tool inputs
+  (file_path) and cannot see into a Bash heredoc/`tee`/interpreter write.
 - Spec landed for #625 (`.docs/{track,complexity,stories,conflicts,plans,intake}/rekick-resume-republish-stale-worktree-engine.md` + `.docs/architecture/2026-07-13-rekick-resume-republish-review.md`): on a self-host re-kick resume, after `resumeRebaseFirst`'s rebase replays commits touching `src/conductor`, the worktree engine will be republished (reusing the existing content-addressed `npm run build` → `publish-engine.mjs`) BEFORE `conductor.run()` runs the gate — closing the worktree-engine variant of the stale-engine class (sibling of #598) where setup builds the `dist` from pre-rebase source and the rebase then delivers the fix into source only, so the gate mis-parses the plan (`▶ build 0/0`) and halts on the already-fixed defect. A failed republish will fail closed (HALT, worktree kept), never gate on the stale `dist`. Implementation tracked separately; this entry documents the queued fix.
 - Updated `resolved-config.test.ts` expectations for `explore`/`prd` reasoning effort (`xhigh` → `medium`), which had drifted from #607's re-scope of those defaults on cost-per-outcome grounds — restores CI green on `main` (2 failing tests fixed). No production defaults changed.
 
