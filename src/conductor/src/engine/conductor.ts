@@ -64,6 +64,7 @@ import {
   buildStepRegistry,
   shouldSkipForBootstrapMode,
   shouldSkipForUpstreamSkip,
+  getGroupForStep,
 } from './steps.js';
 import { checkGate } from './gates.js';
 import {
@@ -1764,6 +1765,25 @@ export class Conductor {
             return;
           }
           continue;
+        }
+
+        // Built-in validation group engagement (adr-2026-07-10-validation-group-join.md):
+        // the group engages ONLY in auto mode, and only at its entry point (the
+        // group's first member). This marks the group path with a distinguishable
+        // `parallel_started` event WITHOUT diverting from the existing per-step
+        // dispatch below — real fan-out/join wiring against these members lands in
+        // later tasks (15+); until then the members still dispatch one at a time
+        // through the ordinary gate/retry/kickback/checkpoint machinery, so
+        // auto-mode manual_test's FAIL-routing and HALT semantics are unaffected.
+        // Interactive/default mode never emits this event at all — the serial walk
+        // (including the checkpoint after manual_test) is byte-for-byte unchanged.
+        const builtinGroup = getGroupForStep(step.name);
+        if (builtinGroup && builtinGroup.members[0] === step.name && this.mode === 'auto') {
+          await this.events.emit({
+            type: 'parallel_started',
+            step: step.name,
+            branches: builtinGroup.members,
+          });
         }
 
         // Check gate: all prerequisites must be satisfied

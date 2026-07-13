@@ -4304,6 +4304,122 @@ describe('engine/conductor', () => {
     expect(onCheckpoint).not.toHaveBeenCalled();
   });
 
+  describe('built-in validation group engagement (auto-mode-only)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+    } as ConductState;
+
+    it('mode=auto reaching the validation group entry point takes the group path', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: VALIDATION_GROUP.members,
+      });
+      // The group path is marked, but member dispatch itself (fan-out/join) is
+      // wired in a later task — manual_test still dispatches through the
+      // ordinary per-step machinery so its FAIL-routing/HALT semantics are
+      // unaffected by this task's guard.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+
+    it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (s) => {
+          stepsRun.push(s);
+          return { success: true };
+        },
+      };
+      const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        // Interactive/default mode — NOT 'auto'.
+        onCheckpoint,
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('checkpoint_reached', (e) => {
+        if (e.type === 'checkpoint_reached') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // No group-path event ever fires in interactive mode.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+
+      // The three group members still dispatch one at a time, in order —
+      // the pre-existing serial walk, untouched.
+      expect(stepsRun.slice(0, 3)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+
+      // checkpoint_reached still fires after manual_test, with no
+      // group-related events interleaved before it.
+      const checkpointIndex = observedEvents.findIndex(
+        (e) => e.type === 'checkpoint_reached' && e.step === 'manual_test',
+      );
+      expect(checkpointIndex).toBeGreaterThanOrEqual(0);
+      const manualTestStartIndex = observedEvents.findIndex(
+        (e) => e.type === 'step_started' && e.step === 'manual_test',
+      );
+      expect(manualTestStartIndex).toBeGreaterThanOrEqual(0);
+      expect(checkpointIndex).toBeGreaterThan(manualTestStartIndex);
+      expect(
+        observedEvents
+          .slice(manualTestStartIndex, checkpointIndex + 1)
+          .some((e) => e.type === 'parallel_started'),
+      ).toBe(false);
+      expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
+    });
+  });
+
   it('advances when checkpoint response is continue', async () => {
     await writeState(statePath, {
       worktree: 'done',
