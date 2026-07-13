@@ -761,6 +761,27 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     await g(['checkout', '-q', 'feat']);
 
+    // Seed the sha-anchored .pipeline stores with the PRE-rebase sha (kept
+    // untracked, and seeded only now — after the base advance — so `git add .`
+    // on main can't sweep them into the docs commit), so the "stores
+    // translated" half of the amended Story 9 is asserted for real — not just
+    // the rewrite map's existence.
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(repo, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 'T1', name: 'seeded', status: 'completed', commit: origHead }],
+      }),
+    );
+    await writeFile(
+      join(repo, '.pipeline/task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: {
+          T1: { sha: origHead, form: 'commit', citedShas: [origHead] },
+        },
+      }),
+    );
+
     // Delegate to the REAL translation (with an emitter, so residue — if any —
     // would actually be written) to prove the pure-replay case leaves none.
     const events = new ConductorEventEmitter();
@@ -785,6 +806,19 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
       await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8'),
     ) as Record<string, string>;
     expect(rewrites[origHead]).toBe(newHead);
+
+    // The sha-anchored stores are TRANSLATED, not just mapped: every seeded
+    // pre-rebase citation now points at the post-rebase sha.
+    const status = JSON.parse(
+      await readFile(join(repo, '.pipeline/task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; commit?: string }> };
+    expect(status.tasks[0].commit).toBe(newHead);
+    const evidence = JSON.parse(
+      await readFile(join(repo, '.pipeline/task-evidence.json'), 'utf-8'),
+    ) as { evidenceStamps: Record<string, { sha?: string; citedShas?: string[] }> };
+    expect(evidence.evidenceStamps.T1.sha).toBe(newHead);
+    expect(evidence.evidenceStamps.T1.citedShas).toEqual([newHead]);
+
     // …and NO residue is written.
     await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
   }, 20000);
