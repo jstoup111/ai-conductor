@@ -24,6 +24,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
 
+### Changed
+
+- `/explore` (DECIDE) approach proposals now require an **Est. effort** line (very rough
+  implementation time, e.g. "~1-2h", "~half day", S/M/L) and an **Impact** line (one line on
+  value added / what it unblocks) on every proposed approach — required line-items on the
+  option template so the operator can weigh cost vs. value when picking; no new gate or
+  artifact.
+
 ### Fixed
 
 - finish GATE 0 no longer instructs a false-positive rebase check (#634): the skill
