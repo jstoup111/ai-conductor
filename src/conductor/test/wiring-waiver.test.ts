@@ -8,8 +8,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveWaiverRef } from '../src/engine/wiring-probe.js';
-import type { GhRunner } from '../src/engine/wiring-probe.js';
+import { checkInertContractContradiction, resolveWaiverRef } from '../src/engine/wiring-probe.js';
+import type {
+  FileExistsChecker,
+  GhRunner,
+  NewExport,
+  ReferenceSearchRunner,
+  TaskWiringContract,
+} from '../src/engine/wiring-probe.js';
 import type { InertRef } from '../src/engine/wired-into.js';
 
 function fakeGh(): { gh: GhRunner; calls: string[][] } {
@@ -95,5 +101,71 @@ describe('resolveWaiverRef — issue-form', () => {
     expect(result.message).toBe(
       'inert waiver ref #42 unverifiable (gh error: HTTP 401: Bad credentials (gh error))',
     );
+  });
+});
+
+describe('checkInertContractContradiction — waived-but-wired', () => {
+  const fileExists: FileExistsChecker = async () => true; // waiver path always resolves
+  const gh: GhRunner = async () => ({ stdout: '' });
+
+  it('reports a gap when a task waived as inert also has a production reference elsewhere', async () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '21',
+        files: ['src/foo.ts'],
+        parseResult: { kind: 'inert', ref: { form: 'path', path: 'docs/plan.md' } },
+      },
+    ];
+    const newExports: NewExport[] = [{ file: 'src/foo.ts', symbol: 'doStuff' }];
+    const searchReferences: ReferenceSearchRunner = async (symbol) =>
+      symbol === 'doStuff' ? ['src/foo.ts', 'src/bar.ts'] : [];
+
+    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh);
+
+    expect(gaps.length).toBe(1);
+    expect(gaps[0]).toContain('task 21');
+    expect(gaps[0]).toContain('«doStuff»');
+    expect(gaps[0]).toContain('contract is stale');
+    expect(gaps[0]).toContain('src/bar.ts');
+  });
+
+  it('does not report a gap when the inert task has no production reference outside its own file', async () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '22',
+        files: ['src/foo.ts'],
+        parseResult: { kind: 'inert', ref: { form: 'path', path: 'docs/plan.md' } },
+      },
+    ];
+    const newExports: NewExport[] = [{ file: 'src/foo.ts', symbol: 'doStuff' }];
+    const searchReferences: ReferenceSearchRunner = async (symbol) =>
+      symbol === 'doStuff' ? ['src/foo.ts', 'src/foo.test.ts'] : [];
+
+    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh);
+
+    expect(gaps.length).toBe(0);
+  });
+
+  it('does not double-report when the waiver itself fails to resolve', async () => {
+    const missingFileExists: FileExistsChecker = async () => false;
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '23',
+        files: ['src/foo.ts'],
+        parseResult: { kind: 'inert', ref: { form: 'path', path: 'docs/missing.md' } },
+      },
+    ];
+    const newExports: NewExport[] = [{ file: 'src/foo.ts', symbol: 'doStuff' }];
+    const searchReferences: ReferenceSearchRunner = async () => ['src/foo.ts', 'src/bar.ts'];
+
+    const gaps = await checkInertContractContradiction(
+      tasks,
+      newExports,
+      searchReferences,
+      missingFileExists,
+      gh,
+    );
+
+    expect(gaps.length).toBe(0);
   });
 });

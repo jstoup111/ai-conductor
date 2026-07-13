@@ -548,3 +548,56 @@ export async function resolveWaiverRef(
     message: `inert waiver ref ${slug} is ${state.toLowerCase() || 'unknown'}`,
   };
 }
+
+// ── Inert-but-wired contradiction (waiver vs. actual diff cross-reference) ────
+
+/**
+ * Cross-references successfully-resolved `inert` waivers (see
+ * `resolveWaiverRef`) against the task's actual diff: a task waived as
+ * "inert" (not yet wired anywhere, pending `ref`) whose diff nonetheless adds
+ * a genuine non-test production reference to the new symbol elsewhere is a
+ * contradiction — the contract is stale (the plan should have declared a
+ * real call site instead of waiving), not a pass. This is the production
+ * call site for `resolveWaiverRef`: only tasks whose waiver resolves to
+ * `waived` are checked here (a waiver that fails to resolve already surfaces
+ * its own gap via `resolveWaiverRef` and is left to that path, not
+ * double-reported).
+ *
+ * Uses the same non-test/outside-defining-file reference shape as
+ * `orphanBackstop`/`verifyDeclaredSites` (via the injected
+ * `ReferenceSearchRunner` and `isTestPath`).
+ */
+export async function checkInertContractContradiction(
+  tasks: TaskWiringContract[],
+  newExports: NewExport[],
+  searchReferences: ReferenceSearchRunner,
+  fileExists: FileExistsChecker,
+  gh: GhRunner,
+): Promise<string[]> {
+  const gaps: string[] = [];
+
+  for (const task of tasks) {
+    if (task.parseResult?.kind !== 'inert') continue;
+
+    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh);
+    if (resolution.status !== 'waived') continue;
+
+    const taskFiles = new Set(task.files);
+    const taskExports = newExports.filter((exp) => taskFiles.has(exp.file));
+
+    for (const exp of taskExports) {
+      const referencingFiles = await searchReferences(exp.symbol);
+      const productionReferences = referencingFiles.filter(
+        (file) => file !== exp.file && !isTestPath(file),
+      );
+
+      if (productionReferences.length > 0) {
+        gaps.push(
+          `task ${task.taskId}: declared inert but diff adds a production reference to «${exp.symbol}» — contract is stale, switch to a declared call site (found in: ${[...new Set(productionReferences)].join(', ')})`,
+        );
+      }
+    }
+  }
+
+  return gaps;
+}
