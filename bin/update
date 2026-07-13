@@ -92,8 +92,8 @@ apply_harness_update() {
   if "${HARNESS_DIR}/bin/migrate"; then
     conductor_cfg_set currentVersion "$new_version"
     conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    ok "Harness updated to ${new_version}. Re-launching..."
-    exec "$0" "${ORIGINAL_ARGS[@]}"
+    ok "Harness updated to ${new_version}. Re-run to pick up the change."
+    return 0
   else
     fail "bin/migrate failed — rolling back to ${rollback_ref}"
     git -C "$HARNESS_DIR" checkout "$rollback_ref" >/dev/null 2>&1 || true
