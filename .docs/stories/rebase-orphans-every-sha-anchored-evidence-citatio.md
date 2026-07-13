@@ -73,13 +73,21 @@
   existing `merge-base --is-ancestor` check refuses it — translation never converts an off-branch
   or forged citation into an accepted one.
 
-## Story 9 — Non-file-changing rebase and capability-absence are no-ops (negative/safety)
+## Story 9 — Already-current branch and capability-absence are no-ops; a HEAD-moving rebase always translates (negative/safety)
 
-- **Given** a rebase whose outcome is `unchanged`/`noop`, or a caller that does not inject the
-  translation capability (unit tests, legacy),
-  **When** the rebase completes,
+- **Given** the branch is already current so the rebase never runs (`isBranchCurrent` no-op,
+  `engine/rebase.ts:415-417`), or a caller that does not inject the translation capability
+  (unit tests, legacy),
+  **When** `performRebase` completes,
   **Then** no store is modified and no residue is written — behavior is byte-identical to today
   (fail-closed).
+- **Given** a clean rebase that moved HEAD but whose base advance touched only docs/config
+  paths (`classifyClean` reports `noop` — a code-path heuristic for re-verification, not the
+  translation gate),
+  **When** the rebase completes with the capability injected,
+  **Then** translation STILL runs — every replayed commit's SHA changed even though no code
+  path did, and skipping here would re-orphan citations (the exact #535 defect); for a pure
+  replay (matching patch-ids) every citation maps and no residue is written.
 
 ## Story 10 — Empty-commit `--empty` handling is verified, not assumed (negative/correctness)
 
@@ -102,6 +110,8 @@
 - A dropped/conflict-modified citation appears in `.pipeline/rebase-residue.json` + event, never as
   a silent dangle (Story 7).
 - A never-on-branch/forged citation is still refused post-translation (Story 8).
-- `unchanged`/capability-absent paths are byte-identical to today (Story 9).
+- Already-current (rebase never runs) and capability-absent paths are byte-identical to today;
+  a clean rebase that moved HEAD still translates stores even when `classifyClean` reports
+  `noop` (docs/config-only base advance) (Story 9).
 
 Status: Accepted

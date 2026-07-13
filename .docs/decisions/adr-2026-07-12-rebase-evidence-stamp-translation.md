@@ -41,8 +41,16 @@ this is greenfield.
 
 ## Decision
 
-Insert one deterministic translation step inside `performRebase`, gated on a file-changing
-(`changed`) outcome, in a new module `engine/rebase-translate.ts`. It:
+Insert one deterministic translation step inside `performRebase`, gated on the rebase actually
+moving HEAD (SHAs rewritten), in a new module `engine/rebase-translate.ts`. The
+`isBranchCurrent` already-current no-op (`src/conductor/src/engine/rebase.ts:415-417`) and
+capability-absent callers skip translation; `classifyClean`'s `changed`/`noop` kind is a
+code-path heuristic for downstream re-verification, **not** the translation gate — a clean
+rebase that replays over a docs/config-only base advance still rewrites every feature commit's
+SHA, so gating on `changed` would re-create exactly the #535 dangling-citation defect
+(rationale in-code at `rebase.ts:436-440`). *(Amended 2026-07-13: the original wording "gated
+on a file-changing (`changed`) outcome" was stale doc/code drift; the as-built gate is
+HEAD-moved, per this ADR's own Context — the feature exists because SHAs are rewritten.)* It:
 
 1. **Builds the old→new map by patch-id correspondence.** `pre = git rev-list {onto}..ORIG_HEAD`,
    `post = git rev-list {onto}..HEAD`; `map[old]=new` where `git patch-id --stable` of the two

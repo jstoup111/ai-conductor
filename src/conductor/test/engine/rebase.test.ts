@@ -732,4 +732,60 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
       expect(outcome.changedCodePaths.length).toBeGreaterThan(0);
     }
   }, 20000);
+
+  // Story 9 (amended, FR-9 remediation): classifyClean's `noop` is a code-path
+  // heuristic for downstream re-verification, NOT the translation gate. A clean
+  // rebase over a docs-only base advance reports `noop` yet still rewrites every
+  // replayed commit's sha — skipping translation there is the exact #535
+  // dangling-citation defect (rebase.ts:436-440).
+  it('STILL invokes translateAfterRebase when a clean rebase moved HEAD but classifyClean reports `noop` (docs-only base advance), with no residue on a pure replay', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    const { translateAfterRebase: realTranslate } = await import(
+      '../../src/engine/rebase-translate.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    // The base advances with a DOCS-ONLY commit: post-rebase, diff(preTree,
+    // HEAD) contains only this .md path (the feature commit is in both trees),
+    // so classifyClean reports `noop` — yet the replay gives feat's commit a
+    // new parent and therefore a new sha.
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'docs-note.md'), 'docs only\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'docs: base advance']);
+    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'feat']);
+
+    // Delegate to the REAL translation (with an emitter, so residue — if any —
+    // would actually be written) to prove the pure-replay case leaves none.
+    const events = new ConductorEventEmitter();
+    const translateAfterRebase = vi.fn(
+      (gr: GitRunner, root: string, o: string, oh: string, h: string) =>
+        realTranslate(gr, root, o, oh, h, events),
+    );
+    const git = makeGitRunner(repo);
+    const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
+
+    // The heuristic outcome is `noop`…
+    expect(outcome.kind).toBe('noop');
+    // …but the rebase genuinely moved HEAD (shas rewritten)…
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(newHead).not.toBe(origHead);
+    // …so translation MUST still run, with the real pre/post HEADs.
+    expect(translateAfterRebase).toHaveBeenCalledTimes(1);
+    expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
+
+    // Pure replay: patch-ids match, the map covers the replayed commit…
+    const rewrites = JSON.parse(
+      await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8'),
+    ) as Record<string, string>;
+    expect(rewrites[origHead]).toBe(newHead);
+    // …and NO residue is written.
+    await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
+  }, 20000);
 });
