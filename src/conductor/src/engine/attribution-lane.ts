@@ -142,6 +142,65 @@ export async function writeMemo(memoPath: string, key: string, result: string): 
 }
 
 /**
+ * Re-key an existing memo entry after a rebase translates commit SHAs.
+ *
+ * If the memo's cached verdict is still valid under the new HEAD — i.e. none
+ * of the judged commits it cites fell into the rebase's residue/unmapped set
+ * — translate the `anchor.head` field to the new HEAD and rewrite the memo
+ * under the recomputed key (`computeMemoKey(newHead, residueIds)`) so a
+ * subsequent `readMemo` hits without forcing an unnecessary re-judge.
+ *
+ * If any judged commit referenced by the memo entry IS in `residueIds`, the
+ * memo is left untouched — it will miss on next read (old key no longer
+ * matches new HEAD) and be re-judged.
+ *
+ * @param projectRoot - Project root directory (memo lives at
+ *   `<projectRoot>/.pipeline/attribution-memo.json`)
+ * @param map - Rewrite map from old SHAs (commits and HEAD) to new SHAs
+ * @param oldHead - Pre-rebase HEAD SHA
+ * @param newHead - Post-rebase HEAD SHA
+ * @param residueIds - Task/commit IDs that are part of the rebase residue set
+ */
+export async function rekeyMemoAfterRebase(
+  projectRoot: string,
+  map: Record<string, string>,
+  oldHead: string,
+  newHead: string,
+  residueIds: string[],
+): Promise<void> {
+  const memoPath = join(projectRoot, '.pipeline', 'attribution-memo.json');
+  const oldKey = computeMemoKey(oldHead, residueIds);
+  const cached = await readMemo(memoPath, oldKey);
+  if (cached === undefined) {
+    return;
+  }
+
+  let parsed: { anchor?: { head?: string }; results?: Array<{ citations?: Array<{ sha?: string }> }> };
+  try {
+    parsed = JSON.parse(cached);
+  } catch {
+    return;
+  }
+
+  // If any judged commit cited in the memo is itself part of the residue
+  // set, leave the memo alone so it misses and gets re-judged.
+  const residueSet = new Set(residueIds);
+  const citedShas = (parsed.results ?? []).flatMap((r) =>
+    (r.citations ?? []).map((c) => c.sha).filter((sha): sha is string => Boolean(sha)),
+  );
+  if (citedShas.some((sha) => residueSet.has(sha))) {
+    return;
+  }
+
+  if (parsed.anchor) {
+    parsed.anchor.head = newHead;
+  }
+
+  const newKey = computeMemoKey(newHead, residueIds);
+  await writeMemo(memoPath, newKey, JSON.stringify(parsed));
+}
+
+/**
  * Dispatch the attribution verifier in a fresh session.
  *
  * Assembles residue tasks and candidate commits, builds the verifier prompt,
