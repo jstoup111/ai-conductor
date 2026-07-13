@@ -16,6 +16,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Updated `resolved-config.test.ts` expectations for `explore`/`prd` reasoning effort (`xhigh` → `medium`), which had drifted from #607's re-scope of those defaults on cost-per-outcome grounds — restores CI green on `main` (2 failing tests fixed). No production defaults changed.
+
 - Daemon build-completion gate no longer false-parks a fully-completed build as
   "empty/missing plan" when the plan's task headings use the bare `### T<N> —
   Title` shorthand (no "Task" word, ids starting at `T0`) — the form used by
