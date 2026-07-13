@@ -1811,6 +1811,114 @@ export class Conductor {
               step: step.name,
               branches: membership.dispatchable.map((m) => m.name),
             });
+
+            // Task 17: real concurrent fan-out + single-writer join
+            // (adr-2026-07-10-validation-group-join.md). Branches dispatch
+            // concurrently under the validation_concurrency cap; NONE of
+            // them write conduct-state.json or .pipeline/gates/* — only
+            // the core, here, on the loop's thread of control, after every
+            // branch has settled, writes state/gates/events. Scoped to the
+            // ALL-GREEN case only (Task 17); join classification for
+            // failures/no-verdict/mixed outcomes is Tasks 18+.
+            const cap = Math.max(
+              1,
+              Math.min(this.validationConcurrency, membership.dispatchable.length),
+            );
+            const outcomes = await runWithConcurrency(
+              membership.dispatchable.map((member) => () =>
+                runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1),
+              ),
+              cap,
+            );
+
+            // A branch outcome of `verdict: pass` only means the skill
+            // dispatch itself succeeded — necessary but NOT sufficient for
+            // "this member is truly done". The join recomputes each
+            // member's OBJECTIVE gate verdict from on-disk evidence, exactly
+            // like the serial walk's own post-dispatch step
+            // (computeAndWriteVerdict, conductor.ts ~3547) — the single
+            // source of truth this layer recomputes from disk rather than
+            // trusting a dispatch's self-report. This also satisfies (b):
+            // one `.pipeline/gates/«member».json` write per member, from
+            // the core, at join. The write itself is unconditional (Task 17's
+            // own acceptance tests assert the gate file exists regardless of
+            // verifyArtifacts). Only the ALLGREEN DECISION consults these
+            // verdicts, and does so only when `verifyArtifacts` is set —
+            // matching the serial walk's own artifact check (line ~2101) —
+            // so callers that never opted into artifact verification keep
+            // the same dispatch-success-only semantics they always have.
+            const dispatchCtx = await this.completionCtx(state);
+            const gateVerdicts = new Map<string, GateObjectiveVerdict>();
+            for (let idx = 0; idx < membership.dispatchable.length; idx += 1) {
+              const member = membership.dispatchable[idx]!;
+              const memberName = member.name as StepName;
+              const outcome = outcomes[idx];
+              if (outcome?.kind === 'verdict' && outcome.verdict === 'pass') {
+                gateVerdicts.set(
+                  memberName,
+                  await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
+                );
+              }
+            }
+
+            // manual_test's own gate is satisfied merely by the results
+            // file existing — the PASS/FAIL verdict lives in the file's
+            // FAIL rows, which the gate predicate does not classify.
+            // Checked separately here (mirrors the daemon's manual_test→
+            // build kickback FAIL-row read, #367). Only consulted by the
+            // allGreen decision below when verifyArtifacts is set.
+            const hasManualTest = membership.dispatchable.some((m) => m.name === 'manual_test');
+            const manualTestFailRows = hasManualTest
+              ? await readManualTestFailRows(this.projectRoot)
+              : [];
+
+            const allGreen = outcomes.every((outcome, idx) => {
+              if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
+              if (!this.verifyArtifacts) return true;
+              const member = membership.dispatchable[idx]!;
+              if (!gateVerdicts.get(member.name)?.satisfied) return false;
+              if (member.name === 'manual_test' && manualTestFailRows.length > 0) return false;
+              return true;
+            });
+
+            if (allGreen) {
+              // JOIN — single writer: one consistent state snapshot,
+              // regardless of the order branches actually completed in.
+              for (const member of membership.dispatchable) {
+                const memberName = member.name as StepName;
+                const syntheticKey = `${builtinGroup.name}__${member.name}`;
+                (state as Record<string, unknown>)[syntheticKey] = 'done';
+                state[memberName] = 'done';
+                await saveStepStatus(this.stateFilePath, memberName, 'done');
+              }
+              await writeState(this.stateFilePath, state);
+              await this.events.emit({
+                type: 'parallel_completed',
+                step: step.name,
+                branches: membership.dispatchable.map((m) => m.name),
+              });
+              continue;
+            }
+
+            // Non-green join: out of scope for Task 17 — consolidated
+            // kickback/remediation classification lands in Tasks 18-24.
+            // Fail the group loudly (mirrors the DSL parallel group's
+            // failure path, runParallelGroupViaCore) rather than silently
+            // re-dispatching members that already ran.
+            state[step.name] = 'failed';
+            await saveStepStatus(this.stateFilePath, step.name, 'failed');
+            await writeState(this.stateFilePath, state);
+            await this.events.emit({
+              type: 'step_failed',
+              step: step.name,
+              error: `Validation group "${step.name}" had a non-green branch outcome`,
+              retryCount: 0,
+            });
+            process.off('SIGINT', sigintHandler);
+            if (!this.daemon) {
+              process.off('SIGTERM', sigterm);
+            }
+            return;
           }
         }
 

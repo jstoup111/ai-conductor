@@ -4517,6 +4517,161 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('single-writer join state + gate verdicts — all-green (Task 17)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    function joinRunner(delays: Partial<Record<StepName, number>>): StepRunner {
+      return {
+        run: vi.fn(async (step: StepName) => {
+          const delay = delays[step];
+          if (delay) await new Promise((r) => setTimeout(r, delay));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+    }
+
+    it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // manual_test is the slowest branch — prd_audit and
+      // architecture_review_as_built resolve first, exercising mixed
+      // completion order at the semaphore.
+      const runner = joinRunner({ manual_test: 30 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+
+      // Every member's own step-status key is 'done'.
+      expect(state.manual_test).toBe('done');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
+
+      // Every member's synthetic «group»__«member» key is also 'done' —
+      // matching the DSL parallel group's key format (Task 10).
+      expect(state['validation__manual_test']).toBe('done');
+      expect(state['validation__prd_audit']).toBe('done');
+      expect(state['validation__architecture_review_as_built']).toBe('done');
+    });
+
+    it('writes .pipeline/gates/«member».json for every member at join, serially, from the core', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = joinRunner({ prd_audit: 20 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      for (const member of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+        const raw = await readFile(join(dir, `.pipeline/gates/${member}.json`), 'utf-8');
+        const verdict = JSON.parse(raw);
+        expect(verdict.satisfied).toBe(true);
+      }
+    });
+
+    it('write-spy: zero state writes originate inside branch execution — only the join (core, post-fan-out) writes conduct-state.json', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // While manual_test is still in flight (its own branch has not yet
+      // resolved), prd_audit's branch reads conduct-state.json directly off
+      // disk from INSIDE its own dispatch. If a branch — or the core, before
+      // every branch has settled — ever wrote a member's completion key
+      // early, this would observe it. The single-writer invariant requires
+      // it stays absent until every branch (including the still-in-flight
+      // manual_test) has resolved.
+      let sawPrematureWrite: unknown = 'not-checked';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await new Promise((r) => setTimeout(r, 30));
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            const mid = await readState(statePath);
+            sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // prd_audit resolved while manual_test was still in flight; at that
+      // moment no synthetic key had been written yet — proving the branch
+      // itself never wrote state, and the core had not joined early either.
+      expect(sawPrematureWrite).not.toBe('done');
+
+      // After the full run, the join has since written it.
+      const finalState = await readState(statePath);
+      expect(finalState.ok && (finalState.value as Record<string, unknown>)['validation__prd_audit']).toBe(
+        'done',
+      );
+    });
+  });
+
   describe('validation group membership resolution (Task 15)', () => {
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
