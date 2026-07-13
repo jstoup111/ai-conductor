@@ -951,7 +951,8 @@ describe('rekeyMemoAfterRebase (RED — not implemented until Task 7)', () => {
       [judgedCommitOld]: judgedCommitNew,
     };
 
-    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds);
+    // No shas dropped by the rebase — the sha-residue set is empty.
+    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds, []);
 
     // The NEW key must now HIT.
     const newKey = computeMemoKey(newHead, residueIds);
@@ -964,5 +965,54 @@ describe('rekeyMemoAfterRebase (RED — not implemented until Task 7)', () => {
 
     // The entry's verdictAnchor (anchor.head) is translated to the new HEAD.
     expect(parsed.anchor.head).toBe(newHead);
+  });
+
+  it('leaves the memo untouched when a cited judged commit is itself in the sha-residue set (dropped/unmapped by the rebase)', async () => {
+    // Regression for the Task 7 rework finding: rekeyMemoAfterRebase must
+    // distinguish pending-task-ids (residueIds, used for computeMemoKey) from
+    // the actual sha-residue set (shaResidue, used for the safety guard).
+    // Previously both were satisfied by a single `residueIds` param — the
+    // caller passed task ids there, so `citedShas.some(residueSet.has)` could
+    // never match a 40-char sha and the guard was dead code.
+    const oldHead = 'a'.repeat(40);
+    const newHead = 'b'.repeat(40);
+    const droppedJudgedCommit = 'e'.repeat(40);
+    const residueIds = ['1', '2'];
+
+    const oldKey = computeMemoKey(oldHead, residueIds);
+    const cachedVerdict = {
+      schema: 1,
+      anchor: { head: oldHead, residue: residueIds },
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: droppedJudgedCommit, rationale: 'implements the sweep feature' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+    await writeMemo(memoPath, oldKey, JSON.stringify(cachedVerdict));
+
+    // The rewrite map has no entry for droppedJudgedCommit (it was dropped by
+    // the rebase, e.g. squashed away or conflict-resolved out); it shows up
+    // in the sha-residue set instead.
+    const map: Record<string, string> = {
+      [oldHead]: newHead,
+    };
+    const shaResidue = [droppedJudgedCommit];
+
+    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds, shaResidue);
+
+    // The memo must be left alone: the OLD key still reads back the
+    // untranslated entry, and the NEW key must miss.
+    const stillOld = await readMemo(memoPath, oldKey);
+    expect(stillOld).toBeDefined();
+    const stillOldParsed = JSON.parse(stillOld as string);
+    expect(stillOldParsed.anchor.head).toBe(oldHead);
+
+    const newKey = computeMemoKey(newHead, residueIds);
+    const miss = await readMemo(memoPath, newKey);
+    expect(miss).toBeUndefined();
   });
 });
