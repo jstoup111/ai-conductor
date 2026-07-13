@@ -2203,19 +2203,47 @@ export class Conductor {
                 // the separate `attempt_ceiling` progress-attempt counter so
                 // slow-drip progress can't loop forever (absolute ceiling
                 // enforcement itself is T5, out of scope here).
+                let bpCeilingHit = false;
+                let bpCeilingValue = 0;
                 {
                   const bpHaltCfg = this.config.build_progress_halt;
                   const bpEnabled = bpHaltCfg?.enabled ?? BUILD_PROGRESS_HALT_DEFAULTS.enabled;
                   const bpCeiling =
                     bpHaltCfg?.attempt_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling;
-                  if (
-                    bpEnabled &&
-                    resolvedTasksAfter > resolvedTasksBefore &&
-                    progressAttempts < bpCeiling
-                  ) {
-                    progressAttempts++;
-                    progressBypassed = true;
+                  if (bpEnabled && resolvedTasksAfter > resolvedTasksBefore) {
+                    if (progressAttempts + 1 < bpCeiling) {
+                      progressAttempts++;
+                      progressBypassed = true;
+                    } else {
+                      // T5: absolute attempt-ceiling backstop. This attempt is
+                      // still making real forward progress (T4's bypass
+                      // condition would otherwise re-dispatch it indefinitely),
+                      // but bypassing this attempt would push the
+                      // progress-attempt counter to (or past) `attempt_ceiling`
+                      // — stop bypassing on THIS attempt and park/halt with a
+                      // distinct reason so operators can tell "genuinely
+                      // stuck" (the generic completion-gate "tasks not
+                      // completed" reason) apart from "still progressing but
+                      // hit the absolute ceiling" (this branch).
+                      progressAttempts++;
+                      bpCeilingHit = true;
+                      bpCeilingValue = bpCeiling;
+                    }
                   }
+                }
+
+                if (bpCeilingHit) {
+                  const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {});
+                  state[step.name] = 'failed';
+                  await writeState(this.stateFilePath, state);
+                  await this.events.emit({ type: 'loop_halt', reason });
+                  process.off('SIGINT', sigintHandler);
+                  return;
                 }
 
                 // Task 23: daemon auto-park at the build gate layer (ADR
