@@ -1178,12 +1178,28 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
       inFilesBlock = false;
     }
 
-    // Legacy fallback source: backtick tokens anywhere in the section. Only
-    // used when the section has no **Files:** line — Steps prose routinely
-    // backticks module-import strings and runtime artifacts that must not
-    // become required corroboration paths (#424).
+    // Legacy fallback source: backtick path tokens in a section that has no
+    // **Files:** line. Restricted to dedicated file-list bullet items
+    // (`- \`path\``) — NOT backtick tokens embedded in a prose sentence.
+    //
+    // A `- \`path\`` bullet is a genuine "this task edits this file"
+    // declaration (the #425 / remediation-append form). A backtick token in a
+    // prose sentence is almost always an incidental reference — a runtime
+    // artifact the task reads/guards, a `file:NNN-MMM` line citation, or a
+    // module-import string — that must NOT become a required corroboration
+    // path (#424 intent). Harvesting inline-prose tokens produced phantom
+    // declared paths and rejected real single-file commits, zeroing build
+    // progress and cascading into stall halts (#548 live incidents: #280 plan
+    // T11's inline `task-status.json` while the commit touched task-evidence.ts;
+    // `2026-07-12-rtk-hook-preservation` T1/T3/T5 inline citations like
+    // `bin/install:494–506`). With no declared path, corroboration abstains and
+    // the engine-stamped Task: trailer stands on its own (abstain-or-loud,
+    // #519/#530), instead of contradicting valid evidence.
+    const bulletBody = line.match(/^\s*[-*]\s+(.*)$/);
+    if (!bulletBody) continue;
     let m: RegExpExecArray | null;
-    while ((m = BACKTICK_TOKEN.exec(line)) !== null) {
+    BACKTICK_TOKEN.lastIndex = 0;
+    while ((m = BACKTICK_TOKEN.exec(bulletBody[1])) !== null) {
       const token = m[1];
       if (!PATH_EXTENSIONS.test(token) && !token.includes('/')) continue;
       const normalized = token.replace(/^\.\//, '');
