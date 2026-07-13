@@ -231,14 +231,15 @@ export async function runGroupBranch(
   maxRetries: number,
 ): Promise<BranchOutcome> {
   const mintSessionId = deps.mintSessionId ?? uuidv4;
-  const sessionId = mintSessionId();
+  let sessionId = mintSessionId();
 
   let lastOutput = "";
   let hasRun = false;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     // `resume` is true once this branch's session has ever been dispatched
-    // before — including a prior rate-limited cycle, which still consumed
-    // the fresh (attempt 1) session slot but must not burn retry budget.
+    // before — including a prior rate-limited/sessionExpired cycle, which
+    // still consumed the fresh (attempt 1) session slot but must not burn
+    // retry budget. A sessionExpired reset re-arms this to false below.
     const resume = hasRun;
     const result = await deps.stepRunner.run(member.name as StepName, state, {
       sessionId,
@@ -263,6 +264,26 @@ export async function runGroupBranch(
 
       attempt -= 1;
       continue;
+    }
+
+    // Stale session: mint a fresh session id and retry WITHOUT burning the
+    // retry budget — mirrors conductor.ts:1757-1769 (resets to a fresh
+    // session, not a resume of the expired one).
+    if (result.sessionExpired) {
+      sessionId = mintSessionId();
+      hasRun = false;
+      attempt -= 1;
+      continue;
+    }
+
+    // Auth failure: does NOT burn the retry budget (matches the SERIAL
+    // loop's park-then-resume semantics, conductor.ts:1771-1775), but this
+    // task does not implement park/resume itself — that belongs to the
+    // group CORE/join logic (Tasks 17+). Surface immediately as a
+    // no-verdict outcome carrying the "authFailure" reason so the core can
+    // route it to halt/park handling instead of silently retrying it.
+    if (result.authFailure) {
+      return makeNoVerdictOutcome("authFailure");
     }
 
     lastOutput = result.output ?? lastOutput;

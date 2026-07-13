@@ -448,3 +448,72 @@ describe("group-core: runGroupBranch rate-limit pass-through into shared episode
     expect(classifyOutcome(outcome)).toBe("verdict:pass");
   });
 });
+
+describe("group-core: runGroupBranch authFailure / sessionExpired parity", () => {
+  /** Minimal runner-spy: captures every (step, opts) call it receives. */
+  function spyRunner(results: StepRunResult[]) {
+    const calls: Array<{ step: StepName; opts?: StepRunOptions }> = [];
+    let i = 0;
+    return {
+      calls,
+      run: async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
+        calls.push({ step, opts });
+        const result = results[i] ?? results.at(-1) ?? { success: true };
+        i += 1;
+        return result;
+      },
+    };
+  }
+
+  const fakeState = {} as ConductState;
+
+  it("an authFailure result does NOT burn retry budget and classifies as no-verdict with reason 'authFailure'", async () => {
+    // maxRetries=1 means a single real attempt is allowed. The branch must
+    // not loop/retry an authFailure automatically (that's core/join's job
+    // in a later task) — it surfaces immediately as no-verdict:authFailure
+    // after exactly one call.
+    const runner = spyRunner([{ success: false, authFailure: true, output: "401 unauthorized" }]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    expect(runner.calls).toHaveLength(1);
+    expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
+  });
+
+  it("a sessionExpired result re-mints a fresh session id and retries with resume:false, without burning retry budget", async () => {
+    const runner = spyRunner([
+      { success: false, sessionExpired: true },
+      { success: true },
+    ]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    let mintCount = 0;
+    const mintSessionId = () => {
+      mintCount += 1;
+      return `SESSION-${mintCount}`;
+    };
+
+    // maxRetries=1: only one real attempt is allowed. The sessionExpired
+    // cycle must not count against it, so the branch still succeeds on
+    // its retry.
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, mintSessionId },
+      1,
+    );
+
+    expect(runner.calls).toHaveLength(2);
+    expect(classifyOutcome(outcome)).toBe("verdict:pass");
+
+    // First call uses the freshly minted session, not resumed.
+    expect(runner.calls[0]!.opts?.sessionId).toBe("SESSION-1");
+    expect(runner.calls[0]!.opts?.resume).toBe(false);
+
+    // After sessionExpired, a NEW session is minted (not the expired one
+    // resumed) and dispatched fresh (resume:false), not resume:true.
+    expect(runner.calls[1]!.opts?.sessionId).toBe("SESSION-2");
+    expect(runner.calls[1]!.opts?.resume).toBe(false);
+  });
+});
