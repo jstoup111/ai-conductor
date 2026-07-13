@@ -31,6 +31,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   value added / what it unblocks) on every proposed approach — required line-items on the
   option template so the operator can weigh cost vs. value when picking; no new gate or
   artifact.
+- `/intake` now requires the same cost/value pair on every filed issue, split as: sizing
+  as exactly one `size: S` / `size: M` / `size: L` label (S ≈ ~1-2h, M ≈ ~half day to a
+  day, L ≈ multi-day; labels created in the repo), applied via REST
+  (`gh api -X POST repos/{owner}/{repo}/issues/<n>/labels`) because `gh issue edit
+  --add-label` is broken on classic-Projects repos; and **Impact** promoted from
+  optional to a required one-line-minimum section in the issue body (the
+  `.github/ISSUE_TEMPLATE/intake.yml` web form now marks Impact required to match).
 
 ### Fixed
 

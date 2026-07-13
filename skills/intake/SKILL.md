@@ -24,12 +24,12 @@ hand — this skill is how.
 
 ## The Intake Shape
 
-Four sections. Two are required.
+Four sections. Three are required.
 
 | Section | Required | Contents |
 |---------|----------|----------|
 | **Observed** | yes | Evidence of the problem — verbatim artifacts, not narrative |
-| **Impact** | no (push for it) | Who or what hurts, how often, what it costs |
+| **Impact** | yes | One line minimum: who or what hurts, how often, what it costs / unblocks |
 | **Desired outcome** | yes | Observable behavior that must hold afterward |
 | **Hypotheses** | no | The filer's guesses about HOW — explicitly labeled as guesses |
 
@@ -94,10 +94,11 @@ Rules of thumb:
 - Long evidence (full logs, big diffs) goes in a `<details>` block or a gist link,
   with the load-bearing lines quoted inline.
 
-### 3. Write **Impact** — Who Hurts, How Often
+### 3. Write **Impact** — Who Hurts, How Often (REQUIRED)
 
-One short paragraph quantifying why this matters. This is what lets the operator
-assign a priority band honestly:
+**Required on every intake — one line minimum.** State the value of fixing it: who or
+what hurts, how often, and/or what it unblocks. This is what lets the operator assign
+a priority band honestly:
 
 ```markdown
 ## Impact
@@ -108,6 +109,10 @@ PR the operator must triage and close. Happened twice this week (#124, #131).
 
 If the honest answer is "minor annoyance, no data loss" — write that. Overstated
 impact erodes the priority bands for everything else.
+
+**Sizing is NOT prose — it's a label.** Do not write effort estimates into the body;
+apply exactly one `size: S` / `size: M` / `size: L` label instead (see §8). A very
+rough tier is all DECIDE needs: S ≈ ~1-2h, M ≈ ~half day to a day, L ≈ multi-day.
 
 ### 4. Write **Desired outcome** — Observable, Not Implementational
 
@@ -180,7 +185,9 @@ Keep it specific and under ~72 characters.
 3. **No HOW outside Hypotheses** — sweep for the leak signals in §5.
 4. **Claims are calibrated** — inferences and guesses are labeled as such, not stated
    as fact.
-5. **Impact is stated honestly** (or consciously omitted for trivial ideas).
+5. **Impact is stated honestly** — required, one line minimum; never omitted.
+6. **A size tier is picked** — exactly one of `size: S` / `size: M` / `size: L`,
+   applied as a label in §8 (never written as prose in the body).
 
 ### 8. File It
 
@@ -195,7 +202,7 @@ gh issue create \
 
 ## Impact
 
-<who/what hurts, how often>
+<one line minimum: who/what hurts, how often, what fixing it unblocks>
 
 ## Desired outcome
 
@@ -213,13 +220,19 @@ EOF
 
 - **`--assignee @me` matters**: the engineer's intake poll only captures issues
   assigned to the operator. An unassigned intake is invisible to the queue.
+- **Size label (REQUIRED, exact names)**: apply exactly one of `size: S`, `size: M`,
+  `size: L` — the very rough effort tier (S ≈ ~1-2h, M ≈ ~half day to a day,
+  L ≈ multi-day). Apply it **via REST after creating** — `gh issue edit --add-label`
+  is broken on this repo (classic Projects):
+  ```bash
+  gh api -X POST repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=size: M"
+  ```
 - **Priority label** (optional, exact names): `priority: critical`, `priority: high`,
-  `priority: medium`, `priority: low`. Apply at create time with `--label`. If a label
-  must be changed later, note that `gh issue edit --add-label` is unreliable on repos
-  with classic Projects — use the REST endpoint instead:
-  `gh api repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=priority: high"`.
-- Omitted sections (Impact/Hypotheses with nothing to say) are dropped entirely, not
-  left as empty headings.
+  `priority: medium`, `priority: low`. Apply via the same REST endpoint —
+  `gh api -X POST repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=priority: high"` —
+  never `gh issue edit --add-label`.
+- Impact is never omitted. A Hypotheses section with nothing to say is dropped
+  entirely, not left as an empty heading.
 - After creating, output the issue URL.
 
 ## Worked Example — Bad vs Good
@@ -250,11 +263,11 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 
 ## Verify
 
-- [ ] Issue has Observed and Desired outcome sections; Impact/Hypotheses only if non-empty
+- [ ] Issue has Observed, Impact (one line minimum), and Desired outcome sections; Hypotheses only if non-empty
 - [ ] Observed leads with verbatim artifacts, each naming its source
 - [ ] Inferences and guesses are labeled, not stated as fact
 - [ ] Every outcome is observable without knowledge of the implementation
 - [ ] No fix directions, design sketches, or prescribed seams outside Hypotheses
 - [ ] Title states the symptom or outcome, not a solution
-- [ ] Filed with `--assignee @me`; priority label applied if warranted
+- [ ] Filed with `--assignee @me`; exactly one `size: S/M/L` label applied via REST; priority label applied if warranted
 - [ ] Issue URL reported to the operator

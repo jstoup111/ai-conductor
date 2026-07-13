@@ -13,10 +13,10 @@ body:
     id: impact
     attributes:
       label: Impact
-      description: Who or what is hurting, and how often?
-      placeholder: (optional)
+      description: One line minimum — who or what is hurting, how often, what fixing it unblocks
+      placeholder: Who hurts, how often, what it unblocks
     validations:
-      required: false
+      required: true
   - type: textarea
     id: desired-outcome
     attributes:
