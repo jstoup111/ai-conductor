@@ -56,6 +56,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Owner: markers added to the four 2026-07-13 spec-wave intake docs (session-fresh-verdict-artifacts, park-all-dispatch-paths, kickback-to-build no-op, retry-classify) so the daemon owner-gate can dispatch their builds (#649/#651/#647/#646).
 - Spec landed for #651 (`.docs/{track,complexity,intake,stories,plans}/park-all-dispatch-paths.md`
   + `.docs/decisions/adr-2026-07-13-park-all-dispatch-paths.md`): the daemon pool's fresh-dispatch path
   will consult the operator-park predicate **immediately before dispatch** (a new `guardedDispatch`

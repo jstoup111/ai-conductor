@@ -1,6 +1,7 @@
 # Intake: Kickback to build is a no-op when the target task's evidence is still stamped (#647)
 
 Source: jstoup111/ai-conductor#647
+Owner: jstoup111
 Size (filed): M
 Labels: bug, priority: high
 
