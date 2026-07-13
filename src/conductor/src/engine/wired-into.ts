@@ -1,9 +1,13 @@
-// Deferred import to avoid a hard circular-module dependency at eval time —
-// autoheal.ts imports parsing helpers from this module, so this module
-// reaches back for only the one grammar constant it needs (kept in lockstep
-// per the TASK_ID_PATTERN comment further below), used solely inside
-// function bodies (never at module top-level), which is safe under ESM's
-// live-binding circular-import semantics.
+// autoheal.ts imports parsing helpers from this module, creating a circular
+// module dependency. This module reaches back for only the one grammar
+// constant it needs (kept in lockstep per the TASK_ID_PATTERN comment
+// further below). ESM circular imports resolve in whichever direction the
+// entry point first pulls the cycle in, so AUTOHEAL_TASK_ID_PATTERN is NOT
+// guaranteed to be initialized yet when this module's top level runs (e.g.
+// when something imports autoheal.ts before wired-into.ts, which is the
+// real production path via conductor.ts). PLAN_TASK_HEADER below is
+// therefore built lazily on first use — never referenced at module
+// top-level — so both import orderings are safe.
 import { TASK_ID_PATTERN as AUTOHEAL_TASK_ID_PATTERN } from './autoheal.js';
 
 // A task's **Wired-into:** line is the authoring-time declaration of which
@@ -248,9 +252,15 @@ export function combineWiredInto(
 // Title`, `### Task ID — Title`, or the bare `### T<N> — Title` shorthand) —
 // the convention `extractWiredIntoContracts` uses to split a plan into
 // per-task sections.
-const PLAN_TASK_HEADER = new RegExp(
-  `^#{1,6}\\s+(?:Task\\s+(${AUTOHEAL_TASK_ID_PATTERN})|T(\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
-);
+let _planTaskHeader: RegExp | undefined;
+function getPlanTaskHeader(): RegExp {
+  if (!_planTaskHeader) {
+    _planTaskHeader = new RegExp(
+      `^#{1,6}\\s+(?:Task\\s+(${AUTOHEAL_TASK_ID_PATTERN})|T(\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
+    );
+  }
+  return _planTaskHeader;
+}
 
 /**
  * Walk a full plan's text and return each task's parsed **Wired-into:**
@@ -272,7 +282,7 @@ export function extractWiredIntoContracts(
   let currentId: string | null = null;
 
   for (const line of planText.split('\n')) {
-    const headerMatch = line.match(PLAN_TASK_HEADER);
+    const headerMatch = line.match(getPlanTaskHeader());
     if (headerMatch) {
       currentId = headerMatch[1] ?? headerMatch[2];
       if (!linesByTask.has(currentId)) {
