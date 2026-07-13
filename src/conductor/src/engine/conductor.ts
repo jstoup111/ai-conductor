@@ -1809,7 +1809,7 @@ export class Conductor {
             await this.events.emit({
               type: 'parallel_started',
               step: step.name,
-              branches: builtinGroup.members,
+              branches: membership.dispatchable.map((m) => m.name),
             });
           }
         }

@@ -4356,6 +4356,45 @@ describe('engine/conductor', () => {
       expect(calledSteps).toContain('manual_test');
     });
 
+    it('width 2 with one skip: parallel_started lists only the dispatchable members, not the skipped phantom', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'L',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      // Technical track skips prd_audit (no PRD to audit), leaving
+      // manual_test + architecture_review_as_built dispatchable at width 2.
+      // The event's member list must reflect ONLY the dispatched members —
+      // prd_audit must never appear, even though it's a static member of
+      // VALIDATION_GROUP.
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(parallelStarted[0].branches).not.toContain('prd_audit');
+    });
+
     it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
