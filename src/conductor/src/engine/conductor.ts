@@ -38,6 +38,7 @@ import {
   resolveBuildProgressConfig,
   isAttributionJudgeCutoverActive,
   BUILD_PROGRESS_HALT_DEFAULTS,
+  resolveValidationConcurrency,
 } from './config.js';
 import {
   isEnforcementConfigured,
@@ -591,6 +592,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
+  private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -829,6 +831,7 @@ export class Conductor {
         defaults: { ...(this.config.defaults ?? {}), max_retries: opts.maxRetries },
       };
     }
+    this.validationConcurrency = resolveValidationConcurrency(this.config);
     this.sleep = opts.sleepFn ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.onCheckpoint = opts.onCheckpoint ?? (async () => 'continue' as const);
     this.onNavigate = opts.onNavigate ?? (async () => null);
@@ -4378,9 +4381,8 @@ export class Conductor {
    * a branch failure fails the whole group; advisory=true → the failure is
    * logged but the group still completes.
    *
-   * Concurrency defaults to unbounded (branches.length) — matching the old
-   * executor's Promise.all-style fan-out. Config-driven concurrency caps
-   * (`validation_concurrency`) are wired in a later task.
+   * Concurrency is capped by `validation_concurrency` (resolved once per
+   * run via `resolveValidationConcurrency`), clamped to the branch count.
    */
   private async runParallelGroupViaCore(
     groupName: StepName,
@@ -4400,7 +4402,7 @@ export class Conductor {
       members.map((member) => async () => {
         return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);
       }),
-      Math.max(1, branches.length),
+      Math.max(1, Math.min(this.validationConcurrency, branches.length)),
     );
 
     let groupFailed = false;
