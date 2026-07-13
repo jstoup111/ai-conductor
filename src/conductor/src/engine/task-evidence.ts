@@ -35,12 +35,16 @@ export interface EvidenceStamp {
  *   (e.g. `zero_work_product` — #505 TS-16). Append-only per miss; cleared
  *   whenever the counter itself resets on progress.
  * - migrationGrandfather: Set<string> — task IDs grandfathered during migration
+ * - lastResolvedCount: number — net task-resolution count from the most recent
+ *   attempt/dispatch (progress-aware halt/park decision, #601). Missing on
+ *   older sidecars; defaults to 0 for backward compatibility.
  */
 export interface TaskEvidence {
   evidenceStamps: Map<string, EvidenceStamp>;
   noEvidenceAttempts: number;
   noEvidenceReasons: string[];
   migrationGrandfather: Set<string>;
+  lastResolvedCount: number;
   write(): Promise<void>;
 }
 
@@ -59,6 +63,7 @@ interface SerializedEvidenceData {
   noEvidenceAttempts: number;
   noEvidenceReasons?: string[];
   migrationGrandfather: string[];
+  lastResolvedCount?: number;
 }
 
 /**
@@ -119,6 +124,8 @@ function createInstance(
       ? [...data.noEvidenceReasons]
       : [],
     migrationGrandfather,
+    lastResolvedCount:
+      typeof data.lastResolvedCount === 'number' ? data.lastResolvedCount : 0,
 
     async write() {
       const sidecarDir = join(projectRoot, '.pipeline');
@@ -133,6 +140,7 @@ function createInstance(
         noEvidenceAttempts: instance.noEvidenceAttempts,
         noEvidenceReasons: [...instance.noEvidenceReasons],
         migrationGrandfather: Array.from(instance.migrationGrandfather),
+        lastResolvedCount: instance.lastResolvedCount,
       };
 
       // TRUE atomic write: unique temp file in the SAME directory, then
