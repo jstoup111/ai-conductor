@@ -31,6 +31,7 @@ import {
   makeNoVerdictOutcome,
   type GroupMember,
   type BranchOutcome,
+  type NoVerdictOutcome,
 } from './group-core.js';
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -1880,6 +1881,45 @@ export class Conductor {
               if (member.name === 'manual_test' && manualTestFailRows.length > 0) return false;
               return true;
             });
+
+            // Task 18: a `no-verdict` outcome means a branch exhausted its
+            // retries without ever producing a completion marker — an
+            // infra/dispatch failure, not a content verdict. This is NOT the
+            // ordinary "some branch failed" case (that's Task 19's kickback/
+            // remediation classification): it fails the group LOUDLY and
+            // FAST, mirroring the credentials/auth HALT pattern elsewhere in
+            // this file (~841, ~882) — write the HALT marker, emit
+            // `loop_halt`, and never synthesize a remediation plan or emit a
+            // `kickback`. No partial join either: not even siblings that
+            // themselves passed get marked 'done', because the group as a
+            // whole never reached a verdict.
+            const noVerdictIdx = outcomes.findIndex((outcome) => outcome.kind === 'no-verdict');
+            if (noVerdictIdx !== -1) {
+              const noVerdictOutcome = outcomes[noVerdictIdx] as NoVerdictOutcome;
+              const noVerdictMember = membership.dispatchable[noVerdictIdx]!;
+              const haltReason =
+                `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
+                `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
+              const haltPath = join(this.projectRoot, HALT_MARKER);
+              await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
+                // Best-effort HALT write; if it fails, still fail the step below.
+              });
+              state[step.name] = 'failed';
+              await saveStepStatus(this.stateFilePath, step.name, 'failed');
+              await writeState(this.stateFilePath, state);
+              await this.events.emit({ type: 'loop_halt', reason: haltReason });
+              await this.events.emit({
+                type: 'step_failed',
+                step: step.name,
+                error: haltReason,
+                retryCount: 0,
+              });
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) {
+                process.off('SIGTERM', sigterm);
+              }
+              return;
+            }
 
             if (allGreen) {
               // JOIN — single writer: one consistent state snapshot,

@@ -4672,6 +4672,146 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('no-verdict branch fails the group (Task 18)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Crashes: never produces a completion marker, never succeeds.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(haltCount).toBeGreaterThan(0);
+      expect(kickbacks.length).toBe(0);
+
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      // No member — including the ones that themselves passed — gets marked
+      // done: no partial join on a no-verdict outcome.
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+
+    it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Dispatch itself "succeeds" but the content is a FAIL row.
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+            return { success: true };
+          } else if (step === 'prd_audit') {
+            // Crashes: never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(kickbacks.length).toBe(0);
+      expect(haltCount).toBeGreaterThan(0);
+    });
+  });
+
   describe('validation group membership resolution (Task 15)', () => {
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
