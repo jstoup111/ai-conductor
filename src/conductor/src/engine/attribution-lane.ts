@@ -145,12 +145,12 @@ export async function writeMemo(memoPath: string, key: string, result: string): 
  * Re-key an existing memo entry after a rebase translates commit SHAs.
  *
  * If the memo's cached verdict is still valid under the new HEAD — i.e. none
- * of the judged commits it cites fell into the rebase's residue/unmapped set
- * — translate the `anchor.head` field to the new HEAD and rewrite the memo
- * under the recomputed key (`computeMemoKey(newHead, residueIds)`) so a
+ * of the judged commits it cites fell into the rebase's sha-residue/unmapped
+ * set — translate the `anchor.head` field to the new HEAD and rewrite the
+ * memo under the recomputed key (`computeMemoKey(newHead, residueIds)`) so a
  * subsequent `readMemo` hits without forcing an unnecessary re-judge.
  *
- * If any judged commit referenced by the memo entry IS in `residueIds`, the
+ * If any judged commit referenced by the memo entry IS in `shaResidue`, the
  * memo is left untouched — it will miss on next read (old key no longer
  * matches new HEAD) and be re-judged.
  *
@@ -159,7 +159,12 @@ export async function writeMemo(memoPath: string, key: string, result: string): 
  * @param map - Rewrite map from old SHAs (commits and HEAD) to new SHAs
  * @param oldHead - Pre-rebase HEAD SHA
  * @param newHead - Post-rebase HEAD SHA
- * @param residueIds - Task/commit IDs that are part of the rebase residue set
+ * @param residueIds - Pending task IDs used for the #520 memo-key convention
+ *   (`computeMemoKey`) — NOT commit SHAs.
+ * @param shaResidue - Commit SHAs dropped/unmapped by the rebase (the real
+ *   sha-residue set). Used only for the safety guard below: if a judged
+ *   commit cited by the cached memo is in this set, the memo is left alone
+ *   rather than re-keyed onto the new HEAD.
  */
 export async function rekeyMemoAfterRebase(
   projectRoot: string,
@@ -167,6 +172,7 @@ export async function rekeyMemoAfterRebase(
   oldHead: string,
   newHead: string,
   residueIds: string[],
+  shaResidue: string[],
 ): Promise<void> {
   const memoPath = join(projectRoot, '.pipeline', 'attribution-memo.json');
   const oldKey = computeMemoKey(oldHead, residueIds);
@@ -182,9 +188,9 @@ export async function rekeyMemoAfterRebase(
     return;
   }
 
-  // If any judged commit cited in the memo is itself part of the residue
-  // set, leave the memo alone so it misses and gets re-judged.
-  const residueSet = new Set(residueIds);
+  // If any judged commit cited in the memo is itself part of the sha
+  // residue set, leave the memo alone so it misses and gets re-judged.
+  const residueSet = new Set(shaResidue);
   const citedShas = (parsed.results ?? []).flatMap((r) =>
     (r.citations ?? []).map((c) => c.sha).filter((sha): sha is string => Boolean(sha)),
   );

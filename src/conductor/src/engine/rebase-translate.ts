@@ -452,7 +452,7 @@ export async function translateAfterRebase(
   // commit it cites is itself in the rebase residue set — both cases already
   // handled inside `rekeyMemoAfterRebase` (cache miss / leave-alone).
   const pendingTaskIds = await derivePendingTaskIds(projectRoot);
-  await rekeyMemoAfterRebase(projectRoot, map, origHead, head, pendingTaskIds);
+  await rekeyMemoAfterRebase(projectRoot, map, origHead, head, pendingTaskIds, residue);
 
   if (residue.length > 0 && events) {
     const citingBySha = await citingTaskIdsFor(projectRoot, residue);
