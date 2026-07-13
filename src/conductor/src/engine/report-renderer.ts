@@ -134,6 +134,12 @@ export interface KickbackEntry {
   to: string;
   count: number;
   evidence?: string;
+  /**
+   * #647 D3: audit discriminator — `'did-work (commits N..M / resolved +K)'`
+   * for a productive kickback vs `'derived-already-complete'` for a D1 no-op
+   * guard HALT. Absent when the emitting event carried no classification.
+   */
+  kickbackOutcome?: string;
 }
 
 /** Kickback events (a downstream gate re-opening an upstream step). */
@@ -146,6 +152,7 @@ export function aggregateKickbacks(events: ParsedEvent[]): KickbackEntry[] {
     const count = typeof evt.count === 'number' ? evt.count : 1;
     const entry: KickbackEntry = { from, to, count };
     if (typeof evt.evidence === 'string') entry.evidence = evt.evidence;
+    if (typeof evt.kickback_outcome === 'string') entry.kickbackOutcome = evt.kickback_outcome;
     out.push(entry);
   }
   return out;
