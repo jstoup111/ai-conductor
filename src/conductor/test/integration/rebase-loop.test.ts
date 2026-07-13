@@ -187,7 +187,7 @@ describe('integration/rebase-loop', () => {
       // The wiring-reachability gate (Task 9) requires a fresh, valid,
       // zero-gap evidence artifact at .pipeline/wiring-evidence.json (see
       // WIRING_EVIDENCE/validateWiringEvidence in artifacts.ts). The
-      // predicate compares evidence.headSha against ctx.getHeadSha(), which
+      // predicate compares evidence.head against ctx.getHeadSha(), which
       // shells out to `git rev-parse HEAD` in `dir` — resolve it
       // dynamically so it matches whatever HEAD the fixture's real repo is
       // actually at (these are real-git-repo suites throughout).
@@ -196,10 +196,11 @@ describe('integration/rebase-loop', () => {
       await writeFile(
         join(dir, '.pipeline/wiring-evidence.json'),
         JSON.stringify({
-          baseSha: '1'.repeat(40),
-          headSha: head,
-          layer2Applicable: false,
-          waiverResolutions: [],
+          schema: 1,
+          base: '1'.repeat(40),
+          head,
+          layer2: { applicable: false },
+          waivers: [],
           tasks: [],
         }),
       );

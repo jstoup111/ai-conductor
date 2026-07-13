@@ -167,11 +167,12 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       await writeFile(
         join(dir, '.pipeline/wiring-evidence.json'),
         JSON.stringify({
-          baseSha: 'base',
-          headSha: 'head',
-          layer2Applicable: false,
-          waiverResolutions: [],
-          tasks: [{ taskId: 't1', contractForm: 'declared', symbols: [] }],
+          schema: 1,
+          base: 'base',
+          head: 'head',
+          layer2: { applicable: false },
+          waivers: [],
+          tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
         }),
       );
     } else if (step === 'manual_test') {
@@ -244,17 +245,16 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
             await writeFile(
               join(dir, '.pipeline/wiring-evidence.json'),
               JSON.stringify({
-                baseSha: 'base',
-                headSha: 'head',
-                layer2Applicable: false,
-                waiverResolutions: [],
+                schema: 1,
+                base: 'base',
+                head: 'head',
+                layer2: { applicable: false },
+                waivers: [],
                 tasks: [
                   {
-                    taskId: 't1',
-                    contractForm: 'inert',
-                    symbols: [
-                      { symbol: 'foo', kind: 'orphan', message: 'foo unreachable' },
-                    ],
+                    id: 't1',
+                    contract: 'src/x.ts#foo',
+                    gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
                   },
                 ],
               }),
@@ -292,17 +292,16 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
           await writeFile(
             join(dir, '.pipeline/wiring-evidence.json'),
             JSON.stringify({
-              baseSha: 'base',
-              headSha: 'head',
-              layer2Applicable: false,
-              waiverResolutions: [],
+              schema: 1,
+              base: 'base',
+              head: 'head',
+              layer2: { applicable: false },
+              waivers: [],
               tasks: [
                 {
-                  taskId: 't1',
-                  contractForm: 'inert',
-                  symbols: [
-                    { symbol: 'foo', kind: 'orphan', message: 'foo unreachable' },
-                  ],
+                  id: 't1',
+                  contract: 'src/x.ts#foo',
+                  gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
                 },
               ],
             }),
@@ -339,11 +338,12 @@ describe('wiring_check predicate — live probe invocation via ctx.wiringProbe (
 
   it('invokes the injected probe, writes .pipeline/wiring-evidence.json (creating .pipeline/ first), and reports satisfied when the probe finds zero gaps', async () => {
     const evidence: WiringEvidence = {
-      baseSha: 'base',
-      headSha: 'head',
-      layer2Applicable: false,
-      waiverResolutions: [],
-      tasks: [{ taskId: 't1', contractForm: 'declared', symbols: [] }],
+      schema: 1,
+      base: 'base',
+      head: 'head',
+      layer2: { applicable: false },
+      waivers: [],
+      tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
     };
     let probeCalls = 0;
     const result = await checkStepCompletion(dir, 'wiring_check', {
@@ -363,15 +363,16 @@ describe('wiring_check predicate — live probe invocation via ctx.wiringProbe (
 
   it('invokes the injected probe and reports unsatisfied with the gap message when the probe finds a real gap', async () => {
     const evidence: WiringEvidence = {
-      baseSha: 'base',
-      headSha: 'head',
-      layer2Applicable: false,
-      waiverResolutions: [],
+      schema: 1,
+      base: 'base',
+      head: 'head',
+      layer2: { applicable: false },
+      waivers: [],
       tasks: [
         {
-          taskId: 't1',
-          contractForm: 'inert',
-          symbols: [{ symbol: 'foo', kind: 'orphan', message: 'foo unreachable' }],
+          id: 't1',
+          contract: 'src/x.ts#foo',
+          gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
         },
       ],
     };
@@ -392,11 +393,12 @@ describe('wiring_check predicate — live probe invocation via ctx.wiringProbe (
     await writeFile(
       join(dir, '.pipeline/wiring-evidence.json'),
       JSON.stringify({
-        baseSha: 'base',
-        headSha: 'head',
-        layer2Applicable: false,
-        waiverResolutions: [],
-        tasks: [{ taskId: 't1', contractForm: 'declared', symbols: [] }],
+        schema: 1,
+        base: 'base',
+        head: 'head',
+        layer2: { applicable: false },
+        waivers: [],
+        tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
       }),
     );
     let probeCalls = 0;

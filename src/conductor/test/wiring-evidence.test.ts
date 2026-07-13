@@ -11,15 +11,16 @@ import {
 
 function validEvidence(): WiringEvidence {
   return {
-    baseSha: 'base123',
-    headSha: 'head456',
-    layer2Applicable: true,
-    waiverResolutions: [],
+    schema: 1,
+    base: 'base123',
+    head: 'head456',
+    layer2: { applicable: true },
+    waivers: [],
     tasks: [
       {
-        taskId: '7',
-        contractForm: 'declared',
-        symbols: [{ symbol: 'doThing', kind: 'no-reference' }],
+        id: '7',
+        contract: 'src/x.ts#doThing',
+        gaps: [{ kind: 'no-reference', message: 'doThing has no non-test reference' }],
       },
     ],
   };
@@ -44,23 +45,23 @@ describe('validateWiringEvidence — validator for wiring-reachability evidence 
     }
   });
 
-  it('missing required field (headSha) fails, naming that field', () => {
+  it('missing required field (head) fails, naming that field', () => {
     const ev = validEvidence() as unknown as Record<string, unknown>;
-    delete ev.headSha;
+    delete ev.head;
 
     const result = validateWiringEvidence(ev);
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toContain('headSha');
+      expect(result.reason).toContain('head');
     }
   });
 
   it('unknown gap kind value fails, naming the bad value', () => {
     const ev = validEvidence() as unknown as {
-      tasks: Array<{ symbols: Array<{ kind: string }> }>;
+      tasks: Array<{ gaps: Array<{ kind: string }> }>;
     };
-    ev.tasks[0].symbols[0].kind = 'bogus-kind';
+    ev.tasks[0].gaps[0].kind = 'bogus-kind';
 
     const result = validateWiringEvidence(ev);
 
@@ -118,13 +119,14 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
 
   it('valid, fresh evidence with zero gaps across all tasks is satisfied', async () => {
     const ev: WiringEvidence = {
-      baseSha: 'base123',
-      headSha: 'head456',
-      layer2Applicable: true,
-      waiverResolutions: [],
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
       tasks: [
-        { taskId: '1', contractForm: 'declared', symbols: [] },
-        { taskId: '2', contractForm: 'none_no_surface', symbols: [] },
+        { id: '1', contract: 'src/x.ts#foo', gaps: [] },
+        { id: '2', contract: 'none (no new production surface)', gaps: [] },
       ],
     };
     await writeEvidence(ev);
@@ -138,15 +140,16 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
   it('evidence with at least one gap is unsatisfied and the kickback reason carries the gap message verbatim', async () => {
     const gapMessage = 'symbol "doThing" has no-reference — task 7 never wires it into a reachable surface';
     const ev = {
-      baseSha: 'base123',
-      headSha: 'head456',
-      layer2Applicable: true,
-      waiverResolutions: [],
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
       tasks: [
         {
-          taskId: '7',
-          contractForm: 'declared',
-          symbols: [{ symbol: 'doThing', kind: 'no-reference', message: gapMessage }],
+          id: '7',
+          contract: 'src/x.ts#doThing',
+          gaps: [{ kind: 'no-reference', message: gapMessage }],
         },
       ],
     };
@@ -161,31 +164,6 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     // gap-producing functions) must appear verbatim in the kickback reason —
     // not just have its taskId/symbol/kind substrings present.
     expect(result.reason).toContain(gapMessage);
-  });
-
-  it('gap without a message field falls back to a synthesized description naming task/symbol/kind', async () => {
-    const ev = {
-      baseSha: 'base123',
-      headSha: 'head456',
-      layer2Applicable: true,
-      waiverResolutions: [],
-      tasks: [
-        {
-          taskId: '7',
-          contractForm: 'declared',
-          symbols: [{ symbol: 'doThing', kind: 'no-reference' }],
-        },
-      ],
-    };
-    await writeEvidence(ev);
-
-    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
-    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
-
-    expect(result.done).toBe(false);
-    expect(result.reason).toContain('doThing');
-    expect(result.reason).toContain('no-reference');
-    expect(result.reason).toContain('7');
   });
 
   it('missing evidence file is unsatisfied, fail-closed, with a named reason', async () => {

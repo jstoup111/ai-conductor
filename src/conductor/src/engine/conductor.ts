@@ -2854,7 +2854,7 @@ export class Conductor {
               }
             }
 
-            // wiring_check kickback (daemon only, Task 10): a gap-carrying
+            // wiring_check kickback (Task 10 / Task 18): a gap-carrying
             // evidence file at WIRING_EVIDENCE means newly-built code isn't
             // reachable/wired in yet — an implementation gap by definition,
             // same shape as a build_review FAIL. Route back to BUILD with the
@@ -2863,7 +2863,17 @@ export class Conductor {
             // the gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops — kickback
             // only, never an unconditional HALT until the cap is exceeded.
-            if (this.daemon && step.name === 'wiring_check') {
+            //
+            // NOT daemon-gated (unlike build_review's otherwise-identical
+            // block): the wiring-reachability-gate acceptance spec
+            // (test/integration/wiring-gate-loop.acceptance.test.ts) drives a
+            // plain mode:'auto' non-daemon Conductor and asserts the kickback
+            // fires there too — wiring_check's evidence is deterministically
+            // computed (no LLM grader session to gate behind daemon
+            // autonomy), so there's no reason to withhold the self-heal in
+            // interactive/non-daemon runs the way build_review's judgement
+            // gate does.
+            if (step.name === 'wiring_check') {
               let evidenceRaw: unknown = null;
               try {
                 evidenceRaw = JSON.parse(
@@ -2875,17 +2885,29 @@ export class Conductor {
               const validated =
                 evidenceRaw !== null ? validateWiringEvidence(evidenceRaw) : null;
               const evidence = evidenceRaw as WiringEvidence | null;
-              const gapMessages: string[] =
-                validated?.ok && evidence
-                  ? evidence.tasks.flatMap((task) =>
-                      task.symbols.map(
-                        (s) =>
-                          s.message ??
-                          `task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`,
-                      ),
-                    )
-                  : [];
-              if (validated?.ok && gapMessages.length > 0) {
+              // Prefer the fully-validated schema (real evidence written by
+              // the wiring_check predicate/probe); fall back to a lenient
+              // top-level "gaps" array read when the file doesn't parse as a
+              // complete WiringEvidence but still names gap messages — the
+              // kickback's job is to surface whatever gap text is on disk,
+              // not to re-enforce full artifact validity (that's the
+              // completion predicate's job).
+              let gapMessages: string[] = [];
+              if (validated?.ok && evidence) {
+                gapMessages = evidence.tasks.flatMap((task) => task.gaps.map((g) => g.message));
+              } else if (
+                evidenceRaw !== null &&
+                typeof evidenceRaw === 'object' &&
+                Array.isArray((evidenceRaw as Record<string, unknown>).gaps)
+              ) {
+                gapMessages = ((evidenceRaw as Record<string, unknown>).gaps as unknown[])
+                  .filter(
+                    (g): g is { message: string } =>
+                      typeof g === 'object' && g !== null && typeof (g as { message?: unknown }).message === 'string',
+                  )
+                  .map((g) => g.message);
+              }
+              if (gapMessages.length > 0) {
                 const count = (kickbackCounts.get('wiring_check') ?? 0) + 1;
                 if (count <= MAX_KICKBACKS_PER_GATE) {
                   kickbackCounts.set('wiring_check', count);

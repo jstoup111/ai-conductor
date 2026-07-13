@@ -564,50 +564,49 @@ export const WIRING_EVIDENCE = '.pipeline/wiring-evidence.json';
 export type WiringContractForm = 'declared' | 'none_no_surface' | 'inert' | 'malformed';
 export type WiringGapKind =
   | 'no-reference'
-  | 'orphan'
+  | 'orphan-export'
+  | 'unreferenced-site'
   | 'undeclared-surface'
   | 'contradiction'
   | 'scope-undeterminable'
   | 'waiver-unresolved';
 
-export interface WiringSymbolResult {
-  symbol: string;
+export interface WiringGap {
   kind: WiringGapKind;
   /**
    * The specific, human-readable gap message computed by the wiring-probe
    * gap-producing functions (e.g. `orphanBackstop`, `verifyDeclaredSites`).
-   * Optional because not every gap-producing path in wiring-probe.ts attaches
-   * a per-symbol message yet (e.g. `verifyDeclaredSites` currently emits
-   * plain strings, not structured per-symbol results) — when absent, callers
-   * fall back to a synthesized description.
    */
-  message?: string;
+  message: string;
 }
 
 export interface WiringTaskResult {
-  taskId: string;
-  contractForm: WiringContractForm;
-  symbols: WiringSymbolResult[];
+  id: string;
+  /** Freeform description of the task's declared contract (e.g. a
+   * `file#symbol` reference, or 'none (no new production surface)'). */
+  contract: string;
+  gaps: WiringGap[];
+}
+
+export interface WiringLayer2 {
+  applicable: boolean;
+  /** Why Layer 2 did/didn't run (e.g. "no TS project detected"). */
+  reason?: string;
 }
 
 export interface WiringEvidence {
-  baseSha: string;
-  headSha: string;
-  layer2Applicable: boolean;
-  waiverResolutions: unknown[];
+  schema: number;
+  base: string;
+  head: string;
   tasks: WiringTaskResult[];
+  layer2: WiringLayer2;
+  waivers: unknown[];
 }
-
-const WIRING_CONTRACT_FORMS: WiringContractForm[] = [
-  'declared',
-  'none_no_surface',
-  'inert',
-  'malformed',
-];
 
 const WIRING_GAP_KINDS: WiringGapKind[] = [
   'no-reference',
-  'orphan',
+  'orphan-export',
+  'unreferenced-site',
   'undeclared-surface',
   'contradiction',
   'scope-undeterminable',
@@ -628,29 +627,42 @@ export function validateWiringEvidence(
   const str = (k: string): string | null =>
     typeof e[k] === 'string' && (e[k] as string).trim() !== '' ? (e[k] as string) : null;
 
-  if (str('baseSha') === null) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "baseSha" as a non-empty string` };
+  if (typeof e.schema !== 'number') {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "schema" as a number` };
   }
-  const headSha = str('headSha');
-  if (headSha === null) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "headSha" as a non-empty string` };
+  if (str('base') === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "base" as a non-empty string` };
   }
-  if (currentHead != null && currentHead !== headSha) {
+  const head = str('head');
+  if (head === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "head" as a non-empty string` };
+  }
+  if (currentHead != null && currentHead !== head) {
     return {
       ok: false,
-      reason: `${WIRING_EVIDENCE} is stale — evidence recorded for ${headSha} but HEAD is ${currentHead}; re-run wiring-reachability analysis at the current HEAD`,
+      reason: `${WIRING_EVIDENCE} is stale — evidence recorded for ${head} but HEAD is ${currentHead}; re-run wiring-reachability analysis at the current HEAD`,
     };
   }
-  if (typeof e.layer2Applicable !== 'boolean') {
+  if (typeof e.layer2 !== 'object' || e.layer2 === null || Array.isArray(e.layer2)) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include a "layer2" object` };
+  }
+  const layer2 = e.layer2 as Record<string, unknown>;
+  if (typeof layer2.applicable !== 'boolean') {
     return {
       ok: false,
-      reason: `${WIRING_EVIDENCE} must include "layer2Applicable" as a boolean`,
+      reason: `${WIRING_EVIDENCE} "layer2" must include "applicable" as a boolean`,
     };
   }
-  if (!Array.isArray(e.waiverResolutions)) {
+  if (layer2.reason !== undefined && typeof layer2.reason !== 'string') {
     return {
       ok: false,
-      reason: `${WIRING_EVIDENCE} must include "waiverResolutions" as an array`,
+      reason: `${WIRING_EVIDENCE} "layer2" has a non-string "reason"`,
+    };
+  }
+  if (!Array.isArray(e.waivers)) {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} must include "waivers" as an array`,
     };
   }
   if (!Array.isArray(e.tasks)) {
@@ -662,48 +674,39 @@ export function validateWiringEvidence(
       return { ok: false, reason: `${WIRING_EVIDENCE} has a "tasks" entry that is not an object` };
     }
     const t = task as Record<string, unknown>;
-    if (typeof t.taskId !== 'string') {
-      return { ok: false, reason: `${WIRING_EVIDENCE} has a task missing a string "taskId"` };
+    if (typeof t.id !== 'string') {
+      return { ok: false, reason: `${WIRING_EVIDENCE} has a task missing a string "id"` };
     }
-    if (
-      typeof t.contractForm !== 'string' ||
-      !WIRING_CONTRACT_FORMS.includes(t.contractForm as WiringContractForm)
-    ) {
+    if (typeof t.contract !== 'string') {
       return {
         ok: false,
-        reason: `${WIRING_EVIDENCE} task "${t.taskId}" has an unknown contractForm "${t.contractForm as string}"`,
+        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "contract" as a string`,
       };
     }
-    if (!Array.isArray(t.symbols)) {
+    if (!Array.isArray(t.gaps)) {
       return {
         ok: false,
-        reason: `${WIRING_EVIDENCE} task "${t.taskId}" must include "symbols" as an array`,
+        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "gaps" as an array`,
       };
     }
-    for (const symbol of t.symbols as unknown[]) {
-      if (typeof symbol !== 'object' || symbol === null) {
+    for (const gap of t.gaps as unknown[]) {
+      if (typeof gap !== 'object' || gap === null) {
         return {
           ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.taskId}" has a "symbols" entry that is not an object`,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a "gaps" entry that is not an object`,
         };
       }
-      const s = symbol as Record<string, unknown>;
-      if (typeof s.symbol !== 'string') {
+      const g = gap as Record<string, unknown>;
+      if (typeof g.kind !== 'string' || !WIRING_GAP_KINDS.includes(g.kind as WiringGapKind)) {
         return {
           ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.taskId}" has a symbol entry missing a string "symbol"`,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap with an unknown kind "${g.kind as string}"`,
         };
       }
-      if (typeof s.kind !== 'string' || !WIRING_GAP_KINDS.includes(s.kind as WiringGapKind)) {
+      if (typeof g.message !== 'string' || g.message.trim() === '') {
         return {
           ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.taskId}" symbol "${s.symbol}" has an unknown kind "${s.kind as string}"`,
-        };
-      }
-      if (s.message !== undefined && typeof s.message !== 'string') {
-        return {
-          ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.taskId}" symbol "${s.symbol}" has a non-string "message"`,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap missing a non-empty string "message"`,
         };
       }
     }
@@ -1291,8 +1294,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // No pre-existing evidence fixture — compute it live via the
       // injected probe (push-evidence injection, same convention as
       // ctx.getHeadSha/ctx.isHeadPushed). Absent injector → fail closed
-      // exactly as before Task 18.
+      // exactly as before Task 18 UNLESS the caller supplied a getHeadSha
+      // that resolves to null — that's the real Conductor's own signal
+      // (completionCtx wires getHeadSha to currentCommitSha(projectRoot))
+      // that projectRoot isn't a git-tracked directory at all, so there is
+      // no wiring-relevant diff to evaluate in the first place (same
+      // "nothing to verify" logic as the freshness check being skipped when
+      // currentHead is indeterminate). A caller that omits getHeadSha
+      // entirely (raw unit/acceptance calls against a real git fixture) is
+      // NOT covered by this — that path still fails closed, matching the
+      // "no evidence file exists at all" acceptance spec.
       if (!ctx.wiringProbe) {
+        if (ctx.getHeadSha) {
+          const head = await ctx.getHeadSha().catch(() => null);
+          if (head === null) {
+            return { done: true };
+          }
+        }
         return {
           done: false,
           reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
@@ -1325,9 +1343,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const evidence = parsed as WiringEvidence;
     const gapMessages: string[] = [];
     for (const task of evidence.tasks) {
-      for (const s of task.symbols) {
-        const detail = s.message ?? `task ${task.taskId} symbol "${s.symbol}" [${s.kind}]`;
-        gapMessages.push(detail);
+      for (const g of task.gaps) {
+        gapMessages.push(g.message);
       }
     }
     if (gapMessages.length > 0) {

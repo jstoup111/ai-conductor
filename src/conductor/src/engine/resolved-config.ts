@@ -39,6 +39,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   acceptance_specs: 'sonnet',
   build: 'sonnet',
   build_review: 'opus',
+  wiring_check: 'sonnet',
   manual_test: 'sonnet',
   prd_audit: 'opus',
   architecture_review_as_built: 'sonnet',
@@ -65,6 +66,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   acceptance_specs: 'medium',
   build: 'low',
   build_review: 'high',
+  wiring_check: 'low',
   manual_test: 'medium',
   prd_audit: 'high',
   architecture_review_as_built: 'medium',
@@ -91,6 +93,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   acceptance_specs: 3,
   build: 5,
   build_review: 3,
+  wiring_check: 3,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -117,6 +120,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
+  wiring_check: 'auto', // deterministic gap-carrying evidence file, no LLM verdict to review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
