@@ -28,7 +28,7 @@ import { execa } from 'execa';
 //   git(['show', sha])                                  -> diff text, per sha in both lists
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
-import { buildRewriteMap } from '../../src/engine/rebase-translate.js';
+import { buildRewriteMap, resolveThroughMap } from '../../src/engine/rebase-translate.js';
 // @ts-expect-error — Task 5 (GREEN) adds this export; Task 4 (RED) asserts it doesn't exist yet.
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
 
@@ -635,5 +635,25 @@ describe('writeResidue (RED — not implemented yet, Task 11)', () => {
     expect(Object.keys(rewrites.map)).not.toContain(RESIDUE_SHA_B);
     expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_A);
     expect(Object.values(rewrites.map)).not.toContain(RESIDUE_SHA_B);
+  });
+});
+
+describe('resolveThroughMap — module contract: never maps a non-key sha (Task 13)', () => {
+  // This is the structural no-laundering gate: `resolveThroughMap` is a
+  // strict map-key lookup (see src/engine/rebase-translate.ts). A sha that
+  // was never a key in the rewrite map — forged, unrelated, or merely
+  // sha-shaped — can never be "mapped" to something else. It must come back
+  // out identical to what went in, for every sha shape callers may pass.
+  const MAP: Record<string, string> = {
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    ccccccc: 'ddddddd',
+  };
+
+  it.each([
+    ['full 40-char sha not in the map', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'],
+    ['short 7-char sha not in the map', 'fffffff'],
+    ['sha-shaped but random hex string', '0123456789abcdef0123456789abcdef01234567'],
+  ])('returns %s unchanged (identity), never resolved through the map', (_label, sha) => {
+    expect(resolveThroughMap(sha, MAP)).toBe(sha);
   });
 });
