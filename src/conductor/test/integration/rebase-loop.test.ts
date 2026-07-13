@@ -11,6 +11,7 @@ import { writeState, readState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
 // END-TO-END acceptance specs for the Phase 9.0 daemon rebase-on-latest step.
 //
@@ -180,6 +181,26 @@ describe('integration/rebase-loop', () => {
         JSON.stringify({
           verdict: 'PASS',
           rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
+    } else if (step === 'wiring_check') {
+      // The wiring-reachability gate (Task 9) requires a fresh, valid,
+      // zero-gap evidence artifact at .pipeline/wiring-evidence.json (see
+      // WIRING_EVIDENCE/validateWiringEvidence in artifacts.ts). The
+      // predicate compares evidence.headSha against ctx.getHeadSha(), which
+      // shells out to `git rev-parse HEAD` in `dir` — resolve it
+      // dynamically so it matches whatever HEAD the fixture's real repo is
+      // actually at (these are real-git-repo suites throughout).
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
+      await writeFile(
+        join(dir, '.pipeline/wiring-evidence.json'),
+        JSON.stringify({
+          baseSha: '1'.repeat(40),
+          headSha: head,
+          layer2Applicable: false,
+          waiverResolutions: [],
+          tasks: [],
         }),
       );
     } else if (step === 'manual_test') {

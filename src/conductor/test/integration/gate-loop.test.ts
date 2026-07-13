@@ -16,6 +16,7 @@ import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
@@ -108,6 +109,26 @@ describe('integration/gate-loop', () => {
         JSON.stringify({
           verdict: 'PASS',
           rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
+    } else if (step === 'wiring_check') {
+      // The wiring-reachability gate (Task 9) requires a fresh, valid,
+      // zero-gap evidence artifact at .pipeline/wiring-evidence.json (see
+      // WIRING_EVIDENCE/validateWiringEvidence in artifacts.ts). The
+      // predicate compares evidence.headSha against ctx.getHeadSha(), which
+      // shells out to `git rev-parse HEAD` in `dir` — null (no comparison)
+      // when `dir` isn't a real git repo, a real sha for the suites below
+      // that do `initRepo()`. Resolve it dynamically so both cases match.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
+      await writeFile(
+        join(dir, '.pipeline/wiring-evidence.json'),
+        JSON.stringify({
+          baseSha: '1'.repeat(40),
+          headSha: head,
+          layer2Applicable: false,
+          waiverResolutions: [],
+          tasks: [],
         }),
       );
     } else if (step === 'manual_test') {
