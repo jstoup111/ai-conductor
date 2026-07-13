@@ -32,7 +32,13 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import {
+  ALL_STEPS,
+  STEP_GROUPS,
+  VALIDATION_GROUP,
+  getGroupForStep,
+  tryGetStepIndex,
+} from '../../src/engine/steps.js';
 import {
   Conductor,
   getNavigableSteps,
@@ -9661,5 +9667,79 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     // The first line should contain the question (emoji should survive UTF-8)
     const firstLine = haltContent.split('\n')[0];
     expect(firstLine).toContain('🚀');
+  });
+});
+
+// adr-2026-07-10-validation-group-join.md, Decision-1: the SHIP sequence
+// gains a built-in validation group entry describing the three validators
+// as a group, without disturbing their existing standalone StepDefinitions
+// or index-based lookups.
+describe('built-in SHIP validation group entry (Decision-1)', () => {
+  it('exposes VALIDATION_GROUP with the three members in ADR order', () => {
+    expect(VALIDATION_GROUP.members).toEqual([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+  });
+
+  it('positions the group immediately after build_review in ALL_STEPS ordering', () => {
+    const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
+    const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
+    expect(firstMemberIdx).toBe(buildReviewIdx + 1);
+
+    // Members remain contiguous and in order in the underlying linear list.
+    const memberIndices = VALIDATION_GROUP.members.map(
+      (name) => ALL_STEPS.findIndex((s) => s.name === name),
+    );
+    expect(memberIndices).toEqual([...memberIndices].sort((a, b) => a - b));
+    expect(memberIndices[memberIndices.length - 1] - memberIndices[0]).toBe(
+      VALIDATION_GROUP.members.length - 1,
+    );
+  });
+
+  it('registers VALIDATION_GROUP in STEP_GROUPS keyed by its name', () => {
+    expect(STEP_GROUPS[VALIDATION_GROUP.name]).toBe(VALIDATION_GROUP);
+  });
+
+  it('resolves each member to its own group via getGroupForStep', () => {
+    for (const member of VALIDATION_GROUP.members) {
+      expect(getGroupForStep(member as StepName)?.name).toBe(VALIDATION_GROUP.name);
+    }
+  });
+
+  it('reports undefined group for ordinary serial steps', () => {
+    expect(getGroupForStep('build')).toBeUndefined();
+    expect(getGroupForStep('build_review')).toBeUndefined();
+    expect(getGroupForStep('retro')).toBeUndefined();
+  });
+
+  it('leaves each member with its own full StepDefinition (skill/gate config unchanged)', () => {
+    const manualTest = ALL_STEPS.find((s) => s.name === 'manual_test');
+    const prdAudit = ALL_STEPS.find((s) => s.name === 'prd_audit');
+    const asBuilt = ALL_STEPS.find((s) => s.name === 'architecture_review_as_built');
+
+    expect(manualTest?.skillName).toBe('manual-test');
+    expect(manualTest?.enforcement).toBe('gating');
+    expect(prdAudit?.skillName).toBe('prd-audit');
+    expect(prdAudit?.skippableForTracks).toEqual(['technical']);
+    expect(asBuilt?.skillName).toBe('architecture-review');
+    expect(asBuilt?.skipWhenSkipped).toBe('architecture_review');
+  });
+
+  it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
+    // Each member still resolves to its OWN linear-list index, not a
+    // group-collapsed position.
+    const buildReviewIdx = tryGetStepIndex('build_review');
+    expect(buildReviewIdx).not.toBeNull();
+    for (let i = 0; i < VALIDATION_GROUP.members.length; i += 1) {
+      const idx = tryGetStepIndex(VALIDATION_GROUP.members[i] as StepName);
+      expect(idx).toBe((buildReviewIdx as number) + 1 + i);
+    }
+
+    // Ordinary serial steps are completely unaffected.
+    expect(tryGetStepIndex('build')).not.toBeNull();
+    expect(tryGetStepIndex('retro')).not.toBeNull();
+    expect(tryGetStepIndex('remediate')).toBeNull();
   });
 });

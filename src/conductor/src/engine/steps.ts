@@ -1,4 +1,4 @@
-import type { StepDefinition, StepName, ComplexityTier, BootstrapMode, Track } from '../types/index.js';
+import type { StepDefinition, StepGroup, StepName, ComplexityTier, BootstrapMode, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 
 export const ALL_STEPS: StepDefinition[] = [
@@ -296,6 +296,47 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
     skillName: 'attribution-verify',
   },
 };
+
+/**
+ * The SHIP-tail validation group (adr-2026-07-10-validation-group-join.md,
+ * Decision-1): manual_test, prd_audit, architecture_review_as_built, in that
+ * order, positioned immediately after build_review. This is a WRAPPER over
+ * the members' existing `StepDefinition`s in `ALL_STEPS` — it does not
+ * remove, replace, or reorder them. Fan-out dispatch, join logic, and the
+ * auto-mode-only engagement guard are built in later tasks (14+); this
+ * entry only proves the registry can describe the grouping.
+ */
+export const VALIDATION_GROUP: StepGroup = {
+  name: 'validation',
+  members: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+};
+
+/**
+ * Registry of built-in concurrent groups, keyed by group name. Ordinary
+ * serial steps have no entry here (and no group involvement at all) — only
+ * the members of a declared group appear in `stepToGroupMap` below.
+ */
+export const STEP_GROUPS: Record<string, StepGroup> = {
+  [VALIDATION_GROUP.name]: VALIDATION_GROUP,
+};
+
+const stepToGroupMap = new Map<StepName, StepGroup>();
+for (const group of Object.values(STEP_GROUPS)) {
+  for (const member of group.members) {
+    stepToGroupMap.set(member, group);
+  }
+}
+
+/**
+ * Returns the built-in group `step` belongs to, or `undefined` for an
+ * ordinary serial step (every step not listed as a member of some
+ * `STEP_GROUPS` entry). Does not affect `tryGetStepIndex`/state keys — a
+ * member step still resolves its own linear-list index independently of
+ * this lookup.
+ */
+export function getGroupForStep(step: StepName): StepGroup | undefined {
+  return stepToGroupMap.get(step);
+}
 
 const stepMap = new Map(ALL_STEPS.map((s) => [s.name, s]));
 const stepIndexMap = new Map(ALL_STEPS.map((s, i) => [s.name, i]));
