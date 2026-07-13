@@ -1480,9 +1480,7 @@ export class Conductor {
       StepName,
       { priorVerdict: boolean; resolvedBefore: number; headBefore: string | null }
     >();
-    const kickbackEscalationEnabled =
-      (this.config as unknown as { kickback_escalation?: { enabled?: boolean } } | undefined)
-        ?.kickback_escalation?.enabled ?? true;
+    const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
 
     /**
      * Records the pre-kickback baseline for `sourceGate` right before a

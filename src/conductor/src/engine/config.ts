@@ -198,6 +198,8 @@ export function validateConfig(
     'build_progress_halt',
     // Wiring-reachability gate Layer 2 (TS import-graph reachability).
     'wiring',
+    // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
+    'kickback_escalation',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -731,6 +733,32 @@ export function validateConfig(
     const err = validateBuildProgressHaltBlock(obj.build_progress_halt, resolvedMaxRetries);
     if (err) return { ok: false, error: err };
     obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+  }
+
+  // kickback_escalation — kickback→build no-op escalation (D2).
+  // Contract (total — never throws, never undefined):
+  //   K1  absent / null → { enabled: true } (no warning)
+  //   K2  { enabled: true|false } → as given (no warning)
+  //   K3  malformed (non-object, unknown key, or non-boolean enabled) →
+  //       { enabled: true } without warning (fail-safe)
+  if (obj.kickback_escalation !== undefined && obj.kickback_escalation !== null) {
+    if (isPlainObject(obj.kickback_escalation)) {
+      const ke = obj.kickback_escalation as Record<string, unknown>;
+      const unknownKey = Object.keys(ke).find((k) => k !== 'enabled');
+      if (unknownKey !== undefined) {
+        obj.kickback_escalation = { enabled: true };
+      } else if (ke.enabled === undefined) {
+        obj.kickback_escalation = { enabled: true };
+      } else if (typeof ke.enabled === 'boolean') {
+        obj.kickback_escalation = { enabled: ke.enabled };
+      } else {
+        obj.kickback_escalation = { enabled: true };
+      }
+    } else {
+      obj.kickback_escalation = { enabled: true };
+    }
+  } else {
+    obj.kickback_escalation = { enabled: true };
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
