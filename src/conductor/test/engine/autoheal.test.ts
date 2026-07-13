@@ -3512,3 +3512,115 @@ Update the declared file only.
     mockWarn.mockRestore();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED (Task 8 of rebase-orphans-every-sha-anchored-evidence-citatio.md):
+// the deriveCompletion satisfied-by consumer (autoheal.ts:602-645) must
+// resolve a cited old sha through a persisted `.pipeline/rebase-rewrites.json`
+// map (via `resolveThroughMap`) before its existence/ancestry check on the
+// `Evidence: satisfied-by <sha>` trailer target — per
+// adr-2026-07-12-rebase-evidence-stamp-translation.md. Today it only does
+// `git rev-parse --verify <sha>^{commit}`, with no map consultation, so a
+// citation naming a sha that a sanctioned engine rebase rewrote (and whose
+// pre-rebase object has since been pruned) is wrongly treated as dangling.
+// Task 9 wires this resolution in (and upgrades the check to ancestry); this
+// test pins the desired post-Task-9 behavior and is expected to FAIL
+// (genuine RED) until that wiring lands.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion resolves satisfied-by citations through a persisted rebase rewrite map (RED, Task 8)', () => {
+  it('a satisfied-by trailer citing the pre-rebase sha still completes the task against the new HEAD', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 30: Rebased evidence
+A task whose satisfied-by evidence sha was rewritten by a rebase.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Pre-rebase work commit — this is what the satisfied-by trailer cites.
+    await writeFile(join(gitDir, 'src.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: 30\n'], { cwd: gitDir });
+    const oldWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Pre-rebase evidence commit citing the (still current) work sha.
+    await execa(
+      'git',
+      ['commit', '--allow-empty', '-m', `noop: evidence commit\n\nTask: 30\nEvidence: satisfied-by ${oldWorkSha}\n`],
+      { cwd: gitDir },
+    );
+    const oldEvidenceSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Simulate the sanctioned rebase: rewind to base (via a force checkout
+    // of a recreated branch, not `reset --hard`), add an upstream commit to
+    // change `onto` (so the replayed commits land on a genuinely different
+    // parent and get NEW shas rather than reproducing the old commits
+    // bit-for-bit), then cherry-pick both commits back on. The evidence
+    // commit's message text (including the OLD work sha it cites) is
+    // carried over verbatim by cherry-pick, exactly as the ADR says trailer
+    // text is never rewritten in place.
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: gitDir });
+    await writeFile(join(gitDir, 'UPSTREAM.md'), 'upstream change\n');
+    await execa('git', ['add', 'UPSTREAM.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'chore: upstream commit (onto)'], { cwd: gitDir });
+    await execa('git', ['cherry-pick', oldWorkSha], { cwd: gitDir });
+    const newWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+    await execa('git', ['cherry-pick', '--allow-empty', oldEvidenceSha], { cwd: gitDir });
+    const newEvidenceSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Confirm the trailer text on the rewritten evidence commit is
+    // unmutated: still names the OLD work sha, never rewritten to the new
+    // one — the ADR's immutable-trailer invariant.
+    const newEvidenceMessage = (
+      await execa('git', ['log', '-1', '--format=%B', newEvidenceSha], { cwd: gitDir })
+    ).stdout;
+    expect(newEvidenceMessage).toContain(`Evidence: satisfied-by ${oldWorkSha}`);
+    expect(newEvidenceMessage).not.toContain(newWorkSha);
+
+    // Prune the pre-rebase objects so the old work sha is genuinely gone —
+    // not merely lingering, which would let the existence-only check pass
+    // by accident and mask whether resolution actually happened.
+    await execa('git', ['reflog', 'expire', '--expire=now', '--all'], { cwd: gitDir });
+    await execa('git', ['gc', '--prune=now'], { cwd: gitDir });
+    const goneCheck = await execa('git', ['cat-file', '-e', `${oldWorkSha}^{commit}`], {
+      cwd: gitDir,
+      reject: false,
+    });
+    expect(goneCheck.exitCode).not.toBe(0); // sanity: fixture genuinely pruned the old object
+
+    // Persist the rewrite map old -> new, exactly as `performRebase` would
+    // after a `changed` outcome.
+    await persistRewriteMap(gitDir, { [oldWorkSha]: newWorkSha });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Desired post-Task-9 behavior: the satisfied-by consumer resolves the
+    // cited oldWorkSha -> newWorkSha through the persisted map before its
+    // existence/ancestry check, so the task completes.
+    expect(result).toHaveProperty('30');
+    expect(result['30']).toHaveProperty('completed', true);
+    expect(result['30'].evidencedBy).toBe(newWorkSha);
+
+    // Load-bearing invariant (ADR), re-checked after deriveCompletion runs:
+    // the trailer text on disk is still the immutable pre-rebase citation —
+    // deriveCompletion must never rewrite commit messages to "fix" a sha.
+    const messageAfter = (
+      await execa('git', ['log', '-1', '--format=%B', newEvidenceSha], { cwd: gitDir })
+    ).stdout;
+    expect(messageAfter).toBe(newEvidenceMessage);
+    expect(messageAfter).toContain(`Evidence: satisfied-by ${oldWorkSha}`);
+  });
+});
