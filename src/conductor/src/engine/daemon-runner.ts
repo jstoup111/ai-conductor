@@ -255,7 +255,7 @@ export function makeRunFeature(
               return {
                 slug: item.slug,
                 status: 'error',
-                reason: triageOutcome.outputTail || 'setup failed and parked after triage',
+                reason: triageOutcome.outputTail || 'parked after setup triage',
               };
             }
             // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
