@@ -10,6 +10,7 @@ import {
   mergeConfigs,
   resolveMemoryProvider,
   isAttributionEnforcementActive,
+  resolveValidationConcurrency,
 } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -152,6 +153,39 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toContain('validation_concurrency');
+    });
+
+    it('resolveValidationConcurrency defaults to 2 when absent', () => {
+      expect(resolveValidationConcurrency({})).toBe(2);
+    });
+
+    it('resolveValidationConcurrency returns explicit 3', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 3 })).toBe(3);
+    });
+
+    it('resolveValidationConcurrency returns explicit 1', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 1 })).toBe(1);
+    });
+
+    it('resolveValidationConcurrency clamps 0 to default 2', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 0 })).toBe(2);
+    });
+
+    it('resolveValidationConcurrency clamps negative to default 2', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: -4 })).toBe(2);
+    });
+
+    it('resolveValidationConcurrency clamps NaN/non-numeric to default 2', () => {
+      expect(
+        resolveValidationConcurrency({
+          validation_concurrency: NaN as unknown as number,
+        }),
+      ).toBe(2);
+      expect(
+        resolveValidationConcurrency({
+          validation_concurrency: 'x' as unknown as number,
+        }),
+      ).toBe(2);
     });
 
     it('rejects disabling a gating step', () => {

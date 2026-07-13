@@ -1533,6 +1533,35 @@ const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
  *
  * @param config - The HarnessConfig (or partial) to read `build_progress` from.
  */
+/**
+ * Default validation-phase fan-out concurrency (used when
+ * `validation_concurrency` is absent, zero, negative, or non-numeric).
+ */
+export const DEFAULT_VALIDATION_CONCURRENCY = 2;
+
+/**
+ * Resolve the validation-phase fan-out concurrency from `config`.
+ *
+ * Resolution rules:
+ *   - undefined / absent     → DEFAULT_VALIDATION_CONCURRENCY (2)
+ *   - positive integer       → use the value as-is
+ *   - 0, negative, NaN, or
+ *     non-numeric             → DEFAULT_VALIDATION_CONCURRENCY (2)
+ */
+export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'validation_concurrency'>): number {
+  const override = config?.validation_concurrency;
+  if (
+    override === undefined ||
+    override === null ||
+    typeof override !== 'number' ||
+    !Number.isFinite(override) ||
+    override <= 0
+  ) {
+    return DEFAULT_VALIDATION_CONCURRENCY;
+  }
+  return override;
+}
+
 export function resolveBuildProgressConfig(
   config: Pick<HarnessConfig, 'build_progress'>,
 ): ResolvedBuildProgressConfig {
