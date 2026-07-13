@@ -9,8 +9,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { retitleFloor, ensureShipReady } from '../../src/engine/halt-pr-rehabilitation.js';
+import { retitleFloor, ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 
 function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -171,5 +172,49 @@ describe('ensureShipReady (Task 7)', () => {
     const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
 
     expect(result).toBe('partial');
+  });
+});
+
+describe('rehabilitateHaltPr — banner is a third stateless halt signal (Task 1)', () => {
+  it('treats a clean-titled, unlabeled PR whose body carries the halt banner as a halt PR (#610 shape)', async () => {
+    const bannerBody = [
+      'This PR was opened automatically after an irrecoverable daemon HALT.',
+      '',
+      'Manual remediation is required to unblock this feature.',
+      'See the comment below for the failure reason.',
+    ].join('\n');
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
+      { stdout: '' }, // cleanupHaltPresentation reads/edits
+      { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
+      { stdout: '' },
+    ]);
+
+    const result = await rehabilitateHaltPr({ gh, cwd: CWD, prUrl: PR_URL, sourceRef: null });
+
+    expect(result).not.toBe('not-halt-pr');
+    expect(bannerBody).toContain(HALT_PR_BANNER_SENTINEL);
+  });
+
+  it('returns not-halt-pr with zero mutation calls when there is no halt signal at all', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          title: 'feat: widget import flow',
+          isDraft: false,
+          labels: [],
+          body: '## Summary\n\nSome clean implementation PR body.\n\nCloses #7',
+        }),
+      },
+    ]);
+
+    const result = await rehabilitateHaltPr({ gh, cwd: CWD, prUrl: PR_URL, sourceRef: null });
+
+    expect(result).toBe('not-halt-pr');
+    // Only the initial gh pr view read — no label/title/body/comment mutation calls.
+    expect(calls.length).toBe(1);
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(calls.some((c) => c.includes('--add-label') || c.includes('--remove-label'))).toBe(false);
+    expect(calls.some((c) => c[0] === 'api')).toBe(false);
   });
 });
