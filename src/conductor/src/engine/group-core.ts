@@ -8,10 +8,10 @@
  *
  * This module defines the branch-outcome discriminated union, the group
  * member/result shapes, the exhaustive classify helper, the concurrency
- * semaphore, and the per-branch skill executor (`runGroupBranch`). It does
- * NOT yet implement rate-limit episode pass-through, authFailure/
- * sessionExpired parity, abort handling, or the stale-marker sweep — those
- * are later tasks (6-9).
+ * semaphore, and the per-branch skill executor (`runGroupBranch`). Abort
+ * handling (Task 8) is threaded through both `runWithConcurrency` and
+ * `runGroupBranch`. It does NOT yet implement the stale-marker sweep —
+ * that is a later task (9).
  */
 
 import { v4 as uuidv4 } from "uuid";
@@ -118,28 +118,61 @@ function assertNever(x: never): never {
  * no further thunks past those already started/queued are newly launched
  * once rejection has been recorded for the caller's promise chain.
  */
+/**
+ * Runs `thunks` with concurrency capped at `limit`. When `signal` is
+ * provided and aborts mid-run, no NEW thunks are launched, but thunks
+ * already in flight are allowed to settle on their own (they are expected
+ * to observe the same signal internally — e.g. `runGroupBranch` — and
+ * unwind quickly). Once all in-flight thunks have settled after an abort,
+ * the promise RESOLVES (never rejects) with only the outcomes that
+ * actually completed, in original input order — completed work is never
+ * thrown away, letting the caller persist synthetic keys for whatever
+ * finished before the abort. Branches that never started, or were
+ * in-flight but didn't complete before abort, are simply absent from the
+ * result array (there is no outcome to report for them).
+ */
 export function runWithConcurrency<T>(
   thunks: Array<() => Promise<T>>,
   limit: number,
+  signal?: AbortSignal,
 ): Promise<T[]> {
   if (limit < 1) {
     throw new Error(`group-core: runWithConcurrency limit must be >= 1, got ${limit}`);
   }
 
   return new Promise<T[]>((resolve, reject) => {
-    const results: T[] = new Array(thunks.length);
+    const results: Array<T | undefined> = new Array(thunks.length);
     let nextIndex = 0;
     let inFlight = 0;
     let completed = 0;
     let settled = false;
+    let aborted = signal?.aborted ?? false;
+
+    const finishOnAbort = () => {
+      if (settled || !aborted || inFlight > 0) return;
+      settled = true;
+      resolve(results.filter((v): v is T => v !== undefined));
+    };
 
     if (thunks.length === 0) {
-      resolve(results);
+      resolve([]);
       return;
+    }
+
+    if (signal && !aborted) {
+      signal.addEventListener(
+        "abort",
+        () => {
+          aborted = true;
+          finishOnAbort();
+        },
+        { once: true },
+      );
     }
 
     const launchNext = () => {
       if (settled) return;
+      if (aborted) return;
       if (nextIndex >= thunks.length) return;
 
       const index = nextIndex;
@@ -151,15 +184,23 @@ export function runWithConcurrency<T>(
           results[index] = value;
           completed += 1;
           inFlight -= 1;
+          if (aborted) {
+            finishOnAbort();
+            return;
+          }
           if (completed === thunks.length) {
             settled = true;
-            resolve(results);
+            resolve(results.filter((v): v is T => v !== undefined));
             return;
           }
           launchNext();
         })
         .catch((err) => {
           inFlight -= 1;
+          if (aborted) {
+            finishOnAbort();
+            return;
+          }
           if (!settled) {
             settled = true;
             reject(err);
@@ -170,6 +211,9 @@ export function runWithConcurrency<T>(
     for (let i = 0; i < limit && i < thunks.length; i += 1) {
       launchNext();
     }
+
+    // Signal was already aborted before any thunk had a chance to launch.
+    finishOnAbort();
   });
 }
 
@@ -208,6 +252,15 @@ export interface BranchExecutorDeps {
    * (still without burning budget).
    */
   rateLimitEpisode?: BranchRateLimitEpisode;
+  /**
+   * Task 8: abort signal threaded through the branch's rate-limit episode
+   * wait (`rateLimitEpisode.clear(signal)`) and checked before every
+   * dispatch. When aborted, the branch exits cleanly — no unhandled
+   * rejection, no further `stepRunner.run` calls — and returns a
+   * `no-verdict` outcome with reason "aborted" so the caller still has a
+   * recorded outcome to persist a synthetic key for.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -236,6 +289,13 @@ export async function runGroupBranch(
   let lastOutput = "";
   let hasRun = false;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+    // Task 8: check before every dispatch — an abort observed while queued
+    // behind the semaphore, or between retries, must stop the branch from
+    // issuing another stepRunner.run() call.
+    if (deps.signal?.aborted) {
+      return makeNoVerdictOutcome("aborted");
+    }
+
     // `resume` is true once this branch's session has ever been dispatched
     // before — including a prior rate-limited/sessionExpired cycle, which
     // still consumed the fresh (attempt 1) session slot but must not burn
@@ -259,7 +319,14 @@ export async function runGroupBranch(
 
       if (deps.rateLimitEpisode) {
         deps.rateLimitEpisode.enter(deadline);
-        await deps.rateLimitEpisode.clear();
+        await deps.rateLimitEpisode.clear(deps.signal);
+      }
+
+      // The episode wait may have resolved BECAUSE the signal aborted
+      // (not because the rate limit actually cleared) — exit cleanly with
+      // a recorded outcome instead of looping back into another dispatch.
+      if (deps.signal?.aborted) {
+        return makeNoVerdictOutcome("aborted");
       }
 
       attempt -= 1;

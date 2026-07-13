@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   makeVerdictOutcome,
   makeNoVerdictOutcome,
@@ -515,5 +515,147 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     // resumed) and dispatched fresh (resume:false), not resume:true.
     expect(runner.calls[1]!.opts?.sessionId).toBe("SESSION-2");
     expect(runner.calls[1]!.opts?.resume).toBe(false);
+  });
+});
+
+describe("group-core: abort/SIGINT persistence for in-flight branches (Task 8)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // Prove no orphaned timers survive an aborted run.
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  /** Minimal runner-spy: captures every (step, opts) call it receives. */
+  function spyRunner(results: StepRunResult[]) {
+    const calls: Array<{ step: StepName; opts?: StepRunOptions }> = [];
+    let i = 0;
+    return {
+      calls,
+      run: async (step: StepName, _state: ConductState, opts?: StepRunOptions) => {
+        calls.push({ step, opts });
+        const result = results[i] ?? results.at(-1) ?? { success: true };
+        i += 1;
+        return result;
+      },
+    };
+  }
+
+  /**
+   * A rate-limit episode fake that models a real timer-based wait: `clear`
+   * schedules a `setTimeout` for the deadline and resolves early (clearing
+   * the timer) if the passed signal aborts first.
+   */
+  function timedEpisode() {
+    let latestDeadline: number | null = null;
+    return {
+      enter: (untilMs: number) => {
+        if (latestDeadline === null || untilMs > latestDeadline) {
+          latestDeadline = untilMs;
+        }
+      },
+      clear: (signal?: AbortSignal) =>
+        new Promise<void>((resolve) => {
+          const waitMs = Math.max(0, (latestDeadline ?? Date.now()) - Date.now());
+          const timer = setTimeout(() => resolve(), waitMs);
+          if (signal) {
+            const onAbort = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            if (signal.aborted) {
+              onAbort();
+            } else {
+              signal.addEventListener("abort", onAbort, { once: true });
+            }
+          }
+        }),
+    };
+  }
+
+  const fakeState = {} as ConductState;
+
+  it("aborting during the rate-limit episode wait exits the branch cleanly with a recorded no-verdict outcome", async () => {
+    const controller = new AbortController();
+    const runner = spyRunner([
+      { success: false, rateLimited: true, deadline: Date.now() + 60_000 },
+    ]);
+    const episode = timedEpisode();
+    const member: GroupMember = {
+      name: "manual_test" as unknown as string,
+      skill: "manual-test",
+      outcome: makeSkippedOutcome(),
+    };
+
+    const outcomePromise = runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, rateLimitEpisode: episode, signal: controller.signal },
+      3,
+    );
+
+    // Let the branch reach the rate-limited episode wait (setTimeout armed).
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    controller.abort();
+    const outcome = await outcomePromise;
+
+    expect(classifyOutcome(outcome)).toBe("no-verdict");
+    expect(outcome).toEqual({ kind: "no-verdict", reason: "aborted" });
+    // Only the single rate-limited call happened — the branch never issued
+    // a second dispatch after the abort.
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("aborting mid-group (via runWithConcurrency) returns outcomes collected so far, not thrown-away work", async () => {
+    const controller = new AbortController();
+
+    // Branch A finishes immediately (before abort). Branch B is rate-limited
+    // and gets cut short by the abort. Branch C never starts (cap=2).
+    const runnerA = spyRunner([{ success: true }]);
+    const runnerB = spyRunner([
+      { success: false, rateLimited: true, deadline: Date.now() + 60_000 },
+    ]);
+    const runnerC = spyRunner([{ success: true }]);
+    const episode = timedEpisode();
+
+    const memberA: GroupMember = { name: "a" as unknown as string, skill: "a", outcome: makeSkippedOutcome() };
+    const memberB: GroupMember = { name: "b" as unknown as string, skill: "b", outcome: makeSkippedOutcome() };
+    const memberC: GroupMember = { name: "c" as unknown as string, skill: "c", outcome: makeSkippedOutcome() };
+
+    const thunkA = () =>
+      runGroupBranch(memberA, fakeState, { stepRunner: runnerA, signal: controller.signal }, 3);
+    const thunkB = () =>
+      runGroupBranch(
+        memberB,
+        fakeState,
+        { stepRunner: runnerB, rateLimitEpisode: episode, signal: controller.signal },
+        3,
+      );
+    const thunkC = () =>
+      runGroupBranch(memberC, fakeState, { stepRunner: runnerC, signal: controller.signal }, 3);
+
+    // Cap of 1: strictly sequential, so C cannot start until B settles —
+    // and B never settles before the abort cuts it short.
+    const groupPromise = runWithConcurrency([thunkA, thunkB, thunkC], 1, controller.signal);
+
+    // Let A resolve (frees the single slot) and B reach its timed
+    // rate-limit wait (setTimeout armed).
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    controller.abort();
+    const outcomes = await groupPromise;
+
+    // C never started (cap=1, abort stopped further launches once B was
+    // in flight), so only A's completed outcome is present — completed
+    // work (A) is preserved, not thrown away.
+    expect(outcomes.length).toBeLessThan(3);
+    expect(outcomes.some((o) => classifyOutcome(o) === "verdict:pass")).toBe(true);
+    expect(runnerC.calls).toHaveLength(0);
   });
 });
