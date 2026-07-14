@@ -1038,6 +1038,18 @@ export class Conductor {
 
     const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
     const halts = plan.gaps.filter((g) => g.disposition === 'halt');
+    // Task 23: a 'halt' disposition must never be silently dropped in favor
+    // of a sibling 'route' disposition. Even when the SAME plan also names
+    // routable fixes for other gaps, a halt gap means at least one blocking
+    // gap needs a human — checked BEFORE the fixes branch below so a mixed
+    // plan (some fixes + one halt) still surfaces the halt rather than
+    // routing around it and losing the halt detail entirely.
+    if (halts.length > 0) {
+      return {
+        kind: 'halt',
+        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
+      };
+    }
     if (fixes.length > 0) {
       const target = earliestRemediationTarget(fixes, steps);
       // #644: DECIDE is operator-only in daemon mode. An autonomous rewind to a
@@ -1086,12 +1098,6 @@ export class Conductor {
         target,
         hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
         evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
-      };
-    }
-    if (halts.length > 0) {
-      return {
-        kind: 'halt',
-        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; '),
       };
     }
     return { kind: 'none' };

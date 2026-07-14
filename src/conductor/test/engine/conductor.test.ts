@@ -5275,6 +5275,221 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('Halt dispositions and partial plans (Task 23)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_GAPS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                  {
+                    id: 'ADR-1',
+                    disposition: 'halt',
+                    category: 'architectural-clarity',
+                    rationale: 'ADR-1 requires a human architectural decision',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+      const kickbacks: Array<{ to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ to: e.to });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The mixed plan (one routable fix + one halt) must HALT, never
+      // silently route around the halt gap — despite manual_test and (were
+      // it not for the halt) the fix-only path both looking "green enough"
+      // to proceed.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks).toHaveLength(0);
+      expect(haltEvents).toHaveLength(1);
+      expect(haltEvents[0]?.reason).toContain('ADR-1');
+      expect(haltEvents[0]?.reason).toContain('architectural-clarity');
+    });
+
+    it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const doneEvents: Array<{ step: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            // Always still shows the SAME blocking gap — the underlying
+            // code was never actually fixed (build's mock does not touch
+            // it), so re-verifying prd_audit each round is the ONLY thing
+            // standing between this test and a false "gate satisfied".
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Subset plan: only ever addresses prd_audit's FR-1 — the
+            // architecture_review_as_built ADR-1 gap is never named by any
+            // disposition, in any round.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      events.on('parallel_completed', (e) => {
+        if (e.type === 'parallel_completed') {
+          for (const b of e.branches) doneEvents.push({ step: b });
+        }
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The subset plan (FR-1 only) still enumerates BOTH failing evidence
+      // files in the /remediate dispatch context — architecture_review_as_
+      // built's ADR-1 gap was never dropped from consideration just because
+      // no disposition named it.
+      expect(remediateCalls).toHaveLength(1);
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+
+      // The group never reached a "parallel_completed" (all-green) join —
+      // architecture_review_as_built's gate was never green-lit despite the
+      // plan only covering prd_audit's gap.
+      expect(doneEvents).toHaveLength(0);
+
+      // The unaddressed member is restaged (not marked satisfied/'done') so
+      // the NEXT tail pass re-verifies it from disk rather than trusting the
+      // stale pre-remediation verdict.
+      const persisted = await readState(statePath);
+      expect(persisted.ok).toBe(true);
+      const persistedState = (persisted as { ok: true; value: ConductState }).value;
+      expect(persistedState.architecture_review_as_built).not.toBe('done');
+      expect(persistedState.architecture_review_as_built).toBe('stale');
+    });
+  });
+
   describe('FAIL verdict waits for siblings (Task 19)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',
