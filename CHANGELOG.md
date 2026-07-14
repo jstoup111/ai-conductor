@@ -1992,6 +1992,8 @@ no action needed — the token requirement is skipped.
   (accurate "dirty tree could not be cleaned" park that quarantines all
   residual uncommitted paths) from a genuine setup failure, and no longer
   reports "setup failed" when `bin/setup` succeeded (#582).
+- `bin/update`, a standalone self-update/channel CLI extracted from `bin/conduct`: `bin/update` (no args) forces an update check now, `bin/update --auto` checks only if `autoCheck` config is not `false`, `bin/update --set-channel <tagged|main>` sets the update channel (exit 2 on invalid), and `bin/update -h|--help` prints usage.
+- The auto-update check is now re-homed onto `conduct-ts` startup, which spawns `bin/update --auto` as a one-shot subprocess, instead of running inline as bash functions in `bin/conduct`.
 
 ## Migration
 
