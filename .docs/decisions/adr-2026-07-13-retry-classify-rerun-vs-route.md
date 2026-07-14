@@ -1,6 +1,7 @@
 # ADR 2026-07-13: Classify step-failures rerun-vs-route before burning a retry (#646)
 
-Status: Proposed
+Status: Approved
+Approved-By: jstoup111 (operator ruling 2026-07-14, spec merged as PR #653)
 Feature: retry-classify-rerun-vs-route
 Issue: jstoup111/ai-conductor#646
 
