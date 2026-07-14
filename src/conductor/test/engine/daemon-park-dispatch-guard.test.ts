@@ -110,7 +110,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
     expect(source).toMatch(
-      /import\s*\{\s*isOperatorParked\s*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
+      /import\s*\{[^}]*\bisOperatorParked\b[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
     );
 
     const region = source.match(
