@@ -136,6 +136,29 @@ export type ConductorEvent =
       branch: string;
       error: string;
     }
+  | {
+      /**
+       * Task 25 (attribution and phantom-member absence): a single group
+       * member's own step dispatch/outcome, emitted from the group-core
+       * branch executor (group-core.ts:runGroupBranch) rather than the
+       * conductor's per-step machinery — so an observer can tell WHICH
+       * validator branch a given dispatch/outcome belongs to, without
+       * relying on step-name-only events that a group's members would
+       * otherwise share ambiguously with a serial dispatch of the same
+       * step name. Never emitted for a member that was never dispatched
+       * (a `SkippedOutcome` member) — only members that actually reached
+       * `runGroupBranch` produce this event.
+       */
+      type: 'group_member_step';
+      /** The member (branch) name this event is attributed to. */
+      member: string;
+      /** The skill dispatched for this member. */
+      skill: string;
+      /** 'dispatch' when the branch is about to call the step runner; 'result' once its outcome is known. */
+      phase: 'dispatch' | 'result';
+      /** Present when phase === 'result': the classified outcome (see classifyOutcome in group-core.ts). */
+      outcome?: string;
+    }
   // ── Gate-driven loop (Phase 5 observability) ──
   | {
       /** A gate's objective verdict was (re)computed by the loop. */

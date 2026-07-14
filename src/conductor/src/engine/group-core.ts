@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { StepName, ConductState } from "../types/index.js";
 import type { StepRunResult, StepRunOptions } from "./conductor.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
+import type { ConductorEvent } from "../types/events.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -107,6 +108,65 @@ export function classifyOutcome(outcome: BranchOutcome): string {
 
 function assertNever(x: never): never {
   throw new Error(`group-core: unhandled BranchOutcome kind: ${JSON.stringify(x)}`);
+}
+
+/** The `group_member_step` variant of `ConductorEvent` (Task 25). */
+export type GroupMemberStepEvent = Extract<ConductorEvent, { type: "group_member_step" }>;
+
+/** The `parallel_started` variant of `ConductorEvent`. */
+export type ParallelStartedEvent = Extract<ConductorEvent, { type: "parallel_started" }>;
+
+/** The `parallel_failure` variant of `ConductorEvent`. */
+export type ParallelFailureEvent = Extract<ConductorEvent, { type: "parallel_failure" }>;
+
+/**
+ * Builds the `parallel_started` event payload from a group's FULL member
+ * list (including any `SkippedOutcome` phantom members that were never
+ * dispatched). Only members that were actually dispatched — i.e. every
+ * outcome kind OTHER than `skipped` — appear in `branches`, so a phantom
+ * member (skipped by tier/track/feature-type/skipWhenSkipped) never shows
+ * up in the event stream as if it had run (adr-2026-07-10-validation-group-
+ * join.md; Task 15 membership resolution). Callers that already filter to a
+ * dispatchable-only list before calling this (e.g. conductor.ts's built-in
+ * group join) get an identical result either way, since skipped members are
+ * filtered here regardless.
+ */
+export function buildParallelStartedEvent(
+  step: StepName,
+  members: GroupMember[],
+): ParallelStartedEvent {
+  return {
+    type: "parallel_started",
+    step,
+    branches: members.filter((m) => m.outcome.kind !== "skipped").map((m) => m.name),
+  };
+}
+
+/**
+ * Builds one `parallel_failure` event per member whose outcome is NOT a
+ * passing verdict — `no-verdict` (infra/dispatch failure) or `verdict:fail`/
+ * `verdict:blocked` (a real, content-level validator failure) — each event
+ * naming that specific member (`branch`), so a mixed-outcome join (some
+ * members pass, one or more fail) attributes the failure to the RIGHT
+ * validator instead of a single ambiguous group-level failure. Skipped
+ * members never produce a `parallel_failure` — they were never dispatched,
+ * so there is nothing to attribute a failure to.
+ */
+export function buildParallelFailureEvents(
+  step: StepName,
+  members: GroupMember[],
+): ParallelFailureEvent[] {
+  const events: ParallelFailureEvent[] = [];
+  for (const member of members) {
+    const { outcome } = member;
+    if (outcome.kind === "skipped") continue;
+    if (outcome.kind === "verdict" && outcome.verdict === "pass") continue;
+
+    const error =
+      outcome.kind === "no-verdict" ? outcome.reason : `branch ${member.name} failed: ${classifyOutcome(outcome)}`;
+    events.push({ type: "parallel_failure", step, branch: member.name, error });
+  }
+  return events;
 }
 
 /**
@@ -280,6 +340,18 @@ export interface BranchExecutorDeps {
    * `state.session_started_at` (conductor.ts:1577-1590).
    */
   sessionStartedAt?: number;
+  /**
+   * Task 25: per-branch step-event attribution. Invoked once with
+   * `phase: 'dispatch'` immediately before each `stepRunner.run` call, and
+   * once with `phase: 'result'` (carrying the classified outcome) right
+   * before `runGroupBranch` returns — always attributed to THIS member
+   * (`member.name`/`member.skill`), never the group's own name, so an
+   * observer watching the event stream can tell which validator branch a
+   * given dispatch/outcome belongs to even when several members share a
+   * concurrent join round. Optional: when absent, no event is emitted —
+   * existing callers that don't pass it see no behavior change.
+   */
+  onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
 }
 
 /**
@@ -297,6 +369,28 @@ export interface BranchExecutorDeps {
  * scope for this task (Tasks 6-7).
  */
 export async function runGroupBranch(
+  member: GroupMember,
+  state: ConductState,
+  deps: BranchExecutorDeps,
+  maxRetries: number,
+): Promise<BranchOutcome> {
+  const outcome = await runGroupBranchInner(member, state, deps, maxRetries);
+  // Task 25: emit the member-attributed result event AFTER the outcome is
+  // known, regardless of which of the inner function's several return
+  // points produced it — a single exit point for event emission so every
+  // outcome (pass, no-verdict/aborted/authFailure, retries exhausted) is
+  // reported exactly once, attributed to THIS member.
+  await deps.onMemberEvent?.({
+    type: "group_member_step",
+    member: member.name,
+    skill: member.skill,
+    phase: "result",
+    outcome: classifyOutcome(outcome),
+  });
+  return outcome;
+}
+
+async function runGroupBranchInner(
   member: GroupMember,
   state: ConductState,
   deps: BranchExecutorDeps,
@@ -329,6 +423,12 @@ export async function runGroupBranch(
     // still consumed the fresh (attempt 1) session slot but must not burn
     // retry budget. A sessionExpired reset re-arms this to false below.
     const resume = hasRun;
+    await deps.onMemberEvent?.({
+      type: "group_member_step",
+      member: member.name,
+      skill: member.skill,
+      phase: "dispatch",
+    });
     const result = await deps.stepRunner.run(member.name as StepName, state, {
       sessionId,
       resume,

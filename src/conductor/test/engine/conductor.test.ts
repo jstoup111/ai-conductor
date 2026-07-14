@@ -52,6 +52,7 @@ import {
   resolveGroupMembership,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { GroupMember } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
@@ -5846,6 +5847,89 @@ describe('engine/conductor', () => {
       // Skipped members are excluded from the dispatchable set entirely, so
       // downstream join logic (Task 17+) can never observe them as failing.
       expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+    });
+
+    it('Task 25: parallel_started lists only dispatched members, never a phantom skipped one', async () => {
+      const { buildParallelStartedEvent } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'architecture_review_as_built', skill: 'architecture_review_as_built', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const event = buildParallelStartedEvent('manual_test', members);
+      expect(event).toEqual({
+        type: 'parallel_started',
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(event.branches).not.toContain('prd_audit');
+    });
+
+    it('Task 25: mixed outcome produces one parallel_failure event naming the failing member, not the whole group', async () => {
+      const { buildParallelFailureEvents } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        {
+          name: 'architecture_review_as_built',
+          skill: 'architecture_review_as_built',
+          outcome: { kind: 'no-verdict', reason: 'exhausted retries' },
+        },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const events = buildParallelFailureEvents('manual_test', members);
+
+      // Exactly one failure event, attributed to the member that actually
+      // failed — the passing member and the skipped phantom member never
+      // produce a parallel_failure of their own.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({
+        type: 'parallel_failure',
+        step: 'manual_test',
+        branch: 'architecture_review_as_built',
+        error: 'exhausted retries',
+      });
+    });
+
+    it('Task 25: skipped members never appear in either event stream (parallel_started or parallel_failure)', async () => {
+      const { buildParallelStartedEvent, buildParallelFailureEvents } = await import(
+        '../../src/engine/group-core.js'
+      );
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'skipped' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      expect(buildParallelStartedEvent('manual_test', members).branches).toEqual([]);
+      expect(buildParallelFailureEvents('manual_test', members)).toEqual([]);
+    });
+
+    it('Task 25: runGroupBranch emits member-attributed dispatch and result events via onMemberEvent', async () => {
+      const { runGroupBranch, makeNoVerdictOutcome } = await import('../../src/engine/group-core.js');
+      const member: GroupMember = {
+        name: 'architecture_review_as_built',
+        skill: 'architecture_review_as_built',
+        outcome: makeNoVerdictOutcome('not-run'),
+      };
+      const events: Array<{ type: string; member: string; skill: string; phase: string; outcome?: string }> = [];
+      const stepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true } as StepRunResult),
+      };
+      const outcome = await runGroupBranch(
+        member,
+        {} as ConductState,
+        {
+          stepRunner,
+          onMemberEvent: (e) => {
+            events.push(e as unknown as (typeof events)[number]);
+          },
+        },
+        1,
+      );
+
+      expect(outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
+      // Every event is attributed to THIS member, never the group name.
+      expect(events.every((e) => e.member === 'architecture_review_as_built')).toBe(true);
+      expect(events.map((e) => e.phase)).toEqual(['dispatch', 'result']);
+      expect(events[1]?.outcome).toBe('verdict:pass');
     });
 
     it('width 0 at the conductor.run() level: the group entry point (manual_test) is never dispatched and every member is marked skipped in state', async () => {
