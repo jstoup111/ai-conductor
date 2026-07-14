@@ -2063,6 +2063,104 @@ export class Conductor {
               }
             }
 
+            // Task 21 (adr-2026-07-10-validation-group-join.md): mixed
+            // failure — one or more of prd_audit/architecture_review_as_built
+            // failed their OWN objective gate (verdict dispatched fine, but
+            // the artifact holds blocking gaps/BLOCKED), independent of
+            // whether manual_test itself passed. This is the SAME /remediate
+            // planner the serial gate-driven tail dispatches for these gates
+            // (planRemediation), invoked exactly ONCE here for the whole
+            // group with a dispatch context enumerating the union of every
+            // failing member's evidence file — never manual_test's FAIL
+            // rows, which are deterministic-only (Task 20) and never handed
+            // to the LLM planner for re-classification. The full merged
+            // work order (earliest target across MT + this union, hint
+            // concatenation) lands in Task 22; this task only covers the
+            // no-manual_test-in-play / manual_test-passed shape.
+            if (this.daemon && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              const gapMemberNames = membership.dispatchable
+                .filter((member, idx) => {
+                  if (member.name === 'manual_test') return false;
+                  const outcome = outcomes[idx];
+                  if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
+                  if (!this.verifyArtifacts) return false;
+                  return gateVerdicts.get(member.name)?.satisfied !== true;
+                })
+                .map((member) => member.name as StepName);
+
+              if (gapMemberNames.length > 0) {
+                const evidenceFiles: string[] = [];
+                if (gapMemberNames.includes('prd_audit' as StepName)) {
+                  evidenceFiles.push('.pipeline/prd-audit.md');
+                }
+                if (gapMemberNames.includes('architecture_review_as_built' as StepName)) {
+                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                }
+                const dispatchContext =
+                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  'Plan remediation per the /remediate skill and write ' +
+                  '.pipeline/remediation.json.';
+
+                remediationRounds++;
+                const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
+                  source: 'validation-group',
+                  evidenceFile: evidenceFiles.join(', '),
+                });
+
+                if (remediationOutcome.kind === 'route') {
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: step.name,
+                    to: remediationOutcome.target,
+                    evidence: remediationOutcome.evidence,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(remediationOutcome.target, remediationOutcome.hint);
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  if (remediationOutcome.target === 'build') {
+                    await captureKickbackToBuildContext(step.name);
+                  }
+                  const nav = navigateBack(state, remediationOutcome.target, steps);
+                  state = nav.state;
+                  for (const name of gapMemberNames) {
+                    (state as Record<string, unknown>)[name] = 'stale';
+                  }
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  continue;
+                }
+
+                if (remediationOutcome.kind === 'halt') {
+                  const reason =
+                    `Validation group "${step.name}" halted: needs human DECIDE — ` +
+                    remediationOutcome.detail;
+                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                    () => {},
+                  );
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                // remediationOutcome.kind === 'none' — no usable plan; fall
+                // through to the generic "fail loudly" path below.
+              }
+            }
+
             // Non-green join: out of scope for Task 17 — consolidated
             // kickback/remediation classification lands in Tasks 18-24.
             // Fail the group loudly (mirrors the DSL parallel group's
