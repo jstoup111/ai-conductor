@@ -80,6 +80,7 @@ import {
 import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
+  resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
@@ -404,7 +405,12 @@ async function main(): Promise<void> {
   // and the daemon run command so they are never mistaken for either.
   const daemonParkCmd = detectDaemonParkCommand(process.argv);
   if (daemonParkCmd) {
-    const code = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd() });
+    const resolved = await resolveMainRepoRoot(process.cwd());
+    if ('error' in resolved) {
+      console.error(resolved.error);
+      process.exit(1);
+    }
+    const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
   }
 

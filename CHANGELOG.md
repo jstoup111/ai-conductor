@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+
 ### Added
 - Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
   SHIP validators (`manual_test`, `prd_audit`, `architecture_review_as_built`) fan out as
@@ -1948,6 +1952,11 @@ no action needed — the token requirement is skipped.
   now honored instead of being dispatched anyway (2026-07-13 20:43Z incident). A grep-enumeration
   regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is guarded,
   so a future bypassing entry point fails loudly. No CLI/schema/hook-wiring change, so no Migration block.
+- daemon park/unpark now resolve the main repo root from any cwd (repo root, a
+  linked worktree, or a nested subdirectory) before scanning plans/worktrees,
+  so an emergency-stop `daemon park <slug>` no longer fails with a misleading
+  "slug not found" when run from inside the affected worktree; outside any
+  repo it now errors with the expected usage instead (ai-conductor#534).
 
 ## Migration
 
