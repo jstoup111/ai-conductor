@@ -1900,7 +1900,18 @@ export class Conductor {
         // Interactive/default mode never emits this event at all — the serial walk
         // (including the checkpoint after manual_test) is byte-for-byte unchanged.
         const builtinGroup = getGroupForStep(step.name);
-        if (builtinGroup && builtinGroup.members[0] === step.name && this.mode === 'auto') {
+        // The group engages only when the ENTRY step's own gate passes —
+        // upstream prerequisites (build/build_review/wiring_check) unsatisfied
+        // means the fan-out must not dispatch any member. Falling through
+        // lands on the ordinary checkGate below, which emits `gate_blocked`
+        // and returns (the daemon's finally backstop then writes its
+        // diagnostic HALT), exactly like the serial walk.
+        if (
+          builtinGroup &&
+          builtinGroup.members[0] === step.name &&
+          this.mode === 'auto' &&
+          checkGate(step, state).passed
+        ) {
           // Membership resolution (Task 15): reuse the existing skip cascade
           // per member. When every member would skip, the group itself is
           // skipped and NO branch (including the entry-point step below)
@@ -1953,6 +1964,11 @@ export class Conductor {
                   state,
                   {
                     stepRunner: this.stepRunner,
+                    // Shared rate-limit episode: a rate-limited branch waits
+                    // on the coordinator WITHOUT blocking its siblings'
+                    // dispatch (acceptance flow E) and without burning its
+                    // own retry budget.
+                    rateLimitEpisode: this.rateLimitEpisode,
                     // Record each member's completion into the pending
                     // side-channel as soon as ITS OWN branch resolves — not
                     // `state` itself, and not a disk write (that stays the
@@ -2469,7 +2485,10 @@ export class Conductor {
             await this.events.emit({
               type: 'step_failed',
               step: step.name,
-              error: `Validation group "${step.name}" had a non-green branch outcome`,
+              // Carry the per-member gate reasons (e.g. the manual_test
+              // whitewash-guard refusal), not just a generic label — the
+              // serial walk's step_failed carried the gate reason too.
+              error: groupHaltReason,
               retryCount: 0,
             });
             await this.events.emit({ type: 'loop_halt', reason: groupHaltReason });

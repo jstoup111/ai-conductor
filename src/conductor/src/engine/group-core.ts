@@ -429,10 +429,23 @@ async function runGroupBranchInner(
       skill: member.skill,
       phase: "dispatch",
     });
-    const result = await deps.stepRunner.run(member.name as StepName, state, {
-      sessionId,
-      resume,
-    });
+    let result: StepRunResult;
+    try {
+      result = await deps.stepRunner.run(member.name as StepName, state, {
+        sessionId,
+        resume,
+      });
+    } catch (err) {
+      // A THROW from the step runner is an infra failure of THIS branch
+      // only — classified exactly like a `success: false` attempt (burns a
+      // retry, ultimately a no-verdict outcome), never a rejection that
+      // would tear down `runWithConcurrency` and cancel/starve sibling
+      // branches (acceptance flow B: a crashing validator must not stop
+      // its siblings from dispatching).
+      hasRun = true;
+      lastOutput = err instanceof Error ? err.message : String(err);
+      continue;
+    }
     hasRun = true;
 
     if (result.success) {
