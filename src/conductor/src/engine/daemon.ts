@@ -515,7 +515,7 @@ export async function guardedDispatchWith(
     parked = true; // fail-closed toward the emergency-stop
   }
   if (parked) {
-    log(`park: skipped dispatch of ${item.slug} — operator-parked (.daemon/parked/${item.slug})`);
+    log(`park: skipped dispatch of ${item.slug} — operator-parked`);
     return false;
   }
   onDispatch(item);
