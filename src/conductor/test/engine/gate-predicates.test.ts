@@ -428,3 +428,125 @@ describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshnes
     expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
   });
 });
+
+// Task 3, session-fresh-verdict-artifacts: regression/fallback coverage for
+// the verdict-freshness floor across all three predicates it touches.
+describe('engine/artifacts — verdict-freshness floor regression/fallback', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'freshness-regress-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function write(path: string, content: string) {
+    const full = join(dir, path);
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, content);
+    return full;
+  }
+
+  const asBuiltHeader = '# As-Built Architecture Review\n**Mode:** as-built\n';
+  const prdAligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+  async function buildReviewPass() {
+    return write(
+      '.pipeline/build-review.json',
+      JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false } }),
+    );
+  }
+
+  it('(a) no attemptStartedAt: architecture_review_as_built behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    const S = Date.now() - 60_000;
+    // Fresh relative to session (mtime is "now", after S) — should pass.
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    // Stale relative to session — should fail, same as pre-change behavior.
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(a) no attemptStartedAt: prd_audit behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await write('.pipeline/prd-audit.md', prdAligned);
+    const S = Date.now() - 60_000;
+    const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(a) no attemptStartedAt: build_review behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await buildReviewPass();
+    const S = Date.now() - 60_000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(b) both attemptStartedAt and sessionStartedAt undefined: fail-open on presence for all three predicates', async () => {
+    await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    await write('.pipeline/prd-audit.md', prdAligned);
+    await buildReviewPass();
+
+    const rAsBuilt = await checkGateCompletion(dir, 'architecture_review_as_built', {});
+    expect(rAsBuilt.done).toBe(true);
+    expect(rAsBuilt.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+
+    const rPrd = await checkGateCompletion(dir, 'prd_audit', {});
+    expect(rPrd.done).toBe(true);
+    expect(rPrd.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+
+    const rBuild = await checkGateCompletion(dir, 'build_review', {});
+    expect(rBuild.done).toBe(true);
+    expect(rBuild.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+  });
+
+  it('(b) verdictFreshnessFloor itself returns undefined when both are undefined', () => {
+    expect(verdictFreshnessFloor({})).toBeUndefined();
+    expect(verdictFreshnessFloor({ sessionStartedAt: undefined, attemptStartedAt: undefined })).toBeUndefined();
+  });
+
+  it('(c) idempotency: repeated evaluation of identical on-disk state yields an identical decision + reason', async () => {
+    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    const T = Date.now();
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const ctx = { sessionStartedAt: T - 60_000, attemptStartedAt: T };
+
+    const r1 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);
+    const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(r2.done).toBe(r1.done);
+    expect(r2.reason).toBe(r1.reason);
+    expect(r2.verdictFreshness).toEqual(r1.verdictFreshness);
+  });
+
+  it('(c) idempotency: repeated evaluation of an identical stale/no-fresh-verdict state yields an identical decision + reason', async () => {
+    const full = await buildReviewPass();
+    const S = Date.now() - 60_000;
+    const T = Date.now();
+    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
+    const ctx = { sessionStartedAt: S, attemptStartedAt: T };
+
+    const r1 = await checkGateCompletion(dir, 'build_review', ctx);
+    const r2 = await checkGateCompletion(dir, 'build_review', ctx);
+    expect(r2.done).toBe(r1.done);
+    expect(r2.reason).toBe(r1.reason);
+    expect(r2.verdictFreshness).toEqual(r1.verdictFreshness);
+  });
+});

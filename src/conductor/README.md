@@ -153,7 +153,11 @@ satisfied only by an explicit clean `Verdict:` of `APPROVED` or `APPROVED WITH D
 stays unsatisfied for `BLOCKED`, a missing `Verdict:` line, or any unrecognized verdict (so a
 no-ADR / garbled review can't slip through marked `done`). An unsatisfied gate keeps the selector
 from reaching `finish`; the skill guidance drives where the rework lands (BUILD vs DECIDE for
-prd-audit; human fix vs superseding ADR for as-built).
+prd-audit; human fix vs superseding ADR for as-built). Both verdict artifacts are also gated by
+the per-attempt verdict-freshness floor described under `build_review` below — a re-dispatched
+judging attempt that fails to rewrite `.pipeline/prd-audit.md` or
+`.pipeline/architecture-review-as-built.md` scores "no fresh verdict" rather than reusing the
+prior attempt's verdict.
 
 `architecture_review_as_built` also **skips when `architecture_review` was skipped** — for the
 Small tier (both share `skippableForTiers: ['S']`) and, via `skipWhenSkipped: 'architecture_review'`,
@@ -1144,9 +1148,14 @@ turned on.
 diff since the merge-base and the plan being graded against (`build-review-inputs.ts`,
 `build-review-prompt.ts`) — no chat history, no prior reasoning to rubber-stamp. It records a
 PASS/FAIL verdict to `.pipeline/build-review.json` (`artifacts.ts` →
-`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale (mtime predates the session),
-malformed JSON, or a non-exact-shape verdict are all treated as "gate not satisfied, must
-re-run."
+`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale, malformed JSON, or a
+non-exact-shape verdict are all treated as "gate not satisfied, must re-run." "Stale" is
+judged per attempt, not just per conductor run: `verdictFreshnessFloor` (`engine/artifacts.ts`)
+requires the verdict artifact's mtime to be at or after this dispatch's `attemptStartedAt` when
+one is present, falling back to the run's `sessionStartedAt` otherwise. Without the per-attempt
+floor, a judging session that fails to rewrite its verdict file would silently re-score a prior
+attempt's verdict forever instead of being scored "no fresh verdict"; the same floor gates
+`prd_audit` and `architecture_review_as_built` (below).
 
 **Cap / HALT behavior.** A FAIL verdict kicks back to `build` with the FAIL reasons as evidence
 (daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. Kickbacks are

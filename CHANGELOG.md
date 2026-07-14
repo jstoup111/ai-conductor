@@ -88,6 +88,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- SHIP-tail verdict checks (`build_review`, `prd_audit`, `architecture_review_as_built`) now
+  require the verdict artifact to be fresh relative to the **per-attempt** judging session
+  (`attemptStartedAt`), not just the conductor-run start (`sessionStartedAt`)
+  (`.docs/decisions/adr-2026-07-13-session-fresh-verdict-artifacts.md`). Previously a
+  judging session that failed to rewrite its verdict file on a re-dispatched attempt could
+  silently reuse a prior attempt's verdict forever (incident
+  2026-07-12-wiring-reachability-gate); the new `verdictFreshnessFloor` makes that loud
+  instead, scoring "no fresh verdict" when the artifact's mtime predates this attempt's
+  start. Falls back to the pre-existing session-level freshness check when no per-attempt
+  floor is available (legacy state, or both timestamps absent) — fail-open on presence
+  preserved.
 - Kickback→build no longer loops silently when the target task's evidence is already
   stamped (#647, `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`).
   `planRemediation` now recomputes build completion after append+re-seed and HALTs with the
