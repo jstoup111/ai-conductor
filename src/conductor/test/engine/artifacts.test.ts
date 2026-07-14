@@ -16,8 +16,13 @@ import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/h
 // verification) already failed the gate. Default behavior returns null (fail-open);
 // tests can override via mockImplementation to call the real implementation.
 const readStaleHaltTitleSpy = vi.fn(async () => null);
+// Spy target for the finish predicate's Phase 2 presentation banner check
+// (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
+// null (fail-open); tests override via mockImplementation to call the real logic.
+const readStaleHaltBannerSpy = vi.fn(async () => null);
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
   readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
+  readStaleHaltBanner: (...args: unknown[]) => readStaleHaltBannerSpy(...args),
 }));
 
 import {
@@ -42,6 +47,7 @@ describe('engine/artifacts', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
     readStaleHaltTitleSpy.mockClear();
+    readStaleHaltBannerSpy.mockClear();
   });
 
   afterEach(async () => {
@@ -601,6 +607,110 @@ describe('engine/artifacts', () => {
       });
       readStaleHaltTitleSpy.mockClear();
       expect(result).toEqual({ done: true });
+    });
+
+    it('Phase 2 presentation: fails when fakeGh returns a PR body containing the halt banner (through-the-gate stale banner check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+          return {
+            stdout: JSON.stringify({
+              body: 'This PR was opened automatically after an irrecoverable daemon HALT.\n\nManual remediation is required to unblock this feature.',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async (gh, cwd, prUrlArg) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrlArg, '--json', 'body'], { cwd });
+          const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+          const sentinel = 'This PR was opened automatically after an irrecoverable daemon HALT.';
+          return body.includes(sentinel) ? sentinel : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(new RegExp(prUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      expect(result.reason).toMatch(/halt banner/i);
+    });
+
+    it('Phase 2 presentation: passes when the banner-check gh read throws (fail-open, Story 2 negative path)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async () => {
+        throw new Error('gh: network unreachable');
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Phase 2 presentation: passes when fakeGh returns a clean body with no halt banner (through-the-gate clean banner check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const calls: string[][] = [];
+      const fakeGh = async (args: string[]) => {
+        calls.push(args);
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+          return { stdout: JSON.stringify({ body: '## Summary\n\nImplemented the thing.' }) };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async (gh, cwd, prUrlArg) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrlArg, '--json', 'body'], { cwd });
+          const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+          const sentinel = 'This PR was opened automatically after an irrecoverable daemon HALT.';
+          return body.includes(sentinel) ? sentinel : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result).toEqual({ done: true });
+      expect(calls.every((c) => c[0] === 'pr' && c[1] === 'view')).toBe(true);
     });
 
     it('Story 3: Phase 2 presentation (isDraft): fails when fakeGh returns isDraft=true with clean title (ship-readiness check)', async () => {
