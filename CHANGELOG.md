@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+
 ### Added
 - Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
   lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
