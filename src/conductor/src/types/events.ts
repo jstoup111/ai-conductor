@@ -46,6 +46,22 @@ export type ConductorEvent =
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
+  | {
+      /**
+       * Emitted after a verdict-consuming completion check
+       * (architecture_review_as_built, prd_audit, build_review) runs, so the
+       * audit trail records whether the verdict artifact was actually
+       * (re)written by the current attempt/session (Task 2,
+       * session-fresh-verdict-artifacts).
+       */
+      type: 'verdict_freshness';
+      step: StepName;
+      artifact: string;
+      fresh: boolean;
+      floorSource: 'attempt' | 'session';
+      mtimeMs?: number;
+      floorMs?: number;
+    }
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';

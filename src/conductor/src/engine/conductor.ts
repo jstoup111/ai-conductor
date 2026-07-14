@@ -612,6 +612,17 @@ export class Conductor {
   private lastRebaseOutcome: RebaseOutcome | null = null;
 
   /**
+   * Epoch ms captured immediately before the current dispatch's generic
+   * stepRunner.run() call, cleared in the same `finally` once the dispatch
+   * returns. Threaded into `completionCtx` as `attemptStartedAt` so the
+   * verdict-freshness gate (Task 1, session-fresh-verdict-artifacts) can
+   * require the verdict artifact to be rewritten by THIS attempt, not just
+   * reused from a stale mtime that predates it. `undefined` outside an
+   * in-flight dispatch (resume/backstop/idle completionCtx calls).
+   */
+  private currentAttemptStartedAt: number | undefined;
+
+  /**
    * Optional rate-limit episode coordinator (Task 10). When active, coordinates
    * deadline-aware backoff during rate-limit waits. May be undefined (graceful
    * fallback to bare sleep).
@@ -735,6 +746,7 @@ export class Conductor {
 
     return {
       sessionStartedAt: state.session_started_at,
+      attemptStartedAt: this.currentAttemptStartedAt,
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
@@ -1896,6 +1908,17 @@ export class Conductor {
 
           let result: StepRunResult;
           try {
+            if (
+              step.name !== 'complexity' &&
+              step.name !== 'worktree' &&
+              step.name !== 'rebase' &&
+              !(this.isSelfBuild() && step.name === 'build')
+            ) {
+              // Task 2, session-fresh-verdict-artifacts: stamp immediately
+              // before the generic dispatch call so completionCtx can
+              // require the verdict artifact to postdate THIS attempt.
+              this.currentAttemptStartedAt = Date.now();
+            }
             result =
               step.name === 'complexity'
                 ? await this.runComplexityStep(state)
@@ -1911,6 +1934,10 @@ export class Conductor {
             if (markerActive) {
               removeBuildStepMarker(this.projectRoot);
             }
+            // currentAttemptStartedAt stays set through the completion check
+            // just below (it needs a live attemptStartedAt to gate verdict
+            // freshness) — cleared unconditionally right after that check
+            // completes, further down.
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
@@ -2141,12 +2168,41 @@ export class Conductor {
           }
 
           // Step runner returned success. Now verify real completion.
+          if (!(this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity')) {
+            // No completion check will run this iteration — nothing will
+            // consume the in-flight attempt timestamp, so clear it now
+            // rather than leaking it into a later completionCtx() call.
+            this.currentAttemptStartedAt = undefined;
+          }
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
               await this.completionCtx(state),
             );
+
+            // Task 2, session-fresh-verdict-artifacts: audit-trail event for
+            // the three dispatched-judge verdict predicates
+            // (architecture_review_as_built, prd_audit, build_review),
+            // recording whether the verdict artifact was fresh for THIS
+            // attempt. Emitted once per completion check, on both the pass
+            // and stale paths (both populate `verdictFreshness`).
+            if (completion.verdictFreshness) {
+              await this.events.emit({
+                type: 'verdict_freshness',
+                step: step.name,
+                artifact: completion.verdictFreshness.artifact,
+                fresh: completion.verdictFreshness.fresh,
+                floorSource: completion.verdictFreshness.floorSource,
+                mtimeMs: completion.verdictFreshness.mtimeMs,
+                floorMs: completion.verdictFreshness.floorMs,
+              });
+            }
+            // Consumed for this attempt's completion check above — clear so
+            // it never leaks into a later completionCtx() call (heal/park
+            // re-checks below, the next step, or an idle/backstop caller)
+            // as a stale "in-flight attempt" timestamp.
+            this.currentAttemptStartedAt = undefined;
 
             // Auto-heal hook: before treating a build-gate miss as a failure,
             // reconcile .pipeline/task-status.json against git log. If the

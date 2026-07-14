@@ -1606,6 +1606,11 @@ dedicated test coverage (950+ tests). See the feature comparison in
   reasons (bounded retries, then HALT); absent config preserves the legacy
   `build → manual_test` topology unchanged. See `src/conductor/README.md` → "Judgement gate
   at the build → manual_test seam" for config, cap/HALT behavior, and the cost trade-off.
+  SHIP-tail verdict checks (`build_review`, `prd_audit`, `architecture_review_as_built`)
+  require their verdict artifact's mtime to be fresh relative to the **per-attempt** judging
+  session (`attemptStartedAt`), not just the conductor-run start (`sessionStartedAt`) — a
+  re-dispatched judging session that fails to rewrite its verdict file scores "no fresh
+  verdict" instead of silently re-scoring a prior attempt's verdict forever.
 - **Wiring reachability gate** (`wiring_check`, gating, always-on, all tiers): sits strictly
   between `build_review` and `manual_test` (`build → build_review → wiring_check →
   manual_test → ...`), verifying that new production surface is actually *called*, not just

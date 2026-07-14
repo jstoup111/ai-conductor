@@ -405,6 +405,155 @@ describe('engine/conductor', () => {
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
 
+  describe('verdict freshness wiring (Task 2, session-fresh-verdict-artifacts)', () => {
+    async function seedToBuildReview(): Promise<void> {
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build_review') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed as ConductState);
+    }
+
+    async function writeBuildReviewVerdict(mtimeMs?: number): Promise<string> {
+      const full = join(dir, '.pipeline', 'build-review.json');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        full,
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
+      if (mtimeMs !== undefined) {
+        const { utimes } = await import('fs/promises');
+        await utimes(full, new Date(mtimeMs), new Date(mtimeMs));
+      }
+      return full;
+    }
+
+    it('completionCtx carries attemptStartedAt only during a dispatched attempt', async () => {
+      await seedToBuildReview();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      // Before any dispatch has occurred, no attempt is in flight.
+      const state = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      const idleCtx = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptStartedAt?: number }>;
+      }).completionCtx(state);
+      expect(idleCtx.attemptStartedAt).toBeUndefined();
+
+      // Confirm the ctx captured DURING the retry loop carries a fresh
+      // attemptStartedAt via the emitted verdict_freshness event's floorSource.
+      const freshnessEvents: Array<{ floorSource: 'attempt' | 'session'; fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+      await writeBuildReviewVerdict(Date.now() + 5000);
+      await conductor.run();
+
+      expect(freshnessEvents[0]?.floorSource).toBe('attempt');
+
+      // And it goes back to undefined once the dispatch attempt is over.
+      const idleCtxAfter = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptStartedAt?: number }>;
+      }).completionCtx(state);
+      expect(idleCtxAfter.attemptStartedAt).toBeUndefined();
+    });
+
+    it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
+      await seedToBuildReview();
+      // Stale verdict, written well before this run starts; the stub
+      // stepRunner never rewrites it on either attempt.
+      await writeBuildReviewVerdict(Date.now() - 60_000);
+
+      const freshnessEvents: Array<{ fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok && result.value.build_review).toBe('failed');
+
+      expect(freshnessEvents.length).toBeGreaterThanOrEqual(1);
+      for (const e of freshnessEvents) {
+        expect(e.fresh).toBe(false);
+      }
+    });
+
+    it('verdict_freshness event is emitted with fresh:false on stale reuse and fresh:true on rewrite', async () => {
+      await seedToBuildReview();
+      await writeBuildReviewVerdict(Date.now() - 60_000);
+
+      let attempts = 0;
+      const runner: StepRunner = {
+        run: async () => {
+          attempts++;
+          if (attempts === 2) {
+            // Second attempt rewrites the verdict fresh. A generous forward
+            // buffer avoids flakiness from coarse filesystem mtime
+            // resolution (some filesystems truncate to whole seconds),
+            // which could otherwise floor this write's mtime to equal or
+            // below the attempt's start timestamp.
+            await writeBuildReviewVerdict(Date.now() + 5000);
+          }
+          return { success: true };
+        },
+      };
+
+      const freshnessEvents: Array<{ fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(freshnessEvents.length).toBe(2);
+      expect(freshnessEvents[0].fresh).toBe(false);
+      expect(freshnessEvents[1].fresh).toBe(true);
+
+      const result = await readState(statePath);
+      expect(result.ok && result.value.build_review).toBe('done');
+    });
+  });
+
   describe('fresh session per step (unconditional)', () => {
     // A runner that logs every session reset and every dispatch, so we can
     // assert the interleaving (reset-then-run for every executed step).
