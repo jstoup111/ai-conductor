@@ -14,12 +14,12 @@ set -euo pipefail
 # homes for this logic.
 #
 # Usage:
-#   update --check
-#   update --apply
-#   update --channel <stable|beta|dev>
+#   update                          — force an update check now, bypassing the autoCheck gate
+#   update --auto                   — check only if autoCheck config is not false (silent no-op otherwise); used by conduct-ts at startup
+#   update --set-channel <tagged|main> — set the update channel
+#   update -h|--help                — usage
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ORIGINAL_ARGS=("$@")
 
 # Not a git checkout — nothing to check/update/configure. Bail before even
 # sourcing harness-common.sh so a harness install missing bin/lib (or any
@@ -32,9 +32,6 @@ fi
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 
 # ─── Update check functions (ported verbatim from bin/conduct) ────────────
-# The re-exec line inside apply_harness_update and the CLI dispatch/entry
-# point are intentionally left as-is / unwired here — later tasks (T3, T4)
-# change the re-exec semantics and wire argument dispatch respectively.
 
 # Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
 # to_ver (inclusive) using the user's configured markdown viewer. Writes to
