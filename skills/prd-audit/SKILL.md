@@ -27,7 +27,9 @@ checks code against stories/AC *during* build; prd-audit checks the as-shipped s
 PRD's stated intent *after the fact*, and classifies each gap so the kickback lands in the right
 place.
 
-**Run at SHIP, after `/manual-test` and before `/retro` and `/finish`.**
+**Run at SHIP as a member of the concurrent validation group — fanned out alongside
+`/manual-test` and `/architecture-review --as-built` in daemon/auto runs. In interactive
+runs it runs serially, after `/manual-test` and before `/retro` and `/finish`.**
 
 ## Practices
 

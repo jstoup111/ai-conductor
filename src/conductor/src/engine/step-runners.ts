@@ -373,7 +373,13 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     const prompt = STEP_PROMPTS[step];
-    const resume = this.sessionStarted;
+    // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
+    // present, overrides the runner's shared this.sessionId so the branch
+    // never touches (reads or mutates) the main conductor session — see
+    // adr-2026-07-10-concurrent-group-core.md. opts.resume then drives the
+    // dispatch directly instead of being derived from this.sessionStarted.
+    const branchSessionId = opts?.sessionId;
+    const resume = branchSessionId !== undefined ? (opts?.resume ?? false) : this.sessionStarted;
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const resolved = this.resolvedConfigFor(step, state.complexity_tier);
 
@@ -383,7 +389,7 @@ export class DefaultStepRunner implements StepRunner {
     // limits and stale sessions. Collaborative steps use invokeInteractive()
     // because the user is actively interacting via REPL.
     if (autonomous) {
-      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved);
+      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved, branchSessionId);
     }
 
     // Open a REPL when the step is designed for user conversation AND we're
@@ -453,6 +459,7 @@ export class DefaultStepRunner implements StepRunner {
     resume: boolean,
     systemPrompt: string,
     resolved: ResolvedStepConfig,
+    branchSessionId?: string,
   ): Promise<StepRunResult> {
     // Resolve to a live model up front (skipping any already known-dead
     // model in this process) so a single ladder-covered invocation doesn't
@@ -471,9 +478,14 @@ export class DefaultStepRunner implements StepRunner {
       invokeInteractive: (opts) => this.provider.invokeInteractive(opts),
     };
 
+    // Concurrent-group branch dispatch: use the branch-local session id
+    // when provided, and never mutate this.sessionId/this.sessionStarted —
+    // those belong exclusively to the shared main conductor session.
+    const dispatchSessionId = branchSessionId ?? this.sessionId;
+
     const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
       prompt,
-      sessionId: this.sessionId,
+      sessionId: dispatchSessionId,
       resume,
       dangerouslySkipPermissions: true,
       systemPrompt,
@@ -509,14 +521,19 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     if (result.success) {
-      this.sessionStarted = true;
-      if (this.pipelineDir) {
-        await this.ensurePipelineDir();
-        await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-        await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
-        // After successful first marker write, we know a session has been established.
-        // Mark that for future mid-run detection.
-        this.wasSessionMarkerFoundOnInit = true;
+      // Branch dispatches (branchSessionId set) never touch the shared
+      // main-conductor session state or its markers — see
+      // adr-2026-07-10-concurrent-group-core.md.
+      if (branchSessionId === undefined) {
+        this.sessionStarted = true;
+        if (this.pipelineDir) {
+          await this.ensurePipelineDir();
+          await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
+          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+          // After successful first marker write, we know a session has been established.
+          // Mark that for future mid-run detection.
+          this.wasSessionMarkerFoundOnInit = true;
+        }
       }
       return { success: true, output: result.output };
     }

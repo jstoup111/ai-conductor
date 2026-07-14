@@ -32,7 +32,13 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import {
+  ALL_STEPS,
+  STEP_GROUPS,
+  VALIDATION_GROUP,
+  getGroupForStep,
+  tryGetStepIndex,
+} from '../../src/engine/steps.js';
 import {
   Conductor,
   getNavigableSteps,
@@ -43,8 +49,10 @@ import {
   buildRetryHint,
   appendRemediationTasks,
   findResumeIndex,
+  resolveGroupMembership,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { GroupMember } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
@@ -2272,6 +2280,20 @@ describe('engine/conductor', () => {
 
     it('daemon mode: dispatches /remediate on build stall with stall question in context', async () => {
       await seedToBuildStep();
+      // The validation group now converges cleanly past its own members
+      // (Task 21 routes mixed gaps rather than failing loudly) once this
+      // test's runner passes prd_audit/architecture_review_as_built/
+      // manual_test cleanly (below) — but the downstream `finish` gate's
+      // own convergence machinery (push evidence, PR presentation) is out
+      // of scope for a build-stall test. Mark it already `done` so the
+      // loop never re-dispatches or gates on it, keeping this test scoped
+      // to the build-stall remediation dispatch it actually covers.
+      {
+        const res = await readState(statePath);
+        const seeded = (res.ok ? res.value : {}) as Record<string, unknown>;
+        seeded.finish = 'done';
+        await writeState(statePath, seeded as unknown as ConductState);
+      }
 
       const calls: Array<{ step: StepName; retryReason?: string }> = [];
       const runner: StepRunner = {
@@ -2324,6 +2346,25 @@ describe('engine/conductor', () => {
                   },
                 ],
               }),
+            );
+          } else if (step === 'manual_test') {
+            // Downstream validation group: this test is about the build
+            // stall's own remediation dispatch, not the group — pass its
+            // members cleanly so the group's join never fires a SECOND
+            // (Task 21 mixed-failure) remediate dispatch.
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'prd_audit') {
+            await writeFile(
+              join(dir, '.pipeline/prd-audit.md'),
+              '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
             );
           }
           return { success: true } as StepRunResult;
@@ -4296,6 +4337,1803 @@ describe('engine/conductor', () => {
     expect(checkpointEvents).toHaveLength(0);
     // onCheckpoint should never be called
     expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  describe('built-in validation group engagement (auto-mode-only)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+    } as ConductState;
+
+    it('mode=auto reaching the validation group entry point takes the group path', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: VALIDATION_GROUP.members,
+      });
+      // The group path is marked, but member dispatch itself (fan-out/join) is
+      // wired in a later task — manual_test still dispatches through the
+      // ordinary per-step machinery so its FAIL-routing/HALT semantics are
+      // unaffected by this task's guard.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+
+    it('width 2 with one skip: parallel_started lists only the dispatchable members, not the skipped phantom', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'L',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      // Technical track skips prd_audit (no PRD to audit), leaving
+      // manual_test + architecture_review_as_built dispatchable at width 2.
+      // The event's member list must reflect ONLY the dispatched members —
+      // prd_audit must never appear, even though it's a static member of
+      // VALIDATION_GROUP.
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(parallelStarted[0].branches).not.toContain('prd_audit');
+    });
+
+    it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (s) => {
+          stepsRun.push(s);
+          return { success: true };
+        },
+      };
+      const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        // Interactive/default mode — NOT 'auto'.
+        onCheckpoint,
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('checkpoint_reached', (e) => {
+        if (e.type === 'checkpoint_reached') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // No group-path event ever fires in interactive mode.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+
+      // The three group members still dispatch one at a time, in order —
+      // the pre-existing serial walk, untouched.
+      expect(stepsRun.slice(0, 3)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+
+      // checkpoint_reached still fires after manual_test, with no
+      // group-related events interleaved before it.
+      const checkpointIndex = observedEvents.findIndex(
+        (e) => e.type === 'checkpoint_reached' && e.step === 'manual_test',
+      );
+      expect(checkpointIndex).toBeGreaterThanOrEqual(0);
+      const manualTestStartIndex = observedEvents.findIndex(
+        (e) => e.type === 'step_started' && e.step === 'manual_test',
+      );
+      expect(manualTestStartIndex).toBeGreaterThanOrEqual(0);
+      expect(checkpointIndex).toBeGreaterThan(manualTestStartIndex);
+      expect(
+        observedEvents
+          .slice(manualTestStartIndex, checkpointIndex + 1)
+          .some((e) => e.type === 'parallel_started'),
+      ).toBe(false);
+      expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
+    });
+  });
+
+  describe('width-1 group degrades to serial semantics (Task 16)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+    } as ConductState;
+
+    it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'S',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // S tier + technical track resolve to width 1 (only manual_test
+      // dispatchable — prd_audit and architecture_review_as_built both
+      // skip). No fan-out ceremony event should fire: the event stream for
+      // manual_test must be byte-for-byte equivalent to the pre-Task-14
+      // serial baseline for that single member.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+      expect(observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test')).toBe(
+        true,
+      );
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+  });
+
+  describe('single-writer join state + gate verdicts — all-green (Task 17)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    function joinRunner(delays: Partial<Record<StepName, number>>): StepRunner {
+      return {
+        run: vi.fn(async (step: StepName) => {
+          const delay = delays[step];
+          if (delay) await new Promise((r) => setTimeout(r, delay));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+    }
+
+    it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // manual_test is the slowest branch — prd_audit and
+      // architecture_review_as_built resolve first, exercising mixed
+      // completion order at the semaphore.
+      const runner = joinRunner({ manual_test: 30 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+
+      // Every member's own step-status key is 'done'.
+      expect(state.manual_test).toBe('done');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
+
+      // Every member's synthetic «group»__«member» key is also 'done' —
+      // matching the DSL parallel group's key format (Task 10).
+      expect(state['validation__manual_test']).toBe('done');
+      expect(state['validation__prd_audit']).toBe('done');
+      expect(state['validation__architecture_review_as_built']).toBe('done');
+    });
+
+    it('writes .pipeline/gates/«member».json for every member at join, serially, from the core', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = joinRunner({ prd_audit: 20 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      for (const member of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+        const raw = await readFile(join(dir, `.pipeline/gates/${member}.json`), 'utf-8');
+        const verdict = JSON.parse(raw);
+        expect(verdict.satisfied).toBe(true);
+      }
+    });
+
+    it('write-spy: zero state writes originate inside branch execution — only the join (core, post-fan-out) writes conduct-state.json', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // While manual_test is still in flight (its own branch has not yet
+      // resolved), prd_audit's branch reads conduct-state.json directly off
+      // disk from INSIDE its own dispatch. If a branch — or the core, before
+      // every branch has settled — ever wrote a member's completion key
+      // early, this would observe it. The single-writer invariant requires
+      // it stays absent until every branch (including the still-in-flight
+      // manual_test) has resolved.
+      let sawPrematureWrite: unknown = 'not-checked';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await new Promise((r) => setTimeout(r, 30));
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            const mid = await readState(statePath);
+            sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // prd_audit resolved while manual_test was still in flight; at that
+      // moment no synthetic key had been written yet — proving the branch
+      // itself never wrote state, and the core had not joined early either.
+      expect(sawPrematureWrite).not.toBe('done');
+
+      // After the full run, the join has since written it.
+      const finalState = await readState(statePath);
+      expect(finalState.ok && (finalState.value as Record<string, unknown>)['validation__prd_audit']).toBe(
+        'done',
+      );
+    });
+  });
+
+  describe('SIGINT persistence across the group + resume skips completed members (Task 27)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+
+    it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      let sigintHandler: (() => void) | undefined;
+      const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+        event: string,
+        handler: (...args: unknown[]) => void,
+      ) => {
+        if (event === 'SIGINT') {
+          sigintHandler = handler as () => void;
+        }
+        return process;
+      }) as typeof process.on);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+      // manual_test and architecture_review_as_built block forever (never
+      // resolve) — simulating a group still mid-flight when SIGINT lands.
+      // prd_audit resolves quickly; a flag (not a synchronous in-runner
+      // SIGINT call) marks its completion so the test can wait for the
+      // engine's OWN post-dispatch bookkeeping (the per-branch completion
+      // event) to finish before firing SIGINT — otherwise SIGINT could win
+      // a race against that bookkeeping and observe a state snapshot from
+      // before it ran.
+      let prdAuditDone = false;
+      const neverResolve = new Promise<void>(() => {});
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            prdAuditDone = true;
+            return { success: true };
+          }
+          await neverResolve;
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      // Not awaited to completion: manual_test/architecture_review_as_built
+      // never resolve, so the group promise never settles.
+      void conductor.run();
+      while (!prdAuditDone) {
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      // Let the engine's own per-branch completion bookkeeping (which runs
+      // in a promise continuation immediately after prd_audit's dispatch
+      // resolves) actually settle before firing SIGINT.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      // The engine's registered handler is `() => signalHandlerBase('SIGINT')`,
+      // which returns the handler's own promise — awaiting it (instead of a
+      // fixed sleep) makes the state-file write deterministically complete
+      // before the read below. A fixed sleep raced fs.writeFile's truncate
+      // window and produced an intermittently-empty file.
+      expect(sigintHandler).toBeDefined();
+      await (sigintHandler as unknown as () => Promise<void>)();
+
+      const midAbortState = await readState(statePath);
+      expect(midAbortState.ok).toBe(true);
+      const midValue = midAbortState.ok ? (midAbortState.value as Record<string, unknown>) : {};
+      expect(midValue.prd_audit).toBe('done');
+      expect(midValue.manual_test).not.toBe('done');
+      expect(midValue.architecture_review_as_built).not.toBe('done');
+
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+
+      // Resumed run: prd_audit already 'done' must not be re-dispatched;
+      // manual_test and architecture_review_as_built (still unfinished) must be.
+      const dispatched: StepName[] = [];
+      const resumedRunner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const resumedConductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: resumedRunner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+      await resumedConductor.run();
+
+      expect(dispatched).not.toContain('prd_audit');
+      expect(dispatched).toContain('manual_test');
+      expect(dispatched).toContain('architecture_review_as_built');
+    });
+  });
+
+  describe('no-verdict branch fails the group (Task 18)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Crashes: never produces a completion marker, never succeeds.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(haltCount).toBeGreaterThan(0);
+      expect(kickbacks.length).toBe(0);
+
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      // No member — including the ones that themselves passed — gets marked
+      // done: no partial join on a no-verdict outcome.
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+
+    it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Dispatch itself "succeeds" but the content is a FAIL row.
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+            return { success: true };
+          } else if (step === 'prd_audit') {
+            // Crashes: never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(kickbacks.length).toBe(0);
+      expect(haltCount).toBeGreaterThan(0);
+    });
+  });
+
+  describe('MT-only failure — deterministic kickback parity (Task 20)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    // manual_test always FAILs (perpetual bug); build re-satisfies its own
+    // gate but never actually fixes anything — every sibling PASSes cleanly.
+    function mtOnlyFailingRunner(): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          // Small margin against the freshness check (artifact mtime must
+          // postdate session_started_at) — matches the defensive delay
+          // pattern used elsewhere in this file (Task 19's sibling tests).
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
+    it('manual_test FAIL alone (siblings PASS) at the group join produces the same navigateBack/retry-hint shape as the serial baseline — zero remediate dispatch', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      // Pre-seed task-status.json exactly like the serial baseline's
+      // seedToManualTest() does — otherwise the FIRST kickback's progress
+      // snapshot reads "no file" (0 resolved) instead of the true
+      // steady-state count, misclassifying the very first repeat as
+      // "did-work" and masking D2's no-op escalation.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one kickback, manual_test -> build, matching the serial
+      // baseline's deterministic FAIL-row routing.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+      expect(kickbacks[0]?.evidence).toContain('| s1 | FAIL |');
+
+      // The retry hint handed to BUILD carries the FAIL rows + the
+      // no-whitewash contract — same shape as the pre-parallel serial walk.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('| s1 | FAIL |');
+        expect(r).toMatch(/COMMIT/i);
+      }
+
+      // Zero remediate dispatches for this failure shape.
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+    });
+
+    it('exhausted manualTestSelfHeals halts with the serial baseline reason wording, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      let haltReason = '';
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltReason = e.reason;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // D2's no-op re-entry guard fires on the first repeat cycle (build
+      // makes zero net progress against the perpetual FAIL) — same wording
+      // family as the serial baseline's kickback-to-build no-op halt.
+      expect(haltReason).toMatch(/manual_test kickback-to-build no-op|manual-test FAIL unresolved/);
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+  });
+
+  describe('Mixed failure — single remediate dispatch over the gap union (Task 21)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_GAPS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n' +
+      '| FR-2 | GAP | missing | evidence.ts:2 | no |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    function mixedFailingRunner(): {
+      runner: StepRunner;
+      remediateCalls: Array<{ retryReason?: string }>;
+    } {
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                  {
+                    id: 'FR-2',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-2',
+                    tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
+                  },
+                  {
+                    id: 'ADR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, remediateCalls };
+    }
+
+    it('prd-audit gaps + as-built BLOCKED at the join dispatch remediate exactly once, over the union of both evidence files, consuming all 3 heterogeneous dispositions', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner, remediateCalls } = mixedFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one /remediate dispatch for the whole mixed-failure join.
+      expect(remediateCalls).toHaveLength(1);
+
+      // Its dispatch context enumerates BOTH evidence file paths...
+      expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
+      expect(remediateCalls[0].retryReason).toContain(
+        '.pipeline/architecture-review-as-built.md',
+      );
+      // ...and NOT the manual-test results path (manual_test passed cleanly).
+      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
+
+      // The single remediate session's disposition set (all 3 heterogeneous
+      // gaps) was consumed — a kickback fires, routing to build.
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(true);
+    });
+  });
+
+  describe('Merged work order — earliest target + both evidence streams (Task 22)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    // manual_test FAILs deterministically AND architecture_review_as_built
+    // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
+    // merged-work-order shape this task covers. The remediate plan routes
+    // ADR-1 to 'acceptance_specs' (a BUILD-phase step earlier than 'build')
+    // so the earliest-target merge is exercised non-trivially: manual_test's
+    // forced target is 'build', but the merged navigateBack must land on
+    // the earlier 'acceptance_specs'.
+    function mergedFailingRunner(): {
+      runner: StepRunner;
+      remediateCalls: Array<{ retryReason?: string }>;
+    } {
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build' || step === 'acceptance_specs') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'ADR-1',
+                    disposition: 'acceptance_specs',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, remediateCalls };
+    }
+
+    it('MT FAIL + plan-routed disposition in the same join round produce ONE navigateBack to the earlier target, with a retry hint carrying both evidence streams', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner, remediateCalls } = mergedFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one /remediate dispatch and exactly one kickback for the
+      // whole merged join round — never two separate navigateBacks.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks.filter((k) => k.from === 'manual_test' || k.from === 'validation_group' || k.to === 'acceptance_specs').length).toBeGreaterThanOrEqual(1);
+
+      // The merged target is the EARLIER of MT's forced 'build' and the
+      // routed disposition's 'acceptance_specs' — i.e. 'acceptance_specs',
+      // never 'build'.
+      const mergedKickback = kickbacks.find((k) => k.to === 'acceptance_specs');
+      expect(mergedKickback).toBeDefined();
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
+
+      // The retry hint at the merged target carries BOTH the deterministic
+      // MT FAIL rows AND the remediation guidance for ADR-1.
+      const acceptanceSpecsReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'acceptance_specs')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(acceptanceSpecsReasons.length).toBeGreaterThan(0);
+      const mergedHint = acceptanceSpecsReasons[0]!;
+      expect(mergedHint).toContain('| s1 | FAIL |');
+      expect(mergedHint).toMatch(/COMMIT/i);
+      expect(mergedHint).toContain('ADR-1');
+      expect(mergedHint).toContain('Fix ADR-1 violation');
+
+      // The dispatch context to /remediate never carries the manual_test
+      // FAIL rows — those stay deterministic-only (Task 20), never handed
+      // to the LLM planner for re-classification.
+      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+    });
+  });
+
+  describe('Halt dispositions and partial plans (Task 23)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_GAPS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                  {
+                    id: 'ADR-1',
+                    disposition: 'halt',
+                    category: 'architectural-clarity',
+                    rationale: 'ADR-1 requires a human architectural decision',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+      const kickbacks: Array<{ to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ to: e.to });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The mixed plan (one routable fix + one halt) must HALT, never
+      // silently route around the halt gap — despite manual_test and (were
+      // it not for the halt) the fix-only path both looking "green enough"
+      // to proceed.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks).toHaveLength(0);
+      expect(haltEvents).toHaveLength(1);
+      expect(haltEvents[0]?.reason).toContain('ADR-1');
+      expect(haltEvents[0]?.reason).toContain('architectural-clarity');
+    });
+
+    it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const doneEvents: Array<{ step: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            // Always still shows the SAME blocking gap — the underlying
+            // code was never actually fixed (build's mock does not touch
+            // it), so re-verifying prd_audit each round is the ONLY thing
+            // standing between this test and a false "gate satisfied".
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Subset plan: only ever addresses prd_audit's FR-1 — the
+            // architecture_review_as_built ADR-1 gap is never named by any
+            // disposition, in any round.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      events.on('parallel_completed', (e) => {
+        if (e.type === 'parallel_completed') {
+          for (const b of e.branches) doneEvents.push({ step: b });
+        }
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The subset plan (FR-1 only) still enumerates BOTH failing evidence
+      // files in the /remediate dispatch context — architecture_review_as_
+      // built's ADR-1 gap was never dropped from consideration just because
+      // no disposition named it.
+      expect(remediateCalls).toHaveLength(1);
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+
+      // The group never reached a "parallel_completed" (all-green) join —
+      // architecture_review_as_built's gate was never green-lit despite the
+      // plan only covering prd_audit's gap.
+      expect(doneEvents).toHaveLength(0);
+
+      // The unaddressed member is restaged (not marked satisfied/'done') so
+      // the NEXT tail pass re-verifies it from disk rather than trusting the
+      // stale pre-remediation verdict.
+      const persisted = await readState(statePath);
+      expect(persisted.ok).toBe(true);
+      const persistedState = (persisted as { ok: true; value: ConductState }).value;
+      expect(persistedState.architecture_review_as_built).not.toBe('done');
+      expect(persistedState.architecture_review_as_built).toBe('stale');
+    });
+  });
+
+  describe('Remediation fallback + budget parity (Task 24)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Deliberately write no (or unreadable) remediation.json — the
+            // planner produced no usable plan. readRemediationPlan returns
+            // null → planRemediation resolves 'none'.
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // /remediate was dispatched for the non-MT gap, but never produced a
+      // usable plan (no remediation.json written) — bounded by the shared
+      // remediation budget.
+      expect(remediateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Despite the unusable LLM plan, the deterministic manual_test
+      // kickback still fires — it does not depend on /remediate at all.
+      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(true);
+      const mtKickback = kickbacks.find((k) => k.from === 'manual_test' && k.to === 'build');
+      expect(mtKickback?.evidence).toContain('| s1 | FAIL |');
+    });
+
+    it('remediationRounds at MAX_KICKBACKS_PER_GATE halts exactly like the serial gate loop, never a silent non-green failure', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      let remediateRound = 0;
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            // Perpetually BLOCKED — build's mock never actually fixes it.
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateRound++;
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `ADR-1-round-${remediateRound}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: `rem-adr-1-${remediateRound}`, title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The shared remediation budget (MAX_KICKBACKS_PER_GATE = 2) is
+      // respected at the join exactly like the serial gate loop — never
+      // more than 2 /remediate dispatches for this persistent gap.
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Once the budget is exhausted, the join HALTs (loop_halt with a
+      // budget-parity reason) — it never falls through to a silent
+      // generic "non-green branch" step failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+      expect(haltEvents[haltEvents.length - 1]?.reason).toMatch(
+        /manual_test kickback-to-build no-op|manual-test FAIL unresolved|remediation budget exhausted/,
+      );
+    });
+  });
+
+  describe('FAIL verdict waits for siblings (Task 19)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Fails fast: no delay, never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            // Slow sibling — must be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 50));
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            // Slower sibling — must also be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 80));
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // The group ultimately halts (manual_test never produced a verdict) —
+      // but only AFTER both slower siblings ran to completion, not before.
+      expect(haltCount).toBeGreaterThan(0);
+
+      // Proof the slow siblings were never aborted/cancelled when the fast
+      // branch failed: their own completion markers exist on disk by the
+      // time conductor.run() resolves. If the executor had cancelled
+      // in-flight branches on the fast failure, these setTimeout-guarded
+      // writes would not have happened yet.
+      const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
+      expect(prdAuditMarker).toBe(PRD_AUDIT_PASS);
+      const asBuiltMarker = await readFile(
+        join(dir, '.pipeline/architecture-review-as-built.md'),
+        'utf-8',
+      );
+      expect(asBuiltMarker).toBe(AS_BUILT_APPROVED);
+
+      // All three members were in fact dispatched — none were skipped or
+      // starved by the fast failure.
+      expect(runner.run).toHaveBeenCalledWith(
+        'manual_test',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
+      expect(runner.run).toHaveBeenCalledWith(
+        'architecture_review_as_built',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('validation group membership resolution (Task 15)', () => {
+    it('width 3: no skip conditions active — all three members are dispatchable', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+      expect(result.members.every((m) => m.outcome.kind !== 'skipped')).toBe(true);
+    });
+
+    it('width 2: technical track skips prd_audit (no PRD to audit)', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: S tier + technical track skip both prd_audit and architecture_review_as_built', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: architecture_review itself skipped upstream cascades to architecture_review_as_built', () => {
+      const state = {
+        complexity_tier: 'M',
+        architecture_review: 'skipped',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+    });
+
+    it('width 0: manual_test disabled by config plus S tier + technical track — the group itself is skipped, nothing dispatchable', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
+        typeof resolveGroupMembership
+      >[3];
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', config);
+
+      expect(result.allSkipped).toBe(true);
+      expect(result.dispatchable).toHaveLength(0);
+      expect(result.members).toHaveLength(3);
+      // Every member — including manual_test — still gets a SkippedOutcome,
+      // never a silently-omitted entry.
+      for (const m of result.members) {
+        expect(m.outcome).toEqual({ kind: 'skipped' });
+      }
+    });
+
+    it('a skipped member never contributes a verdict and can never fail the group', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      // Must be the dedicated SkippedOutcome variant — never a VerdictOutcome
+      // (e.g. a placeholder "pass") and never a NoVerdictOutcome (which fails
+      // the group through the normal step-failure path).
+      expect(prdAudit.outcome.kind).toBe('skipped');
+      expect(prdAudit.outcome.kind).not.toBe('verdict');
+      expect(prdAudit.outcome.kind).not.toBe('no-verdict');
+      // Skipped members are excluded from the dispatchable set entirely, so
+      // downstream join logic (Task 17+) can never observe them as failing.
+      expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+    });
+
+    it('Task 27: a member already marked done in state (resumed after a mid-group abort) is excluded from dispatchable, not re-dispatched', () => {
+      const state = {
+        complexity_tier: 'L',
+        prd_audit: 'done',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
+    });
+
+    it('Task 25: parallel_started lists only dispatched members, never a phantom skipped one', async () => {
+      const { buildParallelStartedEvent } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'architecture_review_as_built', skill: 'architecture_review_as_built', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const event = buildParallelStartedEvent('manual_test', members);
+      expect(event).toEqual({
+        type: 'parallel_started',
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(event.branches).not.toContain('prd_audit');
+    });
+
+    it('Task 25: mixed outcome produces one parallel_failure event naming the failing member, not the whole group', async () => {
+      const { buildParallelFailureEvents } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        {
+          name: 'architecture_review_as_built',
+          skill: 'architecture_review_as_built',
+          outcome: { kind: 'no-verdict', reason: 'exhausted retries' },
+        },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const events = buildParallelFailureEvents('manual_test', members);
+
+      // Exactly one failure event, attributed to the member that actually
+      // failed — the passing member and the skipped phantom member never
+      // produce a parallel_failure of their own.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({
+        type: 'parallel_failure',
+        step: 'manual_test',
+        branch: 'architecture_review_as_built',
+        error: 'exhausted retries',
+      });
+    });
+
+    it('Task 25: skipped members never appear in either event stream (parallel_started or parallel_failure)', async () => {
+      const { buildParallelStartedEvent, buildParallelFailureEvents } = await import(
+        '../../src/engine/group-core.js'
+      );
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'skipped' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      expect(buildParallelStartedEvent('manual_test', members).branches).toEqual([]);
+      expect(buildParallelFailureEvents('manual_test', members)).toEqual([]);
+    });
+
+    it('Task 25: runGroupBranch emits member-attributed dispatch and result events via onMemberEvent', async () => {
+      const { runGroupBranch, makeNoVerdictOutcome } = await import('../../src/engine/group-core.js');
+      const member: GroupMember = {
+        name: 'architecture_review_as_built',
+        skill: 'architecture_review_as_built',
+        outcome: makeNoVerdictOutcome('not-run'),
+      };
+      const events: Array<{ type: string; member: string; skill: string; phase: string; outcome?: string }> = [];
+      const stepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true } as StepRunResult),
+      };
+      const outcome = await runGroupBranch(
+        member,
+        {} as ConductState,
+        {
+          stepRunner,
+          onMemberEvent: (e) => {
+            events.push(e as unknown as (typeof events)[number]);
+          },
+        },
+        1,
+      );
+
+      expect(outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
+      // Every event is attributed to THIS member, never the group name.
+      expect(events.every((e) => e.member === 'architecture_review_as_built')).toBe(true);
+      expect(events.map((e) => e.phase)).toEqual(['dispatch', 'result']);
+      expect(events[1]?.outcome).toBe('verdict:pass');
+    });
+
+    it('width 0 at the conductor.run() level: the group entry point (manual_test) is never dispatched and every member is marked skipped in state', async () => {
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'S',
+        track: 'technical',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        build: 'done',
+        build_review: 'done',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: { steps: { manual_test: { disable: true } } } as unknown as ConstructorParameters<
+          typeof Conductor
+        >[0]['config'],
+      });
+
+      await conductor.run();
+
+      // No branch executor call for ANY validation-group member.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).not.toContain('manual_test');
+      expect(calledSteps).not.toContain('prd_audit');
+      expect(calledSteps).not.toContain('architecture_review_as_built');
+
+      const finalState = await readState(statePath);
+      expect(finalState.ok && finalState.value.manual_test).toBe('skipped');
+      expect(finalState.ok && finalState.value.prd_audit).toBe('skipped');
+      expect(finalState.ok && finalState.value.architecture_review_as_built).toBe('skipped');
+    });
   });
 
   it('advances when checkpoint response is continue', async () => {
@@ -9661,5 +11499,83 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     // The first line should contain the question (emoji should survive UTF-8)
     const firstLine = haltContent.split('\n')[0];
     expect(firstLine).toContain('🚀');
+  });
+});
+
+// adr-2026-07-10-validation-group-join.md, Decision-1: the SHIP sequence
+// gains a built-in validation group entry describing the three validators
+// as a group, without disturbing their existing standalone StepDefinitions
+// or index-based lookups.
+describe('built-in SHIP validation group entry (Decision-1)', () => {
+  it('exposes VALIDATION_GROUP with the three members in ADR order', () => {
+    expect(VALIDATION_GROUP.members).toEqual([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+  });
+
+  it('positions the group immediately after the build gates (build_review → wiring_check) in ALL_STEPS ordering', () => {
+    // wiring_check (3110f9fd, from main) sits between build_review and the
+    // group's first member — the group entry follows the LAST build gate.
+    const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
+    const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'wiring_check');
+    expect(wiringCheckIdx).toBe(buildReviewIdx + 1);
+    const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
+    expect(firstMemberIdx).toBe(wiringCheckIdx + 1);
+
+    // Members remain contiguous and in order in the underlying linear list.
+    const memberIndices = VALIDATION_GROUP.members.map(
+      (name) => ALL_STEPS.findIndex((s) => s.name === name),
+    );
+    expect(memberIndices).toEqual([...memberIndices].sort((a, b) => a - b));
+    expect(memberIndices[memberIndices.length - 1] - memberIndices[0]).toBe(
+      VALIDATION_GROUP.members.length - 1,
+    );
+  });
+
+  it('registers VALIDATION_GROUP in STEP_GROUPS keyed by its name', () => {
+    expect(STEP_GROUPS[VALIDATION_GROUP.name]).toBe(VALIDATION_GROUP);
+  });
+
+  it('resolves each member to its own group via getGroupForStep', () => {
+    for (const member of VALIDATION_GROUP.members) {
+      expect(getGroupForStep(member as StepName)?.name).toBe(VALIDATION_GROUP.name);
+    }
+  });
+
+  it('reports undefined group for ordinary serial steps', () => {
+    expect(getGroupForStep('build')).toBeUndefined();
+    expect(getGroupForStep('build_review')).toBeUndefined();
+    expect(getGroupForStep('retro')).toBeUndefined();
+  });
+
+  it('leaves each member with its own full StepDefinition (skill/gate config unchanged)', () => {
+    const manualTest = ALL_STEPS.find((s) => s.name === 'manual_test');
+    const prdAudit = ALL_STEPS.find((s) => s.name === 'prd_audit');
+    const asBuilt = ALL_STEPS.find((s) => s.name === 'architecture_review_as_built');
+
+    expect(manualTest?.skillName).toBe('manual-test');
+    expect(manualTest?.enforcement).toBe('gating');
+    expect(prdAudit?.skillName).toBe('prd-audit');
+    expect(prdAudit?.skippableForTracks).toEqual(['technical']);
+    expect(asBuilt?.skillName).toBe('architecture-review');
+    expect(asBuilt?.skipWhenSkipped).toBe('architecture_review');
+  });
+
+  it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
+    // Each member still resolves to its OWN linear-list index, not a
+    // group-collapsed position.
+    const wiringCheckIdx = tryGetStepIndex('wiring_check');
+    expect(wiringCheckIdx).not.toBeNull();
+    for (let i = 0; i < VALIDATION_GROUP.members.length; i += 1) {
+      const idx = tryGetStepIndex(VALIDATION_GROUP.members[i] as StepName);
+      expect(idx).toBe((wiringCheckIdx as number) + 1 + i);
+    }
+
+    // Ordinary serial steps are completely unaffected.
+    expect(tryGetStepIndex('build')).not.toBeNull();
+    expect(tryGetStepIndex('retro')).not.toBeNull();
+    expect(tryGetStepIndex('remediate')).toBeNull();
   });
 });

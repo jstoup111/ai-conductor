@@ -287,6 +287,78 @@ describe('parallel: group execution (T15-T22)', () => {
     }
   });
 
+  it('caps DSL group concurrency at validation_concurrency: 2 for a 3-branch group (T12)', async () => {
+    await seedAllDoneExcept(statePath, 'explore');
+
+    // Manual promise control: each branch's run() call is recorded in
+    // dispatch order and stays pending until its resolver is invoked.
+    const dispatchOrder: string[] = [];
+    const resolvers = new Map<string, () => void>();
+
+    const runner: StepRunner = {
+      run: vi.fn().mockImplementation((name: string) => {
+        dispatchOrder.push(name);
+        return new Promise((resolve) => {
+          resolvers.set(name, () => resolve({ success: true }));
+        });
+      }),
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: {
+        validation_concurrency: 2,
+        steps: {
+          explore: {
+            parallel: [
+              { name: 'alpha' },
+              { name: 'beta' },
+              { name: 'gamma' },
+            ],
+          },
+        },
+      },
+      mode: 'auto',
+    });
+
+    const runPromise = conductor.run();
+
+    // Wait for the first wave of dispatches (state I/O is async, so poll
+    // rather than assuming a fixed number of microtask flushes).
+    await vi.waitFor(() => {
+      expect(dispatchOrder.length).toBeGreaterThanOrEqual(2);
+    });
+
+    // Only 2 of the 3 branches should have been dispatched — cap enforced.
+    expect(dispatchOrder).toHaveLength(2);
+    expect(dispatchOrder).toContain('alpha');
+    expect(dispatchOrder).toContain('beta');
+    expect(dispatchOrder).not.toContain('gamma');
+
+    // Resolve one of the first two — this frees a slot for the third branch.
+    resolvers.get('alpha')?.();
+
+    // The third branch must now have been dispatched, AFTER alpha/beta.
+    await vi.waitFor(() => {
+      expect(dispatchOrder).toHaveLength(3);
+    });
+    expect(dispatchOrder[2]).toBe('gamma');
+    expect(dispatchOrder.indexOf('gamma')).toBeGreaterThan(dispatchOrder.indexOf('alpha'));
+    expect(dispatchOrder.indexOf('gamma')).toBeGreaterThan(dispatchOrder.indexOf('beta'));
+
+    // Resolve the rest so the conductor run can finish.
+    resolvers.get('beta')?.();
+    resolvers.get('gamma')?.();
+
+    await runPromise;
+
+    const completedEvt = emitted.find((e) => e.type === 'parallel_completed');
+    expect(completedEvt).toBeDefined();
+  });
+
   it('emits parallel_failure and fails group on gating branch failure (T18)', async () => {
     await seedAllDoneExcept(statePath, 'explore');
 
@@ -448,6 +520,42 @@ describe('parallel: group execution (T15-T22)', () => {
 
     // All three branches must have been dispatched
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+  });
+
+  it('dispatches each branch under its OWN name/skill, not the group name (GroupCore re-point)', async () => {
+    await seedAllDoneExcept(statePath, 'explore');
+
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      config: {
+        steps: {
+          explore: {
+            parallel: [
+              { name: 'frontend', skill: 'skills/explore-frontend/SKILL.md' },
+              { name: 'backend', skill: 'skills/explore-backend/SKILL.md' },
+            ],
+          },
+        },
+      },
+      mode: 'auto',
+    });
+
+    await conductor.run();
+
+    const runCalls = (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: unknown[]) => c[0],
+    );
+    // Each branch must be dispatched under its OWN name — never the group's name.
+    expect(runCalls).toContain('frontend');
+    expect(runCalls).toContain('backend');
+    expect(runCalls).not.toContain('explore');
   });
 });
 

@@ -939,6 +939,13 @@ steps:
 # default; set to `[]` to disable fallback entirely.
 model_fallback_ladder: ["fable", "opus", "sonnet"]   # default shown
 
+# ── SHIP validation fan-out (#469, auto mode only) ────────────────────────────
+# Concurrency cap for the parallel validation group (manual_test, prd_audit,
+# architecture_review_as_built). Default 2. Zero/negative/non-numeric values
+# fall back to the default; the effective width is additionally capped at the
+# number of dispatchable members. Interactive runs ignore this (serial walk).
+validation_concurrency: 2
+
 # ── Complexity tier ───────────────────────────────────────────────────────────
 complexity:
   default_tier: M              # "S" | "M" | "L" — used when /assess hasn't run yet
@@ -1633,6 +1640,22 @@ dedicated test coverage (950+ tests). See the feature comparison in
   FAIL rows and refuses a FAIL→PASS rewrite with no new commits — a claimed fix must exist
   as commits. Results are append-only per attempt (`## Attempt N` sections; the latest
   section is the verdict). See `src/conductor/README.md` → "Daemon manual-test routing".
+- **Parallel SHIP validation phase** (#469, auto mode only): when an auto-mode run
+  (`inline`/`daemon`) reaches the SHIP validators, `manual_test`, `prd_audit`, and
+  `architecture_review_as_built` fan out as a **concurrent validation group** instead of the
+  serial walk — each branch on its own fresh session, bounded by the `validation_concurrency`
+  config key (default **2**; zero/negative/non-numeric values fall back to 2; always capped at
+  the number of actually-dispatchable members, so a width-1 group degrades to exact serial
+  semantics). Branches never write state — a **single-writer join** recomputes every member's
+  objective gate verdict from on-disk evidence after all branches settle, then writes
+  `conduct-state.json` + `.pipeline/gates/*` once. Join classification preserves the serial
+  guarantees: all-green advances; an MT-only FAIL takes the same deterministic
+  `manual_test → build` kickback (#367); mixed gaps dispatch **one** `/remediate` over the
+  union of failing members' evidence (shared `MAX_KICKBACKS_PER_GATE` budget, D2 no-op-cycle
+  HALT parity); a branch with no verdict HALTs loudly. SIGINT mid-group persists each settled
+  member's `done`, and a resumed run re-dispatches only unfinished members. Interactive runs
+  are untouched — members execute via the pre-existing serial walk with their normal
+  checkpoints. See `src/conductor/README.md` → "Parallel validation phase".
 - **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
