@@ -424,6 +424,27 @@ Omit the block entirely to get `enabled: true`. This only gates the zero-progres
 (D1) is fail-closed correctness and always stays active. See `src/conductor/README.md` for
 implementation details.
 
+**Rerun-vs-route retry classifier (`retry_routing`).** In daemon mode, a completion-check miss on
+one of the SHIP-tail verdict steps (`architecture_review_as_built`, `build_review`, `prd_audit`)
+routes into the same `/remediate` self-heal path above instead of burning a rerun whenever either:
+(a) the verdict artifact itself names a fresh, adverse result (a fresh `BLOCKED` as-built, a fresh
+`build_review` FAIL, or a non-clean prd-audit) — a "named-route" signal that rerunning the grader
+can't change; or (b) the failure reason is byte-identical to the prior attempt's *and* both the
+HEAD commit and the verdict artifact are provably unchanged since then — an "identical-repeat"
+signal that a rerun would just restate. Anything else (an absent/malformed verdict on the first
+attempt, or a same-reason repeat where the inputs actually changed) still reruns as before.
+Configure via a `retry_routing:` block in the project config:
+
+```yaml
+retry_routing:
+  enabled: true   # default true; false is an exact revert to the pre-existing prd_audit-only short-circuit
+```
+
+Omit the block entirely to get `enabled: true`. Setting `enabled: false` disables this classifier
+completely — only the original `prd_audit`-only short-circuit runs, and the other two verdict
+steps burn their full retry budget before routing at `step_failed`, exactly as before this
+feature. See `src/conductor/README.md` for the implementation details.
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a

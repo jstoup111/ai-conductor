@@ -462,4 +462,109 @@ describe('integration/retry-classify (#646)', () => {
     // the point under test is that prd_audit itself never retried.
     expect(halt).not.toBeNull();
   });
+
+  // ── Task 5: negative/regression coverage ────────────────────────────────
+
+  it('Regression: non-daemon (interactive) mode is unaffected — no retry_decision, legacy retry-to-failure behavior', async () => {
+    await seedTailAt(statePath, 'architecture_review_as_built');
+    const runner = withRemediation(dir, {
+      architecture_review_as_built: async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/architecture-review-as-built.md'),
+          '# As-Built Review\n\nVerdict: BLOCKED\n',
+        );
+      },
+    });
+    const { retryDecisions, stepRetries } = collect();
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: false, // interactive/non-daemon — the classifier seam is daemon-gated
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'architecture_review_as_built',
+      escalateBuildFailure: async () => ({}),
+    });
+    await conductor.run();
+
+    // The #646 classifier only ever engages when `this.daemon` is true; in
+    // non-daemon mode it must never fire — behaviour identical to pre-#646.
+    expect(retryDecisions).toHaveLength(0);
+    const calls = (runner as unknown as { __calls: StepName[] }).__calls;
+    // Legacy behaviour: burns the full retry budget on the same fresh
+    // BLOCKED verdict rather than routing early.
+    expect(calls.filter((s) => s === 'architecture_review_as_built').length).toBeGreaterThanOrEqual(2);
+    expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built').length).toBeGreaterThanOrEqual(1);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toMatch(/failed in auto mode \(retries exhausted\)/);
+  });
+
+  it('Regression: a perpetually-BLOCKED as-built verdict routed via the classifier still HALTs at MAX_KICKBACKS_PER_GATE (2), never an unbounded loop', async () => {
+    const MAX_KICKBACKS_PER_GATE = 2;
+    // markDownstreamStale only restages steps whose status is 'done', not
+    // 'skipped' — seed the intermediate SHIP-tail steps as 'skipped' so a
+    // kickback to 'build' lands back on architecture_review_as_built
+    // directly, without re-dispatching build_review/wiring_check/
+    // manual_test/prd_audit each cycle.
+    await seedTailAt(statePath, 'architecture_review_as_built', {
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+    });
+    const runner = withRemediation(dir, {
+      architecture_review_as_built: async () => {
+        // Every attempt re-writes a fresh BLOCKED verdict — always
+        // routeClass 'named-route', so the classifier routes on attempt 1
+        // of every cycle (never burns a same-step retry).
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/architecture-review-as-built.md'),
+          '# As-Built Review\n\nVerdict: BLOCKED\n',
+        );
+      },
+      build: async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/task-status.json'),
+          JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+        );
+      },
+    });
+    const { retryDecisions, stepRetries, kickbacks, halted } = collect();
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+      fromStep: 'architecture_review_as_built',
+      escalateBuildFailure: async () => ({}),
+    });
+    await conductor.run();
+
+    // Routed via the classifier every cycle (named-route, attempt 1) — the
+    // classify path reuses the SAME planRemediation/kickback mechanism that
+    // enforces MAX_KICKBACKS_PER_GATE, so it must still cap at 2 and HALT
+    // rather than loop forever.
+    expect(
+      kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build').length,
+    ).toBe(MAX_KICKBACKS_PER_GATE);
+    expect(stepRetries.filter((r) => r.step === 'architecture_review_as_built')).toHaveLength(0);
+    expect(
+      retryDecisions.filter(
+        (d) => d.decision === 'route' && d.signal === 'named-route',
+      ).length,
+    ).toBeGreaterThanOrEqual(MAX_KICKBACKS_PER_GATE);
+    expect(halted()).toBe(true);
+  });
 });
