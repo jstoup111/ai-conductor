@@ -33,6 +33,7 @@ import {
   checkStepCompletion,
   isStoriesApproved,
   classifyPrdAuditGaps,
+  classifyRetryDecision,
   sweepStaleReviewArtifacts,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
@@ -40,6 +41,7 @@ import {
   planHasDependencyTree,
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
+import type { CompletionResult } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -1835,6 +1837,165 @@ describe('engine/artifacts', () => {
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
+    });
+  });
+
+  describe('classifyRetryDecision', () => {
+    function completion(routeClass?: 'named-route' | 'absent', reason = 'r'): CompletionResult {
+      return { done: false, reason, routeClass };
+    }
+
+    describe('truth table over architecture_review_as_built / build_review', () => {
+      for (const step of ['architecture_review_as_built', 'build_review'] as const) {
+        describe(step, () => {
+          it('named-route, attempt 1 → route named-route (regardless of reason/inputsUnchanged)', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('named-route'),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+          });
+
+          it('named-route, attempt 2, same reason, inputsUnchanged → route named-route (signal a wins)', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('named-route', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+          });
+
+          it('absent, attempt 1 → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent'),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('absent, attempt 2, diff reason, inputsUnchanged → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'new'),
+              attempt: 2,
+              priorReason: 'old',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('absent, attempt 2, same reason, inputsUnchanged → route identical-repeat', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'identical-repeat' });
+          });
+
+          it('absent, attempt 2, same reason, inputsUnchanged:false → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('undefined routeClass, attempt 1 → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion(undefined),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+        });
+      }
+    });
+
+    it('build step always reruns (scope guard), even with named-route-like inputs', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: completion('named-route', 'same'),
+        attempt: 2,
+        priorReason: 'same',
+        inputsUnchanged: true,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    it('prd_audit with prdAuditNonClean:true routes named-route on attempt 1', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'gap' },
+        attempt: 1,
+        priorReason: undefined,
+        inputsUnchanged: false,
+        prdAuditNonClean: true,
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+    });
+
+    it('prd_audit without prdAuditNonClean does not route on named-route signal', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'gap' },
+        attempt: 1,
+        priorReason: undefined,
+        inputsUnchanged: false,
+        prdAuditNonClean: false,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    describe('identical-repeat requires all three conditions', () => {
+      it('flips attempt < 2 → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 1,
+          priorReason: 'same',
+          inputsUnchanged: true,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
+
+      it('flips priorReason undefined → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 2,
+          priorReason: undefined,
+          inputsUnchanged: true,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
+
+      it('flips inputsUnchanged false → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 2,
+          priorReason: 'same',
+          inputsUnchanged: false,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
     });
   });
 
