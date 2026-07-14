@@ -34,6 +34,17 @@ export type ConductorEvent =
       resolvedBefore?: number;
       resolvedAfter?: number;
     }
+  | {
+      // #646: rerun-vs-route classification, emitted on every classifier-
+      // covered completion-gate miss (verdict steps only) so the audit log
+      // can pair a decision with the outcome event that follows it.
+      type: 'retry_decision';
+      step: StepName;
+      attempt: number;
+      decision: 'rerun' | 'route';
+      signal?: 'named-route' | 'identical-repeat';
+      unchangedInput?: string;
+    }
   | { type: 'checkpoint_reached'; step: StepName }
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
   | { type: 'gate_blocked'; step: StepName; reason: string }

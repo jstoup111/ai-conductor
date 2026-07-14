@@ -1118,7 +1118,7 @@ function resolveBuildProgressHaltBlock(raw: unknown): {
  * Defaults for the `retry_routing:` kill-switch. Absent block resolves to
  * `enabled: true` (feature on by default).
  */
-const RETRY_ROUTING_DEFAULTS = {
+export const RETRY_ROUTING_DEFAULTS = {
   enabled: true,
 } as const;
 

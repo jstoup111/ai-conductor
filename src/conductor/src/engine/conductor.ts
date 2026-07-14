@@ -43,6 +43,7 @@ import {
   isAttributionJudgeCutoverActive,
   BUILD_PROGRESS_HALT_DEFAULTS,
   resolveValidationConcurrency,
+  RETRY_ROUTING_DEFAULTS,
 } from './config.js';
 import {
   isEnforcementConfigured,
@@ -80,6 +81,7 @@ import {
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
+  classifyRetryDecision,
   readRemediationPlan,
   sweepStaleReviewArtifacts,
   parseTrack,
@@ -2625,6 +2627,17 @@ export class Conductor {
         let retryResolvedBefore: number | undefined;
         let retryResolvedAfter: number | undefined;
 
+        // #646: rerun-vs-route classifier state, held across attempts of
+        // THIS step's retry loop (reset per step, not per run — signal (b)
+        // only compares consecutive attempts of the same step dispatch).
+        let priorCompletionReason: string | undefined;
+        let priorHeadSha: string | null = null;
+        let priorArtifactMtimeSignature: string | undefined;
+        // D5: set only for a signal-(b) identical-repeat route; threaded into
+        // the routed-halt reason below instead of the generic "retries
+        // exhausted" message when that route dead-ends in a HALT.
+        let unchangedInputNote: string | undefined;
+
         while (attempt < stepMaxRetries) {
           attempt++;
 
@@ -3121,13 +3134,77 @@ export class Conductor {
                 join(this.projectRoot, '.pipeline'),
               );
 
-              // prd-audit short-circuit (daemon only): re-auditing unchanged code
-              // yields the same verdict, so the default retries are pure waste
-              // once a fresh report with blocking rows exists. Stop retrying and
-              // drop into the failure path, where the gap-class routes the daemon
-              // back to BUILD (impl-gap) or halts (product/plan gap). A failure
-              // with no fresh report (skill never wrote one / stale) still retries.
-              if (this.daemon && step.name === 'prd_audit') {
+              // #646: rerun-vs-route classifier. Generalizes the original
+              // prd_audit-only short-circuit (retained verbatim below when
+              // the kill-switch is off) to all three SHIP-tail verdict
+              // steps: a fresh adverse verdict (named-route) or a
+              // byte-identical failure on provably-unchanged inputs
+              // (identical-repeat) routes into the existing remediation/
+              // kickback path immediately instead of burning the retry
+              // budget on a rerun that can't change the outcome.
+              const retryRoutingEnabled =
+                this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
+              const isVerdictStep =
+                step.name === 'architecture_review_as_built' ||
+                step.name === 'prd_audit' ||
+                step.name === 'build_review';
+
+              if (this.daemon && retryRoutingEnabled && isVerdictStep) {
+                let prdAuditNonClean: boolean | undefined;
+                if (step.name === 'prd_audit') {
+                  const cls = await classifyPrdAuditGaps(
+                    this.projectRoot,
+                    state.session_started_at,
+                  );
+                  prdAuditNonClean = cls.kind !== 'clean';
+                }
+
+                const headSha = await currentCommitSha(this.projectRoot);
+                const artifactSnapshot = await snapshotArtifactMtimes(this.projectRoot, step.name);
+                const artifactSignature = JSON.stringify(
+                  Array.from(artifactSnapshot.entries()).sort(),
+                );
+                const inputsUnchanged =
+                  priorArtifactMtimeSignature !== undefined &&
+                  headSha === priorHeadSha &&
+                  artifactSignature === priorArtifactMtimeSignature;
+
+                const clsDecision = classifyRetryDecision({
+                  step: step.name,
+                  completion,
+                  attempt,
+                  priorReason: priorCompletionReason,
+                  inputsUnchanged,
+                  prdAuditNonClean,
+                });
+
+                if (clsDecision.decision === 'route' && clsDecision.signal === 'identical-repeat') {
+                  const artifactNames = (STEP_ARTIFACT_GLOBS[step.name] ?? []).join(', ') || 'no artifact';
+                  unchangedInputNote =
+                    `HEAD sha unchanged at ${headSha ?? 'unknown'}; ${artifactNames} unchanged ` +
+                    `since attempt ${attempt - 1}`;
+                }
+
+                await this.events.emit({
+                  type: 'retry_decision',
+                  step: step.name,
+                  attempt,
+                  decision: clsDecision.decision,
+                  ...(clsDecision.decision === 'route' ? { signal: clsDecision.signal } : {}),
+                  ...(unchangedInputNote !== undefined && clsDecision.decision === 'route' &&
+                  clsDecision.signal === 'identical-repeat'
+                    ? { unchangedInput: unchangedInputNote }
+                    : {}),
+                });
+
+                priorCompletionReason = completion.reason;
+                priorHeadSha = headSha;
+                priorArtifactMtimeSignature = artifactSignature;
+
+                if (clsDecision.decision === 'route') break;
+                // 'rerun' — fall through to the unchanged retry logic below.
+              } else if (this.daemon && step.name === 'prd_audit') {
+                // Kill-switch off: exact revert of the original short-circuit.
                 const cls = await classifyPrdAuditGaps(
                   this.projectRoot,
                   state.session_started_at,
@@ -4312,7 +4389,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : unchangedInputNote
+                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );
