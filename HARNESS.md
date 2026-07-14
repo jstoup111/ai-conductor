@@ -52,6 +52,12 @@ Skills chain via artifacts in `.docs/`. No skill orchestrates another internally
 UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
 ```
 
+In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
+architecture-review --as-built) execute as one **concurrent validation group** after the
+build gates (build_review → wiring_check), fan-out capped by `validation_concurrency`
+with a single-writer join; interactive runs keep the serial sequence and checkpoints
+shown above.
+
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |

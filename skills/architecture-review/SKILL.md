@@ -324,8 +324,10 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 
 ### 12. As-Built Compliance Gate (`--as-built` mode)
 
-Invoked at **SHIP**, after `/prd-audit` and before `/retro` and `/finish`, as
-`/architecture-review --as-built`. This is the final architectural drift sweep: it checks the
+Invoked at **SHIP** as `/architecture-review --as-built`, a member of the concurrent
+validation group — fanned out alongside `/manual-test` and `/prd-audit` in daemon/auto
+runs; in interactive runs it runs serially, after `/prd-audit` and before `/retro` and
+`/finish`. This is the final architectural drift sweep: it checks the
 **shipped code** against **APPROVED** ADRs and the approved architecture only. It is lightweight —
 it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
 logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
