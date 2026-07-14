@@ -268,6 +268,17 @@ export interface KickbackEscalationConfig {
 }
 
 /**
+ * Retry-routing config kill-switch (retry_routing): master on/off switch for
+ * classifying a retry as "rerun" vs "route" (rather than always re-dispatching
+ * the same step). Absent block resolves to the documented default (owned by
+ * runtime default resolution/validation, not this type).
+ */
+export interface RetryRoutingConfig {
+  /** Master on/off switch for retry classify rerun-vs-route. Defaults to true. */
+  enabled?: boolean;
+}
+
+/**
  * How harness self-host mode is decided (adr-2026-06-30-self-host-detection-seam):
  *   - 'auto'      → path-based auto-detection (build repo root == harness root)
  *   - 'force_on'  → treat ANY repo as the harness self-build (testing)
@@ -379,6 +390,11 @@ export interface HarnessConfig {
    * `{ enabled: true }`. See `KickbackEscalationConfig`.
    */
   kickback_escalation?: KickbackEscalationConfig;
+  /**
+   * Retry-routing kill-switch. Absent block resolves to defaults owned by
+   * runtime resolution (not this type). See `RetryRoutingConfig`.
+   */
+  retry_routing?: RetryRoutingConfig;
   /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the

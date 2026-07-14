@@ -1367,4 +1367,42 @@ complexity:
       }
     });
   });
+
+  describe('retry_routing config field (Task 3)', () => {
+    it('resolves absent block to enabled: true', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.retry_routing?.enabled).toBe(true);
+    });
+
+    it('resolves retry_routing: { enabled: false } to disabled', () => {
+      const result = validateConfig({ retry_routing: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.retry_routing?.enabled).toBe(false);
+    });
+
+    it('rejects a non-boolean enabled value', () => {
+      const result = validateConfig({ retry_routing: { enabled: 'banana' } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+    });
+
+    it('rejects an unknown key inside the retry_routing block', () => {
+      const result = validateConfig({ retry_routing: { enabled: true, bogus: 1 } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+    });
+
+    it('still rejects an unknown top-level sibling key (regression)', () => {
+      const result = validateConfig({ retry_routing: { enabled: true }, bogus_top_level: 1 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('bogus_top_level');
+    });
+  });
 });
