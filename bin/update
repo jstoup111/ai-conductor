@@ -6,6 +6,13 @@ set -euo pipefail
 # .docs/stories/port-self-update-flow.md). bin/conduct still retains its own
 # copy of the update flow until #226 removes it.
 #
+# Sequencing note for #226: that follow-up issue must delete the update block
+# (check_harness_update/apply_harness_update/set_update_channel/etc., plus
+# any duplicated helper copy still inline in bin/conduct rather than sourced
+# from bin/lib/harness-common.sh) from bin/conduct. #226 must NOT remove this
+# file (bin/update) or bin/lib/harness-common.sh — they are the new permanent
+# homes for this logic.
+#
 # Usage:
 #   update --check
 #   update --apply
