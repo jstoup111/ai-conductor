@@ -1,5 +1,7 @@
 # Stories: rekick-resume-republish-stale-worktree-engine
 
+Status: Accepted
+
 **Source:** jstoup111/ai-conductor#625 · **Track:** technical · **Tier:** S
 **Design:** direction H-b (republish after rebase; no ADR — reuses existing publish primitive)
 
