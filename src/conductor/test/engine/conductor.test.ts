@@ -4706,6 +4706,142 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('SIGINT persistence across the group + resume skips completed members (Task 27)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+
+    it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      let sigintHandler: (() => void) | undefined;
+      const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+        event: string,
+        handler: (...args: unknown[]) => void,
+      ) => {
+        if (event === 'SIGINT') {
+          sigintHandler = handler as () => void;
+        }
+        return process;
+      }) as typeof process.on);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+      // manual_test and architecture_review_as_built block forever (never
+      // resolve) — simulating a group still mid-flight when SIGINT lands.
+      // prd_audit resolves quickly; a flag (not a synchronous in-runner
+      // SIGINT call) marks its completion so the test can wait for the
+      // engine's OWN post-dispatch bookkeeping (the per-branch completion
+      // event) to finish before firing SIGINT — otherwise SIGINT could win
+      // a race against that bookkeeping and observe a state snapshot from
+      // before it ran.
+      let prdAuditDone = false;
+      const neverResolve = new Promise<void>(() => {});
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            prdAuditDone = true;
+            return { success: true };
+          }
+          await neverResolve;
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      // Not awaited to completion: manual_test/architecture_review_as_built
+      // never resolve, so the group promise never settles.
+      void conductor.run();
+      while (!prdAuditDone) {
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      // Let the engine's own per-branch completion bookkeeping (which runs
+      // in a promise continuation immediately after prd_audit's dispatch
+      // resolves) actually settle before firing SIGINT.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      // The engine's registered handler is `() => signalHandlerBase('SIGINT')`,
+      // which returns the handler's own promise — awaiting it (instead of a
+      // fixed sleep) makes the state-file write deterministically complete
+      // before the read below. A fixed sleep raced fs.writeFile's truncate
+      // window and produced an intermittently-empty file.
+      expect(sigintHandler).toBeDefined();
+      await (sigintHandler as unknown as () => Promise<void>)();
+
+      const midAbortState = await readState(statePath);
+      expect(midAbortState.ok).toBe(true);
+      const midValue = midAbortState.ok ? (midAbortState.value as Record<string, unknown>) : {};
+      expect(midValue.prd_audit).toBe('done');
+      expect(midValue.manual_test).not.toBe('done');
+      expect(midValue.architecture_review_as_built).not.toBe('done');
+
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+
+      // Resumed run: prd_audit already 'done' must not be re-dispatched;
+      // manual_test and architecture_review_as_built (still unfinished) must be.
+      const dispatched: StepName[] = [];
+      const resumedRunner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const resumedConductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: resumedRunner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+      await resumedConductor.run();
+
+      expect(dispatched).not.toContain('prd_audit');
+      expect(dispatched).toContain('manual_test');
+      expect(dispatched).toContain('architecture_review_as_built');
+    });
+  });
+
   describe('no-verdict branch fails the group (Task 18)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',
@@ -5847,6 +5983,22 @@ describe('engine/conductor', () => {
       // Skipped members are excluded from the dispatchable set entirely, so
       // downstream join logic (Task 17+) can never observe them as failing.
       expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+    });
+
+    it('Task 27: a member already marked done in state (resumed after a mid-group abort) is excluded from dispatchable, not re-dispatched', () => {
+      const state = {
+        complexity_tier: 'L',
+        prd_audit: 'done',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
     });
 
     it('Task 25: parallel_started lists only dispatched members, never a phantom skipped one', async () => {

@@ -29,6 +29,7 @@ import {
   runWithConcurrency,
   makeSkippedOutcome,
   makeNoVerdictOutcome,
+  makeVerdictOutcome,
   type GroupMember,
   type BranchOutcome,
   type NoVerdictOutcome,
@@ -1466,9 +1467,26 @@ export class Conductor {
       }
     }
 
+    // Task 27: pending per-member completions for a builtin validation
+    // group's fan-out that is CURRENTLY in flight (set while
+    // `runWithConcurrency` is awaited below, cleared immediately once its
+    // outcomes are in hand — before any halt/allGreen/kickback branching
+    // runs). A SIGINT/SIGTERM/SIGHUP landing while siblings are still
+    // dispatching merges these into `state` so the persisted snapshot
+    // carries 'done' for whichever members had already settled — WITHOUT
+    // ever leaking into the ordinary post-join paths (Task 18/20/21's "no
+    // partial join on a HALT/failed round" invariant), since those paths
+    // run only after this is cleared and never consult it themselves.
+    let inFlightGroupCompletions: Record<string, StepStatus> | undefined;
+
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
     // Exit codes follow Unix convention: 128 + signal number
     const signalHandlerBase = async (signal: NodeJS.Signals) => {
+      if (inFlightGroupCompletions) {
+        for (const [key, status] of Object.entries(inFlightGroupCompletions)) {
+          (state as Record<string, unknown>)[key] = status;
+        }
+      }
       await writeState(this.stateFilePath, state);
       const exitCodes: Record<string, number> = {
         SIGINT: 130,   // 128 + 2
@@ -1500,6 +1518,11 @@ export class Conductor {
         currentWaitController.abort();
       }
       try {
+        if (inFlightGroupCompletions) {
+          for (const [key, status] of Object.entries(inFlightGroupCompletions)) {
+            (state as Record<string, unknown>)[key] = status;
+          }
+        }
         await writeState(this.stateFilePath, state);
       } catch {
         // A signal handler must never reject; best-effort state save only.
@@ -1919,12 +1942,42 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
+            // Task 27: reset the pending-completions side-channel for THIS
+            // round only — never touched by any path outside this fan-out
+            // and the signal handlers above.
+            inFlightGroupCompletions = {};
             const outcomes = await runWithConcurrency(
               membership.dispatchable.map((member) => () =>
-                runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1),
+                runGroupBranch(
+                  member,
+                  state,
+                  {
+                    stepRunner: this.stepRunner,
+                    // Record each member's completion into the pending
+                    // side-channel as soon as ITS OWN branch resolves — not
+                    // `state` itself, and not a disk write (that stays the
+                    // join's exclusive job, Task 17's single-writer
+                    // invariant). A SIGINT/SIGTERM/SIGHUP landing while
+                    // siblings are still in flight merges this into `state`
+                    // via the signal handlers above; a clean round below
+                    // clears it before any halt/allGreen/kickback branching
+                    // runs, so those paths are entirely unaffected.
+                    onMemberEvent: (event) => {
+                      if (event.phase === 'result' && event.outcome === 'verdict:pass') {
+                        const syntheticKey = `${builtinGroup.name}__${event.member}`;
+                        inFlightGroupCompletions![event.member] = 'done';
+                        inFlightGroupCompletions![syntheticKey] = 'done';
+                      }
+                    },
+                  },
+                  1,
+                ),
               ),
               cap,
             );
+            // Round settled (whatever the outcome) — the pending side-channel
+            // must never leak into the halt/allGreen/kickback paths below.
+            inFlightGroupCompletions = undefined;
 
             // A branch outcome of `verdict: pass` only means the skill
             // dispatch itself succeeded — necessary but NOT sufficient for
@@ -5331,13 +5384,26 @@ export function resolveGroupMembership(
       shouldSkipForUpstreamSkip(stepDef, state) ||
       shouldSkipForBootstrapMode(stepDef.name, state.bootstrap_mode) ||
       resolved.disabled;
+    // Task 27: resume-awareness — a member already marked 'done' in state
+    // (e.g. persisted mid-group, when a SIGINT landed after this member
+    // settled but before its siblings/the join did) is already satisfied.
+    // It gets a VerdictOutcome (not skipped — it genuinely ran and passed,
+    // unlike a skip cascade) and is excluded from `dispatchable` below so a
+    // resumed run never re-dispatches work already done.
+    const alreadyDone = !skip && getStepStatus(state, name) === 'done';
     return {
       name,
       skill: stepDef.skillName ?? '',
-      outcome: skip ? makeSkippedOutcome() : makeNoVerdictOutcome('not-run'),
+      outcome: skip
+        ? makeSkippedOutcome()
+        : alreadyDone
+          ? makeVerdictOutcome('pass')
+          : makeNoVerdictOutcome('not-run'),
     };
   });
-  const dispatchable = members.filter((m) => m.outcome.kind !== 'skipped');
+  const dispatchable = members.filter(
+    (m) => m.outcome.kind === 'no-verdict' && m.outcome.reason === 'not-run',
+  );
   return { members, dispatchable, allSkipped: dispatchable.length === 0 };
 }
 
