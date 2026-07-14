@@ -1911,6 +1911,13 @@ no action needed — the token requirement is skipped.
   action is required — this activates automatically at both call sites. See
   `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
 - Finish no longer ships a reused needs-remediation halt PR with the halt boilerplate body: the engine-authored banner is now a stateless halt signal, a deterministic `bodyFloor` (mirroring the retitle floor) replaces it with an implementation-PR body (summary, test-evidence line, halt history preserved in comments), the finish completion gate fails while the banner remains (fail-open on gh errors), and repair outcomes are logged (`[halt-pr-rehab]`) instead of silent (ai-conductor#632; specimen PR #610).
+- Closed the daemon pool's selection→dispatch operator-park race (#651): a new `guardedDispatch`/
+  `guardedDispatchWith` wrapper in `src/conductor/src/engine/daemon.ts` re-checks the operator-park
+  predicate **immediately before every dispatch**, not only at `pickEligible` selection time, so a park
+  marker written during the `rebuildAndMaybeRestartForStaleEngine` await between selection and dispatch is
+  now honored instead of being dispatched anyway (2026-07-13 20:43Z incident). A grep-enumeration
+  regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is guarded,
+  so a future bypassing entry point fails loudly. No CLI/schema/hook-wiring change, so no Migration block.
 
 ## Migration
 
