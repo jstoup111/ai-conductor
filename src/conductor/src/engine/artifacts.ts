@@ -6,7 +6,7 @@ import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
-import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
+import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
 
 /**
@@ -1534,6 +1534,25 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
+      }
+
+      // adr-2026-07-06-halt-pr-rehab-body-floor: the halt banner is a
+      // stateless halt signal — a reused PR whose body still carries it
+      // must be rewritten before the ship can complete. Fail-open on any
+      // gh error (readStaleHaltBanner returns null): network unavailability
+      // never blocks a ship.
+      try {
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const staleBanner = await readStaleHaltBanner(ghRunner, dir, prUrl);
+        if (staleBanner !== null) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} body still carries the halt banner ("${staleBanner}") — the engine bodyFloor/finish skill must rewrite the reused halt PR's body before completing`,
             missing: 'other',
           };
         }
