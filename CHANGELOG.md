@@ -1895,6 +1895,7 @@ no action needed — the token requirement is skipped.
   fail the existing ancestry check. No new CLI flag, config, or consumer
   action is required — this activates automatically at both call sites. See
   `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
+- Finish no longer ships a reused needs-remediation halt PR with the halt boilerplate body: the engine-authored banner is now a stateless halt signal, a deterministic `bodyFloor` (mirroring the retitle floor) replaces it with an implementation-PR body (summary, test-evidence line, halt history preserved in comments), the finish completion gate fails while the banner remains (fail-open on gh errors), and repair outcomes are logged (`[halt-pr-rehab]`) instead of silent (ai-conductor#632; specimen PR #610).
 
 ## Migration
 
