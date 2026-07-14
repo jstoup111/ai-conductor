@@ -1740,6 +1740,12 @@ pipeline or by resolving a HALT: clearing a HALT does not unpark a slug, and par
 not touch its HALT marker. While parked, the daemon treats the slug as ineligible for both
 **dispatch** (no new BUILD/SHIP work starts) and **re-kick** (a parked slug's REKICK sentinel is
 preserved untouched, so unparking resumes re-dispatch exactly where re-kick would have left it).
+The park predicate is checked at `pickEligible` selection *and again, immediately before dispatch*
+via `guardedDispatch`/`guardedDispatchWith` (`engine/daemon.ts`) — closing a race where a marker
+written in the window between selection and dispatch (e.g. during
+`rebuildAndMaybeRestartForStaleEngine`) would otherwise be dispatched anyway. A grep-enumeration
+regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
+guarded this way.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,

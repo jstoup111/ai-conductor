@@ -550,7 +550,9 @@ The park state is stored in `.daemon/parked/<slug>`, validated against a known p
 not the same as HALTed:** a HALT (`.pipeline/HALT`) is written by the pipeline itself and cleared
 automatically by re-kick; an operator-park is placed by a human and survives both — clearing a
 HALT does not unpark a slug. Unlike a HALT, an operator-parked worktree preserves its REKICK
-sentinel and resumes re-dispatch right where it left off once unparked. The status dashboard's
+sentinel and resumes re-dispatch right where it left off once unparked. The park check is
+re-consulted **immediately before dispatch**, not only at initial pool selection, closing a race
+where a park written between selection and dispatch was previously ignored. The status dashboard's
 PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE, etc.) — a parked
 slug always shows there and nowhere else. See
 [`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
