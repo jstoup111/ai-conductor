@@ -663,6 +663,67 @@ describe("group-core: abort/SIGINT persistence for in-flight branches (Task 8)",
   });
 });
 
+describe("group-core: wall-clock concurrency proof (Task 26)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * Fake-timer stub runners with durations 3t/2t/t under cap 2. Proves the
+   * semaphore in `runWithConcurrency` genuinely overlaps branches instead of
+   * running them one after another: total wall-clock duration must be LESS
+   * than the naive serial sum (6t) but at least the longest chain the cap
+   * forces (3t, since the 1t branch queues behind the 3t/2t pair and only
+   * starts once the 2t branch frees a slot at t=2t, finishing at 3t — same
+   * as the 3t branch). Start-event timestamps are recorded to prove actual
+   * overlap (not sequential starts): the first two thunks start at the SAME
+   * tick, and the third starts mid-flight of the still-running 3t branch.
+   */
+  it("cap 2 with durations 3t/2t/t: duration < serial sum, >= longest chain, starts interleave", async () => {
+    const t = 10;
+    const starts: number[] = [];
+
+    const makeThunk = (durationMs: number) => () => {
+      starts.push(Date.now());
+      return new Promise<void>((resolve) => setTimeout(resolve, durationMs));
+    };
+
+    const thunks = [makeThunk(3 * t), makeThunk(2 * t), makeThunk(1 * t)];
+
+    const startTime = Date.now();
+    const resultPromise = runWithConcurrency(thunks, 2);
+
+    await vi.runAllTimersAsync();
+    await resultPromise;
+
+    const endTime = Date.now();
+    const totalDuration = endTime - startTime;
+
+    // Genuine overlap, not serial: 3t + 2t + t (=6t) would be the naive
+    // serial sum; the capped-concurrency duration must beat it.
+    expect(totalDuration).toBeLessThan(6 * t);
+    // But the cap still bounds parallelism: the longest chain under cap 2
+    // is the 3t branch (the 1t branch queues and finishes inside that
+    // window), so duration can never drop below it.
+    expect(totalDuration).toBeGreaterThanOrEqual(3 * t);
+
+    // Start-event interleaving proves overlap, not sequential starts: the
+    // first two branches (3t, 2t) start at the exact same tick...
+    expect(starts[0]).toBe(startTime);
+    expect(starts[1]).toBe(startTime);
+    // ...and the third (t) starts later, once the 2t branch frees a slot —
+    // strictly BEFORE the 3t branch (still in flight) has finished, proving
+    // the third branch's run overlaps the first branch's run rather than
+    // waiting for it.
+    expect(starts[2]).toBeGreaterThan(startTime);
+    expect(starts[2]).toBeLessThan(startTime + 3 * t);
+  });
+});
+
 describe("group-core: runGroupBranch per-branch stale-sweep isolation (Task 9)", () => {
   /** Minimal runner-stub: always succeeds on first dispatch. */
   function okRunner() {
