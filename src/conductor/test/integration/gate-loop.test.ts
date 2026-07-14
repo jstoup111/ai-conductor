@@ -1145,7 +1145,7 @@ describe('integration/gate-loop', () => {
       events.on('feature_complete', () => {
         completed = true;
       });
-      const config = { build_review: { enabled: true } };
+      const config = { build_review: { enabled: true }, kickback_escalation: { enabled: false } };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1291,7 +1291,7 @@ describe('integration/gate-loop', () => {
           return satisfy(step);
         },
       };
-      const config = { build_review: { enabled: true } };
+      const config = { build_review: { enabled: true }, kickback_escalation: { enabled: false } };
 
       const kicksA: Array<{ from: string; to: string }> = [];
       const eventsA = new ConductorEventEmitter();
