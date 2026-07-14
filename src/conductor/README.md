@@ -1739,6 +1739,15 @@ current, and garbage collection (four-condition fail-closed: not current ∧ no 
 referencing it ∧ older than min-age ∧ outside keep-last-K, and any registry error stops **all**
 deletion). The status surface shows which version each daemon is running.
 
+**Self-update check at startup (`engine/auto-update-check.ts`)** — before the pipeline boots,
+`index.ts` spawns `bin/update --auto`, resolved relative to the harness root. `bin/update` owns
+all self-update logic (channel resolution, version check, changelog rendering, migration,
+rollback — see `HARNESS.md` → "Update flow"); this module's only job is spawning it and
+respecting `autoCheck`. It is advisory-only: a missing harness root, a missing `bin/update`, a
+spawn failure, or a non-zero exit are all logged and swallowed — they never fail conduct-ts
+startup. `autoCheck=false` is enforced inside `bin/update` itself (its own silent no-op), not by
+this wiring.
+
 **Build flow change** — `npm run build` now uses a wrapper (`scripts/publish-engine.mjs`)
 instead of raw `tsup`. The wrapper stages the build, finalizes to the store, atomically flips
 the `dist` symlink, and runs GC. Raw `tsup` invocations are guarded and refused (caught in the
