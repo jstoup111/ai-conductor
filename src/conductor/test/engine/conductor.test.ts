@@ -5135,6 +5135,146 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('Merged work order — earliest target + both evidence streams (Task 22)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    // manual_test FAILs deterministically AND architecture_review_as_built
+    // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
+    // merged-work-order shape this task covers. The remediate plan routes
+    // ADR-1 to 'acceptance_specs' (a BUILD-phase step earlier than 'build')
+    // so the earliest-target merge is exercised non-trivially: manual_test's
+    // forced target is 'build', but the merged navigateBack must land on
+    // the earlier 'acceptance_specs'.
+    function mergedFailingRunner(): {
+      runner: StepRunner;
+      remediateCalls: Array<{ retryReason?: string }>;
+    } {
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build' || step === 'acceptance_specs') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'ADR-1',
+                    disposition: 'acceptance_specs',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, remediateCalls };
+    }
+
+    it('MT FAIL + plan-routed disposition in the same join round produce ONE navigateBack to the earlier target, with a retry hint carrying both evidence streams', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner, remediateCalls } = mergedFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one /remediate dispatch and exactly one kickback for the
+      // whole merged join round — never two separate navigateBacks.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks.filter((k) => k.from === 'manual_test' || k.from === 'validation_group' || k.to === 'acceptance_specs').length).toBeGreaterThanOrEqual(1);
+
+      // The merged target is the EARLIER of MT's forced 'build' and the
+      // routed disposition's 'acceptance_specs' — i.e. 'acceptance_specs',
+      // never 'build'.
+      const mergedKickback = kickbacks.find((k) => k.to === 'acceptance_specs');
+      expect(mergedKickback).toBeDefined();
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
+
+      // The retry hint at the merged target carries BOTH the deterministic
+      // MT FAIL rows AND the remediation guidance for ADR-1.
+      const acceptanceSpecsReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'acceptance_specs')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(acceptanceSpecsReasons.length).toBeGreaterThan(0);
+      const mergedHint = acceptanceSpecsReasons[0]!;
+      expect(mergedHint).toContain('| s1 | FAIL |');
+      expect(mergedHint).toMatch(/COMMIT/i);
+      expect(mergedHint).toContain('ADR-1');
+      expect(mergedHint).toContain('Fix ADR-1 violation');
+
+      // The dispatch context to /remediate never carries the manual_test
+      // FAIL rows — those stay deterministic-only (Task 20), never handed
+      // to the LLM planner for re-classification.
+      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+    });
+  });
+
   describe('FAIL verdict waits for siblings (Task 19)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',

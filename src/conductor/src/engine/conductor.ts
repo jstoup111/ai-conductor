@@ -2039,6 +2039,13 @@ export class Conductor {
             // /remediate dispatches for this failure shape. Mixed failures
             // (manual_test + another validator, or another validator alone)
             // remain out of scope here — Tasks 21-24.
+            // Task 22 (adr-2026-07-10-validation-group-join.md): tracks
+            // whether the merged-work-order path below already dispatched
+            // (routed, halted, or returned) for this join round, so Task
+            // 21's block never re-dispatches /remediate a second time for
+            // the same round.
+            let mtMergeHandled = false;
+
             if (this.daemon && hasManualTest && manualTestFailRows.length > 0) {
               const manualTestIdx = membership.dispatchable.findIndex(
                 (m) => m.name === 'manual_test',
@@ -2061,6 +2068,128 @@ export class Conductor {
                 i = outcome.nextIndex;
                 continue;
               }
+
+              // Task 22: manual_test FAILed AND at least one other validator
+              // in the SAME join round has its own gate unsatisfied (not
+              // merely "siblingsSatisfied === false" for an infra reason —
+              // gapMemberNamesForMerge below is the same "verdict pass but
+              // gate unsatisfied" predicate Task 21 uses). Rather than two
+              // separate navigateBacks — one deterministic MT->build, one
+              // LLM-routed — dispatch /remediate exactly once for the
+              // non-MT gaps, then merge: the final target is the earliest
+              // of MT's forced 'build' target and the routed disposition's
+              // target (over the union), and the retry hint concatenates
+              // the deterministic MT FAIL rows with the remediation
+              // guidance so a single pass at the merged target sees BOTH
+              // evidence streams.
+              const gapMemberNamesForMerge = membership.dispatchable
+                .filter((member, idx) => {
+                  if (member.name === 'manual_test') return false;
+                  const outcome = outcomes[idx];
+                  if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
+                  if (!this.verifyArtifacts) return false;
+                  return gateVerdicts.get(member.name)?.satisfied !== true;
+                })
+                .map((member) => member.name as StepName);
+
+              if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+                mtMergeHandled = true;
+                const evidenceFiles: string[] = [];
+                if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {
+                  evidenceFiles.push('.pipeline/prd-audit.md');
+                }
+                if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {
+                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');
+                }
+                const dispatchContext =
+                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +
+                  'Plan remediation per the /remediate skill and write ' +
+                  '.pipeline/remediation.json.';
+
+                remediationRounds++;
+                const remediationOutcome = await this.planRemediation(state, steps, dispatchContext, {
+                  source: 'validation-group',
+                  evidenceFile: evidenceFiles.join(', '),
+                });
+
+                if (remediationOutcome.kind === 'route') {
+                  // Merge the two targets: MT's forced 'build' vs. the
+                  // routed disposition's target — whichever is earlier in
+                  // step order wins. planRemediation already HALTed (above,
+                  // inside planRemediation) if the routed-only target were
+                  // DECIDE-phase, so any target reaching here is safe to
+                  // route to.
+                  const buildIdx = steps.findIndex((s) => s.name === 'build');
+                  const routedIdx = steps.findIndex((s) => s.name === remediationOutcome.target);
+                  const mergedTarget: StepName =
+                    routedIdx >= 0 && routedIdx < buildIdx ? remediationOutcome.target : 'build';
+
+                  const mtEvidence = manualTestFailRows.join('\n');
+                  const mtHint =
+                    `manual-test FAILED with these results:\n${mtEvidence}\nRead ` +
+                    `.pipeline/manual-test-results.md (latest attempt section) for full ` +
+                    `evidence. The plan's task list may already be complete — these are ` +
+                    `BUGS in the shipped code. Implement and COMMIT fixes for each FAIL; ` +
+                    `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
+                    `commits, and manual-test re-runs after this build.`;
+                  const mergedHint = `${mtHint}\n\n${remediationOutcome.hint}`;
+
+                  await this.events.emit({
+                    type: 'kickback',
+                    from: step.name,
+                    to: mergedTarget,
+                    evidence: `manual_test: ${mtEvidence}; ${remediationOutcome.evidence}`,
+                    count: remediationRounds,
+                  });
+                  pendingRetryHints.set(mergedTarget, mergedHint);
+
+                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    return;
+                  }
+
+                  await captureKickbackToBuildContext('manual_test');
+                  const nav = navigateBack(state, mergedTarget, steps);
+                  state = nav.state;
+                  // manual_test is `failed` (deterministic FAIL rows), not
+                  // `done` — restage it explicitly for the tail, same as
+                  // handleManualTestFailKickback does.
+                  (state as Record<string, unknown>).manual_test = 'stale';
+                  for (const name of gapMemberNamesForMerge) {
+                    (state as Record<string, unknown>)[name] = 'stale';
+                  }
+                  await writeState(this.stateFilePath, state);
+                  i = nav.index - 1; // for-loop i++ lands on the merged target
+                  continue;
+                }
+
+                if (remediationOutcome.kind === 'halt') {
+                  const reason =
+                    `Validation group "${step.name}" halted: needs human DECIDE — ` +
+                    remediationOutcome.detail;
+                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                    () => {},
+                  );
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                // remediationOutcome.kind === 'none' — no usable plan for the
+                // non-MT gaps; fall through to Task 21's block below, which
+                // will fall through further to the generic "fail loudly"
+                // path since a fresh /remediate dispatch already ran this
+                // round (remediationRounds was incremented above).
+              }
             }
 
             // Task 21 (adr-2026-07-10-validation-group-join.md): mixed
@@ -2077,7 +2206,7 @@ export class Conductor {
             // work order (earliest target across MT + this union, hint
             // concatenation) lands in Task 22; this task only covers the
             // no-manual_test-in-play / manual_test-passed shape.
-            if (this.daemon && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+            if (!mtMergeHandled && this.daemon && remediationRounds < MAX_KICKBACKS_PER_GATE) {
               const gapMemberNames = membership.dispatchable
                 .filter((member, idx) => {
                   if (member.name === 'manual_test') return false;
