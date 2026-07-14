@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runDaemon,
+  guardedDispatchWith,
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
@@ -1888,5 +1889,97 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed).toHaveLength(1); // in-flight feature drained, not dropped
     expect(res.processed[0].slug).toBe('f0');
     expect(res.processed[0].status).toBe('done');
+  });
+
+  describe('guardedDispatch: park check immediately before dispatch (Task 1, #651)', () => {
+    it('pool does not start a slug parked between selection and dispatch (race)', async () => {
+      // First call models pickEligible's selection-time check (passes, false).
+      // Second call models guardedDispatch's dispatch-time check (a marker
+      // landed in the window between selection and dispatch — true).
+      let calls = 0;
+      const logs: string[] = [];
+      let runFeatureCalls = 0;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        isParked: async () => {
+          calls++;
+          return calls >= 2;
+        },
+        runFeature: async (it) => {
+          runFeatureCalls++;
+          return { slug: it.slug, status: 'done' };
+        },
+        log: (msg) => {
+          logs.push(msg);
+        },
+      };
+      await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 3 });
+      expect(runFeatureCalls).toBe(0);
+      expect(logs.some((m) => m.includes('operator-parked') && m.includes('f0'))).toBe(true);
+    });
+
+    it('pool starts an unparked slug exactly once', async () => {
+      let runFeatureCalls = 0;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        isParked: async () => false,
+        runFeature: async (it) => {
+          runFeatureCalls++;
+          return { slug: it.slug, status: 'done' };
+        },
+      };
+      const res = await runDaemon(deps, { concurrency: 1, once: true });
+      expect(runFeatureCalls).toBe(1);
+      expect(res.processed.map((o) => o.slug)).toEqual(['f0']);
+    });
+
+    it('guardedDispatch blocks a parked slug even if selection is bypassed', async () => {
+      let dispatched = false;
+      let logged = '';
+      const result = await guardedDispatchWith(
+        { slug: 'f0' },
+        async () => true,
+        () => {
+          dispatched = true;
+        },
+        (msg) => {
+          logged = msg;
+        },
+      );
+      expect(result).toBe(false);
+      expect(dispatched).toBe(false);
+      expect(logged).toMatch(/operator-parked/);
+      expect(logged).toContain('f0');
+    });
+
+    it('guardedDispatch fails closed when isParked throws', async () => {
+      let dispatched = false;
+      const result = await guardedDispatchWith(
+        { slug: 'f0' },
+        async () => {
+          throw new Error('marker read failed');
+        },
+        () => {
+          dispatched = true;
+        },
+        () => {},
+      );
+      expect(result).toBe(false);
+      expect(dispatched).toBe(false);
+    });
+
+    it('guardedDispatch is a no-op guard when isParked is undefined', async () => {
+      let dispatched = false;
+      const result = await guardedDispatchWith(
+        { slug: 'f0' },
+        undefined,
+        () => {
+          dispatched = true;
+        },
+        () => {},
+      );
+      expect(result).toBe(true);
+      expect(dispatched).toBe(true);
+    });
   });
 });

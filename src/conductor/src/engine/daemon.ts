@@ -486,6 +486,42 @@ export interface DaemonResult {
 /** A runFeature promise tagged with its slug so a race can identify the winner. */
 type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
 
+/**
+ * Task 1 (#651): the park check consulted immediately before every
+ * build-start. `pickEligible`'s selection-time check (:137) filters the
+ * backlog, but selection and the actual `dispatch` call are separated by an
+ * `await` (stale-engine rebuild/restart) — a marker written in that window
+ * would otherwise be dispatched anyway. `isParked` is awaited again right
+ * here, immediately before `onDispatch` runs, closing that race.
+ *
+ * A throwing (or rejecting) `isParked` is treated as parked — fail-closed
+ * toward the emergency-stop, mirroring `isOperatorParked`'s own contract.
+ * Absent `isParked` is a no-op guard: `onDispatch` always runs, preserving
+ * pre-#651 behavior exactly.
+ *
+ * Exported as a standalone function (params instead of closure state) so the
+ * gate itself is unit-testable without driving the full pool.
+ */
+export async function guardedDispatchWith(
+  item: BacklogItem,
+  isParked: ((slug: string) => boolean | Promise<boolean>) | undefined,
+  onDispatch: (item: BacklogItem) => void,
+  log: (msg: string) => void,
+): Promise<boolean> {
+  let parked = false;
+  try {
+    parked = !!(await isParked?.(item.slug));
+  } catch {
+    parked = true; // fail-closed toward the emergency-stop
+  }
+  if (parked) {
+    log(`park: skipped dispatch of ${item.slug} — operator-parked (.daemon/parked/${item.slug})`);
+    return false;
+  }
+  onDispatch(item);
+  return true;
+}
+
 export async function runDaemon(
   deps: DaemonDeps,
   options: DaemonOptions,
@@ -661,6 +697,16 @@ export async function runDaemon(
       }));
     inFlight.set(item.slug, tagged);
   };
+
+  // Task 1 (#651): park check immediately before every build-start, closing
+  // the selection→dispatch race — pickEligible's selection-time check
+  // (:137) can pass, then `await rebuildAndMaybeRestartForStaleEngine()`
+  // (below) opens a window where an operator-park marker can land before
+  // this slug is actually dispatched. Delegates to the module-level
+  // `guardedDispatchWith` so the gate itself is unit-testable without
+  // driving the full pool.
+  const guardedDispatch = (item: BacklogItem): Promise<boolean> =>
+    guardedDispatchWith(item, deps.isParked, dispatch, log);
 
   const collectOne = async (): Promise<void> => {
     const { slug, outcome } = await Promise.race(inFlight.values());
@@ -893,8 +939,15 @@ export async function runDaemon(
         }
         // Task 20: Update episode state when dispatching
         wasEpisodeActive = episodeActive;
-        dispatch(next);
-        continue; // try to fill another slot before awaiting
+        // Task 1 (#651): re-check park immediately before this dispatch — closes
+        // the selection→dispatch race opened by the rebuild/restart await above.
+        const dispatched = await guardedDispatch(next);
+        if (dispatched) {
+          continue; // try to fill another slot before awaiting
+        }
+        // Parked between selection and here: fall through to the idle/await
+        // section below instead of `continue`, so the tick doesn't tight-loop
+        // re-picking the same parked slug.
       }
       // Nothing new to start.
       if (inFlight.size === 0) {
