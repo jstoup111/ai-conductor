@@ -118,6 +118,18 @@ export async function fileIsFreshSinceSession(
   }
 }
 
+/**
+ * The freshness floor a verdict artifact must meet: the per-attempt judging
+ * session start when present, else the conductor-run session start. Without
+ * a per-attempt floor, a review session that fails to rewrite its verdict
+ * file would silently re-score a prior session's verdict forever (incident
+ * 2026-07-12-wiring-reachability-gate) — the per-attempt floor makes that
+ * loud instead by scoring "no fresh verdict".
+ */
+export function verdictFreshnessFloor(ctx: CompletionContext): number | undefined {
+  return ctx.attemptStartedAt ?? ctx.sessionStartedAt;
+}
+
 export const HALT_MARKER = '.pipeline/halt-user-input-required';
 
 /**
@@ -320,6 +332,19 @@ export interface CompletionResult {
    * or predicates that don't classify).
    */
   missing?: 'recording' | 'other';
+  /**
+   * Trace of the per-attempt verdict-freshness check (Task 1,
+   * session-fresh-verdict-artifacts). Populated by the three dispatched-judge
+   * verdict predicates (architecture_review_as_built, prd_audit, build_review)
+   * on both the pass and stale paths.
+   */
+  verdictFreshness?: {
+    artifact: string;
+    mtimeMs?: number;
+    floorMs?: number;
+    floorSource: 'attempt' | 'session';
+    fresh: boolean;
+  };
 }
 
 /**
@@ -337,6 +362,16 @@ export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 export interface CompletionContext {
   /** Epoch ms; predicates reject artifacts older than this when set. */
   sessionStartedAt?: number;
+  /**
+   * Epoch ms captured immediately before the current review dispatch (the
+   * judging session that must (re)write the verdict artifact). When set,
+   * the three dispatched-judge verdict predicates
+   * (architecture_review_as_built, prd_audit, build_review) require the
+   * verdict artifact's mtime to be at or after THIS, not just
+   * `sessionStartedAt` — see `verdictFreshnessFloor`. Absent for
+   * resume/backstop/legacy callers, which fall back to `sessionStartedAt`.
+   */
+  attemptStartedAt?: number;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
   /**
@@ -1154,16 +1189,24 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
       };
     }
-    // Only consider reports written in this session; a stale audit left in the
-    // same worktree by a prior feature must not satisfy the gate.
+    // Only consider reports written by THIS judging attempt (falls back to
+    // sessionStartedAt when no per-attempt floor is present); a stale audit
+    // left over from a prior feature — or a prior attempt whose session
+    // failed to rewrite the verdict — must not satisfy the gate.
+    const floor = verdictFreshnessFloor(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, floor)) fresh.push(f);
     }
     if (fresh.length === 0) {
+      const f = files[0];
+      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
-        reason: 'prd-audit report exists but is stale (mtime predates this session) — re-run the prd-audit for the current feature',
+        reason:
+          "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
+        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
       };
     }
     for (const f of fresh) {
@@ -1177,7 +1220,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
     }
-    return { done: true };
+    const passF = fresh[0];
+    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
   },
 
   // As-built architecture gate is FAIL-CLOSED: it passes only when a fresh
@@ -1196,14 +1244,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: 'no .pipeline/architecture-review-as-built.md present — the as-built review must record a verdict',
       };
     }
+    const floor = verdictFreshnessFloor(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, floor)) fresh.push(f);
     }
     if (fresh.length === 0) {
+      const f = files[0];
+      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
-        reason: 'as-built architecture review exists but is stale (mtime predates this session) — re-run for the current feature',
+        reason:
+          "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
+        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
       };
     }
     for (const f of fresh) {
@@ -1225,7 +1279,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
     }
-    return { done: true };
+    const passF = fresh[0];
+    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
   },
 
   // build_review judgement gate: satisfied only by a fresh, valid PASS
@@ -1235,17 +1294,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // reasons so the kickback message tells `build` what to fix.
   build_review: async (dir, ctx): Promise<CompletionResult> => {
     const path = join(dir, BUILD_REVIEW_VERDICT);
-    if (!(await fileIsFreshSinceSession(path, ctx.sessionStartedAt))) {
+    const floor = verdictFreshnessFloor(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
+    if (!(await fileIsFreshSinceSession(path, floor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.
-      const exists = await access(path)
-        .then(() => true)
-        .catch(() => false);
+      const mtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+      const exists = mtimeMs !== undefined;
       return {
         done: false,
         reason: exists
-          ? `${BUILD_REVIEW_VERDICT} is stale (mtime predates this session) — the build_review grader must re-run and rewrite it`
+          ? "build-review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused"
           : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
+        verdictFreshness: exists
+          ? { artifact: path, mtimeMs, floorMs: floor, floorSource, fresh: false }
+          : undefined,
       };
     }
     let parsed: unknown;
@@ -1270,7 +1333,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
       };
     }
-    return { done: true };
+    const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
   },
 
   // Wiring-reachability gate: satisfied only by a fresh evidence artifact at
