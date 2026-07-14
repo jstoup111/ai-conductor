@@ -271,6 +271,25 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     expect(r.done).toBe(true);
   });
 
+  // Filesystem-clock lag: a verdict written *during* this dispatch can record an
+  // mtime a few ms BEFORE `attemptStartedAt` (captured just before the write via
+  // Date.now()) because the kernel's coarse filesystem clock lags CLOCK_REALTIME.
+  // The per-attempt comparison absorbs this via VERDICT_FRESHNESS_FS_TOLERANCE_MS
+  // so a genuinely fresh verdict is never a false "no fresh verdict".
+  it('passes when mtime is a few ms below attemptStartedAt (filesystem-clock lag tolerance)', async () => {
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const T = Date.now();
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    // Written this dispatch, but mtime lags the captured floor by 50ms.
+    await utimes(full, new Date(T - 50), new Date(T - 50));
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
+  });
+
   it('verdictFreshnessFloor falls back to sessionStartedAt when attemptStartedAt is undefined', async () => {
     const S = Date.now() - 1000;
     expect(verdictFreshnessFloor({ sessionStartedAt: S })).toBe(S);

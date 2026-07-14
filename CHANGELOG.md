@@ -98,7 +98,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   instead, scoring "no fresh verdict" when the artifact's mtime predates this attempt's
   start. Falls back to the pre-existing session-level freshness check when no per-attempt
   floor is available (legacy state, or both timestamps absent) — fail-open on presence
-  preserved.
+  preserved. The per-attempt comparison applies a small filesystem-timestamp tolerance
+  (`VERDICT_FRESHNESS_FS_TOLERANCE_MS`) so a verdict written *during* the current dispatch
+  is never scored a false "no fresh verdict" when the coarse filesystem clock records an
+  mtime a few ms behind the captured floor; a genuinely stale prior-attempt verdict is
+  separated by a full re-dispatch and stays loud.
 - Kickback→build no longer loops silently when the target task's evidence is already
   stamped (#647, `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`).
   `planRemediation` now recomputes build completion after append+re-seed and HALTs with the

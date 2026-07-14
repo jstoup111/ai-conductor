@@ -130,6 +130,40 @@ export function verdictFreshnessFloor(ctx: CompletionContext): number | undefine
   return ctx.attemptStartedAt ?? ctx.sessionStartedAt;
 }
 
+/**
+ * Tolerance (ms) applied to the per-attempt verdict-freshness comparison to
+ * absorb filesystem timestamp lag. `attemptStartedAt` is `Date.now()` captured
+ * immediately before the review dispatch (a monotonic-ish CLOCK_REALTIME read),
+ * while a verdict file's mtime comes from the kernel's coarse filesystem clock,
+ * which can lag wall-clock time by up to a scheduler tick (and is second- or
+ * even 2s-granular on some filesystems). Without this tolerance a verdict
+ * written *during* the same dispatch — the legitimate fresh case the ADR
+ * assumes "passes" — can record an mtime a few ms BEFORE the captured floor and
+ * be scored a false "no fresh verdict", spuriously kicking back a genuine
+ * review (observed across the gate-loop/rebase-loop suites and on WSL2 locally).
+ *
+ * The tolerance only relaxes the *attempt* floor. A genuinely stale verdict —
+ * one left by a PRIOR judging attempt — is separated from the current attempt
+ * by at least a full build+review re-dispatch (seconds to minutes; the suite's
+ * negative cases use a 30s gap), so a small fixed tolerance never masks real
+ * staleness. The session floor (captured at run start, ≥ seconds before any
+ * write) needs no tolerance and is compared exactly.
+ */
+export const VERDICT_FRESHNESS_FS_TOLERANCE_MS = 2000;
+
+/**
+ * The floor a verdict artifact's mtime is actually COMPARED against (as opposed
+ * to the raw floor recorded in the `verdictFreshness` trace, which stays exact —
+ * see `verdictFreshnessFloor`). Applies `VERDICT_FRESHNESS_FS_TOLERANCE_MS` only
+ * when the floor is the per-attempt timestamp, absorbing filesystem-clock lag
+ * for a verdict written during the current dispatch.
+ */
+export function verdictFreshnessComparand(ctx: CompletionContext): number | undefined {
+  const floor = verdictFreshnessFloor(ctx);
+  if (floor === undefined) return undefined;
+  return ctx.attemptStartedAt !== undefined ? floor - VERDICT_FRESHNESS_FS_TOLERANCE_MS : floor;
+}
+
 export const HALT_MARKER = '.pipeline/halt-user-input-required';
 
 /**
@@ -1194,10 +1228,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // left over from a prior feature — or a prior attempt whose session
     // failed to rewrite the verdict — must not satisfy the gate.
     const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
     const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, floor)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
       const f = files[0];
@@ -1245,10 +1280,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     }
     const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
     const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, floor)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
       const f = files[0];
@@ -1295,8 +1331,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   build_review: async (dir, ctx): Promise<CompletionResult> => {
     const path = join(dir, BUILD_REVIEW_VERDICT);
     const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
     const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
-    if (!(await fileIsFreshSinceSession(path, floor))) {
+    if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.
       const mtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
