@@ -1988,6 +1988,10 @@ no action needed — the token requirement is skipped.
   so an emergency-stop `daemon park <slug>` no longer fails with a misleading
   "slug not found" when run from inside the affected worktree; outside any
   repo it now errors with the expected usage instead (ai-conductor#534).
+- Daemon setup-failure triage now distinguishes a setup-success-with-dirty-tree
+  (accurate "dirty tree could not be cleaned" park that quarantines all
+  residual uncommitted paths) from a genuine setup failure, and no longer
+  reports "setup failed" when `bin/setup` succeeded (#582).
 
 ## Migration
 

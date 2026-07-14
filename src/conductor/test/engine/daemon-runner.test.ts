@@ -550,6 +550,72 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       }
     });
 
+    it('dirty-tree-uncleaned park never mislabels reason/HALT as "setup failed" (Task 2 — #582)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-dirty-'));
+      try {
+        const base = deps({ done: true, halted: false, finishChoice: 'pr' }, {});
+        const run = makeRunFeature({
+          ...base,
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          prepareWorktree: async () => {
+            throw new SetupFailureError('project setup (bin/setup) failed: dirty tree', 'tail');
+          },
+          runConductor: async () => {},
+          daemon: true,
+          runSetupTriage: async () =>
+            ({
+              kind: 'park',
+              outputTail: 'working tree left dirty after setup: 2 stray paths quarantined',
+              contractOutcome: 'dirty-tree-uncleaned',
+              quarantineRef: 'refs/quarantine/feat-x',
+              preservedPaths: ['src/foo.ts', 'src/bar.ts'],
+            } as TriageOutcome),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('error');
+        expect(out.reason).not.toMatch(/setup failed and parked after triage/);
+        expect(out.reason).not.toMatch(/\bsetup failed\b/);
+        expect(out.reason).toMatch(/working tree left dirty after setup/);
+        const halt = await readFile(join(wt, '.pipeline', 'HALT'), 'utf-8');
+        expect(halt).not.toMatch(/setup failed and parked after triage/);
+        expect(halt).not.toMatch(/\bsetup failed\b/);
+        expect(halt).toMatch(/working tree left dirty after setup/);
+        expect(halt).toMatch(/Contract outcome: dirty-tree-uncleaned/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('park with empty outputTail renders neutral fallback, never "setup failed" (Task 2 — #582)', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-dirty-empty-'));
+      try {
+        const base = deps({ done: true, halted: false, finishChoice: 'pr' }, {});
+        const run = makeRunFeature({
+          ...base,
+          createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+          prepareWorktree: async () => {
+            throw new SetupFailureError('project setup (bin/setup) failed: dirty tree', 'tail');
+          },
+          runConductor: async () => {},
+          daemon: true,
+          runSetupTriage: async () =>
+            ({
+              kind: 'park',
+              outputTail: '',
+              contractOutcome: 'dirty-tree-uncleaned',
+              quarantineRef: 'refs/quarantine/feat-x',
+              preservedPaths: ['src/foo.ts'],
+            } as TriageOutcome),
+        });
+        const out = await run(ITEM);
+        expect(out.status).toBe('error');
+        expect(out.reason).not.toMatch(/\bsetup failed\b/);
+        expect(out.reason).toMatch(/parked after setup triage/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
     it('a deps object without prepareWorktree builds normally (backward compatible)', async () => {
       // The existing deps() helper ships no prepareWorktree — the feature must
       // still build, proving the step is genuinely opt-in.
