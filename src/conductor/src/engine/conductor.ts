@@ -2306,6 +2306,37 @@ export class Conductor {
                 .map((member) => member.name as StepName);
 
               if (gapMemberNames.length > 0) {
+                // D2 (#647) parity with the serial gate loop: a gap member
+                // re-failing right after a prior join-routed kickback-to-build
+                // cycle that made zero net progress on an unchanged verdict
+                // escalates to HALT here instead of spending another
+                // remediation round. Same single-use captured-context guard
+                // the serial prd_audit path consults (~line 3954), keyed per
+                // gap member (the capture below stores one per member).
+                for (const gapName of gapMemberNames) {
+                  const gapEscalation = await checkKickbackToBuildEscalation(gapName);
+                  if (gapEscalation.halt) {
+                    const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
+                    await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                      () => {},
+                    );
+                    await writeFile(
+                      join(this.projectRoot, LOOP_HALT_MARKER),
+                      reason + '\n',
+                      'utf-8',
+                    ).catch(() => {
+                      /* best-effort marker */
+                    });
+                    await writeState(this.stateFilePath, state);
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                    process.off('SIGINT', sigintHandler);
+                    if (!this.daemon) {
+                      process.off('SIGTERM', sigterm);
+                    }
+                    return;
+                  }
+                }
                 const evidenceFiles: string[] = [];
                 if (gapMemberNames.includes('prd_audit' as StepName)) {
                   evidenceFiles.push('.pipeline/prd-audit.md');
@@ -2339,7 +2370,14 @@ export class Conductor {
                   }
 
                   if (remediationOutcome.target === 'build') {
-                    await captureKickbackToBuildContext(step.name);
+                    // D2 parity: capture one no-op-guard context PER gap
+                    // member (not the group's entry step name, which varies
+                    // with where the loop re-enters the group) so the
+                    // escalation consult above finds it on the next join
+                    // round regardless of entry point.
+                    for (const gapName of gapMemberNames) {
+                      await captureKickbackToBuildContext(gapName);
+                    }
                   }
                   const nav = navigateBack(state, remediationOutcome.target, steps);
                   state = nav.state;
@@ -2378,20 +2416,63 @@ export class Conductor {
               }
             }
 
-            // Non-green join: out of scope for Task 17 — consolidated
-            // kickback/remediation classification lands in Tasks 18-24.
-            // Fail the group loudly (mirrors the DSL parallel group's
-            // failure path, runParallelGroupViaCore) rather than silently
-            // re-dispatching members that already ran.
+            // Non-green join with no classified route left (Tasks 18-24 all
+            // declined or exhausted): fail the group LOUDLY, exactly like the
+            // serial walk's own auto-mode step failure — write the HALT
+            // marker naming each member that missed its gate and emit
+            // `loop_halt`, never a bare step_failed + silent return (which a
+            // supervising daemon can only classify as "loop ended without
+            // DONE or HALT" and park). Preserves the #367 guarantee the
+            // serial walk gave these same steps: a manual_test FAIL or a
+            // no-evidence gate miss HALTs — it is never silently dropped.
+            const failedMemberReasons = membership.dispatchable
+              .filter((member, idx) => {
+                const outcome = outcomes[idx];
+                if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') return true;
+                if (!this.verifyArtifacts) return false;
+                if (!gateVerdicts.get(member.name)?.satisfied) return true;
+                if (member.name === 'manual_test' && manualTestFailRows.length > 0) return true;
+                return false;
+              })
+              .map((member) => {
+                if (member.name === 'manual_test' && manualTestFailRows.length > 0) {
+                  return `step 'manual_test' failed: FAIL rows in .pipeline/manual-test-results.md`;
+                }
+                const verdict = gateVerdicts.get(member.name);
+                return `step '${member.name}' failed: ${verdict?.reason ?? 'gate unsatisfied'}`;
+              });
+            // Preserve a more specific pre-existing HALT reason (e.g. a
+            // pre-flight credentials check) — same convention as the serial
+            // walk's generic HALT (adr-2026-07-04-auth-failure-park-and-poll).
+            const existingGroupHalt = await readFile(
+              join(this.projectRoot, LOOP_HALT_MARKER),
+              'utf-8',
+            ).catch(() => null);
+            const groupHaltReason =
+              existingGroupHalt && existingGroupHalt.trim().length > 0
+                ? existingGroupHalt.trim()
+                : `Validation group "${step.name}" halted in auto mode: ` +
+                  (failedMemberReasons.length > 0
+                    ? failedMemberReasons.join('; ')
+                    : 'non-green branch outcome');
             state[step.name] = 'failed';
             await saveStepStatus(this.stateFilePath, step.name, 'failed');
             await writeState(this.stateFilePath, state);
+            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+            await writeFile(
+              join(this.projectRoot, LOOP_HALT_MARKER),
+              groupHaltReason + '\n',
+              'utf-8',
+            ).catch(() => {
+              /* best-effort marker */
+            });
             await this.events.emit({
               type: 'step_failed',
               step: step.name,
               error: `Validation group "${step.name}" had a non-green branch outcome`,
               retryCount: 0,
             });
+            await this.events.emit({ type: 'loop_halt', reason: groupHaltReason });
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
