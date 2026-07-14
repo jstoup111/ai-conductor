@@ -379,6 +379,14 @@ export interface CompletionResult {
     floorSource: 'attempt' | 'session';
     fresh: boolean;
   };
+  /**
+   * Route-signal facet for retry-classification (issue #646). 'named-route'
+   * marks a fresh, parseable, non-passing verdict (a real reviewer decision
+   * that should route rather than rerun); 'absent' marks a missing, stale, or
+   * unparseable verdict (no decision yet — safe to rerun). Undefined on
+   * `done:true` and on predicates that don't classify.
+   */
+  routeClass?: 'named-route' | 'absent';
 }
 
 /**
@@ -1277,6 +1285,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: 'no .pipeline/architecture-review-as-built.md present — the as-built review must record a verdict',
+        routeClass: 'absent',
       };
     }
     const floor = verdictFreshnessFloor(ctx);
@@ -1294,6 +1303,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason:
           "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
         verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        routeClass: 'absent',
       };
     }
     for (const f of fresh) {
@@ -1303,6 +1313,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: 'as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review',
+          routeClass: 'absent',
         };
       }
       // Clean pass iff the verdict begins with APPROVED (covers both
@@ -1312,6 +1323,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
+          routeClass: 'named-route',
         };
       }
     }
@@ -1346,6 +1358,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         verdictFreshness: exists
           ? { artifact: path, mtimeMs, floorMs: floor, floorSource, fresh: false }
           : undefined,
+        routeClass: 'absent',
       };
     }
     let parsed: unknown;
@@ -1355,11 +1368,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must rewrite it`,
+        routeClass: 'absent',
       };
     }
     const result = validateBuildReviewVerdict(parsed);
     if (!result.ok) {
-      return { done: false, reason: result.reason };
+      return { done: false, reason: result.reason, routeClass: 'absent' };
     }
     if (result.verdict === 'FAIL') {
       const reasons = result.reasons && result.reasons.length > 0
@@ -1368,6 +1382,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
+        routeClass: 'named-route',
       };
     }
     const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
