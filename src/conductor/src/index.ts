@@ -37,6 +37,7 @@ import {
   formatGapReport,
 } from './engine/complete-verifier.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
+import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
@@ -881,6 +882,13 @@ async function main(): Promise<void> {
       }`,
     );
   }
+
+  // Auto-update check (port-self-update-flow T5 / Story 7): spawn
+  // `bin/update --auto` before the pipeline boots. Advisory only — a missing
+  // harness root, a missing `bin/update`, or any spawn/exec failure is logged
+  // and swallowed inside spawnAutoUpdateCheck; it must never block or crash
+  // startup.
+  await spawnAutoUpdateCheck();
 
   const conductor = new Conductor({
     stateFilePath,
