@@ -517,7 +517,7 @@ describe('integration/retry-classify (#646)', () => {
       manual_test: 'skipped',
       prd_audit: 'skipped',
     });
-    const runner = withRemediation(dir, {
+    const base = withRemediation(dir, {
       architecture_review_as_built: async () => {
         // Every attempt re-writes a fresh BLOCKED verdict — always
         // routeClass 'named-route', so the classifier routes on attempt 1
@@ -536,6 +536,39 @@ describe('integration/retry-classify (#646)', () => {
         );
       },
     });
+    // The #647 D1 guard halts a remediation route into `build` when the round
+    // carries no new dispatchable work and build is already evidence-complete
+    // ('derived-already-complete') — it would end this loop before the cap.
+    // Emit a fresh rem-N task each round so every route is legitimate rework
+    // and the loop genuinely runs until MAX_KICKBACKS_PER_GATE — the bound
+    // under test here.
+    let remediationRound = 0;
+    const runner: StepRunner = {
+      run: async (step, state, opts) => {
+        if (step === 'remediate') {
+          remediationRound += 1;
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: `gap-${remediationRound}`,
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'fix the flagged drift',
+                  tasks: [
+                    { id: `rem-${remediationRound}`, title: 'redo the flagged drift fix' },
+                  ],
+                },
+              ],
+            }),
+          );
+          return { success: true };
+        }
+        return base.run(step, state, opts);
+      },
+    };
     const { retryDecisions, stepRetries, kickbacks, halted } = collect();
 
     const conductor = new Conductor({
@@ -549,6 +582,12 @@ describe('integration/retry-classify (#646)', () => {
       maxRetries: 3,
       fromStep: 'architecture_review_as_built',
       escalateBuildFailure: async () => ({}),
+      // The D2 kickback escalation (kickback_escalation, default on) halts a
+      // zero-progress/unchanged-verdict re-entry BEFORE the cap is reached —
+      // disable it here so this test still exercises the
+      // MAX_KICKBACKS_PER_GATE cap path itself (same pattern as the cap tests
+      // in gate-loop.test.ts).
+      config: { kickback_escalation: { enabled: false } },
     });
     await conductor.run();
 
