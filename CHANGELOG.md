@@ -11,6 +11,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- Spec landed for #668 (`.docs/{track,complexity,intake,stories,plans,conflicts,architecture}/s-tier-bug-decide-flow.md`
+  + `.docs/decisions/adr-2026-07-14-s-tier-bug-decide-flow.md` [APPROVED, Approved-By jstoup111] +
+  `architecture-review-2026-07-14-s-tier-bug-decide-flow.md`): a first-class **lightweight DECIDE
+  flow for `size: S` + `bug` issues**. One combined mini-spec artifact (Problem · Root-cause anchor ·
+  Fix sketch · RED test list · Acceptance) replaces the separate explore/stories/plan docs; a
+  deterministic `landSTierSpec` expands it into the canonical gate-read files with `Owner`,
+  `Status: Accepted`, and `Tier: S` **stamped by construction**, so the owner-gate (#656), the
+  stories-status gate (#625), and the ADR-status gate (#662) are satisfied before the PR opens and
+  those failure classes cannot recur for an S-bug spec. Trigger is label-driven and deterministic
+  (`resolveTierFromLabels` maps `size: S` → `Tier: S`, bypassing the LLM `assessTier` walk). The
+  build pipeline afterward is unchanged — Tier S reuses the existing `skippableForTiers: ['S']` skips
+  only; `build_review`, the TDD domain review, and `code-review` still run (no gate weakening).
+  Fail-closed at land on missing Owner, missing `Status: Accepted`, a stray DRAFT ADR, or an empty
+  RED test list. Non-goals: M/L DECIDE unchanged; non-bug `size: S` still runs full DECIDE.
+  Implementation tracked separately; this entry documents the queued fix.
 - Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
   lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
   `.ai-conductor/config.yml`; `validateConfig()` still rejects disabling every other
