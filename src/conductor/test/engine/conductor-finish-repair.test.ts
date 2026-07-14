@@ -181,4 +181,65 @@ describe('conductor/finish-repair', () => {
     expect(ctx.repairFinishPr).toBeDefined();
     expect(typeof ctx.repairFinishPr).toBe('function');
   });
+
+  it('repairFinishPr runs bodyFloor after retitleFloor and before ensureShipReady', async () => {
+    const calls: string[] = [];
+    const bannerBody = [
+      'This PR was opened automatically after an irrecoverable daemon HALT.',
+      'Manual remediation is required to unblock this feature.',
+      'See the comment below for the failure reason.',
+    ].join('\n');
+
+    const patchedGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        calls.push('view');
+        return {
+          stdout: JSON.stringify({
+            title: 'needs-remediation: test',
+            isDraft: true,
+            labels: [],
+            body: bannerBody,
+          }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        if (args.includes('--title')) calls.push('edit-title');
+        else if (args.includes('--body')) calls.push('edit-body');
+        else calls.push('edit-other');
+        return { stdout: '{}' };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready') {
+        calls.push('ready');
+        return { stdout: '{}' };
+      }
+      calls.push(`other:${args.join(' ')}`);
+      return { stdout: '{}' };
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      gh: patchedGh,
+    });
+
+    const state: ConductState = {
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    };
+
+    const ctx = await (conductor as any)['completionCtx'](state);
+    await ctx.repairFinishPr('https://github.com/example/repo/pull/1');
+
+    const editTitleIdx = calls.indexOf('edit-title');
+    const editBodyIdx = calls.indexOf('edit-body');
+    const readyIdx = calls.lastIndexOf('ready');
+
+    expect(editTitleIdx).toBeGreaterThanOrEqual(0);
+    expect(editBodyIdx).toBeGreaterThanOrEqual(0);
+    expect(readyIdx).toBeGreaterThanOrEqual(0);
+    expect(editBodyIdx).toBeGreaterThan(editTitleIdx);
+    expect(readyIdx).toBeGreaterThan(editBodyIdx);
+  });
 });

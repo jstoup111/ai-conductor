@@ -119,6 +119,7 @@ import {
   readHaltMarkerContent,
   writeStallQuestionEvidence,
   writeStallHalt,
+  normalizeTasks,
 } from './task-progress.js';
 import {
   makeGitRunner,
@@ -157,6 +158,7 @@ import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard
 import {
   rehabilitateHaltPr,
   retitleFloor,
+  bodyFloor,
   ensureShipReady,
 } from './halt-pr-rehabilitation.js';
 
@@ -665,12 +667,32 @@ export class Conductor {
       }
     }
 
-    // Compose the repair callback that applies the three repairs in order
+    // Compose the repair callback that applies the four repairs in order
     const repairFinishPr = async (prUrl: string): Promise<void> => {
       const gh = this.gh;
       const cwd = this.projectRoot;
       const branch = state.worktree_branch;
       const featureDesc = state.feature_desc;
+      const repairLog = (msg: string) => console.warn(msg);
+
+      // Best-effort test-evidence line for the body floor: derived from
+      // .pipeline/task-status.json. Left undefined on any error — the floor
+      // then simply omits the "Test evidence" section.
+      let testEvidenceLine: string | undefined;
+      try {
+        const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
+        const raw = await readFile(statusPath, 'utf-8');
+        const parsed = JSON.parse(raw) as unknown;
+        const tasks = normalizeTasks(parsed);
+        if (tasks.length > 0) {
+          const completed = tasks.filter(
+            (t) => t.status === 'completed' || t.status === 'skipped',
+          ).length;
+          testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
+        }
+      } catch {
+        testEvidenceLine = undefined;
+      }
 
       // Step 1: Rehabilitate halt PR (unlabel, title fix, close injection)
       try {
@@ -679,6 +701,7 @@ export class Conductor {
           cwd,
           prUrl,
           sourceRef,
+          log: repairLog,
         });
       } catch (err) {
         // Warn-only: repair is best-effort, failures don't block further steps
@@ -687,15 +710,23 @@ export class Conductor {
 
       // Step 2: Retitle floor (fix stale needs-remediation: title)
       try {
-        await retitleFloor(gh, cwd, prUrl, { featureDesc, branch });
+        await retitleFloor(gh, cwd, prUrl, { featureDesc, branch }, repairLog);
       } catch (err) {
         // Warn-only
         console.warn(`[conductor-repair] retitleFloor failed: ${err}`);
       }
 
-      // Step 3: Ensure PR is ready (draft→ready flip)
+      // Step 3: Body floor (fix stale halt-boilerplate body)
       try {
-        await ensureShipReady(gh, cwd, prUrl);
+        await bodyFloor(gh, cwd, prUrl, { featureDesc, sourceRef, testEvidenceLine }, repairLog);
+      } catch (err) {
+        // Warn-only
+        console.warn(`[conductor-repair] bodyFloor failed: ${err}`);
+      }
+
+      // Step 4: Ensure PR is ready (draft→ready flip)
+      try {
+        await ensureShipReady(gh, cwd, prUrl, repairLog);
       } catch (err) {
         // Warn-only
         console.warn(`[conductor-repair] ensureShipReady failed: ${err}`);
