@@ -11,6 +11,36 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ## [Unreleased]
 
 ### Added
+- Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
+  SHIP validators (`manual_test`, `prd_audit`, `architecture_review_as_built`) fan out as
+  a built-in concurrent validation group (`VALIDATION_GROUP`/`STEP_GROUPS`,
+  `engine/group-core.ts`) instead of the serial walk — per-branch fresh sessions,
+  single-writer join that recomputes every member's objective gate verdict from on-disk
+  evidence, branch-attributed `parallel_started`/`group_member_step`/`parallel_completed`
+  events, SIGINT-safe mid-group persistence (a resumed run re-dispatches only unfinished
+  members), and join classification with full serial parity (#367 manual-test kickback,
+  one `/remediate` per round over the union of gap members' evidence, shared
+  `MAX_KICKBACKS_PER_GATE` budget, D2/#647 kickback-to-build no-op HALT, loud non-green
+  HALT naming each failing member). Interactive runs keep the serial walk and
+  checkpoints. See `src/conductor/README.md` → "Parallel validation phase".
+- New `validation_concurrency` config key (`.ai-conductor/config.yml`) bounding the
+  validation-group fan-out. Default 2; zero/negative/non-numeric fall back to the
+  default; effective width additionally capped at the number of dispatchable members
+  (width 1 degrades to exact serial semantics). Additive and optional — absent config
+  keeps the default.
+
+### Changed
+- The config-DSL `parallel:` step executor now runs through the same shared GroupCore as
+  the built-in validation group (`runParallelGroupViaCore`): each branch dispatches its
+  OWN step/skill name on its own fresh session (previously branches could dispatch under
+  the group's name), with a single-writer join for state keys.
+
+### Removed
+- Internal `runParallelGroup` helper (replaced by `runParallelGroupViaCore` over the
+  shared GroupCore). Engine-internal only — no consumer-visible CLI/hook/schema change,
+  no migration block required.
+
+### Added
 - Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
   lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
   `.ai-conductor/config.yml`; `validateConfig()` still rejects disabling every other
