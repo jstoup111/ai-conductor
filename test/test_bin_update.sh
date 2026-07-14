@@ -253,6 +253,54 @@ else
   assert "non-git dir: exits 0 without error" 1
 fi
 
+# ─── Story 7: --auto gating + -h/--help usage (T4 argument dispatch) ──────
+
+echo ""
+echo -e "${BOLD}Story 7 — --auto gating and usage${NC}"
+
+REPO=$(make_repo "s7-auto-disabled")
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+mkdir -p "$HOME_DIR/.claude"
+python3 -c "
+import json
+from pathlib import Path
+p = Path('$HOME_DIR/.claude/ai-conductor.config.json')
+cfg = json.loads(p.read_text()) if p.exists() else {}
+cfg['autoCheck'] = False
+cfg['currentVersion'] = 'v0.3.0'
+p.write_text(json.dumps(cfg))
+"
+
+run_update "$REPO" "$HOME_DIR" --auto
+assert "--auto with autoCheck=false: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "--auto with autoCheck=false: silent no-op (no lastCheckedAt)" "$([ -z "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+
+REPO=$(make_repo "s7-auto-enabled")
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.4.0
+git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+
+run_update "$REPO" "$HOME_DIR" --auto
+assert "--auto with autoCheck!=false: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "--auto with autoCheck!=false: runs the check (writes lastCheckedAt)" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+
+REPO=$(make_repo "s7-help")
+HOME_DIR=$(make_isolated_home)
+
+run_update "$REPO" "$HOME_DIR" -h
+assert "-h: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "-h: prints usage" "$(case "$OUT" in *"Usage: update"*) echo 0;; *) echo 1;; esac)"
+
+run_update "$REPO" "$HOME_DIR" --help
+assert "--help: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "--help: prints usage" "$(case "$OUT" in *"Usage: update"*) echo 0;; *) echo 1;; esac)"
+
+run_update "$REPO" "$HOME_DIR" --bogus-flag
+assert "unrecognized arg: exits 2" "$([ "$CODE" -eq 2 ] && echo 0 || echo 1)"
+assert "unrecognized arg: prints usage" "$(case "$OUT" in *"Usage: update"*) echo 0;; *) echo 1;; esac)"
+
 # ─── Story 6: first-run version seeding ────────────────────────────────────
 
 echo ""
@@ -289,6 +337,12 @@ echo ""
 echo -e "${BOLD}Story 3 — tagged update (TTY)${NC}"
 
 REPO=$(make_repo "s3-accept")
+# v0.4.0 must land on its own commit, not the same commit as v0.3.0 — two
+# tags on one commit make `git describe --tags` pick whichever tag git's
+# internal ref ordering favors (observed: the earlier-created tag), so the
+# "checked out v0.4.0" assertion below would be unable to actually
+# distinguish "checked out v0.3.0's commit" from "checked out v0.4.0's".
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
 git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
@@ -353,6 +407,7 @@ PAIR=$(make_main_repo "s4-accept")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" main@0000000
+run_update "$REPO" "$HOME_DIR" --set-channel main
 
 WORK="$TMP_ROOT/s4-accept-push"
 git clone -q "$ORIGIN" "$WORK"

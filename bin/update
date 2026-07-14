@@ -14,6 +14,13 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ORIGINAL_ARGS=("$@")
 
+# Not a git checkout — nothing to check/update/configure. Bail before even
+# sourcing harness-common.sh so a harness install missing bin/lib (or any
+# other non-git tree bin/update happens to run inside) still exits cleanly.
+if [ ! -d "${HARNESS_DIR}/.git" ]; then
+  exit 0
+fi
+
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 
@@ -71,7 +78,17 @@ PY
   local tmp
   tmp=$(mktemp --suffix=.md 2>/dev/null || mktemp -t changelog.XXXXXX.md)
   printf '%s\n' "$preview" > "$tmp"
-  render_md "$tmp"
+  # Deliberately bypass render_md's configured markdown_viewer here: its
+  # default args ("-p -w 80 {file}") open glow in full-screen pager mode,
+  # which steals the same stdin the y/n prompt right after this call needs
+  # to read. A human would press "q" to dismiss it and continue, but that
+  # extra keypress isn't part of the documented confirm-prompt UX, and any
+  # scripted/piped stdin (tests, non-interactive callers) hangs forever
+  # waiting for a quit key that never comes. Render the preview as plain,
+  # non-paged output instead so the prompt's read is never starved. Plain
+  # `cat` (no glow ANSI styling) also keeps this preview deterministically
+  # greppable for callers/tests scanning the printed changelog text.
+  cat "$tmp"
   rm -f "$tmp"
 }
 
@@ -146,7 +163,7 @@ check_harness_update_tagged() {
     fail "Failed to checkout ${latest_tag} — update aborted"
     return 0
   fi
-  apply_harness_update "$latest_tag" "$rollback_ref" || true
+  apply_harness_update "$latest_tag" "$rollback_ref"
 }
 
 # Main-channel update: preserve the old fast-forward pull behavior but run
@@ -186,24 +203,25 @@ check_harness_update_main() {
 
   local rollback_ref
   rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
-  if ! git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
+  # Explicit remote+branch: relies on origin/<branch> already having been
+  # fetched above, not on upstream tracking config being set (a checkout
+  # whose branch has no "branch.<name>.merge" set — e.g. never pushed with
+  # -u — would otherwise make plain `git pull` fail with "no tracking
+  # information" even though the ff-only merge itself is perfectly safe).
+  if ! git -C "$HARNESS_DIR" pull --ff-only origin "$branch" 2>/dev/null; then
     fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
     return 0
   fi
 
   local new_sha
   new_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  apply_harness_update "main@${new_sha}" "$rollback_ref" || true
+  apply_harness_update "main@${new_sha}" "$rollback_ref"
 }
 
-# Dispatch based on the configured update channel.
-check_harness_update() {
-  [ -d "${HARNESS_DIR}/.git" ] || return 0
-
-  local auto_check channel
-  auto_check=$(conductor_cfg_get autoCheck true)
-  [ "$auto_check" = "false" ] && return 0
-
+# Dispatch on the configured update channel, regardless of autoCheck. Shared
+# by the forced (no-args) and auto (--auto, gated) entry points below.
+dispatch_update_channel() {
+  local channel
   channel=$(conductor_cfg_get updateChannel tagged)
   case "$channel" in
     main)   check_harness_update_main ;;
@@ -211,5 +229,74 @@ check_harness_update() {
   esac
 }
 
-# set_update_channel and CLI argument dispatch are implemented in a later
-# task — this task only ports the check/apply functions above.
+# Forced check — used for the no-args "check now" invocation. Bypasses the
+# autoCheck gate (a manual check should always run) but still requires a git
+# checkout.
+check_harness_update() {
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+  dispatch_update_channel
+}
+
+# Auto check — used by --auto (e.g. wired into conduct-ts's daemon loop).
+# Respects the autoCheck config gate; silent no-op when disabled.
+check_harness_update_auto() {
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+
+  local auto_check
+  auto_check=$(conductor_cfg_get autoCheck true)
+  [ "$auto_check" = "false" ] && return 0
+
+  dispatch_update_channel
+}
+
+set_update_channel() {
+  local new_channel=$1
+  case "$new_channel" in
+    tagged|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+  esac
+  conductor_cfg_set updateChannel "$new_channel"
+  ok "Update channel set to: ${new_channel}"
+  exit 0
+}
+
+usage() {
+  cat <<'EOF'
+Usage: update [OPTIONS]
+
+  (no args)           Force an update check now, bypassing the autoCheck gate.
+  --auto              Run an update check only if autoCheck is not "false".
+  --set-channel <c>   Set the update channel (tagged, main).
+  -h, --help          Show this help message.
+EOF
+}
+
+# ─── CLI argument dispatch ──────────────────────────────────────────────────
+
+if [ "$#" -eq 0 ]; then
+  check_harness_update
+  exit 0
+fi
+
+case "${1:-}" in
+  --auto)
+    check_harness_update_auto
+    exit 0
+    ;;
+  --set-channel)
+    if [ -z "${2:-}" ]; then
+      fail "Missing channel argument for --set-channel (expected: tagged, main)"
+      exit 2
+    fi
+    set_update_channel "$2"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    fail "Unrecognized argument: $1"
+    exit 2
+    ;;
+esac
