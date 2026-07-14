@@ -185,6 +185,12 @@ The finish/as-built hooks matter most on the **technical track**, which skips `p
 entirely — before them, those gates dead-ended in a `failed in auto mode` HALT even when the
 gap was routable.
 
+At the **parallel validation group's join** (see "Parallel validation phase" below), the
+same planner is dispatched **once per join round over the union** of every gap-carrying
+member's evidence file (`prd_audit` + `architecture_review_as_built` in one dispatch
+context) — never one dispatch per member — drawing from the same shared
+`MAX_KICKBACKS_PER_GATE` budget.
+
 **Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
 `.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
 `Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
@@ -263,6 +269,51 @@ because a manual FAIL is an implementation gap by definition — bounded by
 (`manual-test FAIL unresolved after N build kickback(s)`). A non-FAIL gate miss (missing or
 stale results — the skill never recorded properly) carries no bug evidence and HALTs
 directly.
+
+### Parallel validation phase (#469, auto mode only)
+
+In an **auto-mode** run (`mode: 'auto'` — inline or daemon), the three SHIP validators run
+as a built-in **concurrent group** instead of the serial walk. Interactive runs are
+untouched: the members execute one at a time via the pre-existing serial walk, and
+manual_test's post-step checkpoint pauses for the operator exactly as before.
+
+- **Group entry (Decision-1)** — `VALIDATION_GROUP` (`engine/steps.ts`, registered in
+  `STEP_GROUPS`) names `manual_test → prd_audit → architecture_review_as_built`. The
+  members keep their own contiguous `ALL_STEPS` entries (immediately after the last build
+  gate, `build_review → wiring_check`), their own `StepDefinition`s, and their own linear
+  indices — the group is an execution overlay, not a topology change. The loop engages the
+  group path whenever it lands on any member in auto mode.
+- **Fan-out** (`engine/group-core.ts`, shared with the config-DSL `parallel` executor) —
+  membership is resolved against state/track/tier first (`resolveGroupMembership`): skipped
+  members are excluded, already-`done` members (e.g. after a mid-group SIGINT) carry their
+  pass verdict and are **not re-dispatched**. Dispatchable members run under a semaphore
+  capped by `validation_concurrency` (default **2**; `≤ 0`/non-numeric → default; always
+  additionally capped at the member count). Each branch mints its **own fresh session**,
+  dispatches its member's own step/skill name, and retries resume that same session. A
+  width-1 group degrades to exact serial semantics (no `parallel_started` event).
+- **Single-writer join** — branches never write `conduct-state.json` or
+  `.pipeline/gates/*`. After **all** branches settle (a fast failure never cancels
+  in-flight siblings), the join recomputes each member's objective gate verdict from
+  on-disk evidence and writes state + one `.pipeline/gates/«member».json` per member, on
+  the loop's own thread of control. All-green marks each member and its synthetic
+  `«group»__«member»` key `done` and advances with zero rewinds.
+- **Join classification (serial-parity guarantees)** — a branch that exhausts retries with
+  **no verdict** fails the group loudly and fast (HALT marker + `loop_halt`, no remediation
+  synthesized, no partial join). An **MT-only FAIL** routes through the same deterministic
+  `manual_test → build` kickback as the serial walk (#367; `manualTestSelfHeals` budget, D2
+  no-op guard). **Mixed/audit gaps** dispatch `/remediate` **exactly once per round over
+  the union** of failing members' evidence files; an MT FAIL in the same round merges into
+  one work order (earliest target, both evidence streams concatenated in the retry hint).
+  Rounds share the serial `MAX_KICKBACKS_PER_GATE` budget, and a gap member re-failing
+  after a kickback-to-build cycle with zero net progress HALTs
+  (`«member» kickback-to-build no-op`, D2/#647 parity). Any non-green shape with no route
+  left HALTs naming each member that missed its gate — never a silent exit.
+- **Signals** — SIGINT/SIGTERM/SIGHUP mid-group persist `done` (member + synthetic key)
+  for every branch that already settled, so a resumed run re-dispatches only unfinished
+  members.
+- **Events** — `parallel_started` (dispatched members only), per-branch
+  `group_member_step` events attributed to the member (never the group), and
+  `parallel_completed` at an all-green join.
 
 ### Mermaid diagram rendering (approval gates)
 
