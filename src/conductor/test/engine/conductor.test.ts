@@ -5490,6 +5490,180 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('Remediation fallback + budget parity (Task 24)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Deliberately write no (or unreadable) remediation.json — the
+            // planner produced no usable plan. readRemediationPlan returns
+            // null → planRemediation resolves 'none'.
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // /remediate was dispatched for the non-MT gap, but never produced a
+      // usable plan (no remediation.json written) — bounded by the shared
+      // remediation budget.
+      expect(remediateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Despite the unusable LLM plan, the deterministic manual_test
+      // kickback still fires — it does not depend on /remediate at all.
+      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(true);
+      const mtKickback = kickbacks.find((k) => k.from === 'manual_test' && k.to === 'build');
+      expect(mtKickback?.evidence).toContain('| s1 | FAIL |');
+    });
+
+    it('remediationRounds at MAX_KICKBACKS_PER_GATE halts exactly like the serial gate loop, never a silent non-green failure', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      let remediateRound = 0;
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            // Perpetually BLOCKED — build's mock never actually fixes it.
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateRound++;
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `ADR-1-round-${remediateRound}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: `rem-adr-1-${remediateRound}`, title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The shared remediation budget (MAX_KICKBACKS_PER_GATE = 2) is
+      // respected at the join exactly like the serial gate loop — never
+      // more than 2 /remediate dispatches for this persistent gap.
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Once the budget is exhausted, the join HALTs (loop_halt with a
+      // budget-parity reason) — it never falls through to a silent
+      // generic "non-green branch" step failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+      expect(haltEvents[haltEvents.length - 1]?.reason).toMatch(
+        /manual_test kickback-to-build no-op|manual-test FAIL unresolved|remediation budget exhausted/,
+      );
+    });
+  });
+
   describe('FAIL verdict waits for siblings (Task 19)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',

@@ -2098,6 +2098,15 @@ export class Conductor {
                 })
                 .map((member) => member.name as StepName);
 
+              // Task 24 (adr-2026-07-10-validation-group-join.md): budget
+              // parity — the join must respect the SAME MAX_KICKBACKS_PER_GATE
+              // remediation-round budget as the serial gate-driven tail. Once
+              // exhausted, never dispatch /remediate again; fall straight to
+              // the deterministic manual_test kickback fallback below (it has
+              // its own separate manualTestSelfHeals budget, so it can still
+              // make progress — or halt on its own cap/D2 no-op guard —
+              // exactly like the serial baseline does when its LLM-routed
+              // budget runs out).
               if (gapMemberNamesForMerge.length > 0 && remediationRounds < MAX_KICKBACKS_PER_GATE) {
                 mtMergeHandled = true;
                 const evidenceFiles: string[] = [];
@@ -2190,11 +2199,31 @@ export class Conductor {
                   return;
                 }
 
-                // remediationOutcome.kind === 'none' — no usable plan for the
-                // non-MT gaps; fall through to Task 21's block below, which
-                // will fall through further to the generic "fail loudly"
-                // path since a fresh /remediate dispatch already ran this
-                // round (remediationRounds was incremented above).
+                // Task 24: remediationOutcome.kind === 'none' — the /remediate
+                // planner produced no usable plan for the non-MT gaps (an
+                // unreadable/malformed remediation.json, or a plan with no
+                // routable dispositions). The deterministic manual_test
+                // kickback stream is entirely independent of that LLM planner
+                // — it must still proceed rather than dead-ending in the
+                // generic "fail loudly" path below.
+                const fallbackOutcome = await handleManualTestFailKickback(manualTestFailRows);
+                if (fallbackOutcome.action === 'return') return;
+                i = fallbackOutcome.nextIndex;
+                continue;
+              } else if (gapMemberNamesForMerge.length > 0) {
+                // Task 24: budget parity — remediationRounds is already at
+                // MAX_KICKBACKS_PER_GATE, so /remediate is never dispatched
+                // again this round. The deterministic manual_test kickback
+                // has its OWN separate budget (manualTestSelfHeals) and D2
+                // no-op guard, so it still gets a chance to make progress —
+                // or halts on that guard/cap — exactly like the serial gate
+                // loop's own budget-exhausted fallback (e.g.
+                // classifyPrdAuditGaps) does.
+                mtMergeHandled = true;
+                const fallbackOutcome = await handleManualTestFailKickback(manualTestFailRows);
+                if (fallbackOutcome.action === 'return') return;
+                i = fallbackOutcome.nextIndex;
+                continue;
               }
             }
 
