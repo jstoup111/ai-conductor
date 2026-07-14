@@ -1779,9 +1779,25 @@ already-parked slug reports "already parked" and leaves the marker untouched); u
 it. Both verbs act directly on the filesystem before the pipeline/daemon boots, mirroring
 `daemon-observe-cli.ts`'s detect/dispatch pattern.
 
+**Park marker main-root resolution (#486):** Both `daemon park` and `daemon unpark` resolve
+the main repository root via `git rev-parse --git-common-dir`, so they work correctly when
+invoked from any directory — main checkout or linked worktree. The marker is always written to
+`.daemon/parked/<slug>` under the main repository root, ensuring visibility to the daemon's
+sweep gate regardless of cwd. If not in a git repository, the cwd is used as fallback. This
+fixes the #486 regression where auto-park markers written from build agents in worktrees were
+invisible to the daemon's sweep gate.
+
+**Marker reconciliation at sweep start (#486):** At the top of every daemon sweep,
+`reconcileStrandedParkMarkers()` scans `.worktrees/*/‌.daemon/parked/` for markers left by
+pre-#486 builds and moves them to the main repository root. Per-marker failures (permission
+denied, I/O errors) are logged and skipped; the function does not throw. This enables seamless
+transition when the #486 fix is deployed to a repo with existing stranded worktree markers.
+Idempotent: a second run finds no markers left to move (no-op).
+
 `daemon park <slug>` validates the slug against known units of work first: it requires either
 `.docs/plans/<slug>.md` or `.worktrees/<slug>` to exist, so a typo'd or stale slug fails loudly
 (`error: slug '<slug>' not found in plans/ or worktrees/`) instead of silently parking nothing.
+On successful park, it echoes the absolute marker path to stdout: `Marked for park: <absolute-path>`.
 
 **Operator-parked vs. HALTed — these are different states.** A HALT (`.pipeline/HALT`) is written
 by the pipeline itself on a kickback cap, an unresolvable gate, or an unexpected throw — it's a
@@ -1797,6 +1813,12 @@ written in the window between selection and dispatch (e.g. during
 `rebuildAndMaybeRestartForStaleEngine`) would otherwise be dispatched anyway. A grep-enumeration
 regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
 guarded this way.
+
+**Unpark counter reset (#486):** When unparking an auto-parked feature (provenance: `auto`),
+`daemon unpark` resets the no-evidence attempt counter in the feature's `.worktrees/<slug>/`
+(or the main root if the worktree is absent) so re-dispatch resumes normal re-kick flow without
+being immediately auto-parked again. For operator-parked features (provenance: `operator`), no
+counter reset occurs.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,

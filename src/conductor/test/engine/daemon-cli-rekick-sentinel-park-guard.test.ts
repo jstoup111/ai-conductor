@@ -32,8 +32,9 @@ describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on op
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
     // The real production primitive is already imported (Task 7 wiring).
+    // Allow for other imports in the same statement (e.g., reconcileStrandedParkMarkers).
     expect(source).toMatch(
-      /import\s*\{\s*isOperatorParked\s*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
+      /import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
     );
 
     // Isolate the region from the ranManualTest computation through the

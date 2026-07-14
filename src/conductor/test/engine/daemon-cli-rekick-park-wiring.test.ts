@@ -29,8 +29,9 @@ describe('Task 6 — daemon-cli wires the real isOperatorParked dep into the re-
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
     // 1. The real production primitive is imported from park-marker.ts.
+    // Allow for other imports in the same statement (e.g., reconcileStrandedParkMarkers).
     expect(source).toMatch(
-      /import\s*\{\s*isOperatorParked\s*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
+      /import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
     );
 
     // 2. The rekickDeps object assembled for rekickSweep includes an

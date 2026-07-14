@@ -594,6 +594,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `no-issue` items still lead, unchanged). Parser accepts the exact label
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
+- `daemon park` now echoes the absolute marker path to stdout on successful
+  park, aiding operator scripting and audit trails (#486).
+- `reconcileStrandedParkMarkers()` function heals pre-#486 park markers left
+  in worktrees by moving them to the main repository root, enabling seamless
+  transition when the fix is deployed (#486).
 
 ### Added
 
@@ -759,6 +764,15 @@ their skill symlinks refreshed or `/intake` resolves as an unknown command:
   anchor → `merge-base --fork-point origin/<default> HEAD` → plain
   `merge-base origin/<default> HEAD` → fail-closed zero commits + anomaly)
   instead of falling back to `root-commit..HEAD` or a hardcoded `origin/main`
+- Park markers now anchor to the main repository root instead of relative to
+  worktree cwd, fixing #486 regression where auto-park markers written from
+  build agents in worktrees were invisible to the daemon's sweep gate.
+  `daemon park` and `daemon unpark` from any directory (including worktree cwd)
+  now correctly resolve to the main root, and worktree-written auto-park
+  markers are automatically reconciled at sweep start.
+- `daemon unpark` now resets the no-evidence counter in the feature's worktree
+  (if present) when unparking an auto-parked feature, enabling normal re-kick
+  flow on resume (#486).
   (#456).
 - Build gate now accepts evidence stamps only; first-seed grandfather
   stamping retired. `engine/artifacts.ts`'s H6/H7/H8 completion check no
