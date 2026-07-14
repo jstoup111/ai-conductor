@@ -4812,6 +4812,163 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('MT-only failure — deterministic kickback parity (Task 20)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    // manual_test always FAILs (perpetual bug); build re-satisfies its own
+    // gate but never actually fixes anything — every sibling PASSes cleanly.
+    function mtOnlyFailingRunner(): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          // Small margin against the freshness check (artifact mtime must
+          // postdate session_started_at) — matches the defensive delay
+          // pattern used elsewhere in this file (Task 19's sibling tests).
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
+    it('manual_test FAIL alone (siblings PASS) at the group join produces the same navigateBack/retry-hint shape as the serial baseline — zero remediate dispatch', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      // Pre-seed task-status.json exactly like the serial baseline's
+      // seedToManualTest() does — otherwise the FIRST kickback's progress
+      // snapshot reads "no file" (0 resolved) instead of the true
+      // steady-state count, misclassifying the very first repeat as
+      // "did-work" and masking D2's no-op escalation.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one kickback, manual_test -> build, matching the serial
+      // baseline's deterministic FAIL-row routing.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+      expect(kickbacks[0]?.evidence).toContain('| s1 | FAIL |');
+
+      // The retry hint handed to BUILD carries the FAIL rows + the
+      // no-whitewash contract — same shape as the pre-parallel serial walk.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('| s1 | FAIL |');
+        expect(r).toMatch(/COMMIT/i);
+      }
+
+      // Zero remediate dispatches for this failure shape.
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+    });
+
+    it('exhausted manualTestSelfHeals halts with the serial baseline reason wording, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      let haltReason = '';
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltReason = e.reason;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // D2's no-op re-entry guard fires on the first repeat cycle (build
+      // makes zero net progress against the perpetual FAIL) — same wording
+      // family as the serial baseline's kickback-to-build no-op halt.
+      expect(haltReason).toMatch(/manual_test kickback-to-build no-op|manual-test FAIL unresolved/);
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+  });
+
   describe('FAIL verdict waits for siblings (Task 19)', () => {
     const VALIDATION_GROUP_PREREQS = {
       worktree: 'done',

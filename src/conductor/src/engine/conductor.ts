@@ -1618,6 +1618,94 @@ export class Conductor {
       return result;
     };
 
+    /**
+     * Task 20 (adr-2026-07-10-validation-group-join.md): the SAME
+     * deterministic manual_test → build kickback classification the
+     * pre-parallel serial walk used (#367), now shared by both the serial
+     * gate-driven tail AND the validation-group join's non-green path.
+     * Extracted so an MT-only failure at the join produces byte-for-byte
+     * the same navigateBack/retry-hint shape as the serial baseline —
+     * no /remediate dispatch, deterministic kickback or HALT only.
+     * Mutates the enclosing `state`/`i`/`manualTestSelfHeals` closures,
+     * exactly like the inline block it replaces did.
+     */
+    const handleManualTestFailKickback = async (
+      failRows: string[],
+    ): Promise<{ action: 'return' } | { action: 'continue'; nextIndex: number }> => {
+      // D2: same no-op re-entry guard as build_review.
+      const manualTestEscalation = await checkKickbackToBuildEscalation('manual_test');
+      if (manualTestEscalation.halt) {
+        const reason = `manual_test kickback-to-build no-op: ${manualTestEscalation.reason}`;
+        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+        await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
+          () => {
+            /* best-effort marker */
+          },
+        );
+        await writeState(this.stateFilePath, state);
+        const prUrl = await this.surfaceRemediationPr(reason);
+        await this.events.emit({ type: 'loop_halt', reason, prUrl });
+        process.off('SIGINT', sigintHandler);
+        process.off('SIGTERM', sigterm);
+        return { action: 'return' };
+      }
+      if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
+        manualTestSelfHeals++;
+        const evidence = failRows.join('\n');
+        await this.events.emit({
+          type: 'kickback',
+          from: 'manual_test',
+          to: 'build',
+          evidence,
+          count: manualTestSelfHeals,
+        });
+        // Hand BUILD the bugs it must fix. The whitewash guard on the
+        // manual_test gate refuses a PASS rewrite with no new commits,
+        // so a no-op BUILD cannot silently converge this loop.
+        pendingRetryHints.set(
+          'build',
+          `manual-test FAILED with these results:\n${evidence}\nRead ` +
+            `.pipeline/manual-test-results.md (latest attempt section) for full ` +
+            `evidence. The plan's task list may already be complete — these are ` +
+            `BUGS in the shipped code. Implement and COMMIT fixes for each FAIL; ` +
+            `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
+            `commits, and manual-test re-runs after this build.`,
+        );
+
+        // Task 7: Merged-PR guard on manual_test kickback (TS-1).
+        // Before committing the rewind, check if the recorded PR has been
+        // merged out-of-band. If so, stop the run as a synthetic verified
+        // ship and return successfully.
+        if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+          return { action: 'return' };
+        }
+        await captureKickbackToBuildContext('manual_test');
+        const nav = navigateBack(state, 'build', steps);
+        state = nav.state;
+        // markDownstreamStale only restages `done` steps; manual_test
+        // is `failed` here, so restage it explicitly for the tail.
+        (state as Record<string, unknown>).manual_test = 'stale';
+        await writeState(this.stateFilePath, state);
+        return { action: 'continue', nextIndex: nav.index - 1 }; // for-loop i++ lands on build
+      }
+      const reason =
+        `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
+        `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
+        (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
+      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
+        () => {
+          /* best-effort marker */
+        },
+      );
+      await writeState(this.stateFilePath, state);
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.events.emit({ type: 'loop_halt', reason, prUrl });
+      process.off('SIGINT', sigintHandler);
+      process.off('SIGTERM', sigterm);
+      return { action: 'return' };
+    };
+
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
@@ -1938,6 +2026,41 @@ export class Conductor {
                 branches: membership.dispatchable.map((m) => m.name),
               });
               continue;
+            }
+
+            // Task 20 (adr-2026-07-10-validation-group-join.md): MT-only
+            // failure — deterministic kickback parity. When manual_test is
+            // the group's ONLY objective failure (its own FAIL rows) and
+            // every sibling genuinely satisfied its own gate, this is the
+            // exact daemon-mode manual_test→build kickback the pre-parallel
+            // serial walk always used — route through the SAME shared
+            // classification (handleManualTestFailKickback) instead of the
+            // generic "fail loudly" below. Deterministic only: zero
+            // /remediate dispatches for this failure shape. Mixed failures
+            // (manual_test + another validator, or another validator alone)
+            // remain out of scope here — Tasks 21-24.
+            if (this.daemon && hasManualTest && manualTestFailRows.length > 0) {
+              const manualTestIdx = membership.dispatchable.findIndex(
+                (m) => m.name === 'manual_test',
+              );
+              const siblingsSatisfied = outcomes.every((outcome, idx) => {
+                if (idx === manualTestIdx) return true;
+                if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
+                if (!this.verifyArtifacts) return true;
+                const member = membership.dispatchable[idx]!;
+                return gateVerdicts.get(member.name)?.satisfied === true;
+              });
+              const manualTestOutcome = outcomes[manualTestIdx];
+              if (
+                siblingsSatisfied &&
+                manualTestOutcome?.kind === 'verdict' &&
+                manualTestOutcome.verdict === 'pass'
+              ) {
+                const outcome = await handleManualTestFailKickback(manualTestFailRows);
+                if (outcome.action === 'return') return;
+                i = outcome.nextIndex;
+                continue;
+              }
             }
 
             // Non-green join: out of scope for Task 17 — consolidated
@@ -3158,87 +3281,10 @@ export class Conductor {
             if (this.daemon && step.name === 'manual_test') {
               const failRows = await readManualTestFailRows(this.projectRoot);
               if (failRows.length > 0) {
-                // D2: same no-op re-entry guard as build_review — see below.
-                const manualTestEscalation = await checkKickbackToBuildEscalation('manual_test');
-                if (manualTestEscalation.halt) {
-                  const reason = `manual_test kickback-to-build no-op: ${manualTestEscalation.reason}`;
-                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                    () => {},
-                  );
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
-                  await writeState(this.stateFilePath, state);
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-                if (manualTestSelfHeals < MAX_KICKBACKS_PER_GATE) {
-                  manualTestSelfHeals++;
-                  const evidence = failRows.join('\n');
-                  await this.events.emit({
-                    type: 'kickback',
-                    from: 'manual_test',
-                    to: 'build',
-                    evidence,
-                    count: manualTestSelfHeals,
-                  });
-                  // Hand BUILD the bugs it must fix. The whitewash guard on the
-                  // manual_test gate refuses a PASS rewrite with no new commits,
-                  // so a no-op BUILD cannot silently converge this loop.
-                  pendingRetryHints.set(
-                    'build',
-                    `manual-test FAILED with these results:\n${evidence}\nRead ` +
-                      `.pipeline/manual-test-results.md (latest attempt section) for full ` +
-                      `evidence. The plan's task list may already be complete — these are ` +
-                      `BUGS in the shipped code. Implement and COMMIT fixes for each FAIL; ` +
-                      `the manual_test gate refuses a FAIL→PASS rewrite that adds no new ` +
-                      `commits, and manual-test re-runs after this build.`,
-                  );
-
-                  // Task 7: Merged-PR guard on manual_test kickback (TS-1).
-                  // Before committing the rewind, check if the recorded PR has been
-                  // merged out-of-band. If so, stop the run as a synthetic verified
-                  // ship and return successfully.
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
-                    return;
-                  }
-                  await captureKickbackToBuildContext('manual_test');
-                  const nav = navigateBack(state, 'build', steps);
-                  state = nav.state;
-                  // markDownstreamStale only restages `done` steps; manual_test
-                  // is `failed` here, so restage it explicitly for the tail.
-                  (state as Record<string, unknown>).manual_test = 'stale';
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on build
-                  continue;
-                }
-                const reason =
-                  `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
-                  `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
-                  (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
-                await writeState(this.stateFilePath, state);
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
+                const outcome = await handleManualTestFailKickback(failRows);
+                if (outcome.action === 'return') return;
+                i = outcome.nextIndex;
+                continue;
               }
             }
 
