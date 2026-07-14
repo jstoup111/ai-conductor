@@ -198,6 +198,8 @@ export function validateConfig(
     'ci_watch',
     // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
     'build_progress_halt',
+    // Retry-routing kill-switch (retry-classify-rerun-vs-route).
+    'retry_routing',
     // Wiring-reachability gate Layer 2 (TS import-graph reachability).
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
@@ -771,6 +773,13 @@ export function validateConfig(
     obj.kickback_escalation = { enabled: true };
   }
 
+  // retry_routing — retry classify rerun-vs-route kill-switch.
+  {
+    const err = validateRetryRoutingBlock(obj.retry_routing);
+    if (err) return { ok: false, error: err };
+    obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
+  }
+
   return { ok: true, config: obj as HarnessConfig, warnings };
 }
 
@@ -1102,6 +1111,44 @@ function resolveBuildProgressHaltBlock(raw: unknown): {
       typeof obj.dispatch_ceiling === 'number'
         ? obj.dispatch_ceiling
         : BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling,
+  };
+}
+
+/**
+ * Defaults for the `retry_routing:` kill-switch. Absent block resolves to
+ * `enabled: true` (feature on by default).
+ */
+export const RETRY_ROUTING_DEFAULTS = {
+  enabled: true,
+} as const;
+
+/**
+ * Validate the `retry_routing:` block (retry classify rerun-vs-route
+ * kill-switch). Object-only; `enabled` must be a boolean if present; unknown
+ * keys inside the block are rejected.
+ */
+function validateRetryRoutingBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'retry_routing must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in retry_routing: "${k}"` };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'retry_routing.enabled must be a boolean' };
+  }
+  return null;
+}
+
+function resolveRetryRoutingBlock(raw: unknown): { enabled: boolean } {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : RETRY_ROUTING_DEFAULTS.enabled,
   };
 }
 

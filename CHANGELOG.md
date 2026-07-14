@@ -45,6 +45,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   no migration block required.
 
 ### Added
+- Implemented #646's rerun-vs-route retry classifier (queued entry below): `classifyRetryDecision`
+  (`src/conductor/src/engine/artifacts.ts`) is a pure helper that, on a completion-gate miss for a
+  SHIP-tail verdict step (`architecture_review_as_built`, `build_review`, `prd_audit`), decides
+  `rerun` vs. `route` from a `routeClass` facet (`'named-route' | 'absent'`) now carried on
+  `CompletionResult` for the as-built/build_review predicates, plus a byte-identical-reason +
+  unchanged-HEAD/artifact-mtime "identical-repeat" signal. The conductor retry loop
+  (`src/conductor/src/engine/conductor.ts`) calls the classifier in daemon mode, emits a
+  `retry_decision` event per attempt, and — for an identical-repeat route — prepends an
+  "unchanged input" note to the routed HALT reason instead of the generic "retries exhausted"
+  text. A new `retry_routing:` config block (`types/config.ts` / `engine/config.ts`,
+  `RETRY_ROUTING_DEFAULTS = { enabled: true }`) is the kill-switch: `enabled: false` reverts
+  exactly to the pre-#646 behaviour (only `prd_audit`'s original try-1 short-circuit runs; the
+  other two verdict steps burn their full retry budget before routing at `step_failed`). Routing
+  reuses the existing `planRemediation`/kickback path unchanged, so `MAX_KICKBACKS_PER_GATE` and
+  the #644 DECIDE-target HALT are unaffected; non-daemon (interactive) retry behavior is
+  untouched (the classifier seam is daemon-gated). Documented next to `build_progress_halt` in
+  `README.md` and `src/conductor/README.md`.
 - Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
   lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
   `.ai-conductor/config.yml`; `validateConfig()` still rejects disabling every other

@@ -177,6 +177,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const full = join(dir, '.pipeline/architecture-review-as-built.md');
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content);
+    return full;
   }
 
   const header = '# As-Built Architecture Review\n**Mode:** as-built\n';
@@ -185,12 +186,14 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no \.pipeline\/architecture-review-as-built\.md/);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('passes on a clean APPROVED verdict', async () => {
     await report(`${header}**Verdict:** APPROVED\n`);
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(true);
+    expect(r.routeClass).toBeUndefined();
   });
 
   it('passes on APPROVED WITH DRIFT NOTES', async () => {
@@ -204,6 +207,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/BLOCKED/);
+    expect(r.routeClass).toBe('named-route');
   });
 
   // The reported random-number-api bug: a non-clean, non-BLOCKED verdict was
@@ -213,13 +217,26 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/not a clean APPROVED|NEEDS REVIEW/);
+    expect(r.routeClass).toBe('named-route');
   });
 
-  it('fails when the report has no Verdict line at all', async () => {
+  it('fails when the report has no Verdict line at all (unparseable verdict)', async () => {
     await report(`${header}## Notes\nThere were no ADRs to check.\n`);
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no parseable .*Verdict|not a clean APPROVED/i);
+    expect(r.routeClass).toBe('absent');
+  });
+
+  it('fails on a stale report (mtime predates session) with routeClass absent', async () => {
+    const full = await report(`${header}**Verdict:** APPROVED\n`);
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    await utimes(full, old, old);
+    const sessionStartedAt = Date.now();
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.routeClass).toBe('absent');
   });
 
   // Task 1, session-fresh-verdict-artifacts (incident 2026-07-12-wiring-reachability-gate):
@@ -323,6 +340,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const r = await checkGateCompletion(dir, 'build_review');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no build-review verdict/i);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('passes on a fresh valid PASS verdict', async () => {
@@ -330,6 +348,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(true);
+    expect(r.routeClass).toBeUndefined();
   });
 
   it('fails when the verdict file predates the session (stale)', async () => {
@@ -343,6 +362,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('fails on a FAIL verdict and surfaces the reasons', async () => {
@@ -356,6 +376,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/tautological assertion in test/);
     expect(r.reason).toMatch(/scope creep beyond acceptance criteria/);
+    expect(r.routeClass).toBe('named-route');
   });
 
   it('fails on malformed JSON', async () => {
@@ -365,6 +386,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('fails on a verdict that fails validation (e.g. missing rubric)', async () => {
@@ -372,6 +394,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
+    expect(r.routeClass).toBe('absent');
   });
 
   // Task 1, session-fresh-verdict-artifacts.

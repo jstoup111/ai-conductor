@@ -2162,6 +2162,61 @@ Tests: `test/acceptance/kickback-build-noop-escalation.acceptance.test.ts`,
 Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
 `test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
 
+### Rerun-vs-route retry classifier (`retry_routing`, #646)
+
+The SHIP-tail verdict steps (`architecture_review_as_built`, `build_review`, `prd_audit`) used to
+have only one short-circuit: a blocking `prd_audit` verdict routed into `/remediate` on the very
+first attempt, while the other two verdict steps burned their full `stepMaxRetries` budget on a
+rerun even when the artifact evidence made it obvious a rerun could never change the outcome
+(e.g. a fresh `BLOCKED` as-built verdict, or a `build_review` `FAIL` that's byte-identical to the
+prior attempt with nothing in the tree having changed). `classifyRetryDecision` (`engine/
+artifacts.ts` facet + `engine/conductor.ts` seam) generalizes that short-circuit to all three
+verdict steps in daemon mode.
+
+**The rerun-vs-route rule.** On a completion-check miss for a verdict step, the classifier routes
+immediately instead of rerunning when either signal fires:
+
+- **(a) named-route** — the completion predicate itself names a fresh, parsed adverse verdict
+  (`routeClass: 'named-route'` on `CompletionResult`, e.g. a fresh as-built `BLOCKED` or a fresh
+  `build_review` `FAIL`; equivalently a non-clean `classifyPrdAuditGaps` result for `prd_audit`).
+  This is a fixable-signal reason to route on attempt 1 — the verdict already told us what's
+  wrong and rerunning the grader with nothing changed won't tell us anything new.
+- **(b) identical-repeat** — attempt ≥ 2, the completion-check `reason` is byte-identical to the
+  prior attempt's, *and* both the HEAD commit sha and the verdict artifact's mtime are unchanged
+  since the prior attempt. This catches the case where the predicate didn't name a route (e.g. an
+  absent/malformed verdict) but the grader is provably re-reporting the exact same failure against
+  unchanged inputs — rerunning again would just burn the retry budget for the same result.
+
+Anything else (an absent/malformed verdict on attempt 1, or a same-reason repeat where the inputs
+actually changed) still reruns, matching pre-#646 behavior. Routing reuses the existing
+`planRemediation`/kickback path (and its `MAX_KICKBACKS_PER_GATE` budget) unchanged — the
+classifier only decides *when* to hand off to that path, not how it routes.
+
+**Config (`pipeline.yml` / `harness-config.ts` `retry_routing:` key):**
+
+```yaml
+retry_routing:
+  enabled: true   # default true
+```
+
+**Kill switch.** `retry_routing.enabled: false` is an *exact revert* to the pre-#646 behavior: only
+the original `prd_audit`-only short-circuit runs (a blocking `prd_audit` verdict still routes on
+attempt 1), and `architecture_review_as_built`/`build_review` burn their full retry budget before
+routing at `step_failed`, exactly as before this feature. No `retry_decision` telemetry is emitted
+while disabled.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `RetryRoutingConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `retry_routing:` block, `RETRY_ROUTING_DEFAULTS` |
+| `engine/artifacts.ts` | `routeClass` facet on `CompletionResult` for the as-built/build_review verdict predicates; `classifyRetryDecision` pure helper (rerun vs. route + signal) |
+| `engine/conductor.ts` | Retry-loop seam: computes `inputsUnchanged`/`prdAuditNonClean`, calls the classifier, emits `retry_decision`, threads the unchanged-input note into a routed HALT reason |
+
+Tests: `test/integration/retry-classify.test.ts`, plus unit coverage in `test/engine/artifacts.test.ts`
+and `test/engine/config*.test.ts`.
+
 ### Bootstrap-mode skip
 
 `state.bootstrap_mode` is set by the `bootstrap` skill to one of `new`, `fresh`,
