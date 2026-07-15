@@ -111,6 +111,7 @@ export type EngineerDispatch =
   | { kind: 'forget'; sourceRef: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean }
+  | { kind: 'reject'; sub: string; flag: string }
   | { kind: 'help'; topic: string };
 
 /** Single source of truth for the known deterministic subcommands (#524). */
@@ -132,6 +133,16 @@ export const ENGINEER_SUBCOMMANDS = [
  *   'handoff'            → {kind:'handoff', project, branch}  (--project <n> --branch <b>)
  *   malformed / missing-flags → {kind:'guide'}  (print usage)
  */
+/** First argv token (from index 4) starting with `--` that isn't in `allowed`
+ * and isn't `--help`/`-h` (already handled earlier) — or null if none. */
+function findUnknownFlag(argv: string[], allowed: string[]): string | null {
+  for (let i = 4; i < argv.length; i++) {
+    const tok = argv[i];
+    if (tok.startsWith('--') && tok !== '--help' && !allowed.includes(tok)) return tok;
+  }
+  return null;
+}
+
 export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   // argv is process.argv: [node, entry, sub, ...]
   const sub = argv[2];
@@ -153,6 +164,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   }
 
   if (subCmd === 'projects') {
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'projects', flag: unk };
     return { kind: 'projects' };
   }
 
@@ -195,11 +208,15 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 
   if (subCmd === 'poll') {
     // `conduct-ts engineer poll` — poll intake sources and enqueue; no routing/process.
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'poll', flag: unk };
     return { kind: 'poll' };
   }
 
   if (subCmd === 'claim') {
     // `conduct-ts engineer claim` — atomically dequeue the oldest pending idea.
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'claim', flag: unk };
     return { kind: 'claim' };
   }
 
@@ -243,6 +260,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     // `conduct-ts engineer migrate-issue-deps [--confirm]` — one-time prose→link
     // migration (Task 22-25). Dry-run by default (proposal only, zero writes);
     // `--confirm` applies via the GET-before-POST writer.
+    const unk = findUnknownFlag(argv, ['--confirm']);
+    if (unk) return { kind: 'reject', sub: 'migrate-issue-deps', flag: unk };
     const confirm = argv.includes('--confirm');
     return { kind: 'migrate-issue-deps', confirm };
   }
@@ -657,6 +676,14 @@ export async function dispatchEngineer(
     case 'guide': {
       printGuide(print);
       return 0;
+    }
+
+    // ── reject ────────────────────────────────────────────────────────────────
+    // Unknown flag on a zero/boolean-flag subcommand (#524 Story 3): fail fast
+    // rather than silently ignoring the flag and running the subcommand anyway.
+    case 'reject': {
+      printErr(`engineer ${dispatch.sub}: unknown flag "${dispatch.flag}"`);
+      return 1;
     }
 
     // ── help ──────────────────────────────────────────────────────────────────
