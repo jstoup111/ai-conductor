@@ -344,8 +344,12 @@ The harness version your project runs against is controlled by
 
 ### Update flow
 
-1. On every `conduct` invocation, `check_harness_update()` in `bin/conduct`
-   fetches either the latest tag (`tagged`) or the remote branch (`main`).
+1. `bin/update` fetches either the latest tag (`tagged`) or the remote branch
+   (`main`), depending on how it's invoked:
+   - `bin/update` (no args) forces a check now, bypassing the `autoCheck`
+     gate.
+   - `bin/update --auto` checks only if `autoCheck` is not `false`; this is
+     what `conduct-ts` spawns automatically at daemon startup.
 2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
    with the configured markdown viewer (see `markdown_viewer` in
    `~/.ai-conductor/config.yml`) and the user is prompted before anything is
@@ -356,16 +360,17 @@ The harness version your project runs against is controlled by
      `settings.json` entries.
    - Walks `CHANGELOG.md` entries between the old and new version for any
      `## Migration` bash blocks, displays them, and runs them on approval.
-4. On success, `currentVersion` is written back to the config and `conduct`
-   re-launches. On failure, the harness is rolled back to the previous ref and
-   the user is notified.
+4. On success, `currentVersion` is written back to the config. On failure,
+   the harness is rolled back to the previous ref and the user is notified.
 
 ### Changing channels
 
 ```
-conduct --set-channel tagged   # follow stable semver tags
-conduct --set-channel main     # follow main branch
-conduct --update               # force an update check now
+bin/update --set-channel tagged   # follow stable semver tags
+bin/update --set-channel main     # follow main branch
+bin/update                        # force an update check now
+bin/update --auto                 # check only if autoCheck != false
+bin/update -h                     # usage
 ```
 
 The `updateChannel` setting is per-user (lives in `~/.claude/`), so every

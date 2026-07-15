@@ -1791,7 +1791,8 @@ ai-conductor/
 │   ├── install              # Install/update/uninstall harness
 │   ├── conduct              # Stable bash SDLC runner
 │   ├── conduct-ts           # TypeScript conductor wrapper (requires built dist/)
-│   └── migrate              # Changelog-driven migration runner
+│   ├── update                # bin/update — self-update check/apply CLI (see HARNESS.md → "Update flow")
+│   └── migrate               # Changelog-driven migration runner
 ├── src/conductor/           # TypeScript conductor (tsup bundle, vitest tests)
 │   ├── src/engine/          # State machine, gates, completion, auto-heal
 │   ├── src/execution/       # Claude provider, subprocess, rate limiting

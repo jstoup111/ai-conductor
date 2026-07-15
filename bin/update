@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# update — Standalone self-update/channel CLI for the harness, ported out of
+# bin/conduct's update block (see .docs/plans/port-self-update-flow.md and
+# .docs/stories/port-self-update-flow.md). bin/conduct still retains its own
+# copy of the update flow until #226 removes it.
+#
+# Sequencing note for #226: that follow-up issue must delete the update block
+# (check_harness_update/apply_harness_update/set_update_channel/etc., plus
+# any duplicated helper copy still inline in bin/conduct rather than sourced
+# from bin/lib/harness-common.sh) from bin/conduct. #226 must NOT remove this
+# file (bin/update) or bin/lib/harness-common.sh — they are the new permanent
+# homes for this logic.
+#
+# Usage:
+#   update                          — force an update check now, bypassing the autoCheck gate
+#   update --auto                   — check only if autoCheck config is not false (silent no-op otherwise); used by conduct-ts at startup
+#   update --set-channel <tagged|main> — set the update channel
+#   update -h|--help                — usage
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Not a git checkout — nothing to check/update/configure. Bail before even
+# sourcing harness-common.sh so a harness install missing bin/lib (or any
+# other non-git tree bin/update happens to run inside) still exits cleanly.
+if [ ! -d "${HARNESS_DIR}/.git" ]; then
+  exit 0
+fi
+
+# shellcheck source=bin/lib/harness-common.sh
+source "${HARNESS_DIR}/bin/lib/harness-common.sh"
+
+# ─── Update check functions (ported verbatim from bin/conduct) ────────────
+
+# Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
+# to_ver (inclusive) using the user's configured markdown viewer. Writes to
+# a temp file so external/blocking viewers (VSCode, Typora) can open it the
+# same way they would for artifact review.
+render_changelog_range() {
+  local from_ver=$1 to_ver=$2
+  local changelog="${HARNESS_DIR}/CHANGELOG.md"
+  [ -f "$changelog" ] || return 0
+  local preview
+  preview=$(FROM_VER="$from_ver" TO_VER="$to_ver" python3 - "$changelog" <<'PY'
+import os, re, sys
+from pathlib import Path
+
+def norm(v):
+    if not v:
+        return ()
+    s = v.lstrip("v")
+    try:
+        return tuple(int(p) for p in s.split("."))
+    except ValueError:
+        return ()
+
+path = Path(sys.argv[1])
+text = path.read_text()
+from_ver = norm(os.environ.get("FROM_VER", ""))
+to_ver = norm(os.environ.get("TO_VER", ""))
+
+sections = re.split(r"(?m)^## \[", text)
+out = []
+for sec in sections[1:]:
+    m = re.match(r"([^\]]+)\]", sec)
+    if not m:
+        continue
+    label = m.group(1).strip()
+    if label.lower() == "unreleased":
+        continue
+    nv = norm(label)
+    if not nv:
+        continue
+    if (not from_ver or nv > from_ver) and (not to_ver or nv <= to_ver):
+        body = sec[m.end():].rstrip()
+        out.append(f"## [{label}]{body}\n")
+sys.stdout.write("\n".join(reversed(out)))
+PY
+  )
+  [ -z "$preview" ] && return 0
+  local tmp
+  tmp=$(mktemp --suffix=.md 2>/dev/null || mktemp -t changelog.XXXXXX.md)
+  printf '%s\n' "$preview" > "$tmp"
+  # Deliberately bypass render_md's configured markdown_viewer here: its
+  # default args ("-p -w 80 {file}") open glow in full-screen pager mode,
+  # which steals the same stdin the y/n prompt right after this call needs
+  # to read. A human would press "q" to dismiss it and continue, but that
+  # extra keypress isn't part of the documented confirm-prompt UX, and any
+  # scripted/piped stdin (tests, non-interactive callers) hangs forever
+  # waiting for a quit key that never comes. Render the preview as plain,
+  # non-paged output instead so the prompt's read is never starved. Plain
+  # `cat` (no glow ANSI styling) also keeps this preview deterministically
+  # greppable for callers/tests scanning the printed changelog text.
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
+# Compare two semver-ish versions. Returns 0 if $1 < $2 (i.e. update available).
+semver_lt() {
+  [ "$1" = "$2" ] && return 1
+  local a="${1#v}" b="${2#v}"
+  local hi
+  hi=$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)
+  [ "$hi" = "$b" ]
+}
+
+# Run bin/migrate for the accepted update, then write the new currentVersion
+# back to config and re-launch conduct. On failure, roll back the checkout.
+apply_harness_update() {
+  local new_version=$1 rollback_ref=$2
+
+  if "${HARNESS_DIR}/bin/migrate"; then
+    conductor_cfg_set currentVersion "$new_version"
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ok "Harness updated to ${new_version}. Re-run to pick up the change."
+    return 0
+  else
+    fail "bin/migrate failed — rolling back to ${rollback_ref}"
+    git -C "$HARNESS_DIR" checkout "$rollback_ref" >/dev/null 2>&1 || true
+    return 1
+  fi
+}
+
+# Tagged-channel update: find the latest vX.Y.Z tag and prompt before applying.
+check_harness_update_tagged() {
+  timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet 2>/dev/null || return 0
+
+  local latest_tag
+  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
+  [ -z "$latest_tag" ] && return 0
+
+  local current_version
+  current_version=$(conductor_cfg_get currentVersion "")
+
+  if [ -z "$current_version" ] || [[ "$current_version" == main@* ]]; then
+    # No recorded tagged version — seed it silently and return.
+    conductor_cfg_set currentVersion "$latest_tag"
+    return 0
+  fi
+
+  if ! semver_lt "$current_version" "$latest_tag"; then
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    return 0
+  fi
+
+  echo ""
+  warn "Harness update available: ${current_version} → ${latest_tag}"
+  echo ""
+  render_changelog_range "$current_version" "$latest_tag"
+  echo ""
+
+  if [ ! -t 0 ]; then
+    warn "No TTY — run: cd ${HARNESS_DIR} && git checkout ${latest_tag} && bin/migrate"
+    return 0
+  fi
+
+  read -r -p "  Update to ${latest_tag}? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref
+  rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
+  if ! git -C "$HARNESS_DIR" checkout "tags/${latest_tag}" 2>/dev/null; then
+    fail "Failed to checkout ${latest_tag} — update aborted"
+    return 0
+  fi
+  apply_harness_update "$latest_tag" "$rollback_ref"
+}
+
+# Main-channel update: preserve the old fast-forward pull behavior but run
+# bin/migrate afterward so symlinks and settings refresh.
+check_harness_update_main() {
+  timeout 5 git -C "$HARNESS_DIR" fetch --quiet 2>/dev/null || return 0
+
+  local branch local_head remote_head
+  branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  [ -z "$branch" ] && return 0
+
+  local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  remote_head=$(git -C "$HARNESS_DIR" rev-parse "origin/${branch}" 2>/dev/null || echo "")
+  [ "$local_head" = "$remote_head" ] && return 0
+  [ -z "$remote_head" ] && return 0
+
+  if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD "origin/${branch}" 2>/dev/null; then
+    return 0
+  fi
+
+  local behind_count
+  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
+  [ "$behind_count" = "0" ] && return 0
+
+  echo ""
+  warn "Harness update available (${behind_count} commit(s) behind origin/${branch})"
+  if [ ! -t 0 ]; then
+    warn "Run: cd ${HARNESS_DIR} && git pull && bin/migrate"
+    return 0
+  fi
+
+  read -r -p "  Pull latest? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref
+  rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
+  # Explicit remote+branch: relies on origin/<branch> already having been
+  # fetched above, not on upstream tracking config being set (a checkout
+  # whose branch has no "branch.<name>.merge" set — e.g. never pushed with
+  # -u — would otherwise make plain `git pull` fail with "no tracking
+  # information" even though the ff-only merge itself is perfectly safe).
+  if ! git -C "$HARNESS_DIR" pull --ff-only origin "$branch" 2>/dev/null; then
+    fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
+    return 0
+  fi
+
+  local new_sha
+  new_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  apply_harness_update "main@${new_sha}" "$rollback_ref"
+}
+
+# Dispatch on the configured update channel, regardless of autoCheck. Shared
+# by the forced (no-args) and auto (--auto, gated) entry points below.
+dispatch_update_channel() {
+  local channel
+  channel=$(conductor_cfg_get updateChannel tagged)
+  case "$channel" in
+    main)   check_harness_update_main ;;
+    tagged|*) check_harness_update_tagged ;;
+  esac
+}
+
+# Forced check — used for the no-args "check now" invocation. Bypasses the
+# autoCheck gate (a manual check should always run) but still requires a git
+# checkout.
+check_harness_update() {
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+  dispatch_update_channel
+}
+
+# Auto check — used by --auto (e.g. wired into conduct-ts's daemon loop).
+# Respects the autoCheck config gate; silent no-op when disabled.
+check_harness_update_auto() {
+  [ -d "${HARNESS_DIR}/.git" ] || return 0
+
+  local auto_check
+  auto_check=$(conductor_cfg_get autoCheck true)
+  [ "$auto_check" = "false" ] && return 0
+
+  dispatch_update_channel
+}
+
+set_update_channel() {
+  local new_channel=$1
+  case "$new_channel" in
+    tagged|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+  esac
+  conductor_cfg_set updateChannel "$new_channel"
+  ok "Update channel set to: ${new_channel}"
+  exit 0
+}
+
+usage() {
+  cat <<'EOF'
+Usage: update [OPTIONS]
+
+  (no args)           Force an update check now, bypassing the autoCheck gate.
+  --auto              Run an update check only if autoCheck is not "false".
+  --set-channel <c>   Set the update channel (tagged, main).
+  -h, --help          Show this help message.
+EOF
+}
+
+# ─── CLI argument dispatch ──────────────────────────────────────────────────
+
+if [ "$#" -eq 0 ]; then
+  check_harness_update
+  exit 0
+fi
+
+case "${1:-}" in
+  --auto)
+    check_harness_update_auto
+    exit 0
+    ;;
+  --set-channel)
+    if [ -z "${2:-}" ]; then
+      fail "Missing channel argument for --set-channel (expected: tagged, main)"
+      exit 2
+    fi
+    set_update_channel "$2"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage
+    fail "Unrecognized argument: $1"
+    exit 2
+    ;;
+esac
