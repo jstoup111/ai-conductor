@@ -4,7 +4,7 @@
 // Mirrors the `daemon --help` guard in src/index.ts:378-388.
 
 import { describe, it, expect } from 'vitest';
-import { detectEngineerCommand } from '../../../src/engine/engineer-cli.js';
+import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 
 // Helper: build argv arrays for testing
 // detectEngineerCommand reads process.argv offsets: [node, entry, 'engineer', sub, ...].
@@ -50,5 +50,54 @@ describe('detectEngineerCommand: --help/-h short-circuits every subcommand', () 
   it('regression guard: bare `engineer --help` (no subcommand token) still returns {kind:"guide"}', () => {
     const result = detectEngineerCommand(argv('--help'));
     expect(result).toEqual({ kind: 'guide' });
+  });
+});
+
+describe('dispatchEngineer: {kind:"help"} renders text with zero side effects (#524)', () => {
+  function captureOut() {
+    const out: string[] = [];
+    const err: string[] = [];
+    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]>): Parameters<typeof dispatchEngineer>[1] => ({
+      print: (s) => out.push(s),
+      printErr: (s) => err.push(s),
+      ...extra,
+    });
+    return { out, err, opts };
+  }
+
+  for (const sub of SUBCOMMANDS) {
+    it(`\`engineer ${sub} --help\` prints one line mentioning '${sub}' and touches nothing`, async () => {
+      const { out, err, opts } = captureOut();
+      let ghCalled = false;
+      const gh = async (): Promise<{ stdout: string }> => {
+        ghCalled = true;
+        throw new Error(`gh must not be called for help topic '${sub}'`);
+      };
+      const code = await dispatchEngineer(
+        { kind: 'help', topic: sub },
+        opts({
+          gh,
+          engineerDir: `/tmp/engineer-cli-help-${Math.random().toString(36).slice(2)}/nope`,
+        }),
+      );
+      expect(code).toBe(0);
+      expect(out.length).toBe(1);
+      expect(out[0]).toContain(sub);
+      expect(ghCalled).toBe(false);
+      expect(err.length).toBe(0);
+    });
+  }
+
+  it('`claim` help text explicitly mentions what it mutates', async () => {
+    const { out, opts } = captureOut();
+    await dispatchEngineer({ kind: 'help', topic: 'claim' }, opts({}));
+    const text = out[0].toLowerCase();
+    expect(text.includes('ledger') || text.includes('inbox')).toBe(true);
+  });
+
+  it('`projects` help text explicitly states it is read-only', async () => {
+    const { out, opts } = captureOut();
+    await dispatchEngineer({ kind: 'help', topic: 'projects' }, opts({}));
+    expect(out[0].toLowerCase()).toContain('read-only');
   });
 });

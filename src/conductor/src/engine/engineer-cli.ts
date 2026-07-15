@@ -397,6 +397,61 @@ function parseGhRepo(remote: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * Per-subcommand `--help`/`-h` text (#524). Each entry states: what the subcommand
+ * does, its flags (required vs optional), what durable state it mutates (or that
+ * it is read-only), and where it sits in the idea→spec loop (claim → worktree →
+ * land → handoff → resolve/forget; poll/migrate-issue-deps are out-of-band
+ * maintenance ops).
+ */
+const SUBCOMMAND_HELP: Record<string, string> = {
+  projects:
+    'engineer projects — list the registered projects from the project registry.\n' +
+    'Flags: none.\n' +
+    'Mutates: nothing (read-only).\n' +
+    'Loop fit: informational only — inspect which projects the engineer can route ideas to; not a step in the claim → worktree → land → handoff → resolve/forget loop.',
+  worktree:
+    'engineer worktree --project <name> --idea "<idea>" — create the per-idea worktree used to author a spec.\n' +
+    'Flags: --project <name> (required), --idea "<text>" (required).\n' +
+    'Mutates: creates a git worktree and branch on disk for the project.\n' +
+    'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  land:
+    'engineer land --project <name> --idea "<idea>" --worktree <path> [--source-ref <ref>] — land the authored spec from the worktree onto the spec/<slug> branch and open the spec PR.\n' +
+    'Flags: --project <name> (required), --idea "<text>" (required), --worktree <path> (required — strict isolation, never falls back to the primary checkout), --source-ref <ref> (optional — intake write-back anchor for github-issues-sourced ideas).\n' +
+    'Mutates: commits to the worktree, pushes the spec/<slug> branch, opens a PR.\n' +
+    'Loop fit: third step — claim → worktree → land → handoff → resolve/forget.',
+  handoff:
+    'engineer handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>] — hand the landed spec off to the daemon/build phase.\n' +
+    'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
+    'Mutates: notifies/nudges the daemon for the target project; updates ledger write-back state when --source-ref is present.\n' +
+    'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
+  poll:
+    'engineer poll — poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox.\n' +
+    'Flags: none.\n' +
+    'Mutates: writes new envelopes to the file-backed inbox queue.\n' +
+    'Loop fit: out-of-band maintenance op — primes the inbox but is not itself a step in claim → worktree → land → handoff → resolve/forget.',
+  claim:
+    'engineer claim — atomically dequeue the oldest pending idea from the inbox for the operator to work.\n' +
+    'Flags: none.\n' +
+    'Mutates: dequeues from the inbox and records a claimed entry in the ledger.\n' +
+    'Loop fit: first step of the loop — claim → worktree → land → handoff → resolve/forget.',
+  forget:
+    'engineer forget <sourceRef> — drop a ledger entry and strip its intake label.\n' +
+    'Flags: <sourceRef> positional (required, must not start with --).\n' +
+    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue).\n' +
+    'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (abandon path, alternative to resolve).',
+  resolve:
+    'engineer resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
+    'Flags: <sourceRef> positional (required), --pr-url <url> (required, must be http:// or https://), --branch <branch> (optional).\n' +
+    'Mutates: stamps the ledger entry with prUrl (and branch, if given), recovering from a stranded claimed-but-undelivered state.\n' +
+    'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (recovery path, alternative to forget).',
+  'migrate-issue-deps':
+    'engineer migrate-issue-deps [--confirm] — one-time migration of prose-based issue dependency references to structured links.\n' +
+    'Flags: --confirm (optional — without it, dry-run only: proposes changes with zero writes; with it, applies via the GET-before-POST writer).\n' +
+    'Mutates: nothing by default (dry-run); with --confirm, updates issue bodies/links on the source tracker.\n' +
+    'Loop fit: out-of-band maintenance op, not a step in claim → worktree → land → handoff → resolve/forget.',
+};
+
 /** Print the engineer usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
   print(
@@ -598,6 +653,13 @@ export async function dispatchEngineer(
     // ── guide ─────────────────────────────────────────────────────────────────
     case 'guide': {
       printGuide(print);
+      return 0;
+    }
+
+    // ── help ──────────────────────────────────────────────────────────────────
+    // Per-subcommand `--help`/`-h` (#524): zero side effects, single print.
+    case 'help': {
+      print(SUBCOMMAND_HELP[dispatch.topic] ?? '');
       return 0;
     }
 
