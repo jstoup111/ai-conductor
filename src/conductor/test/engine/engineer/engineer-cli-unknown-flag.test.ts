@@ -56,4 +56,116 @@ describe('detectEngineerCommand: unknown-flag rejection (#524 Story 3)', () => {
     );
     expect(result).toEqual({ kind: 'reject', sub: 'resolve', flag: '--dry-run' });
   });
+
+  // --- Story 3: worktree/land/handoff (required-named-flag subcommands) ---
+
+  it('rejects an unknown flag on `worktree`', () => {
+    const result = detectEngineerCommand(
+      argv('worktree', '--project', 'p', '--idea', 'i', '--extra', 'x')
+    );
+    expect(result).toEqual({ kind: 'reject', sub: 'worktree', flag: '--extra' });
+  });
+
+  it('regression: `worktree` with only recognized flags is unchanged', () => {
+    const result = detectEngineerCommand(argv('worktree', '--project', 'p', '--idea', 'i'));
+    expect(result).toEqual({ kind: 'worktree', project: 'p', idea: 'i' });
+  });
+
+  it('regression: `worktree` missing required flags still guides', () => {
+    expect(detectEngineerCommand(argv('worktree', '--project', 'p'))).toEqual({ kind: 'guide' });
+  });
+
+  it('rejects an unknown flag on `land`', () => {
+    const result = detectEngineerCommand(
+      argv('land', '--project', 'p', '--idea', 'i', '--worktree', 'w', '--bogus')
+    );
+    expect(result).toEqual({ kind: 'reject', sub: 'land', flag: '--bogus' });
+  });
+
+  it('rejects an unknown flag on `land` even when `--source-ref` is present', () => {
+    const result = detectEngineerCommand(
+      argv(
+        'land',
+        '--project',
+        'p',
+        '--idea',
+        'i',
+        '--worktree',
+        'w',
+        '--source-ref',
+        's',
+        '--bogus'
+      )
+    );
+    expect(result).toEqual({ kind: 'reject', sub: 'land', flag: '--bogus' });
+  });
+
+  it('regression: `land` with only recognized flags is unchanged', () => {
+    const result = detectEngineerCommand(
+      argv('land', '--project', 'p', '--idea', 'i', '--worktree', 'w')
+    );
+    expect(result).toEqual({ kind: 'land', project: 'p', idea: 'i', worktree: 'w', sourceRef: undefined });
+  });
+
+  it('regression: `land` with `--source-ref` is unchanged', () => {
+    const result = detectEngineerCommand(
+      argv('land', '--project', 'p', '--idea', 'i', '--worktree', 'w', '--source-ref', 's')
+    );
+    expect(result).toEqual({ kind: 'land', project: 'p', idea: 'i', worktree: 'w', sourceRef: 's' });
+  });
+
+  it('regression: `land` missing required flags still guides', () => {
+    expect(
+      detectEngineerCommand(argv('land', '--project', 'p', '--idea', 'i'))
+    ).toEqual({ kind: 'guide' });
+  });
+
+  it('rejects an unknown flag on `handoff`', () => {
+    const result = detectEngineerCommand(
+      argv('handoff', '--project', 'p', '--branch', 'b', '--worktree', 'w', '--nope')
+    );
+    expect(result).toEqual({ kind: 'reject', sub: 'handoff', flag: '--nope' });
+  });
+
+  it('regression: `handoff` with only recognized flags is unchanged', () => {
+    const result = detectEngineerCommand(
+      argv('handoff', '--project', 'p', '--branch', 'b', '--worktree', 'w')
+    );
+    expect(result).toEqual({
+      kind: 'handoff',
+      project: 'p',
+      branch: 'b',
+      worktree: 'w',
+      sourceRef: undefined,
+    });
+  });
+
+  it('regression: `handoff` with `--source-ref` is unchanged', () => {
+    const result = detectEngineerCommand(
+      argv(
+        'handoff',
+        '--project',
+        'p',
+        '--branch',
+        'b',
+        '--worktree',
+        'w',
+        '--source-ref',
+        's'
+      )
+    );
+    expect(result).toEqual({
+      kind: 'handoff',
+      project: 'p',
+      branch: 'b',
+      worktree: 'w',
+      sourceRef: 's',
+    });
+  });
+
+  it('regression: `handoff` missing required flags still guides', () => {
+    expect(
+      detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'b'))
+    ).toEqual({ kind: 'guide' });
+  });
 });

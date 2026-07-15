@@ -177,6 +177,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     if (!project || !idea) {
       return { kind: 'guide' };
     }
+    const unk = findUnknownFlag(argv, ['--project', '--idea']);
+    if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
     return { kind: 'worktree', project, idea };
   }
 
@@ -192,6 +194,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     // Optional intake write-back anchor — present when the idea came from an
     // intake envelope (github-issues). Absent for human-typed ideas.
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--project', '--idea', '--worktree', '--source-ref']);
+    if (unk) return { kind: 'reject', sub: 'land', flag: unk };
     return { kind: 'land', project, idea, worktree, sourceRef };
   }
 
@@ -203,6 +207,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--project', '--branch', '--worktree', '--source-ref']);
+    if (unk) return { kind: 'reject', sub: 'handoff', flag: unk };
     return { kind: 'handoff', project, branch, worktree, sourceRef };
   }
 
