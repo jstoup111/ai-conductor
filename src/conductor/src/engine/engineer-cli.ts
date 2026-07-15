@@ -692,7 +692,9 @@ export async function dispatchEngineer(
     // Unknown flag on a zero/boolean-flag subcommand (#524 Story 3): fail fast
     // rather than silently ignoring the flag and running the subcommand anyway.
     case 'reject': {
-      printErr(`engineer ${dispatch.sub}: unknown flag "${dispatch.flag}"`);
+      printErr(
+        `engineer ${dispatch.sub}: unknown flag '${dispatch.flag}' — run \`engineer ${dispatch.sub} --help\` for usage.`,
+      );
       return 1;
     }
 

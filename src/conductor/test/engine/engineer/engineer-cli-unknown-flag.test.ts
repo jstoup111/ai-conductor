@@ -3,7 +3,7 @@
 // like `--verbose` on `claim` was silently ignored and the subcommand ran anyway.
 
 import { describe, it, expect } from 'vitest';
-import { detectEngineerCommand } from '../../../src/engine/engineer-cli.js';
+import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
 
@@ -168,4 +168,50 @@ describe('detectEngineerCommand: unknown-flag rejection (#524 Story 3)', () => {
       detectEngineerCommand(argv('handoff', '--project', 'p', '--branch', 'b'))
     ).toEqual({ kind: 'guide' });
   });
+});
+
+describe('dispatchEngineer: {kind:"reject"} exits 1 with zero mutation (#524 Story 3)', () => {
+  function captureOut() {
+    const out: string[] = [];
+    const err: string[] = [];
+    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]>): Parameters<typeof dispatchEngineer>[1] => ({
+      print: (s) => out.push(s),
+      printErr: (s) => err.push(s),
+      ...extra,
+    });
+    return { out, err, opts };
+  }
+
+  const cases: Array<{ sub: string; flag: string }> = [
+    { sub: 'claim', flag: '--verbose' },
+    { sub: 'projects', flag: '--typo' },
+    { sub: 'resolve', flag: '--dry-run' },
+    { sub: 'land', flag: '--bogus' },
+  ];
+
+  for (const { sub, flag } of cases) {
+    it(`\`engineer ${sub} ${flag}\` exits 1, reports both sub and flag on stderr, and never calls gh`, async () => {
+      const { out, err, opts } = captureOut();
+      let ghCalled = false;
+      const gh = async (): Promise<{ stdout: string }> => {
+        ghCalled = true;
+        throw new Error(`gh must not be called for reject dispatch on '${sub}'`);
+      };
+      const code = await dispatchEngineer(
+        { kind: 'reject', sub, flag },
+        opts({
+          gh,
+          engineerDir: `/tmp/engineer-cli-reject-${Math.random().toString(36).slice(2)}/nope`,
+        }),
+      );
+      expect(code).toBe(1);
+      expect(out.length).toBe(0);
+      expect(ghCalled).toBe(false);
+      expect(err.length).toBeGreaterThan(0);
+      const text = err.join('\n');
+      expect(text).toContain(sub);
+      expect(text).toContain(flag);
+      expect(text.toLowerCase()).toContain('--help');
+    });
+  }
 });
