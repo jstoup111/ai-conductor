@@ -226,6 +226,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     if (!sourceRef || sourceRef.startsWith('--')) {
       return { kind: 'guide' };
     }
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'forget', flag: unk };
     return { kind: 'forget', sourceRef };
   }
 
@@ -253,6 +255,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
       return { kind: 'guide' };
     }
     const branch = parseFlag(argv, '--branch') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--pr-url', '--branch']);
+    if (unk) return { kind: 'reject', sub: 'resolve', flag: unk };
     return { kind: 'resolve', sourceRef, prUrl, branch };
   }
 

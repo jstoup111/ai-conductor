@@ -44,4 +44,16 @@ describe('detectEngineerCommand: unknown-flag rejection (#524 Story 3)', () => {
   it('regression: `projects` with no flags is unchanged', () => {
     expect(detectEngineerCommand(argv('projects'))).toEqual({ kind: 'projects' });
   });
+
+  it('rejects an unknown flag on `forget`', () => {
+    const result = detectEngineerCommand(argv('forget', 'o/a#1', '--force'));
+    expect(result).toEqual({ kind: 'reject', sub: 'forget', flag: '--force' });
+  });
+
+  it('rejects an unknown flag on `resolve`', () => {
+    const result = detectEngineerCommand(
+      argv('resolve', 'o/a#1', '--pr-url', 'https://x/1', '--dry-run')
+    );
+    expect(result).toEqual({ kind: 'reject', sub: 'resolve', flag: '--dry-run' });
+  });
 });
