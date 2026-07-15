@@ -110,7 +110,8 @@ export type EngineerDispatch =
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
-  | { kind: 'migrate-issue-deps'; confirm: boolean };
+  | { kind: 'migrate-issue-deps'; confirm: boolean }
+  | { kind: 'help'; topic: string };
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
@@ -135,6 +136,17 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   if (!subCmd || subCmd === '') {
     // Bare `conduct-ts engineer` → launch the interactive host-agent loop.
     return { kind: 'launch' };
+  }
+
+  // #524: --help/-h MUST be checked BEFORE any subcommand's own dispatch logic —
+  // mirrors the `daemon --help` guard in index.ts:378-388 (same failure class:
+  // otherwise the flag is silently ignored and the subcommand actually executes).
+  const KNOWN_SUBCOMMANDS = new Set([
+    'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
+    'migrate-issue-deps',
+  ]);
+  if (KNOWN_SUBCOMMANDS.has(subCmd) && argv.slice(4).some((a) => a === '--help' || a === '-h')) {
+    return { kind: 'help', topic: subCmd };
   }
 
   if (subCmd === 'projects') {
