@@ -4,7 +4,12 @@
 // Mirrors the `daemon --help` guard in src/index.ts:378-388.
 
 import { describe, it, expect } from 'vitest';
-import { detectEngineerCommand, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import {
+  detectEngineerCommand,
+  dispatchEngineer,
+  ENGINEER_SUBCOMMANDS,
+  SUBCOMMAND_HELP,
+} from '../../../src/engine/engineer-cli.js';
 
 // Helper: build argv arrays for testing
 // detectEngineerCommand reads process.argv offsets: [node, entry, 'engineer', sub, ...].
@@ -99,5 +104,20 @@ describe('dispatchEngineer: {kind:"help"} renders text with zero side effects (#
     const { out, opts } = captureOut();
     await dispatchEngineer({ kind: 'help', topic: 'projects' }, opts({}));
     expect(out[0].toLowerCase()).toContain('read-only');
+  });
+});
+
+describe('regression guard: ENGINEER_SUBCOMMANDS and SUBCOMMAND_HELP stay in sync (#524)', () => {
+  it('every entry in ENGINEER_SUBCOMMANDS has a non-empty SUBCOMMAND_HELP entry', () => {
+    for (const sub of ENGINEER_SUBCOMMANDS) {
+      expect(SUBCOMMAND_HELP[sub]).toBeTruthy();
+    }
+  });
+
+  it('SUBCOMMAND_HELP has no extra keys outside ENGINEER_SUBCOMMANDS', () => {
+    const known = new Set<string>(ENGINEER_SUBCOMMANDS);
+    for (const key of Object.keys(SUBCOMMAND_HELP)) {
+      expect(known.has(key)).toBe(true);
+    }
   });
 });

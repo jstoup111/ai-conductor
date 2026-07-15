@@ -113,6 +113,12 @@ export type EngineerDispatch =
   | { kind: 'migrate-issue-deps'; confirm: boolean }
   | { kind: 'help'; topic: string };
 
+/** Single source of truth for the known deterministic subcommands (#524). */
+export const ENGINEER_SUBCOMMANDS = [
+  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
+  'migrate-issue-deps',
+] as const;
+
 // ── Subcommand detection ──────────────────────────────────────────────────────
 
 /**
@@ -141,10 +147,7 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
   // #524: --help/-h MUST be checked BEFORE any subcommand's own dispatch logic —
   // mirrors the `daemon --help` guard in index.ts:378-388 (same failure class:
   // otherwise the flag is silently ignored and the subcommand actually executes).
-  const KNOWN_SUBCOMMANDS = new Set([
-    'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
-    'migrate-issue-deps',
-  ]);
+  const KNOWN_SUBCOMMANDS = new Set<string>(ENGINEER_SUBCOMMANDS);
   if (KNOWN_SUBCOMMANDS.has(subCmd) && argv.slice(4).some((a) => a === '--help' || a === '-h')) {
     return { kind: 'help', topic: subCmd };
   }
@@ -404,7 +407,7 @@ function parseGhRepo(remote: string): string | null {
  * land → handoff → resolve/forget; poll/migrate-issue-deps are out-of-band
  * maintenance ops).
  */
-const SUBCOMMAND_HELP: Record<string, string> = {
+export const SUBCOMMAND_HELP = {
   projects:
     'engineer projects — list the registered projects from the project registry.\n' +
     'Flags: none.\n' +
@@ -450,7 +453,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     'Flags: --confirm (optional — without it, dry-run only: proposes changes with zero writes; with it, applies via the GET-before-POST writer).\n' +
     'Mutates: nothing by default (dry-run); with --confirm, updates issue bodies/links on the source tracker.\n' +
     'Loop fit: out-of-band maintenance op, not a step in claim → worktree → land → handoff → resolve/forget.',
-};
+} satisfies Record<(typeof ENGINEER_SUBCOMMANDS)[number], string>;
 
 /** Print the engineer usage/guide text (front door + deterministic primitives). */
 function printGuide(print: (s: string) => void): void {
@@ -659,7 +662,7 @@ export async function dispatchEngineer(
     // ── help ──────────────────────────────────────────────────────────────────
     // Per-subcommand `--help`/`-h` (#524): zero side effects, single print.
     case 'help': {
-      print(SUBCOMMAND_HELP[dispatch.topic] ?? '');
+      print(SUBCOMMAND_HELP[dispatch.topic as keyof typeof SUBCOMMAND_HELP] ?? '');
       return 0;
     }
 
