@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Stamped the missing `Owner:` intake marker for the
+  `finish-staleness-grep-never-matches-rebase-finish` spec
+  (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
+  Source-Ref jstoup111/ai-conductor#587), ungating it from the owner gate's
+  `unowned-post-cutover` hold.
 - `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
 
 ### Added
