@@ -20,6 +20,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `conduct daemon unpark` now resets the no-evidence budget
+  (`noEvidenceAttempts`/`noEvidenceReasons`) for both operator- and auto-parked features
+  instead of only auto-parked ones, so an operator-unparked feature also gets a fresh
+  budget rather than carrying over stale counts into re-dispatch. The auto-park halt
+  message now distinguishes a budget inherited from a prior park/unpark cycle from
+  fresh no-evidence failures accumulated since the last unpark, so operators can tell
+  whether a halt reflects new misses or leftover count (#667).
 - Stamped the missing `Owner:` intake marker for the
   `finish-staleness-grep-never-matches-rebase-finish` spec
   (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
