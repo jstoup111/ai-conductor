@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Spec for issue #667 — operator `unpark` grants a fresh no-evidence budget
+  (resets `noEvidenceAttempts`/`noEvidenceReasons` regardless of park
+  provenance) and the auto-park halt message distinguishes an inherited
+  budget from fresh failures
+  (`.docs/plans/noevidenceattempts-persists-across-unpark-so-re-di.md`).
+
 ### Fixed
 
 - Stamped the missing `Owner:` intake marker for the
