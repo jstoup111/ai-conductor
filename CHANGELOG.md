@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Spec for issue #677 — verify-only (prove-closed) plan tasks get a
+  deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
+  the judged attribution lane for marked residue tasks (dark-cutover-safe),
+  `Evidence: skipped <reason>` parity in the generated commit-msg hook, and
+  park reasons that name stranded verify-only task ids — so an
+  evaluator-APPROVED build no longer auto-parks solely because one task
+  legitimately produced no commit
+  (`.docs/plans/verify-only-prove-closed-task-evidence.md`; partial #678 —
+  removes the completed-build re-dispatch trigger for this class, general
+  outcomes deferred to #678/PR #679).
 - Spec for issue #667 — operator `unpark` grants a fresh no-evidence budget
   (resets `noEvidenceAttempts`/`noEvidenceReasons` regardless of park
   provenance) and the auto-park halt message distinguishes an inherited
