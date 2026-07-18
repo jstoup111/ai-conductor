@@ -20,6 +20,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- CLAUDE.md release-gate rule 4: scoped the mandatory VERSION-bump approval
+  prompt to interactive sessions only — autonomous/daemon build sessions no
+  longer block waiting for semver approval (which burned the retry budget and
+  auto-parked evaluator-APPROVED builds, #678); they leave `VERSION` untouched
+  and record the proposed bump in the PR body instead.
 - Stamped the missing `Owner:` intake marker for the
   `finish-staleness-grep-never-matches-rebase-finish` spec
   (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
