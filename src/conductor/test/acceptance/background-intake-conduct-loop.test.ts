@@ -36,7 +36,11 @@
 // No real `gh`, no real filesystem status-surface writes, no real tmux/process.
 // ─────────────────────────────────────────────────────────────────────────────
 
+<<<<<<< HEAD
 import { describe, it, expect, vi } from 'vitest';
+=======
+import { describe, it, expect } from 'vitest';
+>>>>>>> 03cfa01f (test: add failing acceptance specs for background intake conduct loop)
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,11 +50,14 @@ const INTAKE_LOOP_MOD = '../../src/engine/engineer/intake/intake-loop.js';
 const NOTIFIER_MOD = '../../src/engine/engineer/intake/notifier.js';
 const INTAKE_LOOP_SRC = join(here, '..', '..', 'src', 'engine', 'engineer', 'intake', 'intake-loop.ts');
 const NOTIFIER_SRC = join(here, '..', '..', 'src', 'engine', 'engineer', 'intake', 'notifier.ts');
+<<<<<<< HEAD
 // buildIntake() is the composition-root factory that wires the concrete
 // github-issues adapter for the intake path (ADR-008: the engineer loop must
 // not import a concrete adapter, but the CLI composition root does). It lives
 // in engineer-cli.ts rather than its own module — this is the file to scan.
 const BUILD_INTAKE_SRC = join(here, '..', '..', 'src', 'engine', 'engineer-cli.ts');
+=======
+>>>>>>> 03cfa01f (test: add failing acceptance specs for background intake conduct loop)
 
 async function load(modPath: string): Promise<Record<string, any>> {
   return (await import(modPath)) as Record<string, any>;
@@ -465,6 +472,7 @@ describe('FR-9 — the intake loop path imports no LLM/provider module', () => {
 
     expect(Object.keys(deps).some((k) => /model|llm|provider|claude/i.test(k))).toBe(false);
   });
+<<<<<<< HEAD
 
   // Task 15 — zero-token guard, broadened patterns + buildIntake's composition
   // root (engineer-cli.ts). This is a static import-scan (readFile + regex),
@@ -511,6 +519,8 @@ describe('FR-9 — the intake loop path imports no LLM/provider module', () => {
     expect(src).not.toMatch(/\bSessionCache\b/);
     expect(src).not.toMatch(/from\s+['"][^'"]*\bsession-?cache[^'"]*['"]/i);
   });
+=======
+>>>>>>> 03cfa01f (test: add failing acceptance specs for background intake conduct loop)
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -637,6 +647,7 @@ describe('FR-10 — the poll interval is configurable with a validated default f
     }
   });
 });
+<<<<<<< HEAD
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 17 — production `runIntakeLoop` wiring + `intake-loop` CLI subcommand.
@@ -846,3 +857,5 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     expect(src).not.toMatch(/from\s+['"][^'"]*\bsession-?cache[^'"]*['"]/i);
   });
 });
+=======
+>>>>>>> 03cfa01f (test: add failing acceptance specs for background intake conduct loop)
