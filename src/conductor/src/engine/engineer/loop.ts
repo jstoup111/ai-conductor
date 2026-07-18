@@ -39,8 +39,10 @@ import { resolveTargetRepo } from './target.js';
 import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
 import { buildAuthoringPrompt, runAuthoring } from './authoring.js';
 import type { DecideResult } from './authoring.js';
-import { runHandoff } from './handoff-step.js';
+import { openSpecPr } from './handoff.js';
+import { recordAuthoredKey } from './authored-ledger.js';
 import { runCreate } from '../registry-cli.js';
+import { ensureRunning } from '../daemon-lock.js';
 
 const execFile = promisify(execFileCb);
 
@@ -418,15 +420,54 @@ async function processIdea(
     decideFn({ step: step as 'brainstorm' | 'stories' | 'plan', idea, project: target.name, prompt: authoringPrompt });
   const { branch } = await runAuthoring(target, idea, { decide });
 
-  // 4e-4g. Post-authoring handoff (extracted — retro A-2): PR-open-vs-local-commit,
-  //        ensure-running fire-and-forget, and the authored entry. runHandoff owns
-  //        the gh-present guard (A-3 — no `gh!`) and the ENSURE-NOT-MANAGE boundary.
-  const entry = await runHandoff(target, branch, {
-    gh: deps.gh,
-    engineerDir: deps.engineerDir,
-    launchFn,
-    print: (s) => io.print(s),
-  });
-  summary.authored!.push(entry);
+  // 4e. PR / handoff, gated on remote presence.
+  if (target.remote) {
+    // Target has a remote — open a spec PR.
+    const handoffResult = await openSpecPr(target, branch, {
+      runner: async (args, runnerOpts) => {
+        const ghCwd = runnerOpts?.cwd ?? target.canonicalPath;
+        const r = await deps.gh!(args, { cwd: ghCwd });
+        return { stdout: r.stdout, stderr: '' };
+      },
+      ledgerOpts: deps.engineerDir ? { engineerDir: deps.engineerDir } : {},
+    });
+    if (handoffResult.kind === 'pr-opened') {
+      io.print(`Spec PR opened: ${handoffResult.url}`);
+    } else {
+      // pr-skipped (no remote detected at runtime by gh).
+      io.print(`PR skipped: ${handoffResult.reason}`);
+    }
+  } else {
+    // No remote — spec is committed on the branch; work is preserved locally.
+    // Record the authored key so FR-12 flywheel trend counts this authoring event
+    // (mirrors openSpecPr's pr-skipped path which also records the ledger entry).
+    await recordAuthoredKey(target.name, branch, deps.engineerDir ? { engineerDir: deps.engineerDir } : {});
+    io.print(`No remote configured — PR could not be opened. Spec committed on branch "${branch}".`);
+  }
+
+  // 4f. Wire ensure-running (FR-21, Task 37): after spec artifacts land, fire-and-
+  //     forget a daemon probe for the target repo. Uses the injected launchFn if
+  //     present (tests spy on it); falls back to ensureRunning with the real
+  //     launchDaemonDetached. Errors are swallowed — this is not on the critical
+  //     path, and a failed ensure-running must never abort spec authoring.
+  //
+  //     CONTRACT: ensureRunning is the ENSURE-NOT-MANAGE boundary. It fires at most
+  //     once per authored idea (one call per PR opened or per local commit). The
+  //     engineer NEVER sends lifecycle signals to a running daemon.
+  try {
+    if (launchFn) {
+      // Injected launch spy: used by tests to assert call count + repoPath.
+      await Promise.resolve(launchFn(target.canonicalPath));
+    } else {
+      // Real path: ensureRunning probes the pidfile; spawns detached iff no live daemon.
+      await ensureRunning(target.canonicalPath, {});
+    }
+  } catch {
+    // Fire-and-forget: ensure-running failure must never block the engineer loop.
+  }
+
+  // 4g. Record the authored entry and increment counter.
+  // This happens on BOTH the PR-opened and no-remote paths (work was done).
+  summary.authored!.push({ project: target.name });
   summary.ideasProcessed += 1;
 }
