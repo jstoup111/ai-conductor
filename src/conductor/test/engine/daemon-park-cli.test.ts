@@ -347,7 +347,7 @@ describe('engine/daemon-park-cli', () => {
       expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
     });
 
-    it('unpark only resets counter for auto-parked features (not operator-parked)', async () => {
+    it('unpark on an operator-parked feature also resets the no-evidence counter (bug #667, Story 1.1)', async () => {
       // Initialize real git repo with worktree
       const worktreeDir = await initGitRepoWithWorktree(root, 'operator-park-slug');
 
@@ -359,12 +359,11 @@ describe('engine/daemon-park-cli', () => {
       );
       expect(code1).toBe(0);
 
-      // Seed a counter in the worktree (simulating failed attempts)
-      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
-        '../../src/engine/task-evidence.js'
-      );
-      await incrementNoEvidenceAttempts(worktreeDir);
-      await incrementNoEvidenceAttempts(worktreeDir);
+      // Seed a counter + reasons in the worktree (simulating failed attempts)
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts, createTaskEvidence } =
+        await import('../../src/engine/task-evidence.js');
+      await incrementNoEvidenceAttempts(worktreeDir, 'zero_work_product');
+      await incrementNoEvidenceAttempts(worktreeDir, 'zero_work_product');
       expect(await readNoEvidenceAttempts(worktreeDir)).toBe(2);
 
       // Unpark the operator-parked feature
@@ -378,11 +377,16 @@ describe('engine/daemon-park-cli', () => {
       // Verify marker removed
       expect(await isOperatorParked(root, 'operator-park-slug')).toBe(false);
 
-      // Counter should NOT be reset for operator-parked features
-      // (no message about counter reset, counter remains at 2)
+      // Given: a feature that was operator-parked while noEvidenceAttempts accrued.
+      // When: the operator unparks it.
+      // Then: the counter resets to 0 and noEvidenceReasons clears too — an
+      // operator unpark is a fresh start just like an auto-park unpark; the
+      // build agent should not inherit stale failed-attempt history (#667).
       const joined = out2.join('\n');
-      expect(joined.toLowerCase()).not.toContain('reset');
-      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(2);
+      expect(joined.toLowerCase()).toContain('reset');
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
+      const evidence = await createTaskEvidence(worktreeDir);
+      expect(evidence.noEvidenceReasons).toEqual([]);
     });
 
     it('park from a non-git cwd falls back to cwd-anchored behavior (pre-#486 semantics): exit 0, marker at cwd', async () => {
@@ -456,7 +460,7 @@ describe('engine/daemon-park-cli', () => {
       expect(await readNoEvidenceAttempts(root)).toBe(0);
     });
 
-    it('unpark on operator-parked slug does not touch counter (Task 12)', async () => {
+    it('unpark on a manually operator-parked slug also resets the counter (bug #667, Story 1.1)', async () => {
       // Initialize real git repo with worktree
       const worktreeDir = await initGitRepoWithWorktree(root, 'operator-park-manual-slug');
 
@@ -486,11 +490,12 @@ describe('engine/daemon-park-cli', () => {
       // Verify marker removed
       expect(await isOperatorParked(root, 'operator-park-manual-slug')).toBe(false);
 
-      // Verify counter was NOT reset (should remain at 3)
-      // The output should NOT mention "reset" (for auto-park counter resets)
+      // Given: a manually operator-parked slug with accrued no-evidence attempts.
+      // When: the operator unparks it.
+      // Then: the counter resets to 0 (#667) — same contract as the auto-park path.
       const joined = out.join('\n');
-      expect(joined.toLowerCase()).not.toContain('reset');
-      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(3);
+      expect(joined.toLowerCase()).toContain('reset');
+      expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
     });
 
     it('unpark fails when counter reset fails, marker survives for recovery (Task 12)', async () => {
@@ -529,6 +534,45 @@ describe('engine/daemon-park-cli', () => {
         expect(await isOperatorParked(root, 'reset-failure-slug')).toBe(true);
 
         // Verify error message mentions the failure
+        const joined = out.join('\n');
+        expect(joined.toLowerCase()).toContain('could not unpark');
+      } finally {
+        // Restore permissions so cleanup doesn't fail
+        await execFile('chmod', ['755', pipelineDir]);
+      }
+    });
+
+    it('unpark on operator-parked slug fails when counter reset fails, marker survives (Story 1.3)', async () => {
+      // Initialize real git repo with worktree
+      const worktreeDir = await initGitRepoWithWorktree(root, 'operator-reset-failure-slug');
+
+      // Manually operator-park (not auto-park)
+      const { writeOperatorPark } = await import('../../src/engine/park-marker.js');
+      await writeOperatorPark(root, 'operator-reset-failure-slug');
+
+      // Seed counter in worktree
+      const { incrementNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      await incrementNoEvidenceAttempts(worktreeDir);
+
+      // Make the .pipeline/ directory unwritable (simulate permission denial)
+      const pipelineDir = join(worktreeDir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await execFile('chmod', ['000', pipelineDir]);
+
+      try {
+        // Given: an operator-parked slug whose counter reset will fail.
+        // When: the operator attempts to unpark it.
+        const out: string[] = [];
+        const code = await dispatchDaemonPark(
+          { kind: 'unpark', slug: 'operator-reset-failure-slug' },
+          { cwd: root, out: (l) => out.push(l) },
+        );
+
+        // Then: non-zero exit, and the marker survives for recovery — the
+        // operator-park branch must fail closed on reset failure exactly
+        // like the auto-park branch does (#667).
+        expect(code).toBe(1);
+        expect(await isOperatorParked(root, 'operator-reset-failure-slug')).toBe(true);
         const joined = out.join('\n');
         expect(joined.toLowerCase()).toContain('could not unpark');
       } finally {
