@@ -347,6 +347,40 @@ describe('engine/daemon-park-cli', () => {
       expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
     });
 
+    it('unpark reset is visible at the root the auto-park gate reads from (Story 1.4)', async () => {
+      // The daemon constructs its Conductor with `projectRoot: worktree.path`
+      // (src/engine/daemon-runner.ts, worktree spawn) and checkAndAutoPark
+      // reads `readNoEvidenceAttempts(this.projectRoot)` — i.e. the gate's
+      // read root IS the feature worktree directory, the same directory
+      // dispatchDaemonPark's unpark branch resets when it exists. This test
+      // pins that invariant: after unpark, a read at the worktree root (the
+      // exact root the auto-park gate uses) observes 0, not stale history.
+      const worktreeDir = await initGitRepoWithWorktree(root, 'gate-root-slug');
+
+      const { incrementNoEvidenceAttempts, readNoEvidenceAttempts } = await import(
+        '../../src/engine/task-evidence.js'
+      );
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await incrementNoEvidenceAttempts(worktreeDir);
+      await writeAutoPark(root, 'gate-root-slug', 'no evidence after 3 attempts');
+
+      const out: string[] = [];
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug: 'gate-root-slug' },
+        { cwd: worktreeDir, out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+
+      // This is the exact root checkAndAutoPark reads via
+      // readNoEvidenceAttempts(projectRoot) when the daemon passes
+      // worktree.path as the Conductor's projectRoot.
+      const gateRoot = worktreeDir;
+      expect(await readNoEvidenceAttempts(gateRoot)).toBe(0);
+    });
+
     it('unpark on an operator-parked feature also resets the no-evidence counter (bug #667, Story 1.1)', async () => {
       // Initialize real git repo with worktree
       const worktreeDir = await initGitRepoWithWorktree(root, 'operator-park-slug');
