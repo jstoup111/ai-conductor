@@ -143,10 +143,19 @@ to this repo must honor these gates:
    - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
    - **PATCH** — bug fix, wording, non-behavioral cleanup.
 
-   **Before creating a PR**, Claude MUST present the proposed VERSION bump to
-   the user for approval. State the current VERSION, the proposed new VERSION,
-   and the semver justification (which rule applies). Do not edit VERSION or
-   create the PR until the user confirms.
+   **Before creating a PR** in an interactive session, Claude MUST present the
+   proposed VERSION bump to the user for approval. State the current VERSION,
+   the proposed new VERSION, and the semver justification (which rule applies).
+   Do not edit VERSION or create the PR until the user confirms.
+
+   **Autonomous/daemon sessions MUST NOT prompt for VERSION approval** — no
+   operator is present to answer, and a session that waits burns its retry
+   budget and auto-parks (#678). Instead: leave `VERSION` untouched, state the
+   proposed bump and semver justification in the PR body for the operator to
+   adjust at review, and proceed to finish/PR. While the pre-1.0 version freeze
+   is active, `VERSION` stays at its current value in ALL sessions; a
+   version-gate HALT is resolved by writing the CURRENT version, never by
+   bumping.
 
 5. **Integrity checks apply to release artifacts too.**
    `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,
