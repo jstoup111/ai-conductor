@@ -30,6 +30,24 @@ Categories:
 
 ## [Unreleased]
 
+### Changed
+
+- `bin/install` now builds and symlinks `conduct-ts` automatically via a new
+  `build_conductor()` helper (runs `npm install` + `npm run build` in
+  `src/conductor/`, rebuilding when source is newer than `dist/`). Previously
+  the symlink was only created if a dist bundle already existed, so fresh
+  checkouts silently skipped `conduct-ts`. `--check` now reports `conduct-ts`
+  status alongside `conduct`, and `--uninstall` removes both symlinks.
+- Graceful degradation: if `node`/`npm` is missing or the build fails, the
+  installer warns and continues — `conduct` still installs.
+
+### Fixed
+
+- `src/conductor/src/index.ts` — fall back to an empty `HarnessConfig` when
+  `loadConfig` fails, so `runProjectPrelude` (which requires a non-nullable
+  config) typechecks. Fresh checkouts previously could not build the
+  conductor because DTS emission errored on three `config` references.
+
 ### Added
 
 - TypeScript conductor rewrite (`src/conductor/`) — 3-layer architecture (Engine/Execution/UI) replacing the 3,100-line bash `bin/conduct`.

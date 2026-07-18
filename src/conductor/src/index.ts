@@ -13,6 +13,7 @@ import { loadConfig } from './engine/config.js';
 import { readState, writeState } from './engine/state.js';
 import { parseArgs, type CLIOptions } from './cli.js';
 import type { StepName, RunMode } from './types/index.js';
+import type { HarnessConfig } from './types/config.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -132,9 +133,11 @@ async function main(): Promise<void> {
   const liveRegion = createLiveRegion();
   const promptHost = new TerminalPromptHost(liveRegion);
 
-  // Load config (optional — conductor works without it)
+  // Load config (optional — conductor works without it). Fall back to an
+  // empty HarnessConfig so downstream callers that require a non-nullable
+  // config (runProjectPrelude, DefaultStepRunner) can rely on ?? defaults.
   const configResult = await loadConfig(projectRoot);
-  const config = configResult.ok ? configResult.config : undefined;
+  const config: HarnessConfig = configResult.ok ? configResult.config : {};
   if (configResult.ok && configResult.warnings.length > 0) {
     for (const w of configResult.warnings) {
       console.warn(`⚠ Config warning: ${w}`);

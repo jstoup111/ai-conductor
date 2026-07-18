@@ -87,6 +87,17 @@ check_installation() {
     all_ok=false
   fi
 
+  # Check conduct-ts (optional TypeScript conductor)
+  if command -v conduct-ts &>/dev/null; then
+    if [ -f "${HARNESS_DIR}/src/conductor/dist/index.js" ]; then
+      ok "conduct-ts script on PATH ($(which conduct-ts))"
+    else
+      warn "conduct-ts on PATH but dist bundle missing — run ./bin/install to rebuild"
+    fi
+  else
+    warn "conduct-ts not on PATH — run ./bin/install to build and symlink (optional TypeScript conductor)"
+  fi
+
   # Check dependencies
   echo ""
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
@@ -694,6 +705,61 @@ p.write_text(json.dumps(cfg, indent=2) + "\n")
   fi
 }
 
+# ─── Conductor (conduct-ts) build ─────────────────────────────────────────────
+
+# Build the TypeScript conductor bundle (src/conductor/dist/index.js).
+# Returns 0 if the bundle is present after the call, non-zero otherwise.
+# Never aborts the installer — callers branch on the return code.
+build_conductor() {
+  local conductor_dir="${HARNESS_DIR}/src/conductor"
+  local dist="${conductor_dir}/dist/index.js"
+
+  if [ ! -d "$conductor_dir" ]; then
+    warn "src/conductor/ missing — skipping conduct-ts build"
+    return 1
+  fi
+
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    warn "node/npm not found on PATH — install Node.js 20+ to build conduct-ts"
+    return 1
+  fi
+
+  # Rebuild if dist is missing or older than any source file under src/.
+  local need_build=false
+  if [ ! -f "$dist" ]; then
+    need_build=true
+  elif [ -n "$(find "${conductor_dir}/src" -type f -newer "$dist" -print -quit 2>/dev/null)" ]; then
+    need_build=true
+  fi
+
+  if ! $need_build; then
+    ok "conduct-ts bundle already current"
+    return 0
+  fi
+
+  if [ ! -d "${conductor_dir}/node_modules" ]; then
+    info "Installing conduct-ts dependencies (npm install)..."
+    if ! (cd "$conductor_dir" && npm install --silent); then
+      warn "npm install failed in src/conductor/ — conduct-ts not built"
+      return 1
+    fi
+  fi
+
+  info "Building conduct-ts bundle (npm run build)..."
+  if ! (cd "$conductor_dir" && npm run build --silent); then
+    warn "npm run build failed in src/conductor/ — conduct-ts not built"
+    return 1
+  fi
+
+  if [ ! -f "$dist" ]; then
+    warn "conduct-ts build reported success but ${dist} is missing"
+    return 1
+  fi
+
+  ok "conduct-ts bundle built"
+  return 0
+}
+
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 install() {
@@ -761,16 +827,15 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
-  # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
-  # invoking `conduct-ts` explicitly. The bundle is produced by
-  # `npm run build` inside src/conductor/; skip the symlink if it's missing
-  # (fresh checkout without a build).
+  # 3b. Build + symlink conduct-ts (TypeScript conductor).
+  # conduct-ts is the engine-layer rewrite of conduct. build_conductor runs
+  # npm install + npm run build in src/conductor/ and returns non-zero if
+  # prerequisites are missing or the build fails — in which case we skip
+  # the symlink but keep the rest of the install.
   local conduct_ts_source="${HARNESS_DIR}/bin/conduct-ts"
   local conduct_ts_target="${LOCAL_BIN}/conduct-ts"
-  local conduct_ts_dist="${HARNESS_DIR}/src/conductor/dist/index.js"
 
-  if [ -f "$conduct_ts_dist" ]; then
+  if build_conductor; then
     if [ -L "$conduct_ts_target" ]; then
       local current_ts
       current_ts=$(readlink -f "$conduct_ts_target" 2>/dev/null || echo "")
@@ -785,7 +850,7 @@ install() {
       ok "Installed conduct-ts script to ${conduct_ts_target}"
     fi
   else
-    info "conduct-ts bundle not found (run 'npm run build' in src/conductor/); skipping symlink"
+    warn "conduct-ts not installed — build failed or prerequisites missing"
   fi
 
   # 4. Configure Claude Code permissions and hooks
@@ -862,6 +927,11 @@ uninstall() {
   if [ -L "${LOCAL_BIN}/conduct" ]; then
     rm "${LOCAL_BIN}/conduct"
     ok "Removed conduct script"
+  fi
+
+  if [ -L "${LOCAL_BIN}/conduct-ts" ]; then
+    rm "${LOCAL_BIN}/conduct-ts"
+    ok "Removed conduct-ts script"
   fi
 
   echo ""
