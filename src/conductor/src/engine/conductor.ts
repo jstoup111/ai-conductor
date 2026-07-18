@@ -2583,6 +2583,13 @@ export class Conductor {
         let attempt = 0;
         let lastError: string = '';
         let succeeded = false;
+        // Task 6 (#inherited-budget halt wording): snapshot the durable
+        // no-evidence counter BEFORE this dispatch cycle's attempts run, so
+        // a subsequent auto-park can distinguish "already exhausted at
+        // cycle start" (inherited from a prior halted run) from "crossed
+        // the threshold during this cycle" — pure arithmetic on the
+        // snapshot vs. the counter's value at park-check time.
+        const cycleStartNoEvidenceAttempts = this.taskEvidence?.noEvidenceAttempts ?? 0;
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
@@ -3408,6 +3415,7 @@ export class Conductor {
                   const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
                     maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
                     daemon: this.daemon,
+                    cycleStartAttempts: cycleStartNoEvidenceAttempts,
                     ...(effectiveEmptyPlan ? { reason: 'empty/missing plan' } : {}),
                     emit: (evt) =>
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
@@ -3424,8 +3432,13 @@ export class Conductor {
                       freshEvidence.lastResolvedCount = resolvedTasksAfter;
                       await freshEvidence.write();
                     }
+                    const inheritedBudget =
+                      cycleStartNoEvidenceAttempts >= DAEMON_NO_EVIDENCE_THRESHOLD;
+                    const noEvidenceReason = inheritedBudget
+                      ? `no completion evidence — inherited an already-exhausted budget of ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`
+                      : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`;
                     const reason =
-                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : noEvidenceReason}` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
                     await writeFile(
                       join(this.projectRoot, LOOP_HALT_MARKER),
