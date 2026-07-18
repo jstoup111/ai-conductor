@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Spec for issue #671 — build dispatches must not run attribution-blind: a
+  deterministic pre-dispatch invariant on the attribution machinery, a loud
+  unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
+  and attribution-aware dispatch-count telemetry
+  (`.docs/plans/build-dispatch-can-start-with-current-task-none-so.md`).
+
 ### Fixed
 
 - Stamped the missing `Owner:` intake marker for the
