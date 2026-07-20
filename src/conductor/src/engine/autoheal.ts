@@ -795,6 +795,7 @@ async function deriveCompletionInternal(
     let satisfyingSha: string | null = null;
     let satisfyingForm: string = 'trailer';
     let newestNonEmpty: { sha: string; files: string[] } | null = null;
+    let dirnameSha: string | null = null;
     for (const candidate of matchingCommits) {
       const filesInCommit = await filesForCommit(projectRoot, candidate.sha);
       if (filesInCommit.length === 0) continue;
@@ -808,11 +809,23 @@ async function deriveCompletionInternal(
       }
 
       const match = corroborationMatch(filesInCommit, taskPaths!);
-      if (match) {
+      if (match === 'exact-suffix') {
+        // Exact/suffix matches always outrank a dirname match — scan the
+        // full candidate set for one before settling for the weaker form.
         satisfyingSha = candidate.sha;
-        satisfyingForm = match === 'dirname' ? 'trailer-dirname' : 'trailer';
+        satisfyingForm = 'trailer';
         break;
       }
+      if (match === 'dirname' && !dirnameSha) {
+        // Remember the first (newest) dirname hit, but keep scanning the
+        // rest of the candidate set for a stronger exact-suffix match.
+        dirnameSha = candidate.sha;
+      }
+    }
+
+    if (!satisfyingSha && dirnameSha) {
+      satisfyingSha = dirnameSha;
+      satisfyingForm = 'trailer-dirname';
     }
 
     if (satisfyingSha) {
