@@ -11,6 +11,7 @@ import {
   detectZeroWorkProduct,
   resolveAttributionAuditSamplePct,
   readDispatchAttribution,
+  detectUnattributedDispatch,
 } from '../../src/engine/attribution-enforcement.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { validateConfig } from '../../src/engine/config.js';
@@ -403,6 +404,71 @@ describe('readDispatchAttribution', () => {
     expect(result.attributed).toBe(2);
     expect(result.unattributed).toBe(1);
     expect(result.taskIds).toEqual(['5', '9']);
+  });
+});
+
+// Task 3 (#671): unattributed-dispatch detection. A build dispatch cycle
+// whose dispatch-count lines are all (or mostly) "Task: none" must surface
+// its own distinct loud signal — separate from and earlier than
+// detectZeroWorkProduct/the evidence gate — naming the unattributed streak.
+// Mixed cycles that stay below the threshold remain quiet.
+describe('detectUnattributedDispatch', () => {
+  it('triggers when every dispatch in the cycle is unattributed ("Task: none")', () => {
+    const result = detectUnattributedDispatch({ attributed: 0, unattributed: 3, taskIds: [] });
+    expect(result).toEqual({
+      triggered: true,
+      reason: 'unattributed_dispatch',
+      unattributedCount: 3,
+    });
+  });
+
+  it('stays quiet for a mixed cycle below the threshold', () => {
+    const result = detectUnattributedDispatch({ attributed: 5, unattributed: 1, taskIds: ['1', '2', '3', '4', '5'] });
+    expect(result).toBeNull();
+  });
+
+  it('triggers for a mixed cycle whose unattributed count meets the threshold', () => {
+    const result = detectUnattributedDispatch(
+      { attributed: 2, unattributed: 3, taskIds: ['1', '2'] },
+      3,
+    );
+    expect(result).toEqual({
+      triggered: true,
+      reason: 'unattributed_dispatch',
+      unattributedCount: 3,
+    });
+  });
+
+  it('stays quiet when there is no dispatch activity at all', () => {
+    const result = detectUnattributedDispatch({ attributed: 0, unattributed: 0, taskIds: [] });
+    expect(result).toBeNull();
+  });
+
+  it('triggers on default threshold for a mixed cycle that is NOT fully unattributed — rules out an all-unattributed-ratio interpretation', () => {
+    // attributed:1, unattributed:3 meets the same default threshold as the
+    // all-none (0/3) case above but is not a 100%-unattributed cycle. A
+    // ratio-based ("ALL dispatches unattributed") implementation would stay
+    // quiet here; the correct count-based implementation must still trigger.
+    const result = detectUnattributedDispatch({ attributed: 1, unattributed: 3, taskIds: ['1'] });
+    expect(result).toEqual({
+      triggered: true,
+      reason: 'unattributed_dispatch',
+      unattributedCount: 3,
+    });
+  });
+
+  it('threshold=0 triggers on any nonzero unattributed count', () => {
+    const result = detectUnattributedDispatch({ attributed: 4, unattributed: 1, taskIds: ['1', '2', '3', '4'] }, 0);
+    expect(result).toEqual({
+      triggered: true,
+      reason: 'unattributed_dispatch',
+      unattributedCount: 1,
+    });
+  });
+
+  it('threshold=0 with zero unattributed dispatches stays quiet (no dispatch activity is never "unattributed")', () => {
+    const result = detectUnattributedDispatch({ attributed: 0, unattributed: 0, taskIds: [] }, 0);
+    expect(result).toBeNull();
   });
 });
 

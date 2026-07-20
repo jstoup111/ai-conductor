@@ -1209,3 +1209,115 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
     checkSpy.mockRestore();
   });
 });
+
+/**
+ * RED (Task 3, #671): unattributed-dispatch streak surfaces its own loud
+ * event during/immediately after the build dispatch — NOT deferred to the
+ * evidence gate. A build cycle whose `.pipeline/dispatch-count` lines are
+ * all "Task: none" must emit a distinct `unattributed_dispatch` event
+ * naming the streak count. A mixed cycle that stays below threshold must
+ * remain quiet (no such event).
+ */
+describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'unattributed-dispatch-wiring-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeIncompleteTaskStatus(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf8',
+    );
+  }
+
+  it('emits unattributed_dispatch naming the streak when every dispatch in the build cycle is "Task: none"', async () => {
+    await writeIncompleteTaskStatus();
+
+    const received: Array<Record<string, unknown>> = [];
+    events.on('unattributed_dispatch' as never, (e: unknown) => {
+      received.push(e as Record<string, unknown>);
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          // Simulate the PRE session hook appending unattributed dispatch
+          // lines during this build cycle — fully unattributed streak.
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline', 'dispatch-count'),
+            'Task: none\nTask: none\nTask: none\n',
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    const fired = received.find((e) => e.type === 'unattributed_dispatch');
+    expect(fired).toBeDefined();
+    expect(fired?.unattributedCount).toBe(3);
+    expect(fired?.step).toBe('build');
+  });
+
+  it('stays quiet (no unattributed_dispatch event) for a mixed cycle below the threshold', async () => {
+    await writeIncompleteTaskStatus();
+
+    const received: Array<Record<string, unknown>> = [];
+    events.on('unattributed_dispatch' as never, (e: unknown) => {
+      received.push(e as Record<string, unknown>);
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          // Mostly attributed, one stray unattributed line — below any
+          // reasonable threshold, must stay quiet.
+          await writeFile(
+            join(dir, '.pipeline', 'dispatch-count'),
+            'Task: 1\nTask: 2\nTask: 3\nTask: 4\nTask: none\n',
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    const fired = received.find((e) => e.type === 'unattributed_dispatch');
+    expect(fired).toBeUndefined();
+  });
+});
