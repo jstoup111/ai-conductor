@@ -1031,6 +1031,93 @@ Task 1 → Task 2
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for parsePlanTaskVerifyOnly (verify-only-prove-closed-task-evidence
+// plan, Task 1). Recognizes a `**Verify-only:** yes` marker line inside a task
+// block (exact-match "yes", case-insensitive). Anything else — "maybe", empty,
+// missing — means false/absent (fail-closed). Does not alter
+// parsePlanTaskPaths' existing Map<string, Set<string>> shape or behavior.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parsePlanTaskVerifyOnly', () => {
+  it('marks a task true when its block has `**Verify-only:** yes`', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** yes
+**Dependencies:** none
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('is case-insensitive for the "yes" value', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** YES
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('leaves an unmarked task false/absent', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Dependencies:** none
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1') ?? false).toBe(false);
+  });
+
+  it.each(['maybe', '', 'true', 'y'])(
+    'fail-closed: malformed value %j resolves to false, not true',
+    async (value) => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** ${value}
+`;
+      const result = mod.parsePlanTaskVerifyOnly(planText);
+      expect(result.get('1') ?? false).toBe(false);
+    },
+  );
+
+  it('does not change parsePlanTaskPaths output for existing no-marker fixtures', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: First
+**Files:** \`src/a.ts\`
+
+### Task 2: Second
+**Files:** \`src/b.ts\`
+`;
+    const pathsResult = mod.parsePlanTaskPaths(planText);
+    expect(Array.from(pathsResult.keys())).toEqual(['1', '2']);
+    expect(Array.from(pathsResult.get('1')!)).toEqual(['src/a.ts']);
+    expect(Array.from(pathsResult.get('2')!)).toEqual(['src/b.ts']);
+
+    const verifyOnlyResult = mod.parsePlanTaskVerifyOnly(planText);
+    expect(verifyOnlyResult.get('1') ?? false).toBe(false);
+    expect(verifyOnlyResult.get('2') ?? false).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for getEvidenceRange (Task 3, fail-closed merge-base + plan-anchor).
 //
 // Tests evidence range calculation with fail-closed behavior:

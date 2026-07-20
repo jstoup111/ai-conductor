@@ -1225,6 +1225,11 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
+// `**Verify-only:** yes` marker line (verify-only-prove-closed-task-evidence
+// plan, Task 1). Exact-match "yes" (case-insensitive) only — "maybe", empty,
+// or any other value is fail-closed false, same as an absent marker.
+const VERIFY_ONLY_LINE = /^\s*(?:[-*]\s+)?\*\*Verify-only\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
 /** Path-looking tokens from a **Files:** line (plain text or backticked). */
 function extractFilesLinePaths(rest: string): string[] {
   const paths: string[] = [];
@@ -1403,6 +1408,46 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
         for (const p of resolved) existing.add(p);
       } else {
         result.set(id, new Set(resolved));
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Parses `**Verify-only:** yes` marker lines per task block
+ * (verify-only-prove-closed-task-evidence plan, Task 1). Exact-match "yes"
+ * (case-insensitive) only — "maybe", empty, or missing all resolve to false
+ * (fail-closed). A standalone sibling of `parsePlanTaskPaths` — it does NOT
+ * alter that function's existing `Map<string, Set<string>>` shape/behavior,
+ * so every current consumer is unaffected.
+ */
+export function parsePlanTaskVerifyOnly(text: string): Map<string, boolean> {
+  const taskHeader =
+    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
+
+  const result = new Map<string, boolean>();
+  let currentIds: string[] = [];
+
+  for (const line of text.split('\n')) {
+    const headerMatch = line.match(taskHeader);
+    if (headerMatch) {
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      for (const id of currentIds) {
+        if (!result.has(id)) result.set(id, false);
+      }
+      continue;
+    }
+    if (currentIds.length === 0) continue;
+
+    const verifyOnlyMatch = line.match(VERIFY_ONLY_LINE);
+    if (verifyOnlyMatch) {
+      const isYes = verifyOnlyMatch[1].trim().toLowerCase() === 'yes';
+      if (isYes) {
+        for (const id of currentIds) result.set(id, true);
       }
     }
   }
