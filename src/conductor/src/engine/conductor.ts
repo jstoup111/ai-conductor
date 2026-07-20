@@ -2763,6 +2763,11 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // #569 Task 5: set when a build stall is diagnosed as no_task_progress —
+        // consulted at the terminal fallback below to give the operator a
+        // distinct, actionable HALT reason instead of the generic
+        // "retries exhausted" message.
+        let lastBuildStallReason: string | undefined;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -3438,6 +3443,10 @@ export class Conductor {
                   stalled = 'halt_marker';
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
+                  // #569 Task 5: record a distinct, actionable reason for
+                  // the terminal HALT fallback in case this build step
+                  // ultimately exhausts retries after this stall.
+                  lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
                 }
 
                 // #569: snapshot the evidence sidecar's noEvidenceReasons
@@ -4637,12 +4646,19 @@ export class Conductor {
               join(this.projectRoot, LOOP_HALT_MARKER),
               'utf-8',
             ).catch(() => null);
+            // #569 Task 5: a no_task_progress build stall is a more specific
+            // and actionable diagnosis than a generic unchanged-input note,
+            // so it takes precedence over `unchangedInputNote` (but never
+            // over an existing, more-specific HALT marker written by
+            // auto-park/budget-exhaustion/remediation above).
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : unchangedInputNote
-                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : lastBuildStallReason
+                  ? lastBuildStallReason
+                  : unchangedInputNote
+                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );

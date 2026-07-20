@@ -11665,6 +11665,164 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     // Auto-park should have fired, causing an early exit
     expect(parked).toBe(true);
   });
+
+  describe('distinct terminal HALT reason for no_task_progress exhaustion (#569 Task 5)', () => {
+    async function seedToBuildStep(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('build exhausts retries after a no_task_progress stall history → HALT names no-task-progress, not the generic "retries exhausted" message', async () => {
+      await seedToBuildStep('no-task-progress-exhaustion-test');
+
+      // Non-daemon auto mode: checkAndAutoPark is daemon-gated (see
+      // conductor.ts ~3559 `if (this.daemon)`), so with daemon:false the
+      // no_task_progress stall never gets diverted into an auto-park HALT
+      // — it falls straight through the retry loop to the terminal
+      // "retries exhausted" fallback once maxRetries is exhausted, which
+      // is exactly the generic-fallback path this task makes more specific.
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Resolved task count never advances -> persistent
+            // 'no_task_progress' verdict on every attempt (attempt >= 2).
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3, // must be >= 2 so the attempt >= 2 stall check fires
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('no task progress');
+      expect(haltContent).not.toMatch(/retries exhausted/);
+    });
+
+    it('preserves an existing, more-specific HALT marker verbatim (existingHalt still wins over no_task_progress)', async () => {
+      await seedToBuildStep('existing-halt-precedence-test');
+
+      const SPECIFIC_HALT = 'auto-park: durable no-evidence threshold reached';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Write a specific HALT marker directly, simulating a HALT
+            // already written by an earlier, more-specific mechanism
+            // (e.g. auto-park or budget exhaustion) before the terminal
+            // fallback is ever reached.
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/HALT'), SPECIFIC_HALT);
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent.trim()).toBe(SPECIFIC_HALT);
+    });
+
+    it('non-no_task_progress terminal exhaustion keeps the pre-existing generic fallback string (lastBuildStallReason never set)', async () => {
+      await seedToBuildStep('generic-fallback-unchanged-test');
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Never write task-status.json / never advance -> completion
+            // check fails, but the build never reaches attempt >= 2 with
+            // resolvedTasksAfter <= resolvedTasksBefore in a way that sets
+            // 'no_task_progress' via a *stall*, because we cap maxRetries
+            // at 1 (single attempt, so attempt never reaches 2 -> `stalled`
+            // stays null). This exercises the plain "retries exhausted"
+            // terminal fallback with no stall diagnosis at all.
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1, // single attempt: never reaches attempt >= 2 stall check
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toMatch(/retries exhausted/);
+      expect(haltContent).not.toContain('no task progress');
+    });
+  });
 });
 
 describe('HALT content robust to hostile question text (Task 12)', () => {
