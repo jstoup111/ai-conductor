@@ -1617,4 +1617,98 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     expect(seeded.tasks[0].id).toBe('1');
     expect(seeded.tasks[0].status).toBe('pending');
   });
+
+  it('seedTaskStatus write fails (task-status.json unwritable) → seedAndCheckAttributionMachinery returns a distinct seed-write-failure diagnostic, not the generic missing-file message', async () => {
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-write-failure-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    // Pre-create task-status.json and make it read-only, so seedTaskStatus's
+    // atomic write (writeFile(statusPath, ...)) throws EACCES instead of
+    // silently succeeding.
+    const taskStatusPath = join(dir, '.pipeline', 'task-status.json');
+    await writeFile(taskStatusPath, JSON.stringify({ tasks: [] }), 'utf-8');
+    await chmod(taskStatusPath, 0o444);
+    await chmod(join(dir, '.pipeline'), 0o555);
+
+    try {
+      const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+      expect(diagnostic).not.toBeNull();
+      expect(diagnostic).toMatch(/failed to seed/i);
+      expect(diagnostic).not.toContain('task-status.json is missing');
+    } finally {
+      await chmod(join(dir, '.pipeline'), 0o755);
+      await chmod(taskStatusPath, 0o644);
+    }
+  });
+
+  it('resumed build with prior completed progress → seedAndCheckAttributionMachinery preserves completed row and reports intact', async () => {
+    // Session hooks present and stamp path writable — mirrors a resumed
+    // dispatch on a build that already made real progress in a prior run.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-and-check-resume-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n\n### Task 2: Do another thing\n\nMore task body.\n',
+      'utf-8',
+    );
+
+    // Pre-write task-status.json with Task 1 already completed, as if a
+    // prior build attempt had already dispatched and finished it.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [
+          { id: '1', name: 'Do the thing', status: 'completed', commit: 'abc1234567890123456789012345678901234567' },
+        ],
+      }),
+      'utf-8',
+    );
+
+    // Pre-write the matching evidence sidecar stamp so the completed row is
+    // not treated as unattributed/ungrandfathered progress.
+    await writeFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: {
+          '1': { sha: 'abc1234567890123456789012345678901234567' },
+        },
+      }),
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+    expect(diagnostic).toBeNull();
+
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+
+    const task1 = seeded.tasks.find((t) => t.id === '1');
+    const task2 = seeded.tasks.find((t) => t.id === '2');
+
+    // The previously-completed row must NOT be reset to pending on a
+    // resumed dispatch — seedTaskStatus's merge must preserve it.
+    expect(task1?.status).toBe('completed');
+    // The newly-appearing plan task should be seeded as pending.
+    expect(task2?.status).toBe('pending');
+  });
 });

@@ -598,7 +598,15 @@ export async function seedAndCheckAttributionMachinery(
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const planResolvable = typeof planPath === 'string' && planPath.length > 0;
   if (planResolvable) {
-    await seedTaskStatus(projectRoot, planPath as string);
+    try {
+      await seedTaskStatus(projectRoot, planPath as string);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        `Attribution machinery broken: failed to seed task-status.json from plan — ${message}.\n` +
+        `Check .pipeline/ is writable.`
+      );
+    }
   }
   return checkAttributionMachineryIntact(projectRoot, { planResolvable });
 }
