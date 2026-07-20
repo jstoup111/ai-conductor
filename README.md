@@ -1271,6 +1271,19 @@ attribution_audit_sample_pct: 10
 - Absent `attribution_audit_sample_pct` → defaults to 10% sampling
 - Both are inert when the judgment gate is inactive
 
+**Verify-only marker (#677):** a plan task can be marked prove-closed —
+legitimately expected to produce no commit (e.g. re-running an existing suite
+to confirm coverage) — with a `**Verify-only:** yes` line in its plan section.
+A gate-miss residue made up of (or including) marked task ids arms the judge
+lane for that class-scoped subset even when `attribution_judge_cutover` is
+dark/absent; an active cutover is unaffected and still judges the full
+residue. This prevents a verify-only task's absent commit from burning the
+`noEvidenceAttempts` counter and auto-parking an otherwise evaluator-APPROVED
+build. Pairs with an `Evidence: skipped <reason>` trailer accepted by the
+generated commit-msg hook as an alternative to `Task:` on an intentionally
+empty commit (a non-empty reason is required; bare empty commits are still
+rejected).
+
 **Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
 can be triggered by hand for a parked/halted feature:
 
@@ -1822,7 +1835,9 @@ by matching commits to tasks and verifying no intermediate work was dropped. See
 **Auto-park on N-attempt trigger:** The daemon auto-parks after N consecutive no-evidence
 gate misses (where a gate found no new commit evidence since its prior attempt) or when the
 plan is empty/missing at seed time. This replaces infinite re-kick with a survivable halt.
-Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. See
+Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. When the
+unresolved residue at park time includes `**Verify-only:** yes`-marked tasks (#677), the
+park reason names those task ids instead of only the generic message. See
 `src/conductor/README.md` → "Auto-park on N-attempt trigger".
 
 **Remediation (agentic gap routing):** When a SHIP gate blocks the daemon, the `/remediate`
