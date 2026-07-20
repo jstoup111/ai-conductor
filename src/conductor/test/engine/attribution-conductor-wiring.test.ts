@@ -1088,6 +1088,16 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       'utf-8',
     );
     await writeTaskStatus(repo.root, ['1', '2']);
+    // Arming attribution_enforcement_cutover below also arms the pre-dispatch
+    // attribution-machinery guard (conductor.ts checkAttributionMachineryIntact),
+    // which requires session-hooks/ scripts to exist before a build dispatch
+    // is allowed — independent of the judge-lane bug this test targets.
+    // Without this, the build step fails the machinery check before ever
+    // reaching the judge-lane dispatch code.
+    await mkdir(join(repo.root, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
     // Task 1 resolves mechanically (trailered commit). Task 2 is residue —
     // implemented but untrailered, and (critically) already committed BEFORE
     // conductor.run() starts, simulating a resumed build where this
