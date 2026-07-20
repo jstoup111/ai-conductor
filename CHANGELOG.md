@@ -43,6 +43,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The attribution judge lane now dispatches on inherited build-gate residue on
+  resumed/stalled runs — dropped the attempt-scoped `!isZeroWork` guard that
+  previously suppressed dispatch whenever `headShaBeforeBuild === headShaAfterBuild`
+  (i.e. no new commits landed this attempt), which meant residue carried over from
+  a prior attempt was silently never judged. The two other no-op paths are
+  preserved: the lane still no-ops when the cutover flag is disabled/absent, and
+  when the residue set is empty. The separate kickback/no-evidence zero-work retry
+  path is unrelated code and is unchanged (#570).
 - `no_task_progress` (zero-work) build stalls now route through the same `/remediate`
   auto-remediation dispatch as `halt_marker` stalls (a synthesized prompt built from the run's
   own context), bounded by the shared remediation budget, with the durable no-evidence counter

@@ -3200,8 +3200,11 @@ export class Conductor {
 
               // Task 12: Attribution lane integration. Runs after auto-heal
               // completes, before gate-miss handling. Extracts residue from
-              // derived result, checks cutover armed, detects zero-work, and
-              // dispatches the verifier. If the lane stamps tasks, those stamps
+              // derived result, checks cutover armed, and dispatches the
+              // verifier. The lane dispatches on residue regardless of
+              // whether this attempt added new commits — inherited residue
+              // from a resumed build is judged too, not just residue newly
+              // produced this attempt. If the lane stamps tasks, those stamps
               // take effect on the NEXT derivation cycle (same evaluation loop —
               // no explicit re-derive here, as the lane runs inside the auto-heal
               // block which already re-checks completion once healing fires).
@@ -3214,22 +3217,14 @@ export class Conductor {
                   (id) => !derivedCompletion[id]?.completed && derivedCompletion[id]?.status !== 'skipped',
                 );
 
-                // Check zero-work once per gate evaluation to skip lane if needed
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-                const isZeroWork = await detectZeroWorkProduct({
-                  projectRoot: this.projectRoot,
-                  config: this.config,
-                  headBefore: headShaBeforeBuild,
-                  headAfter: headShaAfterBuild,
-                });
 
                 // Dispatch the lane if there's residue and cutover is armed
                 const planPathOrNull = (await this.completionCtx(state)).planPath;
                 if (
                   residueIds.length > 0 &&
                   planPathOrNull &&
-                  headShaAfterBuild &&
-                  !isZeroWork
+                  headShaAfterBuild
                 ) {
                   const planPath: string = planPathOrNull;
                   const headSha: string = headShaAfterBuild;
