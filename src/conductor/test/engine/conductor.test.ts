@@ -11228,7 +11228,13 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     expect(buildCalls).toBe(1);
   });
 
-  it('no_task_progress stall (not halt_marker) → remediate NOT dispatched', async () => {
+  it('no_task_progress stall (not halt_marker) in interactive mode → remediate NOT dispatched', async () => {
+    // #569: the daemon+auto dispatch of /remediate for no_task_progress
+    // stalls (see the test immediately below) is gated to daemon+auto mode
+    // only, same as halt_marker. This test now covers the interactive
+    // (non-daemon) case, which must still skip dispatch and fall through
+    // to the REPL hand-off — the same guard (`this.daemon && this.mode ===
+    // 'auto'`) that already applied to halt_marker.
     await seedToBuildStep();
 
     const dispatchedSteps: StepName[] = [];
@@ -11252,16 +11258,15 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       stepRunner: runner,
       events,
       projectRoot: dir,
-      mode: 'auto',
-      daemon: true,
+      mode: 'interactive',
+      daemon: false,
       verifyArtifacts: true,
       maxRetries: 3, // Allow retries
     });
 
     await conductor.run();
 
-    // When stall is 'no_task_progress' (not 'halt_marker'), remediate is NOT dispatched
-    // This is because the guard checks: if (stalled === 'halt_marker')
+    // Not daemon+auto → remediate is NOT dispatched.
     expect(dispatchedSteps).not.toContain('remediate');
   });
 
