@@ -1477,12 +1477,37 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
                 const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
 
+                // Route the ci-fix dispatch through resolveCiFailure (T4):
+                // adapt a real DefaultStepRunner into productionCiFixRunner's
+                // dispatcher seam instead of wiring the bare exec-based
+                // runner directly — mirrors the resolveRebaseConflict /
+                // DefaultStepRunner pattern used for rebase resolution above.
+                const ciFixDispatcher = {
+                  resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
+                    const sessionId = uuidv4();
+                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.worktreePath, {
+                      featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                      config,
+                      mode: 'auto',
+                    });
+                    await stepRunner.resolveCiFailure({
+                      worktreePath: ctx.worktreePath,
+                      prUrl: ctx.entry.prUrl,
+                      hint: ctx.hint,
+                      slug: ctx.entry.slug,
+                    });
+                    return { kind: 'changed' as const };
+                  },
+                };
+
                 const outcome = await runCiFix(
                   entry,
                   branch,
                   hint,
                   {
-                    fixRunner: productionCiFixRunner,
+                    fixRunner: {
+                      run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
+                    },
                     suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
                   },
                   log,
