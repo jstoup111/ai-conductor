@@ -402,6 +402,67 @@ describe('publish-engine.mjs GC self-guard env', () => {
     expect(remaining).not.toContain(oldIds[0]);
     expect(remaining).not.toContain(oldIds[1]);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 6 — end-to-end: a long-lived daemon's version (`V_run`), seeded
+  // outside keepLastK with NO live pidfile referencing it (simulating the
+  // pre-`holdLock` startup window / a cross-context registry read — see
+  // plan Verified gap), survives a real publish+GC pass when the self-guard
+  // env points at it, and its directory remains fully readable afterward
+  // (no ENOENT) — proving Tasks 1/3/4 hold end-to-end, not just in
+  // isolation.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('protects a long-lived daemon version (no live pidfile) through a real publish+GC pass, and its files remain readable after', async () => {
+    const oldIds = await seedOldVersions(5);
+    const vRun = oldIds[0]; // oldest — outside keepLastK=3, GC-eligible, no pidfile references it
+
+    // RED demonstration: with the guard disabled, this exact scenario
+    // deletes V_run (no pidfile protection, no self-guard) — confirming the
+    // guard is what saves it below, not some other retention rule.
+    const redProbe = await runPublishWithEnv({});
+    const redRemaining = await readdir(join(conductorRoot, 'dist-versions'));
+    expect(redProbe.exitCode).toBe(0);
+    expect(redRemaining).not.toContain(vRun);
+
+    // Reset: re-seed a fresh conductorRoot scenario for the GREEN (guarded) run.
+    await rm(conductorRoot, { recursive: true, force: true });
+    conductorRoot = await mkdtemp(join(tmpdir(), 'publish-engine-test-'));
+    stubPath = join(conductorRoot, 'stub-tsup.mjs');
+    await writeFile(
+      stubPath,
+      [
+        'import { writeFile, mkdir } from "node:fs/promises";',
+        'const args = process.argv.slice(2);',
+        'const outDirIdx = args.indexOf("--out-dir");',
+        'const outDir = args[outDirIdx + 1];',
+        'await mkdir(outDir, { recursive: true });',
+        'await writeFile(`${outDir}/index.js`, "export const built = true;\\n");',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const oldIds2 = await seedOldVersions(5);
+    const vRun2 = oldIds2[0];
+
+    const guardedResult = await runPublishWithEnv({
+      CONDUCT_ENGINE_SELF_GUARD: '1',
+      CONDUCT_ENGINE_SELF_VERSION: vRun2,
+    });
+    expect(guardedResult.exitCode).toBe(0);
+
+    const remaining = await readdir(join(conductorRoot, 'dist-versions'));
+    expect(remaining).toContain(vRun2);
+
+    // Readback: the protected version's directory is not just present on
+    // disk but actually readable — no ENOENT reading its contents, the
+    // real-world consequence of the self-eviction bug (#673).
+    const vRunDir = join(conductorRoot, 'dist-versions', vRun2);
+    const files = await readdir(vRunDir);
+    expect(files).toContain('index.js');
+    const contents = await readFile(join(vRunDir, 'index.js'), 'utf-8');
+    expect(contents).toContain('seeded = 0');
+  });
 });
 
 describe('package.json build script', () => {
