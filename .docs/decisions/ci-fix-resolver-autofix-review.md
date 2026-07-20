@@ -39,13 +39,13 @@ preflight, and classifying resolver spawn errors.
 | Auto-pushing LLM fixes to already-shipped PRs | Unchanged existing safety pipeline: acceptance guards (no lost feature commits) → suite gate → **lease-protected** push; any stage failure logs `escalated` and skips the push. |
 | Resolver worktree mutating the primary checkout | Preserved invariant — dispatch runs inside `withResolveWorktree`; cwd is the resolver worktree. |
 | Preflight false-negative disabling ci-fix wrongly | Probe validates flag/exec surface only (e.g. a `--print` dry probe or `--help` capability check), not model reachability; classified reason is logged so the operator can see why. |
-| Scope creep into the underlying red-CI cause (`Ambiguous plan discovery`) | Explicitly out of scope (see ADR-0002 non-goals); deferred to separate triage per intake #666. |
+| Scope creep into the underlying red-CI cause (`Ambiguous plan discovery`) | Explicitly out of scope (see adr-2026-07-20-ci-fix-startup-preflight-and-error-classification non-goals); deferred to separate triage per intake #666. |
 
 ## Decisions requiring ADRs
 
-1. **ADR-0001** — Dispatch mechanism: reuse `DefaultStepRunner` (`resolveCiFailure`) vs a
+1. **adr-2026-07-20-ci-fix-dispatch-via-steprunner** — Dispatch mechanism: reuse `DefaultStepRunner` (`resolveCiFailure`) vs a
    bespoke `claude --print` spawn in `ci-fix.ts`. → APPROVED.
-2. **ADR-0002** — Startup preflight + error classification: fail-loud-once contract and the
+2. **adr-2026-07-20-ci-fix-startup-preflight-and-error-classification** — Startup preflight + error classification: fail-loud-once contract and the
    out-of-scope boundary. → APPROVED.
 
 Both ADRs are APPROVED below; no DRAFT carried forward.

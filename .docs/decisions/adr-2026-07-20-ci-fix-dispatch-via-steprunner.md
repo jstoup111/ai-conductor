@@ -1,9 +1,9 @@
-# ADR-0001: Dispatch ci-fix via DefaultStepRunner, not a bespoke claude spawn
+# ADR: Dispatch ci-fix via DefaultStepRunner, not a bespoke claude spawn
 
 **Status:** APPROVED
 **Date:** 2026-07-20
 **Context tier:** Medium
-**Related:** intake jstoup111/ai-conductor#666, ADR-0002
+**Related:** intake jstoup111/ai-conductor#666, adr-2026-07-20-ci-fix-startup-preflight-and-error-classification
 
 ## Context
 

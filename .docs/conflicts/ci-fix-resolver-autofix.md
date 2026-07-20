@@ -20,7 +20,7 @@ CF-1…CF-7 (above).
 ## Overlap / duplication scan
 
 - `resolveCiFailure` overlaps `resolveSetupFailure` by design (sibling one-shot dispatch).
-  Not duplication to eliminate — deliberate reuse of the same proven mechanism (ADR-0001).
+  Not duplication to eliminate — deliberate reuse of the same proven mechanism (adr-2026-07-20-ci-fix-dispatch-via-steprunner).
   Risk: prompt/hint divergence; mitigated by keeping the CI hint payload (`buildCiFixHint`)
   as the only CI-specific input.
 

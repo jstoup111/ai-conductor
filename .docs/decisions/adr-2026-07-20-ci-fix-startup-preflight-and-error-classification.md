@@ -1,9 +1,9 @@
-# ADR-0002: Fail-loud-once startup preflight + resolver error classification
+# ADR: Fail-loud-once startup preflight + resolver error classification
 
 **Status:** APPROVED
 **Date:** 2026-07-20
 **Context tier:** Medium
-**Related:** intake jstoup111/ai-conductor#666, ADR-0001, preflight.ts, build-auth-preflight.ts
+**Related:** intake jstoup111/ai-conductor#666, adr-2026-07-20-ci-fix-dispatch-via-steprunner, preflight.ts, build-auth-preflight.ts
 
 ## Context
 

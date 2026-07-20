@@ -3,7 +3,7 @@
 **Status: Accepted**
 **Track:** Technical · **Tier:** Medium
 **Source:** intake jstoup111/ai-conductor#666
-**ADRs:** ADR-0001 (StepRunner dispatch), ADR-0002 (preflight + error classification)
+**ADRs:** adr-2026-07-20-ci-fix-dispatch-via-steprunner (StepRunner dispatch), adr-2026-07-20-ci-fix-startup-preflight-and-error-classification (preflight + error classification)
 
 Goal: the daemon's ci-fix resolver runs a real fix attempt through the proven StepRunner path,
 surfaces classified/diagnosable errors, and validates its fix-invocation surface once at
@@ -110,7 +110,7 @@ waiver (internal-only rationale) per CLAUDE.md; otherwise no migration block.
 ## Out of scope (do NOT touch)
 
 - The underlying `conductor` CI red cause: `Ambiguous plan discovery: multiple plans found`,
-  `remediate planner crashed`, possible #573 flakiness (CF-7 / ADR-0002 non-goals).
+  `remediate planner crashed`, possible #573 flakiness (CF-7 / adr-2026-07-20-ci-fix-startup-preflight-and-error-classification non-goals).
 - Mergeable-sweep eligibility gates and the guard/suite/lease-push pipeline internals.
 
 ## Verification (maps to stories)
