@@ -271,6 +271,7 @@ export function validateConfig(
         'effort',
         'max_retries',
         'disable',
+        'escalate',
         'skill',
         'hooks',
         'by_tier',
@@ -298,6 +299,9 @@ export function validateConfig(
       }
       if (cfg.disable !== undefined && typeof cfg.disable !== 'boolean') {
         return errVal(`steps.${name}.disable must be a boolean`);
+      }
+      if (cfg.escalate !== undefined && typeof cfg.escalate !== 'boolean') {
+        return errVal(`steps.${name}.escalate must be a boolean`);
       }
       if (cfg.model !== undefined && typeof cfg.model !== 'string') {
         return errVal(`steps.${name}.model must be a string`);
@@ -1288,7 +1292,7 @@ function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | nu
   const obj = raw as Record<string, unknown>;
   // defaults/phases accept the same knobs as steps minus skill/disable/hooks/after.
   // (review is not user-configurable — it's fixed per step in resolved-config.ts)
-  const allowed = new Set(['model', 'effort', 'max_retries', 'by_tier']);
+  const allowed = new Set(['model', 'effort', 'max_retries', 'escalate', 'by_tier']);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -1296,6 +1300,9 @@ function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | nu
         message: `Unknown key in ${path}: "${k}"`,
       };
     }
+  }
+  if (obj.escalate !== undefined && typeof obj.escalate !== 'boolean') {
+    return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
   }
   if (obj.effort !== undefined && !VALID_EFFORTS.has(obj.effort as EffortLevel)) {
     return {
