@@ -1823,11 +1823,16 @@ written in the window between selection and dispatch (e.g. during
 regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
 guarded this way.
 
-**Unpark counter reset (#486):** When unparking an auto-parked feature (provenance: `auto`),
-`daemon unpark` resets the no-evidence attempt counter in the feature's `.worktrees/<slug>/`
-(or the main root if the worktree is absent) so re-dispatch resumes normal re-kick flow without
-being immediately auto-parked again. For operator-parked features (provenance: `operator`), no
-counter reset occurs.
+**Unpark counter reset (#486, #667):** `daemon unpark` resets the no-evidence attempt counter
+(`noEvidenceAttempts`/`noEvidenceReasons`) in the feature's `.worktrees/<slug>/` (or the main
+root if the worktree is absent) regardless of the marker's provenance — both an auto-parked
+feature (provenance: `auto`) and an operator-parked feature (provenance: `operator`) get a
+fresh no-evidence budget on unpark, so re-dispatch resumes normal re-kick flow without being
+immediately re-parked on stale counts. Because the counter can now carry over from a prior
+park/unpark cycle, the auto-park halt message distinguishes a budget **inherited** from an
+earlier cycle from **fresh** failures accumulated since the last unpark, so an operator reading
+the halt reason can tell whether the trigger reflects new evidence misses or leftover count from
+before the last unpark.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,

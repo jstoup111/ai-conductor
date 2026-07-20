@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeOperatorPark, removeOperatorPark, isOperatorParked, getProvenanceType } from './park-marker.js';
+import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 
 const execFile = promisify(execFileCb);
@@ -147,23 +147,19 @@ export async function dispatchDaemonPark(
         return 0;
       }
 
-      // Check if this is an auto-parked feature (not operator-parked)
-      // If so, reset the no-evidence counter when unparking.
-      // For auto provenance, reset the counter in the feature worktree
-      // (where the build agent runs), or fall back to the resolved root.
-      const provenance = await getProvenanceType(resolvedRoot, cmd.slug);
-      if (provenance === 'auto') {
-        const worktreeDir = join(resolvedRoot, '.worktrees', cmd.slug);
-        const resetRoot = existsSync(worktreeDir) ? worktreeDir : resolvedRoot;
-        const usedFallback = !existsSync(worktreeDir);
-        await resetNoEvidenceAttempts(resetRoot);
-        if (usedFallback) {
-          out(`Unparked '${cmd.slug}' and reset no-evidence counter at resolved root (fallback — worktree missing) — normal dispatch and re-kick resume.`);
-        } else {
-          out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
-        }
+      // Reset the no-evidence counter on unpark regardless of provenance
+      // (auto-park or operator-park) — an unpark is a fresh start either
+      // way, and the build agent should not inherit stale failed-attempt
+      // history (#667). Reset the counter in the feature worktree (where
+      // the build agent runs), or fall back to the resolved root.
+      const worktreeDir = join(resolvedRoot, '.worktrees', cmd.slug);
+      const resetRoot = existsSync(worktreeDir) ? worktreeDir : resolvedRoot;
+      const usedFallback = !existsSync(worktreeDir);
+      await resetNoEvidenceAttempts(resetRoot);
+      if (usedFallback) {
+        out(`Unparked '${cmd.slug}' and reset no-evidence counter at resolved root (fallback — worktree missing) — normal dispatch and re-kick resume.`);
       } else {
-        out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
+        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
       }
 
       // Only remove the marker after counter reset succeeds.
