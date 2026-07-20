@@ -10,7 +10,7 @@ import {
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { HALT_MARKER } from './halt-marker.js';
+import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -567,6 +567,44 @@ async function selectChangedArtifacts(
 function stepHasCompletionCheck(step: StepName): boolean {
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
+
+/**
+ * Task 6 (#676): pre-dispatch attribution-machinery guard. When enforcement
+ * is configured, the build step's dispatch depends on
+ * `.pipeline/task-status.json`, `.pipeline/session-hooks/`, and the
+ * `.pipeline/current-task` stamp path all being intact — that machinery is
+ * what the enforcement/judge lanes attribute dispatched work against. Called
+ * BEFORE dispatch (unlike Task 3's post-dispatch unattributed-dispatch
+ * signal) so a broken machinery state never reaches an unattributable
+ * dispatch. Returns a diagnostic naming the broken piece, or `null` when
+ * intact.
+ */
+async function checkAttributionMachineryIntact(projectRoot: string): Promise<string | null> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+
+  // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
+  // fresh conductor run whose earlier steps haven't created it) is not
+  // "broken" — there's nothing to attribute against yet. The guard only
+  // fires once `.pipeline/` exists but is missing the machinery a build
+  // dispatch depends on.
+  const pipelineDirExists = await accessFile(pipelineDir).then(() => true).catch(() => false);
+  if (!pipelineDirExists) {
+    return null;
+  }
+
+  const taskStatusPath = join(pipelineDir, 'task-status.json');
+  const taskStatusOk = await accessFile(taskStatusPath).then(() => true).catch(() => false);
+  if (!taskStatusOk) {
+    return (
+      `Attribution machinery broken: .pipeline/task-status.json is missing.\n` +
+      `Build dispatch requires task-status.json to be seeded and the ` +
+      `.pipeline/current-task stamp path to be writable before a build ` +
+      `session can be attributed to a task.`
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -2680,12 +2718,43 @@ export class Conductor {
           // session activity. Never written when enforcement isn't
           // configured (absent/future cutover) — zero overhead for
           // operators who haven't opted in.
-          const markerActive = step.name === 'build' && isEnforcementConfigured(this.config);
+          // Task 6 (#676): pre-dispatch attribution-machinery guard. Checked
+          // before the build-step-active marker / dispatch below — a build
+          // step never reaches an unattributable dispatch when the
+          // machinery it depends on is broken.
+          const machineryIssue =
+            step.name === 'build' && isEnforcementConfigured(this.config)
+              ? await checkAttributionMachineryIntact(this.projectRoot)
+              : null;
+          const markerActive =
+            !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
 
           let result: StepRunResult;
+          if (machineryIssue) {
+            buildWatcher?.stop();
+            result = { success: false, output: machineryIssue };
+            // Write the HALT marker directly rather than relying solely on
+            // the generic "retries exhausted" flow below — that flow only
+            // fires in `mode === 'auto'` (daemon), but a broken attribution
+            // machinery is loud regardless of run mode. Gated on `attempt
+            // >= 2` — the SAME literal threshold the pre-existing stall
+            // circuit breaker uses a few hundred lines below (search
+            // `attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore`)
+            // for its own build-step loud-halt decision. That precedent
+            // already accepts the corollary this creates: a project
+            // configured with `max_retries: 1` never reaches attempt 2, so
+            // neither that breaker nor this guard escalates to a HALT for
+            // it — a single-attempt retry budget disables both of this
+            // step's loud-halt mechanisms by design, not a gap introduced
+            // here. Retryable per existing step-retry semantics, not a
+            // bypass of them.
+            if (attempt >= 2) {
+              await writeHaltMarker(this.projectRoot, machineryIssue);
+            }
+          } else
           try {
             if (
               step.name !== 'complexity' &&
