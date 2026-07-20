@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Committed shipped-records for two manually-shipped features —
+  `2026-07-20-engine-gc-self-eviction-guard` (#673, PR #703) and
+  `build-stall-remediation-skips-no-task-progress` (#701, PR #701) — so
+  `daemon-backlog.ts` dedups them instead of re-dispatching work that already
+  shipped (#438 stopgap). Plus a **Daemon Operations Safety** section in
+  `CLAUDE.md`: never bulk-delete worktrees/branches, park before touching a
+  feature's git state, a worktree checkout is disposable but the branch is the
+  source of truth, and a manual PR is not a harness finish (run
+  `conduct-ts shipped-record`).
 - Spec for issue #569 — build-stall auto-remediation now also fires for
   `no_task_progress` (zero-work) stalls, not only `halt_marker` stalls: a
   synthesized remediation prompt (from the completion-gate reason, the stall
