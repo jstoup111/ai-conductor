@@ -89,6 +89,15 @@ path to `done` without a stamp.
   **Then** the lane is skipped, no re-check is added, and the whole flow is byte-identical
   to pre-change behavior.
 
+  **Carve-out:** the one exception to this byte-identical invariant is a residue task
+  that the plan marks `**Verify-only:** yes` — for that marked subset only, the lane
+  still arms class-scoped even with the global `attribution_judge_cutover` dark/absent
+  (see `.docs/plans/verify-only-prove-closed-task-evidence.md`, Task 3, landed in
+  `src/conductor/src/engine/conductor.ts`). This carve-out is narrow by construction: it
+  applies only to tasks explicitly marked verify-only in the plan, and must never widen
+  to unmarked residue — unmarked residue keeps the byte-identical, cutover-absent
+  behavior described above.
+
 ---
 
 ## Story 5 — Stale-anchor verdicts remain fail-closed (negative path)
@@ -113,6 +122,7 @@ no-verdict, **so that** a stale verdict from a prior cycle can never stamp cover
 - A `no-verdict`/`unsatisfied`/refused task never advances the gate (Stories 2, 4).
 - A `semantic-verified` stamp survives a failed trailer corroboration for its task
   (Story 3).
-- Default (cutover-absent) behavior is byte-identical (Story 4).
+- Default (cutover-absent) behavior is byte-identical (Story 4), except for the narrow,
+  explicitly-marked `**Verify-only:** yes` carve-out described in Story 4.
 
 Status: Accepted
