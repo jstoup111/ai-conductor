@@ -454,3 +454,100 @@ describe('deriveCompletion semantic judge fallback unchanged by dirname pass (#7
     expect(result['9']?.completed).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: dirname credit is independent of the judge cutover
+// (#707 Task 8).
+//
+// deriveCompletion never dispatches the judge lane itself (that lives in
+// attribution-lane.ts, gated by `attribution_judge_cutover` /
+// `attribution_enforcement_cutover` — see attribution-conductor-wiring.test.ts).
+// It only ever sees a `semantic-verified` evidence stamp if the judge lane
+// ran and wrote one. "Judge lane disabled/absent (no cutover)" is therefore
+// modeled here as: evidence carries no `semantic-verified` stamp for the
+// task. Under that condition, the deterministic trailer/path-overlap +
+// bounded-dirname heuristic must still credit a same-immediate-dir commit,
+// and must still reject a full miss — i.e. the dirname pass is fully
+// self-sufficient without the judge lane, with no new false positive.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion dirname credit independent of judge cutover (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  async function commitFile(relPath: string, body: string, taskTrailer: string): Promise<void> {
+    const abs = join(root, relPath);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    await git('add', '.');
+    await git('commit', '-q', '-m', `feat: work\n\nTask: ${taskTrailer}\n`);
+  }
+
+  async function derive(planPath: string) {
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+    const result = await deriveCompletion(root, planPath, '', commits, evidence);
+    return { result, evidence };
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-nojudge-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('with no judge/semantic-verified stamp, a same-immediate-dir commit is still credited via the dirname pass', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    await commitFile('src/conductor/src/engine/other.ts', 'export const x = 1;', '1');
+
+    const { result, evidence } = await derive(planPath);
+
+    // No judge cutover: the judge lane never ran, so no semantic-verified
+    // stamp exists — credit came solely from the deterministic dirname pass.
+    expect(evidence.evidenceStamps.get('1')?.form).not.toBe('semantic-verified');
+    expect(result['1']?.completed).toBe(true);
+  });
+
+  it('with no judge/semantic-verified stamp, a full miss (wrong dir, no overlap) still rejects', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    // Wholly unrelated directory: not exact/suffix, not same-immediate-dir.
+    await commitFile('test/unrelated/other.test.ts', 'x', '1');
+
+    const { result, evidence } = await derive(planPath);
+
+    expect(evidence.evidenceStamps.get('1')?.form).not.toBe('semantic-verified');
+    expect(result['1']?.completed).toBeFalsy();
+  });
+});
