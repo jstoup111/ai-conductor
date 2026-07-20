@@ -7,7 +7,7 @@
 // logic — a file in a sibling or nested directory does not match.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -299,5 +299,88 @@ describe('deriveCompletion #445 non-regression: ancestor/repo-root do not corrob
 
     const result = await derive(planPath);
     expect(result['2']?.completed).toBeFalsy();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: wrong-immediate-dir commit falls through to the unchanged
+// reject path (#707 Task 6).
+//
+// Plan paths live only under src/conductor/src/engine/. A Task: N commit that
+// touches only test/ and docs/ files is neither an exact/suffix match nor a
+// same-immediate-dir match, so the bounded dirname pass must NOT credit it.
+// On the resulting full miss (no `semantic-verified` stamp present), the
+// existing `warnOnce` "Path corroboration failed" audit must still fire —
+// this test asserts the reject/audit behavior is unchanged by the dirname
+// pass, matching the assertion style in autoheal-warn-once.test.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion wrong-dir commit falls through to unchanged reject (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  async function commitFile(relPath: string, body: string, taskTrailer: string): Promise<void> {
+    const abs = join(root, relPath);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    await git('add', '.');
+    await git('commit', '-q', '-m', `feat: work\n\nTask: ${taskTrailer}\n`);
+  }
+
+  async function derive(planPath: string) {
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+    return deriveCompletion(root, planPath, '', commits, evidence);
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-wrongdir-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a commit touching only test/ + docs/ files is not dirname-credited, and the reject-path warnOnce audit still fires', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    // Touches only test/ and docs/ — neither exact/suffix nor same-immediate-dir
+    // as the declared src/conductor/src/engine/ path.
+    await mkdir(join(root, 'test/engine'), { recursive: true });
+    await writeFile(join(root, 'test/engine/other.test.ts'), 'x');
+    await mkdir(join(root, 'docs'), { recursive: true });
+    await writeFile(join(root, 'docs/notes.md'), 'x');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: work\n\nTask: 1\n');
+
+    const warns: string[] = [];
+    vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warns.push(args.join(' '));
+    });
+
+    const result = await derive(planPath);
+
+    expect(result['1']?.completed).toBeFalsy();
+    expect(
+      warns.filter((w) => w.includes('Path corroboration failed for task 1')),
+    ).toHaveLength(1);
   });
 });
