@@ -473,3 +473,75 @@ export async function runCiFix(
     throw err;
   }
 }
+
+/**
+ * Result of {@link preflightCiFixInvocation}.
+ */
+export interface CiFixPreflightResult {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Default probe for {@link preflightCiFixInvocation}: a cheap, no-model-round-trip
+ * check that the `claude` binary is spawnable and responds to `--version`. This
+ * intentionally never starts a real fix session — it's meant to catch the "the
+ * daemon host has no claude binary / no auth / a stale flag" class of failure
+ * once at startup, not on every per-PR dispatch.
+ */
+export async function defaultCiFixProbe(): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  try {
+    const result = await execa('claude', ['--version'], { reject: false });
+    return {
+      exitCode: result.exitCode ?? 1,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { exitCode: 1, stdout: '', stderr: message };
+  }
+}
+
+/**
+ * CF-5/CF-6 (intake #666): startup preflight for the ci-fix resolver's
+ * fix-invocation surface (the `claude` CLI ci-fix relies on). Runs a cheap
+ * capability/dry probe (see {@link defaultCiFixProbe}) exactly once —
+ * no model round-trip — so the daemon can disable ci-fix for the run and log
+ * a diagnosable reason instead of crashing or silently retrying a broken
+ * invocation on every PR.
+ *
+ * Never throws: a rejecting probe is caught and reported as
+ * `{ ok: false, reason }` just like a non-zero exit code, so callers (see
+ * daemon-cli.ts startup wiring) can safely `await` this without a try/catch.
+ *
+ * @param opts.probe Injectable probe seam (tests stub this; production wiring
+ *                     passes {@link defaultCiFixProbe}).
+ */
+export async function preflightCiFixInvocation(opts: {
+  probe: () => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+}): Promise<CiFixPreflightResult> {
+  let result: { exitCode: number; stdout: string; stderr: string };
+  try {
+    result = await opts.probe();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const tag = classifyFixError(err);
+    return { ok: false, reason: `ci-fix preflight probe threw [${tag}]: ${message}` };
+  }
+
+  if (result.exitCode === 0) {
+    return { ok: true };
+  }
+
+  const err = new Error(result.stderr || `probe exited with code ${result.exitCode}`);
+  const tag = classifyFixError(err);
+  const reason =
+    `ci-fix preflight probe failed [${tag}] (exit ${result.exitCode}): ` +
+    `${result.stderr || result.stdout || '(no output)'}`;
+  return { ok: false, reason };
+}

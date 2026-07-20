@@ -14,6 +14,8 @@ import {
   buildCiFixHint,
   productionCiFixRunner,
   classifyFixError,
+  preflightCiFixInvocation,
+  defaultCiFixProbe,
 } from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
@@ -458,6 +460,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
 
+  // ci-fix startup preflight (CF-5/CF-6) result is disabled below, right
+  // after `log` is defined.
+  let ciFixEnabled = true;
+
   // Task 16: Transition-only per-slug status logging + resume line
   // Track the last status for each slug so we only emit log lines when status changes
   const lastStatus = new Map<string, string>();
@@ -519,6 +525,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
   const discoveryLogger = createDiscoveryLogger(log);
+
+  // CF-5/CF-6 (intake #666): run the ci-fix startup preflight exactly once,
+  // before the sweep loop starts, so a broken `claude` fix-invocation surface
+  // (missing binary, bad auth, stale flag) disables ci-fix for this daemon
+  // run instead of crashing or silently retrying a broken invocation on every
+  // PR. Never repeated per-PR — the `ciFix.dispatch` closure only reads the
+  // resulting `ciFixEnabled` flag.
+  const ciFixPreflight = await preflightCiFixInvocation({ probe: defaultCiFixProbe });
+  if (!ciFixPreflight.ok) {
+    ciFixEnabled = false;
+    log(`[ci-fix] startup preflight failed, disabling ci-fix for this run: ${ciFixPreflight.reason}`);
+  }
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -1459,6 +1477,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
             dispatch: async (entry) => {
+              if (!ciFixEnabled) {
+                return;
+              }
               log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
 
               try {
