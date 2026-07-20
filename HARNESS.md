@@ -129,7 +129,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | bootstrap | sonnet | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
 | memory | haiku | low | Read/write files, update index — mechanical. |
 | assess | sonnet | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
-| explore | fable | medium | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 5-retry budget. Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). |
+| explore | fable | medium | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). |
 | prd | fable | medium | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need. |
 | complexity | sonnet | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
 | stories | sonnet | low (S), medium (M), high (L) | Pattern-following from design doc, structured output. |
@@ -183,6 +183,23 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 > `.ai-conductor/config.yml` to disable fallback. The `--model` CLI flag and
 > `steps.<step>.model` config still take precedence as an explicit override, and the
 > override itself is checked for availability before use.
+
+> **Retry-as-escalation ladder (#188):** A retry is no longer an identical coin-flip —
+> it deliberately raises capability so the re-run changes the odds. On a step's failed
+> attempt the loop escalates from the resolved base `(model, effort)`, indexed by the
+> 1-based attempt: **attempt 1** runs the base; **attempt 2** bumps effort one level
+> (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model one
+> tier up the capability ladder (`haiku→sonnet→opus→fable`). Bumps are capped — an effort
+> already at `max` or a model already at `fable` is a no-op rung, never an error. The
+> model bump expresses *intent* only; it still routes through the #186 availability ladder
+> above, which substitutes a live model if the escalated tier is dead (escalation ascends
+> for upgrade-on-retry; availability descends for substitute-on-dead). Because escalation
+> derives purely from the attempt number, non-budget-consuming retries (rate-limit, stale
+> session, auth park-and-poll) re-run at the *same* rung rather than climbing. Deep-step
+> retry budgets (`explore`, `prd`, `plan`, `build`) drop from 5 to **3** — the floor that
+> still reaches the attempt-3 model-bump rung. Escalation is **on by default**; set
+> `steps.<step>.escalate: false` (also valid at `phases.<PHASE>` / `defaults`) to pin the
+> base `(model, effort)` across every retry (identical-retry, pre-#188 behavior).
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
 ```

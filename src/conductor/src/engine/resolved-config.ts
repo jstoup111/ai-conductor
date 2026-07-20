@@ -81,17 +81,22 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
   memory: 1,
   assess: 3,
-  explore: 5,
-  prd: 5,
+  // #188 retry-as-escalation: deep steps dropped 5 → 3. A retry now escalates
+  // (effort, then model tier) instead of repeating an identical coin-flip, so
+  // five identical retries are wasteful. Floored at 3, not 2 — the model-bump
+  // rung lives at attempt 3, so a budget of 2 would truncate the ladder before
+  // it ever exercises the model bump (adr Decision 4).
+  explore: 3,
+  prd: 3,
   complexity: 1,
   stories: 3,
   conflict_check: 3,
-  plan: 5,
+  plan: 3,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
   acceptance_specs: 3,
-  build: 5,
+  build: 3,
   build_review: 3,
   wiring_check: 3,
   manual_test: 3,

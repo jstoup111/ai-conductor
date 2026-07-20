@@ -57,9 +57,15 @@ describe('engine/resolved-config', () => {
     });
 
     it('retry budgets scale with step criticality', () => {
-      expect(DEFAULT_STEP_RETRIES.prd).toBe(5);
-      expect(DEFAULT_STEP_RETRIES.plan).toBe(5);
-      expect(DEFAULT_STEP_RETRIES.build).toBe(5);
+      // #188 retry-as-escalation: deep steps dropped 5 → 3 (a retry now escalates
+      // instead of repeating an identical attempt). Floored at 3 so the
+      // attempt-3 model-bump rung stays reachable.
+      expect(DEFAULT_STEP_RETRIES.prd).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.plan).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.build).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.explore).toBe(3);
+      // architecture_review is out of #188 scope — stays at 5.
+      expect(DEFAULT_STEP_RETRIES.architecture_review).toBe(5);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
     });
 
