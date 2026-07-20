@@ -384,3 +384,73 @@ describe('deriveCompletion wrong-dir commit falls through to unchanged reject (#
     ).toHaveLength(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: semantic judge fallback path preserved (#707 Task 7).
+//
+// GUARD NOTE: this change set (Tasks 1-6, the bounded dirname corroboration
+// pass) does not modify `src/conductor/src/engine/attribution-lane.ts` or any
+// conductor judge-dispatch block — verified via
+// `git diff 2c62ef32..HEAD -- src/conductor/src/engine/attribution-lane.ts`,
+// which is empty. attribution-lane.ts is also the sole file matching a
+// judge-dispatch search (`find src/conductor/src -iname '*judge*dispatch*'`
+// found nothing; the judge lane lives in attribution-lane.ts). The
+// pre-existing `semantic-verified` stamp branch in deriveCompletion (see
+// "semantic-verified stamp outranks a Task: trailer..." in autoheal.test.ts)
+// is consulted ahead of the trailer/path-overlap heuristic and is untouched
+// by the new dirname pass, which only extends the trailer/path-overlap
+// heuristic itself.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion semantic judge fallback unchanged by dirname pass (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-semantic-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a pre-existing semantic-verified stamp still credits the task when the dirname pass does not apply', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 9: Judged task
+**Files:** src/judged.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: add plan');
+
+    // Commit touches a wholly unrelated directory — neither exact/suffix nor
+    // same-immediate-dir, so the dirname pass does not (and must not) apply.
+    await mkdir(join(root, 'test/unrelated'), { recursive: true });
+    await writeFile(join(root, 'test/unrelated/other.test.ts'), 'x');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: work\n\nTask: 9\n');
+
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+
+    // Judge lane already stamped this task as semantically satisfied — the
+    // existing pre-dirname-pass branch this test guards.
+    const judgeSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+    evidence.evidenceStamps.set('9', { sha: judgeSha, form: 'semantic-verified' });
+
+    const result = await deriveCompletion(root, planPath, '', commits, evidence);
+
+    expect(result['9']?.completed).toBe(true);
+  });
+});
