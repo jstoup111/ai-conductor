@@ -3808,26 +3808,31 @@ export class Conductor {
                       // outcome must route back to 'build' (answering the stall question).
                       // If remediation misroutes to a non-build step, halt with the
                       // question to signal the human that remediation is broken.
-                      const detail =
-                        `misrouted to '${outcome.target}': build stall answers must be ` +
-                        `disposition='build', not routed elsewhere.`;
-                      const haltContent = effectiveQuestion + '\n\n' + detail;
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const detail =
+                          `misrouted to '${outcome.target}': build stall answers must be ` +
+                          `disposition='build', not routed elsewhere.`;
+                        const haltContent = effectiveQuestion + '\n\n' + detail;
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
                     if (outcome.kind === 'halt') {
                       // Task 6: Write HALT with question first, then disposition detail.

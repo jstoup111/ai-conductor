@@ -11546,6 +11546,79 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     },
   );
 
+  it('no_task_progress stall with planRemediation outcome route misrouted to a non-build target falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Write remediation that misroutes to 'plan' (non-build target).
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'plan',
+                  category: null,
+                  rationale: 'Needs a re-plan, not a build answer.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 5,
+    });
+
+    await conductor.run();
+
+    // /remediate must actually get dispatched for this to be a meaningful
+    // exercise of the route-misroute path.
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A no_task_progress stall whose remediation outcome misroutes to a
+    // non-build target must not write the halt_marker-style "misrouted to"
+    // terminal HALT from the stall block — it must fall through to
+    // retry/auto-park instead, same as the halt/none/throw outcomes.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('misrouted to');
+    }
+  });
+
   it('no_task_progress stall where planRemediation dispatch throws falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
     await seedToBuildStep();
 
