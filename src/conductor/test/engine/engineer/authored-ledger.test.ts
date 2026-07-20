@@ -12,7 +12,7 @@
 //   (e) malformed ledger file → clear throw naming the file
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -166,6 +166,51 @@ describe('authored-keys ledger', () => {
     it('does not reject a valid absolute base and still returns [] on ENOENT', async () => {
       const keys = await readAuthoredKeys({ engineerDir: tempDir });
       expect(keys).toEqual([]);
+    });
+  });
+
+  // ── regression: guard must not over-reject valid, correctly-configured bases ──
+  describe('accepts correctly-configured bases (guard does not over-reject)', () => {
+    it('writes to <engineerDir>/authored-keys.json via opts.engineerDir, merging without duplication', async () => {
+      await recordAuthoredKey('proj', 'feat', { engineerDir: tempDir });
+      await recordAuthoredKey('proj', 'feat', { engineerDir: tempDir }); // duplicate call
+
+      const keys = await readAuthoredKeys({ engineerDir: tempDir });
+      expect(keys).toHaveLength(1);
+      expect(keys[0]).toEqual({ project: 'proj', feature: 'feat' });
+
+      const onDisk = JSON.parse(await readFile(join(tempDir, 'authored-keys.json'), 'utf-8'));
+      expect(onDisk).toEqual([{ project: 'proj', feature: 'feat' }]);
+    });
+
+    it('writes under an injected home dir (<home>/.ai-conductor/engineer/authored-keys.json) without env override, leaving real $HOME untouched', async () => {
+      const fakeHome = await mkdtemp(join(tmpdir(), 'authored-ledger-home-'));
+      try {
+        // No AI_CONDUCTOR_ENGINEER_DIR override — empty env forces fallback to opts.home.
+        await recordAuthoredKey('home-proj', 'home-feat', { home: fakeHome, env: {} });
+
+        const canonicalPath = join(fakeHome, '.ai-conductor', 'engineer', 'authored-keys.json');
+        const raw = await readFile(canonicalPath, 'utf-8');
+        expect(JSON.parse(raw)).toEqual([{ project: 'home-proj', feature: 'home-feat' }]);
+
+        const keys = await readAuthoredKeys({ home: fakeHome, env: {} });
+        expect(keys).toEqual([{ project: 'home-proj', feature: 'home-feat' }]);
+      } finally {
+        await rm(fakeHome, { recursive: true, force: true });
+      }
+    });
+
+    it('honours a valid absolute $AI_CONDUCTOR_ENGINEER_DIR override passed via opts.env', async () => {
+      const overrideDir = await mkdtemp(join(tmpdir(), 'authored-ledger-override-'));
+      try {
+        const overrideEnv = { AI_CONDUCTOR_ENGINEER_DIR: overrideDir };
+        await recordAuthoredKey('env-proj', 'env-feat', { env: overrideEnv });
+
+        const raw = await readFile(join(overrideDir, 'authored-keys.json'), 'utf-8');
+        expect(JSON.parse(raw)).toEqual([{ project: 'env-proj', feature: 'env-feat' }]);
+      } finally {
+        await rm(overrideDir, { recursive: true, force: true });
+      }
     });
   });
 });
