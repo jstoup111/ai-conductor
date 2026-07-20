@@ -16,7 +16,7 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
-import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { findArtifactFiles } from './artifacts.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
@@ -747,6 +747,60 @@ export class DefaultStepRunner implements StepRunner {
 
     // Always report attempted: true — the success of the fix is determined by
     // whether the setup step subsequently passes.
+    return { attempted: true };
+  }
+
+  /**
+   * Dispatch a fix-session to attempt to resolve a CI failure on a shipped PR
+   * (ci-fix resolver autofix). Uses a fresh one-shot session (never resumes
+   * the main conductor session) with the failure hint in the prompt so
+   * Claude can diagnose and fix the root cause.
+   *
+   * Always returns `{ attempted: true }` — the method's role is to bootstrap
+   * the fix session. Whether the fix succeeds is determined by whether CI
+   * subsequently passes, not by this method's return value.
+   *
+   * Runs with cwd set to the worktreePath so any diagnostic/remediation
+   * commands operate in the right worktree context.
+   */
+  async resolveCiFailure(ctx: CiFailureContext): Promise<CiFailureAttempt> {
+    const resolved = this.resolvedConfigFor('build');
+
+    const systemPrompt =
+      'You are attempting to fix a CI failure on a shipped pull request.\n' +
+      `Worktree path: ${ctx.worktreePath}\n` +
+      `Pull request: ${ctx.prUrl}\n` +
+      `Feature slug: ${ctx.slug}\n\n` +
+      'Diagnose the failure and attempt to fix the root cause. Use the current ' +
+      'directory (the worktree) for any diagnostic or remediation commands.\n' +
+      'After making fixes, commit and push so CI can be retried automatically.';
+
+    const prompt =
+      'The CI failure hint is:\n' +
+      '```\n' +
+      `${ctx.hint}\n` +
+      '```\n\n' +
+      'Diagnose and fix the CI failure. Explain your diagnosis and the fixes you applied.';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Walk the fallback ladder so the CI-failure resolver is not blocked by
+    // one model's unavailability.
+    await this.modelAvailability.invokeWithLadder(this.provider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: ctx.worktreePath,
+    });
+
+    // Always report attempted: true — the success of the fix is determined by
+    // whether CI subsequently passes.
     return { attempted: true };
   }
 
