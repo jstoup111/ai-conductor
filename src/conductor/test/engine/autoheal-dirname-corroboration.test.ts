@@ -551,3 +551,102 @@ describe('deriveCompletion dirname credit independent of judge cutover (#707)', 
     expect(result['1']?.completed).toBeFalsy();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: trailer match remains a precondition for dirname credit
+// (#707 Task 9).
+//
+// The bounded dirname pass runs inside the existing per-matching-commit loop,
+// i.e. only for commits whose `Task:` trailer already satisfies
+// `taskTrailerMatches`. A commit with NO trailer must never be dirname-credited
+// merely because its files happen to sit in the plan-declared directory, and a
+// commit whose trailer `taskTrailerMatches` rejects as ambiguous (alias form
+// `task-N` when `task-N` is itself a plan task id) must also never be credited.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion trailer match remains precondition for dirname credit (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  async function commitFile(relPath: string, body: string, message: string): Promise<void> {
+    const abs = join(root, relPath);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    await git('add', '.');
+    await git('commit', '-q', '-m', message);
+  }
+
+  async function derive(planPath: string) {
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+    return deriveCompletion(root, planPath, '', commits, evidence);
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-trailer-precondition-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a commit with NO Task trailer whose files sit in the plan dir is NOT credited', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    // Same immediate dir as the declared path, but the commit carries no
+    // `Task:` trailer at all — must not be dirname-credited.
+    await commitFile('src/conductor/src/engine/other.ts', 'export const x = 1;', 'feat: work with no trailer');
+
+    const result = await derive(planPath);
+    expect(result['1']?.completed).toBeFalsy();
+  });
+
+  it('a commit with an AMBIGUOUS Task trailer (rejected by taskTrailerMatches) is NOT credited', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    // Plan has both a bare-numeric task "1" and an alphanumeric task "task-1",
+    // making the alias form `task-1` ambiguous per taskTrailerMatches.
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+
+### Task task-1: Other implementation
+**Files:** src/other/thing.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    // Same immediate dir as task 1's declared path, but the trailer value
+    // `task-1` is ambiguous between task "1" (via alias) and task "task-1"
+    // (exact) — taskTrailerMatches must reject it for task "1".
+    await commitFile(
+      'src/conductor/src/engine/other.ts',
+      'export const x = 1;',
+      'feat: work\n\nTask: task-1\n',
+    );
+
+    const result = await derive(planPath);
+    expect(result['1']?.completed).toBeFalsy();
+  });
+});
