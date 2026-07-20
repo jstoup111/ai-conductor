@@ -26,6 +26,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Source-Ref jstoup111/ai-conductor#587), ungating it from the owner gate's
   `unowned-post-cutover` hold.
 - `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+- Finish and pr skills' staleness-proof fallback now matches git's actual reflog wording: `git reflog | grep "rebase: finish"` never matched real git output (git writes `rebase (finish): returning to refs/heads/<branch>`, parenthesized, no colon), so on any branch where the merge-base ancestry fast path also failed (e.g. a twice-rebased branch), finish/pr wrongly concluded foreign commits existed on the remote and halted for human review. Corrected to `grep -E "rebase \(finish\)"` in both `skills/finish/SKILL.md` and `skills/pr/SKILL.md` (ai-conductor#587).
 
 ### Added
 - Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
