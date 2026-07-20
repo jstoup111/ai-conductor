@@ -12,6 +12,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Spec for issue #677 — verify-only (prove-closed) plan tasks get a
+  deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
+  the judged attribution lane for marked residue tasks (dark-cutover-safe),
+  `Evidence: skipped <reason>` parity in the generated commit-msg hook, and
+  park reasons that name stranded verify-only task ids — so an
+  evaluator-APPROVED build no longer auto-parks solely because one task
+  legitimately produced no commit
+  (`.docs/plans/verify-only-prove-closed-task-evidence.md`; partial #678 —
+  removes the completed-build re-dispatch trigger for this class, general
+  outcomes deferred to #678/PR #679).
 - Committed shipped-records for two manually-shipped features —
   `2026-07-20-engine-gc-self-eviction-guard` (#673, PR #703) and
   `build-stall-remediation-skips-no-task-progress` (#701, PR #701) — so
