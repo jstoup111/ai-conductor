@@ -2465,6 +2465,101 @@ describe('engine/conductor', () => {
       // Verify remediate was called at most MAX_KICKBACKS_PER_GATE (2) times
       expect(remediateCallCount.length).toBeLessThanOrEqual(2);
     });
+
+    // REGRESSION PIN (#569): once remediationRounds reaches
+    // MAX_KICKBACKS_PER_GATE for a halt_marker build stall, the run must
+    // write the "Remediation budget exhausted" HALT marker and return —
+    // no further /remediate dispatch. Locks conductor.ts:3657-3677 so a
+    // later change (adding no_task_progress dispatch) can't accidentally
+    // let a budget-exhausted halt_marker stall fall through to a 3rd
+    // dispatch or lose the budget-exhausted HALT content.
+    it('halt_marker stall at remediation budget exhaustion writes "Remediation budget exhausted" HALT and dispatches no further /remediate', async () => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const remediateCallCount: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            buildAttemptCount++;
+            // Always write a stall marker to trigger remediation dispatch
+            // on every attempt, exhausting the budget. The halt_marker
+            // check takes precedence over the resolved-task-count
+            // comparison, so the resolved count is bumped each attempt
+            // (task ids grow) purely to keep the durable no-evidence
+            // auto-park counter (a DIFFERENT mechanism, gated on lack of
+            // resolved-task progress) from firing first and masking the
+            // budget-exhaustion HALT this test is pinning.
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              `Stall ${buildAttemptCount}`,
+            );
+            const tasks = Array.from({ length: buildAttemptCount }, (_, i) => ({
+              id: i + 1,
+              status: 'completed',
+            }));
+            tasks.push({ id: buildAttemptCount + 100, status: 'pending' });
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks }),
+            );
+          } else if (step === 'remediate') {
+            remediateCallCount.push(buildAttemptCount);
+            // Route back to build every time — the stall never actually
+            // resolves, forcing the budget to exhaust.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `stall:${buildAttemptCount}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: `Answer ${buildAttemptCount}`,
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // High retry count so the budget (not retries) is what stops the loop
+      });
+
+      await conductor.run();
+
+      // Never more than MAX_KICKBACKS_PER_GATE (2) dispatches for this
+      // persistent halt_marker stall.
+      expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+      expect(remediateCallCount.length).toBeGreaterThan(0);
+
+      // The run HALTs rather than looping forever or falling through to a
+      // silent non-green failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+
+      // The HALT marker on disk carries the fail-safe budget-exhausted
+      // message pinned at conductor.ts:3657-3677.
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('Remediation budget exhausted');
+      expect(haltContent).toContain('max 2 kickbacks per gate');
+    });
   });
 
   describe('stall HALT carries the question (Task 6)', () => {
