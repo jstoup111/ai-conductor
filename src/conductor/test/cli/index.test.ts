@@ -174,6 +174,33 @@ describe('CLI', () => {
       expect(help).not.toContain('conduct help');
       expect(help).not.toContain('conduct engineer help');
     });
+
+    it('documents the full engineer subtree (all six runtime primitives)', () => {
+      for (const path of [
+        'conduct engineer worktree',
+        'conduct engineer poll',
+        'conduct engineer claim',
+        'conduct engineer forget',
+        'conduct engineer resolve',
+        'conduct engineer migrate-issue-deps',
+      ]) {
+        expect(help).toContain(path);
+      }
+    });
+
+    it('documents the real land/handoff flags (--worktree, --source-ref)', () => {
+      expect(help).toContain('--worktree');
+      expect(help).toContain('--source-ref');
+    });
+  });
+
+  describe('root-level program description names both loops', () => {
+    it('mentions daemon, engineer, and points to `engineer --help`', () => {
+      const rootHelp = createProgram().helpInformation();
+      expect(rootHelp).toContain('daemon');
+      expect(rootHelp).toContain('engineer');
+      expect(rootHelp).toContain('engineer --help');
+    });
   });
 
   // `conduct daemon --help` renders the daemon subtree only (run flags + every
