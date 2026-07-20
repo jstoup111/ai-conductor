@@ -438,11 +438,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // surfaces as a cryptic "no parseable result" HALT). The interactive prompt to
   // self-heal lives at `daemon start`.
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
-  // Stamp this process's own engine version onto env BEFORE any GC-triggering
-  // step runs, so publish-engine.mjs's gcVersions call (Task 3) can never
-  // delete the dist-versions/<id> this daemon is currently running out of.
-  Object.assign(process.env, selfGuardEnv());
-  await ensureFresh();
   // The local branch worktrees fork from and discovery reads. Resolve origin's
   // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
   // fast-forwards this branch on each idle poll (see fastForwardRoot).
@@ -578,6 +573,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     lock.releaseSync();
   };
   process.once('exit', releaseBackstop);
+
+  // Task 5: run the install-freshness check (which may trigger publish/GC)
+  // only AFTER holdLock has succeeded and the exit backstop above is
+  // registered. This closes the pre-lock startup window where GC could
+  // self-evict the running daemon's own dist before any pidfile/backstop
+  // protection existed — a throw here (stale-install refusal) now
+  // propagates with the lock already guarded by releaseBackstop on exit.
+  // Stamp this process's own engine version onto env BEFORE any GC-triggering
+  // step runs, so publish-engine.mjs's gcVersions call (Task 3) can never
+  // delete the dist-versions/<id> this daemon is currently running out of.
+  Object.assign(process.env, selfGuardEnv());
+  await ensureFresh();
 
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a

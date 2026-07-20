@@ -39,24 +39,35 @@ describe('Task 4 — runDaemonMode stamps self-guard env before ensureFresh', ()
   it('has CONDUCT_ENGINE_SELF_GUARD and CONDUCT_ENGINE_SELF_VERSION set on process.env by the time ensureFresh is invoked', async () => {
     const { runDaemonMode } = await import('../../src/daemon-cli.js');
     const holdLockModule = await import('../../src/engine/daemon-lock.js');
-    // Make runDaemonMode bail out immediately after the ensureFresh call by
-    // having holdLock resolve null (lock-loser exit path) — we only care
-    // about env state observed inside ensureFresh, called before that.
-    vi.spyOn(holdLockModule, 'holdLock').mockResolvedValue(null);
+    // Task 5: ensureFresh now runs AFTER a successful holdLock (the pidfile
+    // backstop must be in place first) — mock a held lock so ensureFresh is
+    // reached, then throw from ensureFresh to bail out deterministically
+    // once we've observed the env state.
+    const fakeLock = {
+      pid: process.pid,
+      uuid: 'fake-uuid',
+      owned: true,
+      release: async () => {},
+      releaseSync: () => {},
+    };
+    vi.spyOn(holdLockModule, 'holdLock').mockResolvedValue(fakeLock as any);
 
     let seenGuard: string | undefined;
     let seenVersion: string | undefined;
     const ensureFresh = async () => {
       seenGuard = process.env.CONDUCT_ENGINE_SELF_GUARD;
       seenVersion = process.env.CONDUCT_ENGINE_SELF_VERSION;
+      throw new Error('__stop__');
     };
 
-    await runDaemonMode({
-      projectRoot,
-      concurrency: 1,
-      ensureFresh,
-      exitProcess: () => {},
-    } as any);
+    await expect(
+      runDaemonMode({
+        projectRoot,
+        concurrency: 1,
+        ensureFresh,
+        exitProcess: () => {},
+      } as any),
+    ).rejects.toThrow('__stop__');
 
     expect(seenGuard).toBe('1');
     expect(typeof seenVersion).toBe('string');
