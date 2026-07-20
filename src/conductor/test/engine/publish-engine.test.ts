@@ -383,6 +383,11 @@ describe('publish-engine.mjs GC self-guard env', () => {
     for (const id of oldIds) {
       expect(remaining).toContain(id);
     }
+    // Task 7: explicit zero-deletions assertion — without the guard,
+    // keepLastK=3 would have deleted 2 of the 5 seeded old versions (see
+    // the resolved-self-version test above), so exact-count equality here
+    // is the assertion that distinguishes "skipped" from "still mostly ran".
+    expect(remaining.length).toBe(oldIds.length + 1);
   });
 
   it('with CONDUCT_ENGINE_SELF_GUARD unset, GC behaves exactly as before (backward compatible)', async () => {
