@@ -1412,4 +1412,34 @@ TIER: M`,
       expect(opts.cwd).toBe('/wt/feature-x');
     });
   });
+
+  describe('resolveCiFailure one-shot dispatch', () => {
+    it('invokes the model ladder once with resume:false, dangerouslySkipPermissions:true, cwd=worktreePath, and the hint in the prompt', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.resolveCiFailure({
+        worktreePath: '/wt/feature-x',
+        prUrl: 'https://github.com/org/repo/pull/42',
+        hint: 'TypeError: Cannot read properties of undefined (reading \'foo\')',
+        slug: 'my-feature',
+      });
+
+      expect(invoke).toHaveBeenCalledOnce();
+
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.resume).toBe(false);
+      expect(opts.dangerouslySkipPermissions).toBe(true);
+      expect(opts.cwd).toBe('/wt/feature-x');
+      expect(opts.prompt).toContain("TypeError: Cannot read properties of undefined (reading 'foo')");
+    });
+  });
 });
