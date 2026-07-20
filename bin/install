@@ -1147,7 +1147,7 @@ install() {
   # — safe to call repeatedly — so no "already initialized" short-circuit is needed.
   if command -v rtk &>/dev/null; then
     info "Initializing rtk for Claude Code..."
-    if rtk init -g --auto-patch 2>/dev/null; then
+    if rtk init -g --auto-patch; then
       ok "rtk initialized (restart Claude Code to activate)"
     else
       warn "rtk init failed — run 'rtk init -g' manually"

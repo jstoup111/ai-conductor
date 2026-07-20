@@ -7,10 +7,11 @@ import {
   unlink as unlinkFile,
   stat,
 } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { HALT_MARKER } from './halt-marker.js';
+import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -51,6 +52,8 @@ import {
   removeBuildStepMarker,
   detectZeroWorkProduct,
   readDispatchCount,
+  readDispatchAttribution,
+  detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
 import { runAttributionLane, type AttributionLaneResult, dispatchAttributionVerifier } from './attribution-lane.js';
@@ -565,6 +568,122 @@ async function selectChangedArtifacts(
 function stepHasCompletionCheck(step: StepName): boolean {
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
+
+/**
+ * Task 6 (#676): pre-dispatch attribution-machinery guard. When enforcement
+ * is configured, the build step's dispatch depends on
+ * `.pipeline/task-status.json`, `.pipeline/session-hooks/`, and the
+ * `.pipeline/current-task` stamp path all being intact — that machinery is
+ * what the enforcement/judge lanes attribute dispatched work against. Called
+ * BEFORE dispatch (unlike Task 3's post-dispatch unattributed-dispatch
+ * signal) so a broken machinery state never reaches an unattributable
+ * dispatch. Returns a diagnostic naming the broken piece, or `null` when
+ * intact.
+ */
+/**
+ * Seed `task-status.json` from the resolvable plan (if any), then run the
+ * pre-dispatch attribution-machinery check (Task 2, #676 follow-up). A
+ * fresh/legitimate dispatch where `.pipeline/task-status.json` simply
+ * hasn't been seeded yet must not trip the guard — seed it here, right
+ * before the check, rather than relying on some earlier step to have
+ * already done so. Plan resolution failure (no plan found) is surfaced via
+ * `checkAttributionMachineryIntact`'s `planResolvable: false` diagnostic
+ * rather than treated as a seeding error.
+ */
+export async function seedAndCheckAttributionMachinery(
+  projectRoot: string,
+  featureDesc: string,
+): Promise<string | null> {
+  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+  const planResolvable = typeof planPath === 'string' && planPath.length > 0;
+  if (planResolvable) {
+    try {
+      await seedTaskStatus(projectRoot, planPath as string);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        `Attribution machinery broken: failed to seed task-status.json from plan — ${message}.\n` +
+        `Check .pipeline/ is writable.`
+      );
+    }
+  }
+  return checkAttributionMachineryIntact(projectRoot, { planResolvable });
+}
+
+export async function checkAttributionMachineryIntact(
+  projectRoot: string,
+  opts?: { planResolvable?: boolean },
+): Promise<string | null> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+
+  // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
+  // fresh conductor run whose earlier steps haven't created it) is not
+  // "broken" — there's nothing to attribute against yet. The guard only
+  // fires once `.pipeline/` exists but is missing the machinery a build
+  // dispatch depends on.
+  const pipelineDirExists = await accessFile(pipelineDir).then(() => true).catch(() => false);
+  if (!pipelineDirExists) {
+    return null;
+  }
+
+  const taskStatusPath = join(pipelineDir, 'task-status.json');
+  const taskStatusOk = await accessFile(taskStatusPath).then(() => true).catch(() => false);
+  if (!taskStatusOk) {
+    if (opts?.planResolvable === false) {
+      return (
+        `Attribution machinery broken: plan could not be resolved — cannot ` +
+        `seed task-status.json.\n` +
+        `Check .docs/plans/ for an unambiguous plan artifact.`
+      );
+    }
+    return (
+      `Attribution machinery broken: .pipeline/task-status.json is missing.\n` +
+      `Build dispatch requires task-status.json to be seeded and the ` +
+      `.pipeline/current-task stamp path to be writable before a build ` +
+      `session can be attributed to a task.`
+    );
+  }
+
+  // Session hooks: the pre/post-dispatch and mutation-gate scripts provisioned
+  // by `writeSessionHooks()` at worktree setup (worktree-prepare.ts). If any
+  // expected script is missing, the PreToolUse/PostToolUse hooks that stamp
+  // `.pipeline/current-task` and record dispatch attribution can never fire.
+  const hooksDir = join(pipelineDir, 'session-hooks');
+  const expectedHooks = ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'];
+  const missingHooks: string[] = [];
+  for (const hook of expectedHooks) {
+    const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
+    if (!ok) missingHooks.push(hook);
+  }
+  if (missingHooks.length > 0) {
+    return (
+      `Attribution machinery broken: .pipeline/session-hooks/ is missing ` +
+      `expected script(s): ${missingHooks.join(', ')}.\n` +
+      `Build dispatch requires session hooks to be installed so a build ` +
+      `session can be attributed to a task.`
+    );
+  }
+
+  // Stamp path writability: `.pipeline/current-task` is where the
+  // PreToolUse hook stamps the active task id before a build session starts.
+  // Check writability of the existing file if present, otherwise of its
+  // parent directory (the file doesn't exist until the first stamp write).
+  const currentTaskPath = join(pipelineDir, 'current-task');
+  const currentTaskExists = await accessFile(currentTaskPath).then(() => true).catch(() => false);
+  const writabilityCheckTarget = currentTaskExists ? currentTaskPath : pipelineDir;
+  const stampPathWritable = await accessFile(writabilityCheckTarget, fsConstants.W_OK)
+    .then(() => true)
+    .catch(() => false);
+  if (!stampPathWritable) {
+    return (
+      `Attribution machinery broken: .pipeline/current-task stamp path is not writable.\n` +
+      `Build dispatch requires the .pipeline/current-task stamp path to be ` +
+      `writable so a build session can be attributed to a task.`
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -2583,6 +2702,13 @@ export class Conductor {
         let attempt = 0;
         let lastError: string = '';
         let succeeded = false;
+        // Task 6 (#inherited-budget halt wording): snapshot the durable
+        // no-evidence counter BEFORE this dispatch cycle's attempts run, so
+        // a subsequent auto-park can distinguish "already exhausted at
+        // cycle start" (inherited from a prior halted run) from "crossed
+        // the threshold during this cycle" — pure arithmetic on the
+        // snapshot vs. the counter's value at park-check time.
+        const cycleStartNoEvidenceAttempts = this.taskEvidence?.noEvidenceAttempts ?? 0;
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
@@ -2637,6 +2763,11 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // #569 Task 5: set when a build stall is diagnosed as no_task_progress —
+        // consulted at the terminal fallback below to give the operator a
+        // distinct, actionable HALT reason instead of the generic
+        // "retries exhausted" message.
+        let lastBuildStallReason: string | undefined;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -2671,12 +2802,43 @@ export class Conductor {
           // session activity. Never written when enforcement isn't
           // configured (absent/future cutover) — zero overhead for
           // operators who haven't opted in.
-          const markerActive = step.name === 'build' && isEnforcementConfigured(this.config);
+          // Task 6 (#676): pre-dispatch attribution-machinery guard. Checked
+          // before the build-step-active marker / dispatch below — a build
+          // step never reaches an unattributable dispatch when the
+          // machinery it depends on is broken.
+          const machineryIssue =
+            step.name === 'build' && isEnforcementConfigured(this.config)
+              ? await seedAndCheckAttributionMachinery(this.projectRoot, state.feature_desc ?? '')
+              : null;
+          const markerActive =
+            !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
 
           let result: StepRunResult;
+          if (machineryIssue) {
+            buildWatcher?.stop();
+            result = { success: false, output: machineryIssue };
+            // Write the HALT marker directly rather than relying solely on
+            // the generic "retries exhausted" flow below — that flow only
+            // fires in `mode === 'auto'` (daemon), but a broken attribution
+            // machinery is loud regardless of run mode. Gated on `attempt
+            // >= 2` — the SAME literal threshold the pre-existing stall
+            // circuit breaker uses a few hundred lines below (search
+            // `attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore`)
+            // for its own build-step loud-halt decision. That precedent
+            // already accepts the corollary this creates: a project
+            // configured with `max_retries: 1` never reaches attempt 2, so
+            // neither that breaker nor this guard escalates to a HALT for
+            // it — a single-attempt retry budget disables both of this
+            // step's loud-halt mechanisms by design, not a gap introduced
+            // here. Retryable per existing step-retry semantics, not a
+            // bypass of them.
+            if (attempt >= 2) {
+              await writeHaltMarker(this.projectRoot, machineryIssue);
+            }
+          } else
           try {
             if (
               step.name !== 'complexity' &&
@@ -2708,6 +2870,22 @@ export class Conductor {
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
             // completes, further down.
+          }
+
+          // Task 3 (#671): unattributed-dispatch loud signal. Fires at the
+          // build dispatch seam itself — earlier than and distinct from
+          // detectZeroWorkProduct/the evidence gate — when this cycle's
+          // dispatch-count crosses the unattributed threshold.
+          if (step.name === 'build' && isEnforcementConfigured(this.config)) {
+            const attribution = await readDispatchAttribution(this.projectRoot);
+            const unattributedResult = detectUnattributedDispatch(attribution);
+            if (unattributedResult) {
+              await this.events.emit({
+                type: 'unattributed_dispatch',
+                step: step.name,
+                unattributedCount: unattributedResult.unattributedCount,
+              });
+            }
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the
@@ -3022,8 +3200,11 @@ export class Conductor {
 
               // Task 12: Attribution lane integration. Runs after auto-heal
               // completes, before gate-miss handling. Extracts residue from
-              // derived result, checks cutover armed, detects zero-work, and
-              // dispatches the verifier. If the lane stamps tasks, those stamps
+              // derived result, checks cutover armed, and dispatches the
+              // verifier. The lane dispatches on residue regardless of
+              // whether this attempt added new commits — inherited residue
+              // from a resumed build is judged too, not just residue newly
+              // produced this attempt. If the lane stamps tasks, those stamps
               // take effect on the NEXT derivation cycle (same evaluation loop —
               // no explicit re-derive here, as the lane runs inside the auto-heal
               // block which already re-checks completion once healing fires).
@@ -3036,22 +3217,14 @@ export class Conductor {
                   (id) => !derivedCompletion[id]?.completed && derivedCompletion[id]?.status !== 'skipped',
                 );
 
-                // Check zero-work once per gate evaluation to skip lane if needed
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-                const isZeroWork = await detectZeroWorkProduct({
-                  projectRoot: this.projectRoot,
-                  config: this.config,
-                  headBefore: headShaBeforeBuild,
-                  headAfter: headShaAfterBuild,
-                });
 
                 // Dispatch the lane if there's residue and cutover is armed
                 const planPathOrNull = (await this.completionCtx(state)).planPath;
                 if (
                   residueIds.length > 0 &&
                   planPathOrNull &&
-                  headShaAfterBuild &&
-                  !isZeroWork
+                  headShaAfterBuild
                 ) {
                   const planPath: string = planPathOrNull;
                   const headSha: string = headShaAfterBuild;
@@ -3265,7 +3438,22 @@ export class Conductor {
                   stalled = 'halt_marker';
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
+                  // #569 Task 5: record a distinct, actionable reason for
+                  // the terminal HALT fallback in case this build step
+                  // ultimately exhausts retries after this stall.
+                  lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
                 }
+
+                // #569: snapshot the evidence sidecar's noEvidenceReasons
+                // BEFORE the durable-counter block below writes its own
+                // (possibly empty) in-memory `this.taskEvidence` back to
+                // disk — that write clobbers any reason tags a step runner
+                // wrote directly to task-evidence.json this attempt. The
+                // no_task_progress remediation-prompt synthesis further
+                // down needs the pre-clobber tags.
+                const noEvidenceReasonsSnapshotForStall = (
+                  await createTaskEvidence(this.projectRoot)
+                ).noEvidenceReasons;
 
                 // Task 12: Durable no-evidence counter. Increment on EVERY
                 // gate miss without progress (H7 — the counter accrues across
@@ -3408,6 +3596,7 @@ export class Conductor {
                   const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
                     maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
                     daemon: this.daemon,
+                    cycleStartAttempts: cycleStartNoEvidenceAttempts,
                     ...(effectiveEmptyPlan ? { reason: 'empty/missing plan' } : {}),
                     emit: (evt) =>
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
@@ -3424,8 +3613,13 @@ export class Conductor {
                       freshEvidence.lastResolvedCount = resolvedTasksAfter;
                       await freshEvidence.write();
                     }
+                    const inheritedBudget =
+                      cycleStartNoEvidenceAttempts >= DAEMON_NO_EVIDENCE_THRESHOLD;
+                    const noEvidenceReason = inheritedBudget
+                      ? `no completion evidence — inherited an already-exhausted budget of ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`
+                      : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`;
                     const reason =
-                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`}` +
+                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : noEvidenceReason}` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
                     await writeFile(
                       join(this.projectRoot, LOOP_HALT_MARKER),
@@ -3459,7 +3653,39 @@ export class Conductor {
                     );
                     // Task 8: save the question for use in degraded remediation error handling
                     stallQuestion = question;
+                  } else if (
+                    stalled === 'no_task_progress' &&
+                    this.daemon &&
+                    this.mode === 'auto'
+                  ) {
+                    // #569: synthesize a remediation prompt from in-scope
+                    // signals so a zero-work stall gets the same /remediate
+                    // dispatch treatment as a halt_marker stall, instead of
+                    // silently skipping it.
+                    const reasonPart = completion.reason
+                      ? `Completion gate: ${completion.reason}`
+                      : 'Completion gate: no progress';
+                    const progressPart =
+                      `Build stall: no forward progress (resolved ` +
+                      `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
+                    // Use the pre-clobber snapshot captured earlier this
+                    // attempt (see `noEvidenceReasonsSnapshotForStall`
+                    // above) rather than the in-memory `this.taskEvidence`,
+                    // which is only ever populated once at construction
+                    // time and the on-disk file, which the durable-counter
+                    // write above may have already overwritten.
+                    const evidenceReasons = noEvidenceReasonsSnapshotForStall;
+                    const evidencePart =
+                      evidenceReasons && evidenceReasons.length > 0
+                        ? ` Evidence: ${evidenceReasons.join(', ')}.`
+                        : '';
+                    const synthesized = `${progressPart} ${reasonPart}.${evidencePart}`;
+                    effectiveQuestion = await writeStallQuestionEvidence(
+                      this.projectRoot,
+                      synthesized,
+                    );
                   }
+                  const isZeroWorkStall = stalled === 'no_task_progress';
 
                   await clearHaltMarker(this.projectRoot);
                   await this.events.emit({
@@ -3475,7 +3701,11 @@ export class Conductor {
                   // is shown instead.
                   if (this.daemon && this.mode === 'auto' && effectiveQuestion) {
                     // Task 8: Budget exhausted — fail-safe HALT with question
-                    if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                    // #569: a zero-work (no_task_progress) stall never
+                    // terminal-HALTs on budget exhaustion from this block —
+                    // it falls through to the existing retry/durable
+                    // no-evidence-counter/auto-park path instead.
+                    if (!isZeroWorkStall && remediationRounds >= MAX_KICKBACKS_PER_GATE) {
                       const haltContent =
                         effectiveQuestion +
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
@@ -3511,32 +3741,46 @@ export class Conductor {
                         state,
                         steps,
                         `Remediate build stall: ${effectiveQuestion}`,
-                        { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+                        {
+                          source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
+                          evidenceFile: '.pipeline/build-stall-question.md',
+                        },
                       );
                     } catch (err) {
                       // Task 8: Degraded remediation exit (throw). Write HALT with question.
                       // The /remediate dispatch itself crashed; log it and use the question
                       // to halt the run so a human can investigate.
                       console.error('build-stall remediation dispatch threw:', err);
-                      const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
 
+                    // #569: when the dispatch threw for a zero-work stall,
+                    // outcome is left undefined (the throw's HALT body was
+                    // skipped above) — there's nothing more to route here,
+                    // so fall straight through to the end of this dispatch
+                    // block without touching outcome.kind.
+                    if (outcome) {
                     if (outcome.kind === 'route') {
                       // Task 5: answerable build stall — resume within the retry loop
                       // instead of rewinding to the outer step loop. When remediation
@@ -3559,26 +3803,31 @@ export class Conductor {
                       // outcome must route back to 'build' (answering the stall question).
                       // If remediation misroutes to a non-build step, halt with the
                       // question to signal the human that remediation is broken.
-                      const detail =
-                        `misrouted to '${outcome.target}': build stall answers must be ` +
-                        `disposition='build', not routed elsewhere.`;
-                      const haltContent = effectiveQuestion + '\n\n' + detail;
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const detail =
+                          `misrouted to '${outcome.target}': build stall answers must be ` +
+                          `disposition='build', not routed elsewhere.`;
+                        const haltContent = effectiveQuestion + '\n\n' + detail;
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
                     if (outcome.kind === 'halt') {
                       // Task 6: Write HALT with question first, then disposition detail.
@@ -3586,48 +3835,59 @@ export class Conductor {
                       // determined requires human DECIDE, avoiding the generic
                       // "retries exhausted" message and ensuring the question is the
                       // first line the human sees.
-                      const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
                     if (outcome.kind === 'none') {
                       // Task 8: Degraded remediation exit (malformed/stale/dropped).
                       // No valid dispositions from /remediate; halt with the question
                       // so human can investigate why remediation failed.
-                      const haltContent =
-                        effectiveQuestion +
-                        '\n\nremediation produced no valid dispositions ' +
-                        '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent =
+                          effectiveQuestion +
+                          '\n\nremediation produced no valid dispositions ' +
+                          '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
+                    }
                     }
                   }
 
@@ -4386,12 +4646,19 @@ export class Conductor {
               join(this.projectRoot, LOOP_HALT_MARKER),
               'utf-8',
             ).catch(() => null);
+            // #569 Task 5: a no_task_progress build stall is a more specific
+            // and actionable diagnosis than a generic unchanged-input note,
+            // so it takes precedence over `unchangedInputNote` (but never
+            // over an existing, more-specific HALT marker written by
+            // auto-park/budget-exhaustion/remediation above).
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : unchangedInputNote
-                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : lastBuildStallReason
+                  ? lastBuildStallReason
+                  : unchangedInputNote
+                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );

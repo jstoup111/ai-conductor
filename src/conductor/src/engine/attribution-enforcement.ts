@@ -98,6 +98,45 @@ export async function readDispatchCount(root: string): Promise<number> {
 }
 
 /**
+ * Parsed breakdown of `.pipeline/dispatch-count`: how many recorded
+ * dispatches carried a real task id ("Task: <id>") versus were unattributed
+ * ("Task: none"), plus the attributed task ids in file order. Malformed
+ * lines (matching neither form) are ignored — not counted in either bucket,
+ * never thrown on. Absent/empty file yields all zeros / an empty array.
+ */
+export interface DispatchAttribution {
+  attributed: number;
+  unattributed: number;
+  taskIds: string[];
+}
+
+export async function readDispatchAttribution(root: string): Promise<DispatchAttribution> {
+  let raw: string;
+  try {
+    raw = await readFile(dispatchCountPath(root), 'utf8');
+  } catch {
+    return { attributed: 0, unattributed: 0, taskIds: [] };
+  }
+  let attributed = 0;
+  let unattributed = 0;
+  const taskIds: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    const match = trimmed.match(/^Task:\s*(.+)$/);
+    if (!match) continue;
+    const value = match[1].trim();
+    if (value === 'none') {
+      unattributed++;
+    } else if (value.length > 0) {
+      attributed++;
+      taskIds.push(value);
+    }
+  }
+  return { attributed, unattributed, taskIds };
+}
+
+/**
  * Whether every task in `.pipeline/task-status.json` is `completed` or
  * `skipped`. Requires at least one task — an absent/empty/unparseable
  * status file is treated as "not complete" (the conservative default: we
@@ -152,4 +191,33 @@ export async function detectZeroWorkProduct(params: ZeroWorkDetectionParams): Pr
   const headUnchanged = headBefore === headAfter;
 
   return dispatchCount === 0 || headUnchanged;
+}
+
+// Task 3 (#671): unattributed-dispatch detection. Distinct from
+// detectZeroWorkProduct — this fires earlier, at the build dispatch seam
+// itself, on the raw attributed/unattributed split rather than on
+// HEAD-movement/dispatch-count. A count-based threshold (not a ratio) so a
+// mixed cycle that still crosses the streak threshold is caught even when
+// it isn't 100% unattributed.
+
+export interface UnattributedDispatchResult {
+  triggered: true;
+  reason: 'unattributed_dispatch';
+  unattributedCount: number;
+}
+
+/**
+ * Detect an unattributed-dispatch streak within a single build cycle's
+ * `DispatchAttribution`. Triggers when `unattributed` is nonzero and meets
+ * or exceeds `threshold` (default 3). Returns `null` when quiet (no
+ * dispatch activity at all, or below threshold).
+ */
+export function detectUnattributedDispatch(
+  attribution: DispatchAttribution,
+  threshold = 3,
+): UnattributedDispatchResult | null {
+  const { unattributed } = attribution;
+  if (unattributed <= 0) return null;
+  if (unattributed < threshold) return null;
+  return { triggered: true, reason: 'unattributed_dispatch', unattributedCount: unattributed };
 }

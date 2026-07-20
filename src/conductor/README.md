@@ -191,10 +191,17 @@ member's evidence file (`prd_audit` + `architecture_review_as_built` in one disp
 context) — never one dispatch per member — drawing from the same shared
 `MAX_KICKBACKS_PER_GATE` budget.
 
-**Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
+**Daemon build-stall remediation (ADR-2026-07-10, #569).** When the build step writes
 `.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
 `Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
-and routes through `/remediate` before halting:
+and routes through `/remediate` before halting. Zero-work stalls (`stalled ===
+'no_task_progress'`) are also routed through the same `/remediate` dispatch and share the
+`MAX_KICKBACKS_PER_GATE` budget below, but differ on the terminal decision: the durable
+no-evidence counter (not the remediation outcome) still owns HALT/park, so a non-recovering
+`/remediate` outcome for a `no_task_progress` stall falls through to retry/auto-park instead of
+an immediate terminal HALT, and an exhausted `no_task_progress` build halts with a distinct,
+specific reason (`build stalled: no task progress (...)`) rather than the generic "retries
+exhausted" message. The `halt_marker` flow below is unchanged:
 
 - **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
   reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
@@ -769,6 +776,31 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 
 **Evidence as source of truth:** The `evidenceStamps` in `.pipeline/task-evidence.json` are the single source of truth for task completion. On every stamp write and at the end of each derived-completion pass, `.pipeline/task-status.json` rows are automatically reconciled from stamps, ensuring rows never lag behind evidence.
 
+#### Build dispatches must not run attribution-blind (#671)
+
+Before this hardening, a build step whose attribution machinery was silently
+broken (e.g. `task-status.json` missing, session hooks not installed, the
+stamp path unwritable) could still dispatch — every sub-dispatch would land
+as `Task: none`, and the gap was only visible later, at the evidence gate.
+Two engine-side safeguards close that gap at the build seam itself:
+
+- **`readDispatchAttribution(root)`** (`src/engine/attribution-enforcement.ts`)
+  parses `.pipeline/dispatch-count` and splits it into `{ attributed,
+  unattributed, taskIds }`, rather than a single opaque count.
+- **`detectUnattributedDispatch(attribution, threshold)`** flags when a
+  dispatch cycle's unattributed count crosses the threshold; the conductor
+  emits a loud `unattributed_dispatch` event during/right after dispatch,
+  instead of deferring discovery to the evidence gate.
+- **`checkAttributionMachineryIntact()`** (`src/engine/conductor.ts`) is a
+  pre-dispatch guard: when attribution enforcement is configured
+  (`isEnforcementConfigured`) and the build step's attribution machinery is
+  broken, the build dispatch is skipped/fails loudly rather than proceeding
+  attribution-blind, and `.pipeline/HALT` is written after 2 failed attempts.
+
+Hook-lane contracts (`git-hook-assets.ts`, `session-hook-assets.ts`) are
+unchanged by this — abstention still exits 0 with no trailer, and no code
+path guesses a task id on the agent's behalf.
+
 #### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
 
 The deterministic evidence gate (trailers, path corroboration) is the sole
@@ -945,6 +977,81 @@ things on top of that, without a parallel dispatch path:
   `recordRebaseStepCompletion` helper on a satisfied rebase, so `state.rebase` is stamped
   consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
   the rebase step silently unmarked.
+
+#### `halt-issues sweep` — filed halt-monitor issue lifecycle (#355)
+
+`monitor.sh` — the halt-monitor daemon that watches the fleet and auto-files a GitHub
+issue when a feature halts — lives **out-of-repo** (#355); this repo owns only the
+reconciliation side: `conduct-ts halt-issues sweep` (CLI wiring in
+`src/engine/halt-issues/halt-issues-cli.ts`, pure orchestrator in
+`src/engine/halt-issues/sweep.ts`).
+
+**Pipeline (`sweep.ts`):**
+1. Parse `--monitor-log` → extract verdicts (which halted feature/slug maps to which
+   filed issue).
+2. Load the `--ledger` JSON file, rebuilding it from the parsed verdicts if it's
+   missing or corrupt (`ledger.ts`).
+3. For each verdict entry: stamp the issue body with a Halt-Slug marker
+   (`closer.ts::stampIssue`, idempotent — re-stamping a already-stamped body is a
+   no-op), check whether the halt condition has since shipped
+   (`resolution.ts::resolveEntry`, ship-evidence + recurrence guard), and if resolvable,
+   close the issue (`closer.ts::closeIssue`).
+4. Write the ledger back atomically (write-to-temp + rename).
+5. Print a summary; exit 0 even when individual entries recorded errors (`lastError` on
+   the ledger entry) — the sweep is designed to be re-run every monitor cycle and
+   self-heal, not to hard-fail the daemon.
+
+Per-entry try/catch isolates one bad entry from blocking the rest of the batch; nothing
+in the sweep body throws past its own boundary.
+
+**CLI:** `conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]`
+
+| Flag | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `--repo-dir <dir>` | yes | — | Repo to search for shipping evidence |
+| `--gh-repo <owner/name>` | yes | — | GitHub repo the filed issues live in |
+| `--dry-run` | no | off | Run the pipeline read-only; no ledger or GitHub writes |
+| `--monitor-log <path>` | no | `~/.ai-conductor/halt-monitor/monitor.log` | Halt-monitor's log |
+| `--ledger <path>` | no | `~/.ai-conductor/halt-issues/ledger.json` | Sweep's state file |
+
+An unknown `--flag` or a missing required flag returns the `guide` (help text) path with
+exit 1 rather than silently falling through — see `detectHaltIssuesSweepCommand` in
+`halt-issues-cli.ts`.
+
+**Monitor hook line.** `monitor.sh` (out-of-repo) should invoke the sweep once per cycle:
+
+```bash
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
+```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`halt-issues-cli.ts:85-87`) return a usage guide instead of running the sweep.
+
+`|| true` prevents a sweep failure from killing the monitor loop; the sweep is idempotent
+(already-stamped/closed issues are skipped) so the next cycle retries cleanly.
+
+**`halt-sweep:keep-open` label contract.** `closer.ts::closeIssue` checks
+`gh.getIssueLabels` for `halt-sweep:keep-open` before every close attempt. If present, it
+returns `closedBy: 'kept-open'`, `lastError: 'kept-open (label)'`, and makes **no writes**
+— the issue stays open indefinitely regardless of shipping evidence. This is the escape
+hatch for a known-false-positive or deliberately-unfixed halt that an operator wants
+tracked but never auto-closed. Removing the label lets the next sweep close it normally.
+
+Beyond the label, `closeIssue` also treats a `null` (404) or already-`closed` issue state
+as `closedBy: 'external'` (no writes) — someone closed it by hand, the sweep doesn't
+re-touch it.
+
+**Ledger rebuild semantics (`ledger.ts`).** The ledger is a JSON file keyed by issue. On
+load:
+- Missing file → start from an empty schema (first run).
+- Present but fails `JSON.parse` (corruption) → the file is renamed to
+  `ledger.json.corrupt-<timestamp>` (quarantined, not deleted) with a stderr warning, and
+  the sweep proceeds with an empty schema.
+- `rebuild()` repopulates the empty/quarantined ledger from the current monitor-log
+  verdicts. This loses previously-recorded per-issue progress (stamps, resolution
+  status) but never loses correctness: already-closed issues are re-detected via live
+  GitHub issue state on the next `closeIssue` call, not blindly re-closed or
+  re-commented.
 
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
@@ -1823,11 +1930,16 @@ written in the window between selection and dispatch (e.g. during
 regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
 guarded this way.
 
-**Unpark counter reset (#486):** When unparking an auto-parked feature (provenance: `auto`),
-`daemon unpark` resets the no-evidence attempt counter in the feature's `.worktrees/<slug>/`
-(or the main root if the worktree is absent) so re-dispatch resumes normal re-kick flow without
-being immediately auto-parked again. For operator-parked features (provenance: `operator`), no
-counter reset occurs.
+**Unpark counter reset (#486, #667):** `daemon unpark` resets the no-evidence attempt counter
+(`noEvidenceAttempts`/`noEvidenceReasons`) in the feature's `.worktrees/<slug>/` (or the main
+root if the worktree is absent) regardless of the marker's provenance — both an auto-parked
+feature (provenance: `auto`) and an operator-parked feature (provenance: `operator`) get a
+fresh no-evidence budget on unpark, so re-dispatch resumes normal re-kick flow without being
+immediately re-parked on stale counts. Because the counter can now carry over from a prior
+park/unpark cycle, the auto-park halt message distinguishes a budget **inherited** from an
+earlier cycle from **fresh** failures accumulated since the last unpark, so an operator reading
+the halt reason can tell whether the trigger reflects new evidence misses or leftover count from
+before the last unpark.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,
@@ -2731,6 +2843,13 @@ the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an o
 <owner/repo#N>` so an intake-originated idea reports back to its issue. The bare launcher also
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
+
+**Subcommand `--help`/`-h` and unknown-flag rejection.** Every `conduct-ts engineer <subcommand>`
+(including `resolve` and `migrate-issue-deps`) short-circuits on `--help`/`-h`: it prints usage text
+for that subcommand and exits **with zero side effects** — no registry read, no worktree/ledger
+mutation, no `gh` call — instead of executing the subcommand. An unrecognized flag passed to any
+`engineer` subcommand is now **rejected** (exit 1, clear stderr, zero state mutation) rather than
+being silently ignored, matching the top-level unknown-option guard described below.
 
 **Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
 dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea

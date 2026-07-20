@@ -218,6 +218,17 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
     });
 
+    it('does not stamp a guessed Task: trailer when .pipeline/current-task is absent (Story 3 abstention)', async () => {
+      // Regression for #671 Tasks 4/6: PREPARE_COMMIT_MSG_HOOK must abstain
+      // (add no trailer at all) when it has no unambiguous task id to work
+      // from, rather than guessing one. Assert on the full commit body, not
+      // just exit code, so a stray/guessed trailer would be caught.
+      const res = await commitFile('c2.txt', 'c2', 'feat: no stamp present, no trailer expected');
+      expect(res.code).toBe(0);
+      const body = await git('log', '-1', '--format=%B');
+      expect(body.stdout).not.toMatch(/^Task:/m);
+    });
+
     it('rejects an unattributed commit made with git commit -m (direct form)', async () => {
       await writeMarker();
       await writeFile(join(repoDir, 'd.txt'), 'd', 'utf-8');

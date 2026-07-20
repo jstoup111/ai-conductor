@@ -73,7 +73,12 @@ function applyPipelineOptions(cmd: Command): Command {
 // subcommands, so a feature description is never mistaken for an unknown command.
 function createBaseProgram(): Command {
   const program = new Command();
-  program.name('conduct').description('Orchestrate SDLC pipeline');
+  program
+    .name('conduct')
+    .description(
+      'Orchestrate SDLC pipeline — two loops: the build/ship daemon (`daemon`) and the ' +
+        'engineer/brain idea→spec loop (`engineer`, or `engineer --help` for its full command reference)',
+    );
   return applyPipelineOptions(program);
 }
 
@@ -131,15 +136,42 @@ export function createProgram(): Command {
     .command('projects')
     .description('List registered projects as JSON (name, path, description, tags)');
   engineer
+    .command('worktree')
+    .description('Create the per-idea worktree used to author a spec')
+    .option('--project <name>', 'Target project name (resolved from the registry)')
+    .option('--idea <idea>', 'The idea being worked (drives slug + branch naming)');
+  engineer
     .command('land')
     .description('Commit the already-authored .docs spec artifacts onto a spec/<slug> branch')
     .option('--project <name>', 'Target project name (resolved from the registry)')
-    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)');
+    .option('--idea <idea>', 'The idea/spec being landed (slug + commit message)')
+    .option('--worktree <path>', 'Path to the per-idea worktree produced by `engineer worktree`')
+    .option('--source-ref <ref>', 'Intake write-back anchor for github-issues-sourced ideas');
   engineer
     .command('handoff')
     .description('Open the spec PR (local-commit fallback when no remote) and nudge the target daemon')
     .option('--project <name>', 'Target project name (resolved from the registry)')
-    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`');
+    .option('--branch <branch>', 'The spec/<slug> branch produced by `engineer land`')
+    .option('--worktree <path>', 'Path to the per-idea worktree produced by `engineer worktree`')
+    .option('--source-ref <ref>', 'Intake write-back anchor for github-issues-sourced ideas');
+  engineer
+    .command('poll')
+    .description('Poll configured intake sources (e.g. github-issues) and enqueue new ideas into the durable inbox');
+  engineer
+    .command('claim')
+    .description('Atomically dequeue the oldest pending idea from the inbox for the operator to work');
+  engineer
+    .command('forget <sourceRef>')
+    .description('Drop a ledger entry and strip its intake label');
+  engineer
+    .command('resolve <sourceRef>')
+    .description('Mark a claimed ledger entry as delivered when the normal write-back failed')
+    .option('--pr-url <url>', 'The PR URL to stamp onto the ledger entry')
+    .option('--branch <branch>', 'The branch to stamp onto the ledger entry');
+  engineer
+    .command('migrate-issue-deps')
+    .description('One-time migration of prose-based issue dependency references to structured links')
+    .option('--confirm', 'Apply the migration (default: dry-run only, zero writes)');
 
   // Task subcommand (Task 7). NON-INTERACTIVE: dispatched by index.ts
   // (detectTaskCommand) before the pipeline boots. Routes to task start/done
@@ -164,6 +196,21 @@ export function createProgram(): Command {
   evidence
     .command('judge <slug>')
     .description('Resolve feature slug to worktree and run semantic attribution verification');
+
+  // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
+  // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
+  // pipeline for processing filed halt-monitor issues. Declared here so `--help`
+  // lists it and its options alongside the other subcommands.
+  program
+    .command('halt-issues')
+    .description('Orchestrate halt-monitor filed issues processing')
+    .command('sweep')
+    .description('Parse, stamp, resolve, and close halt-monitor filed issues')
+    .option('--dry-run', 'Run without writing to ledger')
+    .option('--repo-dir <dir>', 'Repository directory (target for file searches)')
+    .option('--monitor-log <path>', 'Path to monitor.log file')
+    .option('--ledger <path>', 'Path to ledger.json file')
+    .option('--gh-repo <repo>', 'GitHub repository (owner/name)');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the

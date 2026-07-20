@@ -22,6 +22,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (`.docs/plans/verify-only-prove-closed-task-evidence.md`; partial #678 —
   removes the completed-build re-dispatch trigger for this class, general
   outcomes deferred to #678/PR #679).
+- Committed shipped-records for two manually-shipped features —
+  `2026-07-20-engine-gc-self-eviction-guard` (#673, PR #703) and
+  `build-stall-remediation-skips-no-task-progress` (#701, PR #701) — so
+  `daemon-backlog.ts` dedups them instead of re-dispatching work that already
+  shipped (#438 stopgap). Plus a **Daemon Operations Safety** section in
+  `CLAUDE.md`: never bulk-delete worktrees/branches, park before touching a
+  feature's git state, a worktree checkout is disposable but the branch is the
+  source of truth, and a manual PR is not a harness finish (run
+  `conduct-ts shipped-record`).
+- Spec for issue #569 — build-stall auto-remediation now also fires for
+  `no_task_progress` (zero-work) stalls, not only `halt_marker` stalls: a
+  synthesized remediation prompt (from the completion-gate reason, the stall
+  transition, and the `zero_work_product` no-evidence tag) is routed through the
+  same `/remediate` dispatch, bounded by the shared `MAX_KICKBACKS_PER_GATE`
+  budget, with the durable no-evidence counter still owning the terminal
+  HALT/park decision; also a distinct terminal HALT reason for a stalled build
+  instead of the misleading generic "retries exhausted"
+  (`.docs/plans/build-stall-remediation-skips-no-task-progress.md`).
+- Spec for issue #671 — build dispatches must not run attribution-blind: a
+  deterministic pre-dispatch invariant on the attribution machinery, a loud
+  unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
+  and attribution-aware dispatch-count telemetry
+  (`.docs/plans/build-dispatch-can-start-with-current-task-none-so.md`).
 - Spec for issue #667 — operator `unpark` grants a fresh no-evidence budget
   (resets `noEvidenceAttempts`/`noEvidenceReasons` regardless of park
   provenance) and the auto-park halt message distinguishes an inherited
@@ -30,12 +53,50 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The attribution judge lane now dispatches on inherited build-gate residue on
+  resumed/stalled runs — dropped the attempt-scoped `!isZeroWork` guard that
+  previously suppressed dispatch whenever `headShaBeforeBuild === headShaAfterBuild`
+  (i.e. no new commits landed this attempt), which meant residue carried over from
+  a prior attempt was silently never judged. The two other no-op paths are
+  preserved: the lane still no-ops when the cutover flag is disabled/absent, and
+  when the residue set is empty. The separate kickback/no-evidence zero-work retry
+  path is unrelated code and is unchanged (#570).
+- `no_task_progress` (zero-work) build stalls now route through the same `/remediate`
+  auto-remediation dispatch as `halt_marker` stalls (a synthesized prompt built from the run's
+  own context), bounded by the shared remediation budget, with the durable no-evidence counter
+  still owning the terminal HALT/park decision. Exhausted `no_task_progress` builds now halt
+  with a distinct, specific reason instead of the generic "retries exhausted" message (#569).
+- Build dispatches can no longer run attribution-blind — a pre-dispatch invariant
+  now fails loudly (skips/fails the dispatch, writing `.pipeline/HALT` after 2
+  attempts) when attribution machinery is broken (missing `task-status.json`,
+  uninstalled session hooks, unwritable stamp path), and a loud
+  `unattributed_dispatch` event surfaces unattributed-dispatch streaks at the
+  build seam via `readDispatchAttribution`/`detectUnattributedDispatch`, instead
+  of silently deferring to the evidence gate. `Task: none` is now treated as an
+  error signal to watch for, not silently tolerated (#671).
+- `conduct daemon unpark` now resets the no-evidence budget
+  (`noEvidenceAttempts`/`noEvidenceReasons`) for both operator- and auto-parked features
+  instead of only auto-parked ones, so an operator-unparked feature also gets a fresh
+  budget rather than carrying over stale counts into re-dispatch. The auto-park halt
+  message now distinguishes a budget inherited from a prior park/unpark cycle from
+  fresh no-evidence failures accumulated since the last unpark, so operators can tell
+  whether a halt reflects new misses or leftover count (#667).
+- `bin/install` no longer redirects `rtk init`'s stderr to `/dev/null`, which
+  silently swallowed rtk's interactive prompt and made the installer appear to
+  hang with no visible output. The prompt (and any error) now reaches the
+  terminal so the user can respond.
 - Stamped the missing `Owner:` intake marker for the
   `finish-staleness-grep-never-matches-rebase-finish` spec
   (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
   Source-Ref jstoup111/ai-conductor#587), ungating it from the owner gate's
   `unowned-post-cutover` hold.
 - `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+- Fresh build dispatch no longer false-halts with "Attribution machinery broken:
+  .pipeline/task-status.json is missing" — the pre-dispatch attribution-machinery
+  guard now seeds `task-status.json` from the committed plan
+  (`seedAndCheckAttributionMachinery`) before evaluating, instead of tripping on a
+  fresh/legitimate dispatch where the plan exists and machinery is otherwise intact
+  (#692).
 
 ### Added
 - Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
@@ -2017,6 +2078,13 @@ no action needed — the token requirement is skipped.
   reports "setup failed" when `bin/setup` succeeded (#582).
 - `bin/update`, a standalone self-update/channel CLI extracted from `bin/conduct`: `bin/update` (no args) forces an update check now, `bin/update --auto` checks only if `autoCheck` config is not `false`, `bin/update --set-channel <tagged|main>` sets the update channel (exit 2 on invalid), and `bin/update -h|--help` prints usage.
 - The auto-update check is now re-homed onto `conduct-ts` startup, which spawns `bin/update --auto` as a one-shot subprocess, instead of running inline as bash functions in `bin/conduct`.
+- `conduct-ts halt-issues sweep` subcommand: reconciles GitHub issues auto-filed by the
+  out-of-repo halt-monitor daemon (`monitor.sh`, #355) against shipped fixes — stamps
+  filed issues with a Halt-Slug marker, detects shipping evidence, and closes resolved
+  issues (respecting the `halt-sweep:keep-open` label escape hatch). Additive
+  subcommand, not a breaking surface — no migration block needed. See `README.md` and
+  `src/conductor/README.md` for flags and the `monitor.sh` hook line
+  (`conduct-ts halt-issues sweep || true`).
 
 ## Migration
 

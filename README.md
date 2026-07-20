@@ -309,6 +309,59 @@ For implementation details, see `src/conductor/src/engine/session-hook-assets.ts
 bodies), `src/conductor/src/engine/worktree-prepare.ts` (provisioning/wiring), and
 `src/conductor/README.md` → "Session-hook task stamping at subagent dispatch".
 
+### `halt-issues sweep` — filed halt-monitor issue lifecycle
+
+`conduct-ts halt-issues sweep` closes out GitHub issues that were auto-filed by the
+out-of-repo halt-monitor daemon (`monitor.sh`, tracked in #355 — that script does not
+live in this repo) once their halt condition has shipped. Without this sweep, filed
+issues never auto-close: they sit open even after the fix lands, and there's no link
+back from the shipped commit to the issue that reported it.
+
+```
+conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]
+```
+
+**Flags:**
+- `--repo-dir <dir>` — repository directory to search for shipping evidence (required)
+- `--gh-repo <owner/name>` — GitHub repository the filed issues live in (required)
+- `--dry-run` — run the full pipeline without writing to the ledger or GitHub; prints
+  what would be stamped/closed
+- `--monitor-log <path>` — path to the halt-monitor's log file (default:
+  `~/.ai-conductor/halt-monitor/monitor.log`)
+- `--ledger <path>` — path to the sweep's own ledger file (default:
+  `~/.ai-conductor/halt-issues/ledger.json`)
+
+**Monitor hook integration.** `monitor.sh` (out-of-repo, #355) should call the sweep
+after each halt-monitor cycle so filed issues get reconciled continuously:
+
+```bash
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
+```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`src/conductor/src/engine/halt-issues/halt-issues-cli.ts:85-87`) return a usage guide
+instead of running the sweep.
+
+The `|| true` keeps a sweep failure from taking down the monitor loop — the sweep is
+safe to retry on the next cycle since it's idempotent (stamped issues and already-closed
+issues are skipped on re-run).
+
+**`halt-sweep:keep-open` label contract.** Add the `halt-sweep:keep-open` label to any
+filed issue you want the sweep to leave alone permanently (e.g. a false positive still
+worth tracking, or a known issue you're deliberately not shipping a fix for). The sweep
+checks for this label before every close attempt; if present, it records
+`kept-open (label)` in the ledger and never closes or comments on the issue, even once
+shipping evidence appears.
+
+**Ledger rebuild semantics.** The sweep persists per-issue state (Halt-Slug stamp,
+resolution status, close status, last error) in a JSON ledger at `--ledger`. If the
+ledger file is missing, it's created fresh. If it exists but fails to parse as valid
+JSON (corruption), the sweep quarantines the bad file by renaming it to
+`ledger.json.corrupt-<timestamp>` alongside a warning, then rebuilds a fresh ledger from
+the current monitor-log verdicts — so a corrupted ledger never blocks the sweep, it just
+loses previously-recorded per-issue progress (already-closed issues are re-detected via
+GitHub issue state, not re-closed).
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
@@ -864,6 +917,11 @@ pipeline. This prevents accidental typos and makes the CLI more discoverable:
 - **Conduct-TS forwarded verbs are documented:** Verbs like `daemon`, `render-diagrams`, 
   `engineer`, etc. are forwarded to conduct-ts if it's available on PATH. Run `conduct --help` 
   to see the full list.
+- **`engineer` subcommand help and unknown-flag rejection:** every `conduct-ts engineer
+  <subcommand> --help`/`-h` prints usage with zero side effects (no registry read, no
+  worktree/ledger mutation, no `gh` call) instead of executing the subcommand, and an
+  unrecognized flag on any `engineer` subcommand is now rejected (exit 1) instead of being
+  silently ignored. See `src/conductor/README.md` for the full subcommand reference.
 
 For details, see [Unknown-Command Guard](https://github.com/anthropics/ai-conductor#unknown-command-guard).
 

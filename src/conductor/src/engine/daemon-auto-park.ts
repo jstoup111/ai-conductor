@@ -104,6 +104,15 @@ export interface CheckAndAutoParkOpts {
   /** Auto-park is a DAEMON-layer behavior; interactive runs never park. */
   daemon: boolean;
   /**
+   * Snapshot of the durable no-evidence counter observed at the start of
+   * this dispatch cycle. When the counter was already at/over `maxAttempts`
+   * before this cycle burned any attempts (e.g. inherited from a prior
+   * halted run via unpark/re-kick), the composed reason names the budget as
+   * inherited rather than implying it was exhausted just now. Optional —
+   * omitting it preserves today's wording (same-cycle crossing).
+   */
+  cycleStartAttempts?: number;
+  /**
    * Explicit immediate-park reason (e.g. 'empty/missing plan' at seed time).
    * When set, the counter is not consulted — the condition is already
    * terminal for dispatch.
@@ -134,7 +143,12 @@ export async function checkAndAutoPark(
   } else {
     const attempts = await readNoEvidenceAttempts(projectRoot);
     if (attempts >= opts.maxAttempts) {
-      reason = `no completion evidence after ${opts.maxAttempts} attempts`;
+      const inherited =
+        opts.cycleStartAttempts !== undefined &&
+        opts.cycleStartAttempts >= opts.maxAttempts;
+      reason = inherited
+        ? `no completion evidence — inherited an already-exhausted budget of ${opts.maxAttempts} attempts`
+        : `no completion evidence after ${opts.maxAttempts} attempts`;
     }
   }
 

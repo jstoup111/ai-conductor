@@ -18,6 +18,7 @@ import {
   readCompletionSignals,
   detectParkContradiction,
   checkAndAutoPark,
+  type CheckAndAutoParkOpts,
 } from '../../src/engine/daemon-auto-park.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -398,5 +399,106 @@ describe('engine/daemon-auto-park — Task 8 (#486)', () => {
 
     // Step 15: Verify clearMarker was called
     expect(clearCalled).toBe(true);
+  });
+});
+
+// ── Task 5 (RED): inherited-budget halt message (Story 2) ──
+//
+// Today, checkAndAutoPark composes a single reason string —
+// `no completion evidence after ${maxAttempts} attempts` — regardless of
+// whether the durable noEvidenceAttempts counter crossed the threshold
+// *during this cycle* or was already at/over the threshold when this cycle
+// began (e.g. inherited from a prior halted run via unpark/re-kick). These
+// tests assume a future mechanism (not implemented here) that lets the
+// caller supply the attempts count observed at cycle-start so the reason
+// can distinguish the two cases. Passing `cycleStartAttempts` today is a
+// no-op (the option doesn't exist on CheckAndAutoParkOpts yet) — that's the
+// point: case (b) documents the gap Task 6 must close.
+describe('engine/daemon-auto-park — Task 5 (RED): inherited-budget halt message', () => {
+  let dir: string;
+  const SLUG = 'test-feature-task5';
+  const MAX_ATTEMPTS = 3;
+
+  async function seedAttempts(n: number): Promise<void> {
+    const pipelineDir = join(dir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(
+      join(pipelineDir, 'task-evidence.json'),
+      JSON.stringify(
+        {
+          evidenceStamps: {},
+          noEvidenceAttempts: n,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-task5-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('(a) threshold reached within the current cycle uses today\'s message (documents current behavior)', async () => {
+    // Cycle started at 2 attempts, one increment this cycle crossed the cap.
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      // Not yet a real option — documents the intended future seam.
+      cycleStartAttempts: MAX_ATTEMPTS - 1,
+      emit: (evt) => events.push(evt),
+    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
+  });
+
+  it('(b) counter already at/over threshold with zero increments this cycle must name an inherited budget (RED — not implemented yet)', async () => {
+    // Cycle started already at the cap — nothing was burned this cycle.
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      cycleStartAttempts: MAX_ATTEMPTS,
+      emit: (evt) => events.push(evt),
+    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    // This is the new, currently-missing behavior: the reason must
+    // distinguish "inherited an already-exhausted budget" from "burned
+    // through the budget just now". Fails today because no such wording
+    // (or the underlying cycle-start comparison) exists yet.
+    expect(evt.reason.toLowerCase()).toContain('inherited');
+  });
+
+  it('(c) fresh-failure case (increments happened this cycle) never claims "inherited" (guard against over-triggering)', async () => {
+    // Cycle started at 0 attempts; all attempts were burned this cycle.
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      cycleStartAttempts: 0,
+      emit: (evt) => events.push(evt),
+    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason.toLowerCase()).not.toContain('inherited');
   });
 });

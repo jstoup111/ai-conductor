@@ -2465,6 +2465,101 @@ describe('engine/conductor', () => {
       // Verify remediate was called at most MAX_KICKBACKS_PER_GATE (2) times
       expect(remediateCallCount.length).toBeLessThanOrEqual(2);
     });
+
+    // REGRESSION PIN (#569): once remediationRounds reaches
+    // MAX_KICKBACKS_PER_GATE for a halt_marker build stall, the run must
+    // write the "Remediation budget exhausted" HALT marker and return —
+    // no further /remediate dispatch. Locks conductor.ts:3657-3677 so a
+    // later change (adding no_task_progress dispatch) can't accidentally
+    // let a budget-exhausted halt_marker stall fall through to a 3rd
+    // dispatch or lose the budget-exhausted HALT content.
+    it('halt_marker stall at remediation budget exhaustion writes "Remediation budget exhausted" HALT and dispatches no further /remediate', async () => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const remediateCallCount: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            buildAttemptCount++;
+            // Always write a stall marker to trigger remediation dispatch
+            // on every attempt, exhausting the budget. The halt_marker
+            // check takes precedence over the resolved-task-count
+            // comparison, so the resolved count is bumped each attempt
+            // (task ids grow) purely to keep the durable no-evidence
+            // auto-park counter (a DIFFERENT mechanism, gated on lack of
+            // resolved-task progress) from firing first and masking the
+            // budget-exhaustion HALT this test is pinning.
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              `Stall ${buildAttemptCount}`,
+            );
+            const tasks = Array.from({ length: buildAttemptCount }, (_, i) => ({
+              id: i + 1,
+              status: 'completed',
+            }));
+            tasks.push({ id: buildAttemptCount + 100, status: 'pending' });
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks }),
+            );
+          } else if (step === 'remediate') {
+            remediateCallCount.push(buildAttemptCount);
+            // Route back to build every time — the stall never actually
+            // resolves, forcing the budget to exhaust.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `stall:${buildAttemptCount}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: `Answer ${buildAttemptCount}`,
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // High retry count so the budget (not retries) is what stops the loop
+      });
+
+      await conductor.run();
+
+      // Never more than MAX_KICKBACKS_PER_GATE (2) dispatches for this
+      // persistent halt_marker stall.
+      expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+      expect(remediateCallCount.length).toBeGreaterThan(0);
+
+      // The run HALTs rather than looping forever or falling through to a
+      // silent non-green failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+
+      // The HALT marker on disk carries the fail-safe budget-exhausted
+      // message pinned at conductor.ts:3657-3677.
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('Remediation budget exhausted');
+      expect(haltContent).toContain('max 2 kickbacks per gate');
+    });
   });
 
   describe('stall HALT carries the question (Task 6)', () => {
@@ -11133,7 +11228,13 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     expect(buildCalls).toBe(1);
   });
 
-  it('no_task_progress stall (not halt_marker) → remediate NOT dispatched', async () => {
+  it('no_task_progress stall (not halt_marker) in interactive mode → remediate NOT dispatched', async () => {
+    // #569: the daemon+auto dispatch of /remediate for no_task_progress
+    // stalls (see the test immediately below) is gated to daemon+auto mode
+    // only, same as halt_marker. This test now covers the interactive
+    // (non-daemon) case, which must still skip dispatch and fall through
+    // to the REPL hand-off — the same guard (`this.daemon && this.mode ===
+    // 'auto'`) that already applied to halt_marker.
     await seedToBuildStep();
 
     const dispatchedSteps: StepName[] = [];
@@ -11157,17 +11258,424 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       stepRunner: runner,
       events,
       projectRoot: dir,
-      mode: 'auto',
-      daemon: true,
+      mode: 'interactive',
+      daemon: false,
       verifyArtifacts: true,
       maxRetries: 3, // Allow retries
     });
 
     await conductor.run();
 
-    // When stall is 'no_task_progress' (not 'halt_marker'), remediate is NOT dispatched
-    // This is because the guard checks: if (stalled === 'halt_marker')
+    // Not daemon+auto → remediate is NOT dispatched.
     expect(dispatchedSteps).not.toContain('remediate');
+  });
+
+  it('no_task_progress stall (not halt_marker) → remediate IS dispatched with synthesized prompt (#569)', async () => {
+    // #569: no_task_progress stalls should get the same auto-remediation
+    // dispatch that halt_marker stalls already receive. Unlike halt_marker
+    // (where the agent itself writes the question), no_task_progress has no
+    // question authored by the agent — the conductor must synthesize one
+    // from the completion-gate signals (pending tasks, resolved-count
+    // stagnation, lack of evidence) and hand that to /remediate.
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          // On every attempt, resolved task count never advances (stays at 0
+          // resolved out of 1 task) — this forces 'no_task_progress' since
+          // resolvedTasksAfter <= resolvedTasksBefore across attempts.
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Route back to build so the dispatch resolves cleanly.
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Retry build with synthesized guidance.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    // remediate must be dispatched for no_task_progress, same as halt_marker.
+    const remediateCalls = dispatchedSteps.filter((s) => s === 'remediate').length;
+    expect(remediateCalls).toBeGreaterThanOrEqual(1);
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A synthesized prompt must be written for /remediate to consume,
+    // capturing the signals that produced the no_task_progress verdict.
+    const evidenceContent = await readFile(
+      join(dir, '.pipeline/build-stall-question.md'),
+      'utf-8',
+    );
+    expect(evidenceContent).toContain('pending');
+    expect(evidenceContent).toContain('0');
+    expect(evidenceContent).toContain('zero_work_product');
+  });
+
+  // RED (#569, Task 3): un-remediable no_task_progress stalls must NOT
+  // terminal-HALT the way halt_marker does. Once Task 4 wires the
+  // no_task_progress dispatch, /remediate should still get dispatched (up
+  // to the shared MAX_KICKBACKS_PER_GATE budget) but every non-recovering
+  // outcome — budget exhaustion, disposition='halt', no valid dispositions,
+  // or a dispatch throw — must fall through to the existing retry/durable
+  // no-evidence-counter/auto-park path (conductor.ts:3539-3620) instead of
+  // writing a terminal HALT from the stall block itself (contrast
+  // conductor.ts:3680-3811, which DOES terminal-HALT halt_marker on these
+  // same outcomes). On current code, no_task_progress never dispatches
+  // /remediate at all (effectiveQuestion stays null for anything but
+  // 'halt_marker'), so these tests are RED because remediateCallCount stays
+  // 0 instead of reaching the shared budget.
+  it('no_task_progress persistent stall at remediation budget exhaustion falls through to retry/auto-park, never terminal-HALTs on budget (#569)', async () => {
+    await seedToBuildStep();
+
+    let buildAttemptCount = 0;
+    const remediateCallCount: number[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          buildAttemptCount++;
+          // Resolved task count never advances -> persistent
+          // 'no_task_progress' verdict on every attempt.
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          remediateCallCount.push(buildAttemptCount);
+          // Route back to build every time — the stall never actually
+          // resolves, forcing the shared budget to exhaust.
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: `stall:${buildAttemptCount}`,
+                  disposition: 'build',
+                  category: null,
+                  rationale: `Answer ${buildAttemptCount}`,
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 10, // generous so budget (not retries) governs dispatch
+    });
+
+    await conductor.run();
+
+    // Once Task 4 lands, no_task_progress gets the same dispatch-up-to-
+    // budget treatment as halt_marker: dispatched at least once, never more
+    // than MAX_KICKBACKS_PER_GATE (2) times for a persistent stall.
+    // RED today: remediateCallCount stays [] because no_task_progress never
+    // dispatches /remediate at all yet.
+    expect(remediateCallCount.length).toBeGreaterThanOrEqual(1);
+    expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+
+    // Unlike halt_marker, budget exhaustion on a no_task_progress stall
+    // must NOT terminal-HALT the run from the stall block — no loop_halt
+    // reason (nor the on-disk HALT marker, if any is written by a LATER,
+    // unrelated mechanism such as auto-park) may carry the halt_marker
+    // budget-exhausted fail-safe message.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('Remediation budget exhausted');
+    }
+    try {
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).not.toContain('Remediation budget exhausted');
+    } catch {
+      // No HALT marker at all is also an acceptable outcome here.
+    }
+  });
+
+  it.each([
+    [
+      'halt',
+      async (dirPath: string, attempt: number) => {
+        await writeFile(
+          join(dirPath, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: `stall:${attempt}`,
+                disposition: 'halt',
+                category: 'product_scope',
+                rationale: 'needs a human decision',
+                tasks: [],
+              },
+            ],
+          }),
+        );
+      },
+    ],
+    [
+      'none',
+      async (dirPath: string) => {
+        // Malformed JSON -> readRemediationPlan returns null -> outcome 'none'.
+        await writeFile(join(dirPath, '.pipeline/remediation.json'), '{not valid json');
+      },
+    ],
+  ] as const)(
+    "no_task_progress stall with planRemediation outcome '%s' falls through to retry/auto-park, no terminal HALT from the stall block (#569)",
+    async (_label, stubRemediation) => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const dispatchedSteps: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatchedSteps.push(step);
+          if (step === 'build') {
+            buildAttemptCount++;
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline/task-evidence.json'),
+              JSON.stringify({
+                evidenceStamps: {},
+                noEvidenceAttempts: 0,
+                migrationGrandfather: [],
+                noEvidenceReasons: ['zero_work_product'],
+              }),
+            );
+          } else if (step === 'remediate') {
+            await stubRemediation(dir, buildAttemptCount);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 5,
+      });
+
+      await conductor.run();
+
+      // /remediate must actually get dispatched for this to be a meaningful
+      // exercise of the halt/none disposition path.
+      // RED today: dispatchedSteps never contains 'remediate' because
+      // no_task_progress doesn't dispatch at all yet.
+      expect(dispatchedSteps).toContain('remediate');
+
+      // Regardless of the disposition kind, a no_task_progress stall must
+      // never write the halt_marker-style terminal HALT (question + halt
+      // detail, or "no valid dispositions") from the stall block itself —
+      // that would short-circuit the retry/auto-park fallthrough this task
+      // exists to protect.
+      for (const h of haltEvents) {
+        expect(h.reason).not.toContain('remediation produced no valid dispositions');
+      }
+    },
+  );
+
+  it('no_task_progress stall with planRemediation outcome route misrouted to a non-build target falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Write remediation that misroutes to 'plan' (non-build target).
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'plan',
+                  category: null,
+                  rationale: 'Needs a re-plan, not a build answer.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 5,
+    });
+
+    await conductor.run();
+
+    // /remediate must actually get dispatched for this to be a meaningful
+    // exercise of the route-misroute path.
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A no_task_progress stall whose remediation outcome misroutes to a
+    // non-build target must not write the halt_marker-style "misrouted to"
+    // terminal HALT from the stall block — it must fall through to
+    // retry/auto-park instead, same as the halt/none/throw outcomes.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('misrouted to');
+    }
+  });
+
+  it('no_task_progress stall where planRemediation dispatch throws falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          throw new Error('remediate dispatch crashed');
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 5,
+    });
+
+    await conductor.run();
+
+    // RED today: dispatchedSteps never contains 'remediate' because
+    // no_task_progress doesn't dispatch at all yet, so the throw is never
+    // exercised.
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A dispatch crash on a no_task_progress stall must not write the
+    // halt_marker-style "remediation dispatch failed" terminal HALT — it
+    // must fall through to retry/auto-park instead.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('remediation dispatch failed');
+    }
   });
 
   it('auto-park condition met → park HALT wins, stall branch never runs', async () => {
@@ -11229,6 +11737,313 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
 
     // Auto-park should have fired, causing an early exit
     expect(parked).toBe(true);
+  });
+
+  describe('distinct terminal HALT reason for no_task_progress exhaustion (#569 Task 5)', () => {
+    async function seedToBuildStep(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('build exhausts retries after a no_task_progress stall history → HALT names no-task-progress, not the generic "retries exhausted" message', async () => {
+      await seedToBuildStep('no-task-progress-exhaustion-test');
+
+      // Non-daemon auto mode: checkAndAutoPark is daemon-gated (see
+      // conductor.ts ~3559 `if (this.daemon)`), so with daemon:false the
+      // no_task_progress stall never gets diverted into an auto-park HALT
+      // — it falls straight through the retry loop to the terminal
+      // "retries exhausted" fallback once maxRetries is exhausted, which
+      // is exactly the generic-fallback path this task makes more specific.
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Resolved task count never advances -> persistent
+            // 'no_task_progress' verdict on every attempt (attempt >= 2).
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3, // must be >= 2 so the attempt >= 2 stall check fires
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('no task progress');
+      expect(haltContent).not.toMatch(/retries exhausted/);
+    });
+
+    it('preserves an existing, more-specific HALT marker verbatim (existingHalt still wins over no_task_progress)', async () => {
+      await seedToBuildStep('existing-halt-precedence-test');
+
+      const SPECIFIC_HALT = 'auto-park: durable no-evidence threshold reached';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Write a specific HALT marker directly, simulating a HALT
+            // already written by an earlier, more-specific mechanism
+            // (e.g. auto-park or budget exhaustion) before the terminal
+            // fallback is ever reached.
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/HALT'), SPECIFIC_HALT);
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent.trim()).toBe(SPECIFIC_HALT);
+    });
+
+    it('non-no_task_progress terminal exhaustion keeps the pre-existing generic fallback string (lastBuildStallReason never set)', async () => {
+      await seedToBuildStep('generic-fallback-unchanged-test');
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Never write task-status.json / never advance -> completion
+            // check fails, but the build never reaches attempt >= 2 with
+            // resolvedTasksAfter <= resolvedTasksBefore in a way that sets
+            // 'no_task_progress' via a *stall*, because we cap maxRetries
+            // at 1 (single attempt, so attempt never reaches 2 -> `stalled`
+            // stays null). This exercises the plain "retries exhausted"
+            // terminal fallback with no stall diagnosis at all.
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1, // single attempt: never reaches attempt >= 2 stall check
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toMatch(/retries exhausted/);
+      expect(haltContent).not.toContain('no task progress');
+    });
+  });
+
+  describe('fix is surgical — auto-park counter + interactive REPL unchanged (#569 Task 6)', () => {
+    // Task 6 is a pure guard: the #569 fix (Tasks 4/5) adds a /remediate
+    // dispatch + a distinct terminal reason for no_task_progress stalls, and
+    // must NOT alter the two adjacent mechanisms it sits between — the durable
+    // no-evidence counter / checkAndAutoPark terminal owner (conductor.ts
+    // ~:3539-3620) and the interactive REPL stall handoff (~:3833). These
+    // tests prove both remain behaviorally unchanged even with the new
+    // dispatch active. No production change lands here.
+    async function seedToBuildGate(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('durable no-evidence counter still accrues across re-kicks and auto-parks at DAEMON_NO_EVIDENCE_THRESHOLD with the pre-existing reason, even though /remediate now dispatches for no_task_progress (#569)', async () => {
+      await seedToBuildGate('surgical-counter-test');
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Zero-progress runner: task-status stays at 0/1 resolved on every
+      // attempt (forcing 'no_task_progress'); a /remediate dispatch returns no
+      // remediation plan (non-recovering), so it falls through to the
+      // retry/durable-counter path. Crucially it does NOT write
+      // task-evidence.json — the conductor owns the durable counter, exactly
+      // as in the pre-fix path.
+      const dispatched: StepName[] = [];
+      const makeRunner = (): StepRunner => ({
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      });
+
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => parkEvents.push({ reason: e.reason }));
+
+      // Re-kick #1 (maxRetries: 2): the durable counter accrues to 2 and the
+      // stall verdict at attempt 2 dispatches /remediate (the NEW #569
+      // behavior), which falls through — the feature is NOT parked yet.
+      const c1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+      // The new dispatch coexists with the unchanged counter accrual.
+      expect(dispatched).toContain('remediate');
+
+      // Re-kick #2: the durable counter carries over (accrues ACROSS runs),
+      // the first zero-progress miss pushes it to N=3 and checkAndAutoPark
+      // parks with the pre-existing reason — the terminal decision still
+      // belongs to the durable counter, not the stall block.
+      const c2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(3);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(/no completion evidence after 3 attempts/);
+    });
+
+    it('interactive mode still reaches the REPL stall handoff on a no_task_progress stall — no /remediate dispatch and no auto-park (#569)', async () => {
+      await seedToBuildGate('surgical-interactive-test');
+
+      const dispatched: StepName[] = [];
+      const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+        // The operator drops into the REPL and /quits without finishing the
+        // work — the completion gate still misses afterwards.
+        runInteractive: vi.fn(async () => {}),
+      };
+
+      const parkEvents: unknown[] = [];
+      events.on('auto_park', (e) => parkEvents.push(e));
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'interactive',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // The interactive stall handoff still fires — unchanged by the fix.
+      expect(runner.runInteractive).toHaveBeenCalledWith('build');
+      // The daemon+auto-only /remediate dispatch never fires in interactive.
+      expect(dispatched).not.toContain('remediate');
+      // Auto-park is daemon-gated → interactive mode never parks.
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      expect(await getProvenanceType(dir, 'surgical-interactive-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+    });
   });
 });
 
