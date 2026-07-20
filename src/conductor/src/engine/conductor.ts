@@ -2803,7 +2803,7 @@ export class Conductor {
           // machinery it depends on is broken.
           const machineryIssue =
             step.name === 'build' && isEnforcementConfigured(this.config)
-              ? await checkAttributionMachineryIntact(this.projectRoot)
+              ? await seedAndCheckAttributionMachinery(this.projectRoot, state.feature_desc ?? '')
               : null;
           const markerActive =
             !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
