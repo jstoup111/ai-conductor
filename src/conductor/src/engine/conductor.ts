@@ -155,6 +155,8 @@ import {
   type ResolutionAttempt,
   type SetupFailureContext,
   type SetupFailureAttempt,
+  type CiFailureContext,
+  type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
@@ -406,6 +408,16 @@ export interface StepRunner {
    * the setup step can be retried.
    */
   resolveSetupFailure?(ctx: SetupFailureContext): Promise<SetupFailureAttempt>;
+  /**
+   * Dispatch a fix-session to resolve a CI failure on a shipped PR. Uses a
+   * fresh one-shot session (never resumes the main conductor session) with
+   * the failure hint in the prompt so Claude can diagnose and fix it.
+   *
+   * Always returns `{ attempted: true }` — the success of the fix is
+   * determined by whether CI subsequently passes, not by this method's
+   * result.
+   */
+  resolveCiFailure?(ctx: CiFailureContext): Promise<CiFailureAttempt>;
 }
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';

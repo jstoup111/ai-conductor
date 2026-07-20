@@ -552,6 +552,12 @@ export type SetupFailureAttempt = { attempted: true };
 export interface SetupFailureContext { worktreePath: string; outputTail: string; slug: string }
 export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFailureAttempt>;
 
+// ── CI failure resolution (ci-fix resolver autofix) ─────────────────────────
+
+export type CiFailureAttempt = { attempted: true };
+export interface CiFailureContext { worktreePath: string; prUrl: string; hint: string; slug: string }
+export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
+
 /**
  * Check whether every commit subject from before the rebase is still present in
  * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
