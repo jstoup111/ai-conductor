@@ -1251,6 +1251,124 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
   });
 
   /**
+   * PIN (Task 3, #570): the judge lane must NEVER dispatch when the residue
+   * set is EMPTY — independent of the zero-work signal (`isZeroWork`) and of
+   * whether this attempt made new commits. `residueIds.length > 0` is a
+   * standalone guard at conductor.ts:~3223-3228 alongside `!isZeroWork`; this
+   * pins that guard's own no-op path so it can't silently regress (e.g. if a
+   * future change accidentally makes an empty residue array dispatch, or if
+   * removing the `!isZeroWork` clause in Task 4 were mistakenly paired with
+   * removing this clause too). Every task resolves mechanically (trailered
+   * commits), so `deriveCompletion` reports full completion and
+   * `residueIds` is empty.
+   *
+   * Two sub-cases, both asserting zero dispatchVerifier calls:
+   *   (a) no new commits during this attempt (headBefore === headAfter,
+   *       mirrors a resumed build with nothing left to judge)
+   *   (b) new commits made during this attempt (headBefore !== headAfter)
+   */
+  it('empty residue (all tasks resolved): judge lane never dispatches — no new commits this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-nocommit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-nocommit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-nocommit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Both tasks resolve mechanically via trailered commits, landing BEFORE
+    // conductor.run() starts — no residue, no new commits this attempt.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  it('empty residue (all tasks resolved): judge lane never dispatches — new commits made this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-commit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-commit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-commit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Task 1 resolves mechanically before the attempt starts.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    // The stubbed build step makes a NEW trailered commit during this
+    // attempt (headBefore !== headAfter), and also mechanically resolves
+    // task 2 — so residue is still empty despite fresh commits landing.
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+          return { success: true };
+        }
+        return makeStepRunner(dispatchVerifier, repo.root).run(step);
+      },
+      dispatchVerifier,
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
    * Story 4 (guard): the re-check added in Story 1 must only fire when the
    * lane actually stamped something. A lane that runs but stamps nothing
    * (e.g. a no-verdict result) must not trigger a redundant
