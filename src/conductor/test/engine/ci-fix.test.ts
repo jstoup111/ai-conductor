@@ -720,6 +720,66 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
   }, REAL_GIT_TIMEOUT_MS);
 });
 
+// ── CF-1 (RED): productionCiFixRunner must delegate to an injected      ──────
+// ── StepRunner-backed dispatcher seam, not shell out to `claude --fix-session` ─
+//
+// T2 added `DefaultStepRunner.resolveCiFailure(ctx)` as the real dispatch
+// path (src/engine/step-runners.ts). `productionCiFixRunner` (this file,
+// ~line 258) still shells out via execa with the fictional `--fix-session`
+// flag and has no seam through which a StepRunner/dispatcher can be
+// injected. This test mirrors the existing `fixRunner` injection pattern
+// used by `runCiFix` (see `deps.fixRunner` above) and the collaborator
+// injection pattern used elsewhere (e.g. `resolveSetupFailure`,
+// `resolveRebaseConflict` in rebase.ts/step-runners.ts): a fake dispatcher
+// is injected and the test asserts it — not `execa` — is what gets called.
+//
+// Expected to FAIL until T4 gives `productionCiFixRunner` a way to receive
+// an injected StepRunner-backed dispatcher instead of hardcoding the execa
+// `--fix-session` spawn.
+describe('ci-fix: productionCiFixRunner delegates to injected StepRunner dispatcher (CF-1, RED)', () => {
+  it('run() calls the injected dispatcher seam instead of shelling out to `claude --fix-session`', async () => {
+    const calls: Array<{ worktreePath: string; hint: string; entry: WatchEntry }> = [];
+
+    // Fake StepRunner-backed dispatcher, mirroring DefaultStepRunner.resolveCiFailure's
+    // shape: takes a CI-failure context and resolves to an attempt outcome.
+    const fakeDispatcher = {
+      resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: WatchEntry }) => {
+        calls.push(ctx);
+        return { kind: 'changed' as const };
+      },
+    };
+
+    const entry: WatchEntry = {
+      prUrl: 'https://github.com/foo/bar/pull/42',
+      slug: 'foo/bar#42',
+      repoCwd: '/fake/repo',
+      ciFixAttempts: 0,
+    };
+    const hint = 'CI checks failed: build';
+    const worktreePath = '/fake/repo/.worktrees/ci-fix-foo-bar-42';
+
+    // `productionCiFixRunner` currently accepts no dispatcher — this call
+    // exercises the seam this task expects to exist. Until T4 wires it up,
+    // this either fails to type/compile against the real interface or the
+    // fake dispatcher is silently never invoked because the production
+    // implementation still calls execa directly.
+    const runner = productionCiFixRunner as unknown as {
+      run(opts: {
+        worktreePath: string;
+        hint: string;
+        entry: WatchEntry;
+        dispatcher?: typeof fakeDispatcher;
+      }): Promise<{ kind: string }>;
+    };
+
+    const outcome = await runner.run({ worktreePath, hint, entry, dispatcher: fakeDispatcher });
+
+    expect(outcome).toEqual({ kind: 'changed' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ worktreePath, hint, entry });
+  });
+});
+
 // ── Resolver real-binary smoke (Task 24) ──────────────────────────────────────
 //
 // Every other test in this file drives `productionCiFixRunner` through an
