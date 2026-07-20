@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Spec for issue #671 — build dispatches must not run attribution-blind: a
+  deterministic pre-dispatch invariant on the attribution machinery, a loud
+  unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
+  and attribution-aware dispatch-count telemetry
+  (`.docs/plans/build-dispatch-can-start-with-current-task-none-so.md`).
 - Spec for issue #667 — operator `unpark` grants a fresh no-evidence budget
   (resets `noEvidenceAttempts`/`noEvidenceReasons` regardless of park
   provenance) and the auto-park halt message distinguishes an inherited
