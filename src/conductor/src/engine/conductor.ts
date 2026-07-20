@@ -581,6 +581,28 @@ function stepHasCompletionCheck(step: StepName): boolean {
  * dispatch. Returns a diagnostic naming the broken piece, or `null` when
  * intact.
  */
+/**
+ * Seed `task-status.json` from the resolvable plan (if any), then run the
+ * pre-dispatch attribution-machinery check (Task 2, #676 follow-up). A
+ * fresh/legitimate dispatch where `.pipeline/task-status.json` simply
+ * hasn't been seeded yet must not trip the guard — seed it here, right
+ * before the check, rather than relying on some earlier step to have
+ * already done so. Plan resolution failure (no plan found) is surfaced via
+ * `checkAttributionMachineryIntact`'s `planResolvable: false` diagnostic
+ * rather than treated as a seeding error.
+ */
+export async function seedAndCheckAttributionMachinery(
+  projectRoot: string,
+  featureDesc: string,
+): Promise<string | null> {
+  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+  const planResolvable = typeof planPath === 'string' && planPath.length > 0;
+  if (planResolvable) {
+    await seedTaskStatus(projectRoot, planPath as string);
+  }
+  return checkAttributionMachineryIntact(projectRoot, { planResolvable });
+}
+
 export async function checkAttributionMachineryIntact(
   projectRoot: string,
   opts?: { planResolvable?: boolean },
