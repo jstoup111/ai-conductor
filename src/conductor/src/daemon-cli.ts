@@ -8,7 +8,13 @@ import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
-import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
+import {
+  isEligibleForCiFix,
+  runCiFix,
+  buildCiFixHint,
+  productionCiFixRunner,
+  classifyFixError,
+} from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
@@ -1519,7 +1525,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 }
                 return;
               } catch (err: any) {
-                log(`[ci-fix] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                log(
+                  `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,
+                );
                 return;
               }
             },

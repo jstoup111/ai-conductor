@@ -23,6 +23,39 @@ import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
 
 /**
+ * Classify a ci-fix resolver error into a coarse category so logs and
+ * escalation paths can distinguish "the CLI flag is wrong" from "we're
+ * not authenticated" from "the binary isn't spawnable" from anything else.
+ *
+ * Inspects the error's message plus execa-style fields (`.stderr`,
+ * `.shortMessage`) since spawn failures often carry the useful text there
+ * rather than in `.message`.
+ */
+export function classifyFixError(err: unknown): 'flag-invalid' | 'auth' | 'spawn-env' | 'unknown' {
+  const parts: string[] = [];
+  if (err && typeof err === 'object') {
+    const anyErr = err as Record<string, unknown>;
+    if (typeof anyErr.message === 'string') parts.push(anyErr.message);
+    if (typeof anyErr.shortMessage === 'string') parts.push(anyErr.shortMessage);
+    if (typeof anyErr.stderr === 'string') parts.push(anyErr.stderr);
+  } else if (typeof err === 'string') {
+    parts.push(err);
+  }
+  const text = parts.join(' ').toLowerCase();
+
+  if (/enoent|spawn .*(enoent|failed)|spawnfile/.test(text)) {
+    return 'spawn-env';
+  }
+  if (/unknown option|unrecognized option|unknown flag|unrecognized flag|invalid option/.test(text)) {
+    return 'flag-invalid';
+  }
+  if (/\b401\b|not authenticated|unauthorized|authentication failed|auth failed/.test(text)) {
+    return 'auth';
+  }
+  return 'unknown';
+}
+
+/**
  * Build a RETRY hint from failing checks and their logs.
  *
  * Story: TR-4 happy (hint names failing checks + includes log excerpt)
@@ -434,7 +467,9 @@ export async function runCiFix(
     return outcome;
   } catch (err) {
     // Any unhandled error in worktree setup gets logged but re-thrown
-    log(`${prUrl}: unexpected error in ci-fix resolver: ${err}`);
+    const tag = classifyFixError(err);
+    const message = err instanceof Error ? err.message : String(err);
+    log(`${prUrl}: unexpected error in ci-fix resolver [${tag}]: ${message}`);
     throw err;
   }
 }
