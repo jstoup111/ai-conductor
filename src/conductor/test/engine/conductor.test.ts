@@ -11896,6 +11896,155 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       expect(haltContent).not.toContain('no task progress');
     });
   });
+
+  describe('fix is surgical — auto-park counter + interactive REPL unchanged (#569 Task 6)', () => {
+    // Task 6 is a pure guard: the #569 fix (Tasks 4/5) adds a /remediate
+    // dispatch + a distinct terminal reason for no_task_progress stalls, and
+    // must NOT alter the two adjacent mechanisms it sits between — the durable
+    // no-evidence counter / checkAndAutoPark terminal owner (conductor.ts
+    // ~:3539-3620) and the interactive REPL stall handoff (~:3833). These
+    // tests prove both remain behaviorally unchanged even with the new
+    // dispatch active. No production change lands here.
+    async function seedToBuildGate(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('durable no-evidence counter still accrues across re-kicks and auto-parks at DAEMON_NO_EVIDENCE_THRESHOLD with the pre-existing reason, even though /remediate now dispatches for no_task_progress (#569)', async () => {
+      await seedToBuildGate('surgical-counter-test');
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Zero-progress runner: task-status stays at 0/1 resolved on every
+      // attempt (forcing 'no_task_progress'); a /remediate dispatch returns no
+      // remediation plan (non-recovering), so it falls through to the
+      // retry/durable-counter path. Crucially it does NOT write
+      // task-evidence.json — the conductor owns the durable counter, exactly
+      // as in the pre-fix path.
+      const dispatched: StepName[] = [];
+      const makeRunner = (): StepRunner => ({
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      });
+
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => parkEvents.push({ reason: e.reason }));
+
+      // Re-kick #1 (maxRetries: 2): the durable counter accrues to 2 and the
+      // stall verdict at attempt 2 dispatches /remediate (the NEW #569
+      // behavior), which falls through — the feature is NOT parked yet.
+      const c1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+      // The new dispatch coexists with the unchanged counter accrual.
+      expect(dispatched).toContain('remediate');
+
+      // Re-kick #2: the durable counter carries over (accrues ACROSS runs),
+      // the first zero-progress miss pushes it to N=3 and checkAndAutoPark
+      // parks with the pre-existing reason — the terminal decision still
+      // belongs to the durable counter, not the stall block.
+      const c2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(3);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(/no completion evidence after 3 attempts/);
+    });
+
+    it('interactive mode still reaches the REPL stall handoff on a no_task_progress stall — no /remediate dispatch and no auto-park (#569)', async () => {
+      await seedToBuildGate('surgical-interactive-test');
+
+      const dispatched: StepName[] = [];
+      const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+        // The operator drops into the REPL and /quits without finishing the
+        // work — the completion gate still misses afterwards.
+        runInteractive: vi.fn(async () => {}),
+      };
+
+      const parkEvents: unknown[] = [];
+      events.on('auto_park', (e) => parkEvents.push(e));
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'interactive',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // The interactive stall handoff still fires — unchanged by the fix.
+      expect(runner.runInteractive).toHaveBeenCalledWith('build');
+      // The daemon+auto-only /remediate dispatch never fires in interactive.
+      expect(dispatched).not.toContain('remediate');
+      // Auto-park is daemon-gated → interactive mode never parks.
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      expect(await getProvenanceType(dir, 'surgical-interactive-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+    });
+  });
 });
 
 describe('HALT content robust to hostile question text (Task 12)', () => {
