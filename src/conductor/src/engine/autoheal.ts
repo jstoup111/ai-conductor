@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
@@ -39,6 +39,22 @@ export function fileMatchesPlanPath(file: string, planDeclaredPath: string): boo
   const f = file.replace(/^\.\//, '');
   const p = planDeclaredPath.replace(/^\.\//, '');
   return f === p || f.endsWith('/' + p);
+}
+
+/**
+ * Bounded immediate-parent-dir corroboration predicate (#707).
+ *
+ * Strips a leading `./` from both sides, then compares `dirname(file)` to
+ * `dirname(planDeclaredPath)` for exact equality. No ancestor/prefix logic —
+ * a file in a nested or sibling directory does not match. This is
+ * intentionally narrower than `fileMatchesPlanPath`'s suffix match; it is
+ * used where corroboration needs the file to sit in the exact same
+ * directory as the plan-declared path, not merely share a path suffix.
+ */
+export function fileDirMatchesPlanPath(file: string, planDeclaredPath: string): boolean {
+  const f = file.replace(/^\.\//, '');
+  const p = planDeclaredPath.replace(/^\.\//, '');
+  return dirname(f) === dirname(p);
 }
 
 /** Commit files that satisfy at least one of the task's plan-declared paths (#425). */
