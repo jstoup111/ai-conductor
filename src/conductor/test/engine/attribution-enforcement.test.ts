@@ -10,6 +10,7 @@ import {
   removeBuildStepMarker,
   detectZeroWorkProduct,
   resolveAttributionAuditSamplePct,
+  readDispatchAttribution,
 } from '../../src/engine/attribution-enforcement.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { validateConfig } from '../../src/engine/config.js';
@@ -348,6 +349,60 @@ describe('detectZeroWorkProduct', () => {
       headAfter: 'sha-a',
     });
     expect(detected).toBe(false);
+  });
+});
+
+describe('readDispatchAttribution', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'dispatch-attribution-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeDispatchCountRaw(content: string): void {
+    mkdirSync(join(root, '.pipeline'), { recursive: true });
+    writeFileSync(join(root, '.pipeline', 'dispatch-count'), content, 'utf8');
+  }
+
+  it('returns zeros when dispatch-count file is absent', async () => {
+    const result = await readDispatchAttribution(root);
+    expect(result).toEqual({ attributed: 0, unattributed: 0, taskIds: [] });
+  });
+
+  it('returns zeros when dispatch-count file is empty', async () => {
+    writeDispatchCountRaw('');
+    const result = await readDispatchAttribution(root);
+    expect(result).toEqual({ attributed: 0, unattributed: 0, taskIds: [] });
+  });
+
+  it('counts an all-"Task: none" file as fully unattributed', async () => {
+    writeDispatchCountRaw('Task: none\nTask: none\nTask: none\n');
+    const result = await readDispatchAttribution(root);
+    expect(result.unattributed).toBe(3);
+    expect(result.attributed).toBe(0);
+    expect(result.taskIds).toEqual([]);
+  });
+
+  it('splits a mixed file into attributed and unattributed counts with ordered task ids', async () => {
+    writeDispatchCountRaw('Task: 5\nTask: none\nTask: 7\nTask: none\nTask: 12\n');
+    const result = await readDispatchAttribution(root);
+    expect(result.attributed).toBe(3);
+    expect(result.unattributed).toBe(2);
+    expect(result.taskIds).toEqual(['5', '7', '12']);
+  });
+
+  it('ignores malformed lines without throwing and without counting them in either bucket', async () => {
+    writeDispatchCountRaw(
+      'Task: 5\ngarbage line\nTask: none\nnot a task line at all\nTask: 9\n',
+    );
+    const result = await readDispatchAttribution(root);
+    expect(result.attributed).toBe(2);
+    expect(result.unattributed).toBe(1);
+    expect(result.taskIds).toEqual(['5', '9']);
   });
 });
 
