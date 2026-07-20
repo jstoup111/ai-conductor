@@ -90,7 +90,7 @@ import {
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
-import { sweepObservationWatch } from './engine/observation-sweep.js';
+import { enrollObservation, sweepObservationWatch } from './engine/observation-sweep.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -870,22 +870,31 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     await conductor.run();
 
-    // Link & close the originating issue (intake specs only): once the
-    // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
-    // auto-closes the issue when the PR merges to the default branch. Best-effort
-    // and idempotent — a gh failure or a halted build (no pr_url) never affects
-    // the feature outcome.
+    // Link the originating issue (intake specs only), once the implementation
+    // PR exists, with the keyword resolved from the spec's observation
+    // declaration (adr-2026-07-10-observed-close-watch-registry §2):
+    //   - no marker, or a close-on-merge declaration → `Closes owner/repo#N`,
+    //     so GitHub auto-closes the issue when the PR merges to default.
+    //   - a watched-signature declaration → `Refs owner/repo#N` (link only);
+    //     the fix is enrolled into `.daemon/observation-watch.jsonl` in the
+    //     PRIMARY repo (never the build worktree) and closed later by the
+    //     observation sweep once the signature is seen in production.
+    // Best-effort and idempotent — a gh failure or a halted build (no
+    // pr_url) never affects the feature outcome.
     const finalState = await readState(stateFilePath);
     const ghRunner = async (args: string[], opts: { cwd: string }) => {
       const r = await execFile('gh', args, { cwd: opts.cwd });
       return { stdout: String(r.stdout) };
     };
+    const declaration = await readObservationDeclaration(wt.path, item.slug, { warn: (msg) => log(msg) });
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
       sourceRef: item.sourceRef,
       prUrl: finalState.ok ? finalState.value.pr_url : undefined,
       cwd: wt.path,
       slug: item.slug,
+      declaration,
+      enroll: (entry) => enrollObservation(projectRoot, entry, log),
       log,
     });
 
@@ -895,7 +904,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Closes for close-on-merge/legacy) — warn-only, never affects the feature outcome.
     const finalPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
     if (finalPrUrl) {
-      const declaration = await readObservationDeclaration(wt.path, item.slug, { warn: (msg) => log(msg) });
       const outcome = await rehabilitateHaltPr({
         gh: ghRunner,
         cwd: wt.path,
@@ -1519,7 +1527,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           const r = await execFile('gh', args, { cwd: opts.cwd });
           return { stdout: String(r.stdout) };
         };
-        await sweepObservationWatch(daemonDir, {
+        // registryPath is the project root — sweepObservationWatch joins
+        // `.daemon/observation-watch.jsonl` onto it internally. Passing
+        // daemonDir here would look for `.daemon/.daemon/...` (double-nested).
+        await sweepObservationWatch(projectRoot, {
           gh: ghRunner,
           logDir: daemonDir,
           log,
