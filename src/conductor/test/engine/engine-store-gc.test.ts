@@ -254,4 +254,26 @@ describe('gcVersions', () => {
     expect(warnings.length).toBeGreaterThan(0);
     expect(await listVersions(storeRoot)).toContain(ancientId);
   });
+
+  it('protectVersionIds: never deletes a self-protected version even when all four legacy conditions would otherwise delete it', async () => {
+    const { gcVersions, listVersions } = await loadEngineStore();
+
+    const protectedId = '20260101T000000Z-aaaaaaaaaaaa';
+    await makeVersion(protectedId, 200 * ONE_DAY_MS); // ancient, not current, not live-referenced, outside keep-K
+    await makeVersion('20260701T000000Z-bbbbbbbbbbbb', 30 * ONE_DAY_MS); // current
+
+    const result = await gcVersions({
+      conductorRoot,
+      currentVersionId: '20260701T000000Z-bbbbbbbbbbbb' as any,
+      minAgeMsecs: ONE_DAY_MS,
+      keepLastK: 0,
+      protectVersionIds: [protectedId as any],
+      registryPath,
+      now: NOW,
+      warn: () => {},
+    });
+
+    expect(result.deleted).not.toContain(protectedId);
+    expect(await listVersions(storeRoot)).toContain(protectedId);
+  });
 });
