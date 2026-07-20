@@ -7,6 +7,7 @@ import {
   unlink as unlinkFile,
   stat,
 } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -601,6 +602,44 @@ async function checkAttributionMachineryIntact(projectRoot: string): Promise<str
       `Build dispatch requires task-status.json to be seeded and the ` +
       `.pipeline/current-task stamp path to be writable before a build ` +
       `session can be attributed to a task.`
+    );
+  }
+
+  // Session hooks: the pre/post-dispatch and mutation-gate scripts provisioned
+  // by `writeSessionHooks()` at worktree setup (worktree-prepare.ts). If any
+  // expected script is missing, the PreToolUse/PostToolUse hooks that stamp
+  // `.pipeline/current-task` and record dispatch attribution can never fire.
+  const hooksDir = join(pipelineDir, 'session-hooks');
+  const expectedHooks = ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'];
+  const missingHooks: string[] = [];
+  for (const hook of expectedHooks) {
+    const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
+    if (!ok) missingHooks.push(hook);
+  }
+  if (missingHooks.length > 0) {
+    return (
+      `Attribution machinery broken: .pipeline/session-hooks/ is missing ` +
+      `expected script(s): ${missingHooks.join(', ')}.\n` +
+      `Build dispatch requires session hooks to be installed so a build ` +
+      `session can be attributed to a task.`
+    );
+  }
+
+  // Stamp path writability: `.pipeline/current-task` is where the
+  // PreToolUse hook stamps the active task id before a build session starts.
+  // Check writability of the existing file if present, otherwise of its
+  // parent directory (the file doesn't exist until the first stamp write).
+  const currentTaskPath = join(pipelineDir, 'current-task');
+  const currentTaskExists = await accessFile(currentTaskPath).then(() => true).catch(() => false);
+  const writabilityCheckTarget = currentTaskExists ? currentTaskPath : pipelineDir;
+  const stampPathWritable = await accessFile(writabilityCheckTarget, fsConstants.W_OK)
+    .then(() => true)
+    .catch(() => false);
+  if (!stampPathWritable) {
+    return (
+      `Attribution machinery broken: .pipeline/current-task stamp path is not writable.\n` +
+      `Build dispatch requires the .pipeline/current-task stamp path to be ` +
+      `writable so a build session can be attributed to a task.`
     );
   }
 

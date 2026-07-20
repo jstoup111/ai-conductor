@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -1241,6 +1241,15 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
       JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
       'utf8',
     );
+    // This describe block exercises the unattributed-dispatch streak signal,
+    // not the pre-dispatch attribution-machinery guard (Task 5/6, #676) —
+    // seed healthy session hooks so that guard doesn't block build dispatch
+    // before the streak logic under test ever runs.
+    const hooksDir = join(dir, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+    await writeFile(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(hooksDir, 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(hooksDir, 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
   }
 
   it('emits unattributed_dispatch naming the streak when every dispatch in the build cycle is "Task: none"', async () => {
@@ -1445,6 +1454,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
     await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
     await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
 
     let buildWasDispatched = false;
     const runner: StepRunner = {
@@ -1471,6 +1481,93 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
     if (haltContent !== null) {
       expect(haltContent).not.toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    }
+  });
+
+  it('build step + task-status.json present but session-hooks/ missing its expected scripts + enforcement configured → dispatch fails loudly naming session hooks', async () => {
+    // task-status.json present, but session-hooks/ dir absent entirely —
+    // the machinery required to attribute a dispatched build is incomplete.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(false);
+
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toMatch(/session-hooks|session hooks/i);
+  });
+
+  it('build step + task-status.json and session-hooks/ present but .pipeline/ not writable + enforcement configured → dispatch fails loudly naming the stamp path', async () => {
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    // Leave .pipeline/ itself writable (the HALT marker also lives there and
+    // must still be writable when the guard fires) but make the
+    // `.pipeline/current-task` stamp path itself unwritable — simulating a
+    // stuck stamp file left over from a prior run with bad permissions, even
+    // though task-status.json and the hook scripts are both present.
+    const currentTaskPath = join(dir, '.pipeline', 'current-task');
+    await writeFile(currentTaskPath, 'Task: 1\n', 'utf-8');
+    await chmod(currentTaskPath, 0o444);
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    try {
+      await conductor.run();
+
+      expect(buildWasDispatched).toBe(false);
+
+      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      expect(halt).toMatch(/current-task|stamp path|writable/i);
+    } finally {
+      // Restore writability so afterEach's rm(dir, { recursive: true }) can
+      // clean up the temp directory.
+      await chmod(currentTaskPath, 0o644);
     }
   });
 });

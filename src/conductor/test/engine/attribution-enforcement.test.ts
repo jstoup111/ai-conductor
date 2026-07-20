@@ -604,6 +604,15 @@ describe('zero-work kickback (#505 TS-16)', () => {
       JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
       'utf8',
     );
+    // This describe block exercises the zero-work kickback, not the
+    // pre-dispatch attribution-machinery guard (Task 5/6, #676) — seed
+    // healthy session hooks so that guard doesn't block build dispatch
+    // before the zero-work logic under test ever runs.
+    const hooksDir = join(dir, '.pipeline', 'session-hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    writeFileSync(join(hooksDir, 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    writeFileSync(join(hooksDir, 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
   }
 
   function writeCompleteTaskStatus(): void {
