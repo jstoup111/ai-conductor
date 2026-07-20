@@ -112,12 +112,15 @@ export interface CloseResult {
 const HALT_SLUG_PATTERN = /^Halt-Slug:\s*([\w-]+)\s*$/m;
 
 /**
- * Comment body for issue closure.
- * This is a single exported constant for ease of testing and documentation.
+ * Render the comment body for issue closure, linking the halt-slug and the
+ * shipping PR that resolved it, per adr-2026-07-08-halt-issue-closure-sweep.
+ *
+ * @param slug - The halt slug this issue tracks
+ * @param prUrl - URL of the PR whose ship evidence resolved this halt
  */
-export const CLOSE_ISSUE_COMMENT_BODY = `Automated closure: This halt has been resolved by the shipped evidence in the process monitor log.
-The fix was deployed and tested; this issue is no longer blocking daemon stability.
-See \`conduct-ts halt-issues sweep\` for details.`;
+export function renderCloseComment(slug: string, prUrl: string): string {
+  return `Auto-closed by halt-issues sweep: \`${slug}\` shipped in ${prUrl}. Reopen (or label \`halt-sweep:keep-open\`) if this issue tracks a broader gap.`;
+}
 
 /**
  * Stamp an issue with a Halt-Slug marker if not already present.
@@ -209,7 +212,7 @@ export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
  *   - If null (404): return closedBy="external", no writes
  *   - If "closed": return closedBy="external", no writes
  *   - If "open": proceed to comment and close
- * - Call upsertIssueComment with CLOSE_ISSUE_COMMENT_BODY
+ * - Call upsertIssueComment with renderCloseComment(entry.slug, prUrl)
  *   - If fails: record lastError, do NOT throw, proceed to close attempt
  * - Call closeIssue
  *   - If fails: record lastError, return closed=false
@@ -223,8 +226,8 @@ export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
  * @param gh - GitHub abstraction
  * @returns CloseResult with status and any errors
  */
-export async function closeIssue(entry: LedgerEntry, gh: GhAbstraction): Promise<CloseResult> {
-  const { repo, issue } = entry;
+export async function closeIssue(entry: LedgerEntry, prUrl: string, gh: GhAbstraction): Promise<CloseResult> {
+  const { repo, issue, slug } = entry;
   const now = new Date().toISOString();
 
   // Step 1: Check for keep-open label
@@ -271,7 +274,7 @@ export async function closeIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
 
   // Step 3: Issue is open, add comment
   try {
-    await gh.upsertIssueComment(repo, issue, CLOSE_ISSUE_COMMENT_BODY);
+    await gh.upsertIssueComment(repo, issue, renderCloseComment(slug, prUrl));
   } catch (err) {
     // Comment failed: return error, do NOT attempt close
     const errorMsg = err instanceof Error ? err.message : String(err);

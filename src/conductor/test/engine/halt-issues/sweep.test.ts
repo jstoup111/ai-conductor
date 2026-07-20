@@ -142,8 +142,11 @@ class MockGh {
     return this.states.get(`${repo}/${issue}`) ?? null;
   }
 
+  commentBodies: string[] = [];
+
   async upsertIssueComment(repo: string, issue: string, body: string): Promise<void> {
     this.callCounts.upsertIssueComment++;
+    this.commentBodies.push(body);
     const response = this.commentResponses[this.commentIndex++];
     if (response?.shouldFail) {
       throw new Error(response.error ?? 'comment failed');
@@ -465,6 +468,11 @@ describe('sweep', () => {
       expect(mockGh.callCounts.upsertIssueComment).toBeLessThanOrEqual(1);
       expect(mockGh.callCounts.closeIssue).toBeLessThanOrEqual(1);
       expect(mockGh.totalCalls).toBeLessThanOrEqual(4);
+      // The posted close comment threads resolution.prUrl through, per the ADR
+      expect(mockGh.commentBodies.length).toBe(1);
+      expect(mockGh.commentBodies[0]).toContain('daemon-lifecycle-controls');
+      expect(mockGh.commentBodies[0]).toContain('https://github.com/test/repo/pull/1');
+      expect(mockGh.commentBodies[0]).toContain('halt-sweep:keep-open');
     });
   });
 

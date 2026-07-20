@@ -216,8 +216,18 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
 
       // Step 4b: Close if locally resolvable
       if (resolution.resolvable) {
+        if (!resolution.prUrl) {
+          // Defensive guard: resolvable should always carry a prUrl per
+          // resolution.ts. If it doesn't, skip the close rather than
+          // posting a link-less comment.
+          entry.lastError = 'resolvable-without-prUrl';
+          counts.errors++;
+          ledgerSchema.entries[issue] = entry;
+          continue;
+        }
+
         // Step 4c: Close the issue
-        const closeResult = await closeIssue(entry, config.gh);
+        const closeResult = await closeIssue(entry, resolution.prUrl, config.gh);
 
         if (closeResult.closed) {
           counts.closed++;

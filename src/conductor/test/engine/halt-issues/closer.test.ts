@@ -17,8 +17,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { stampIssue, StampResult, closeIssue, CloseResult, CLOSE_ISSUE_COMMENT_BODY } from '../../../src/engine/halt-issues/closer';
+import { stampIssue, StampResult, closeIssue, CloseResult, renderCloseComment } from '../../../src/engine/halt-issues/closer';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
+
+const TEST_PR_URL = 'https://github.com/jstoup111/test-repo/pull/42';
 
 /**
  * Fake GhAbstraction for testing
@@ -297,7 +299,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: false }]
       });
 
-      const result = await closeIssue(closableEntry, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result.closed).toBe(true);
       expect(result.closedBy).toBe('sweep');
@@ -307,7 +309,10 @@ describe('closer', () => {
       // Verify comment was added
       const comments = gh.getCommentBodies('jstoup111/test-repo', '297');
       expect(comments.length).toBe(1);
-      expect(comments[0]).toBe(CLOSE_ISSUE_COMMENT_BODY);
+      expect(comments[0]).toBe(renderCloseComment('daemon-lifecycle-controls', TEST_PR_URL));
+      expect(comments[0]).toContain('daemon-lifecycle-controls');
+      expect(comments[0]).toContain(TEST_PR_URL);
+      expect(comments[0]).toContain('halt-sweep:keep-open');
     });
 
     it('skips closure when halt-sweep:keep-open label is present', async () => {
@@ -329,7 +334,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('kept-open');
@@ -359,7 +364,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('external');
@@ -390,7 +395,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: true, error: 'Permission denied' }]
       });
 
-      const result1 = await closeIssue(closableEntry, gh);
+      const result1 = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result1.closed).toBe(false);
       expect(result1.lastError).toContain('Permission denied');
@@ -415,7 +420,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: false }]
       });
 
-      const result2 = await closeIssue(updatedEntry, gh);
+      const result2 = await closeIssue(updatedEntry, TEST_PR_URL, gh);
 
       // The close should succeed on retry
       expect(result2.closed).toBe(true);
@@ -444,7 +449,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: false }]
       });
 
-      const result = await closeIssue(closableEntry, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result.closed).toBe(false);
       expect(result.lastError).toContain('rate limited');
@@ -472,7 +477,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('external');
