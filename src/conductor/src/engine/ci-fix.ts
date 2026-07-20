@@ -246,28 +246,52 @@ export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'bra
  * entry. The runner's result becomes the dispatch outcome.
  */
 export interface CiFixRunner {
-  run(opts: { worktreePath: string; hint: string; entry: WatchEntry }): Promise<CiFixOutcome>;
+  run(opts: {
+    worktreePath: string;
+    hint: string;
+    entry: WatchEntry;
+    dispatcher?: CiFixDispatcher;
+  }): Promise<CiFixOutcome>;
 }
 
 /**
- * Production {@link CiFixRunner}: shells out to a fix session inside the
- * worktree, injecting the hint. Guarded by the AI_CONDUCTOR_NO_REAL_EXEC
- * kill-switch (used in tests/dry-run to avoid spawning real processes) — when
- * set, it short-circuits to a no-op outcome without shelling out.
+ * StepRunner-backed dispatcher seam for {@link productionCiFixRunner}.
+ * Mirrors `DefaultStepRunner.resolveCiFailure`'s role (T2,
+ * src/engine/step-runners.ts) but is expressed in `CiFixRunner`'s own
+ * ctx/outcome shape so `productionCiFixRunner` doesn't need to know about
+ * `DefaultStepRunner` construction — callers (e.g. daemon-cli.ts) adapt a
+ * real `DefaultStepRunner` into this shape at the call site.
+ */
+export interface CiFixDispatcher {
+  resolveCiFailure(ctx: {
+    worktreePath: string;
+    hint: string;
+    entry: WatchEntry;
+  }): Promise<CiFixOutcome>;
+}
+
+/**
+ * Production {@link CiFixRunner}: delegates to an injected StepRunner-backed
+ * dispatcher (see {@link CiFixDispatcher}) instead of shelling out to a
+ * fictional "fix session" CLI flag that never existed (CF-1).
+ * Guarded by the AI_CONDUCTOR_NO_REAL_EXEC kill-switch (used in tests/dry-run
+ * to avoid dispatching real fix sessions) — when set, it short-circuits to a
+ * no-op outcome without invoking the dispatcher.
  */
 export const productionCiFixRunner: CiFixRunner = {
-  async run({ worktreePath, hint, entry }): Promise<CiFixOutcome> {
+  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixOutcome> {
     if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
       return { kind: 'noop' };
     }
 
-    await execa(
-      'claude',
-      ['--fix-session', '--pr-url', entry.prUrl, '--hint', hint],
-      { cwd: worktreePath },
-    );
+    if (!dispatcher) {
+      throw new Error(
+        'productionCiFixRunner.run requires an injected dispatcher (StepRunner-backed ' +
+          'resolveCiFailure seam) — see daemon-cli.ts ciFix dispatch wiring.',
+      );
+    }
 
-    return { kind: 'changed' };
+    return dispatcher.resolveCiFailure({ worktreePath, hint, entry });
   },
 };
 
