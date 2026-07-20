@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- `architecture-review` skill: tightened the ADR-naming rule with explicit
+  WRONG/RIGHT examples and the heading convention (`# ADR:`, no number), after a
+  spec authored `adr-0001-…`/`adr-0002-…` in violation of the existing date-based
+  convention. A deterministic gate to reject number-named ADRs is captured in
+  intake #705.
+
 ### Added
 
 - Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
@@ -25,6 +33,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   event gains optional `escalatedModel`/`escalatedEffort` (the upcoming
   attempt's rung) and `aggregateRetryHotspots` surfaces the terminal rung for
   retro Part C (`.docs/plans/retry-as-escalation.md`).
+- Spec for issue #677 — verify-only (prove-closed) plan tasks get a
+  deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
+  the judged attribution lane for marked residue tasks (dark-cutover-safe),
+  `Evidence: skipped <reason>` parity in the generated commit-msg hook, and
+  park reasons that name stranded verify-only task ids — so an
+  evaluator-APPROVED build no longer auto-parks solely because one task
+  legitimately produced no commit
+  (`.docs/plans/verify-only-prove-closed-task-evidence.md`; partial #678 —
+  removes the completed-build re-dispatch trigger for this class, general
+  outcomes deferred to #678/PR #679).
+- Committed shipped-records for two manually-shipped features —
+  `2026-07-20-engine-gc-self-eviction-guard` (#673, PR #703) and
+  `build-stall-remediation-skips-no-task-progress` (#701, PR #701) — so
+  `daemon-backlog.ts` dedups them instead of re-dispatching work that already
+  shipped (#438 stopgap). Plus a **Daemon Operations Safety** section in
+  `CLAUDE.md`: never bulk-delete worktrees/branches, park before touching a
+  feature's git state, a worktree checkout is disposable but the branch is the
+  source of truth, and a manual PR is not a harness finish (run
+  `conduct-ts shipped-record`).
 - Spec for issue #569 — build-stall auto-remediation now also fires for
   `no_task_progress` (zero-work) stalls, not only `halt_marker` stalls: a
   synthesized remediation prompt (from the completion-gate reason, the stall
@@ -75,6 +102,14 @@ set `steps.<step>.max_retries: 5` where desired.
 
 ### Fixed
 
+- The attribution judge lane now dispatches on inherited build-gate residue on
+  resumed/stalled runs — dropped the attempt-scoped `!isZeroWork` guard that
+  previously suppressed dispatch whenever `headShaBeforeBuild === headShaAfterBuild`
+  (i.e. no new commits landed this attempt), which meant residue carried over from
+  a prior attempt was silently never judged. The two other no-op paths are
+  preserved: the lane still no-ops when the cutover flag is disabled/absent, and
+  when the residue set is empty. The separate kickback/no-evidence zero-work retry
+  path is unrelated code and is unchanged (#570).
 - `no_task_progress` (zero-work) build stalls now route through the same `/remediate`
   auto-remediation dispatch as `halt_marker` stalls (a synthesized prompt built from the run's
   own context), bounded by the shared remediation budget, with the durable no-evidence counter

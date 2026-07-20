@@ -26,6 +26,43 @@ not a stronger prompt. (Precedents: the evidence gate derives completion from co
 rather than trusting agent reports; #426 fixed path matching engine-side; #433 replaces
 trailer discipline with engine-stamped task ids and commit hooks.)
 
+## Daemon Operations Safety (Operator / Claude)
+
+When operating a running daemon — parking, cleaning up, resuming, or "finishing"
+features — these rules are MANDATORY. Each encodes a failure that has already
+happened and corrupted daemon state:
+
+1. **Never bulk-delete worktrees or branches.** Do NOT `rm -rf` over a globbed or
+   computed set (`for d in .worktrees/*`) and never loop-delete branches. Scope every
+   destructive delete to an EXPLICIT, enumerated list of named paths; print the list and
+   confirm it before deleting. Shell trap: `mapfile`/`readarray` are bash-only and
+   silently do nothing under zsh — never guard a delete with an array you have not proven
+   is populated. (A guard that came back empty once deleted all 74 worktrees instead of 4.)
+
+2. **Park before you touch a feature's git state.** The daemon re-dispatches anything in
+   its backlog and re-creates branches you delete, and its resume path re-kicks git errors
+   with no backoff (#681). ALWAYS `conduct daemon park <slug>` BEFORE removing a feature's
+   worktree or branch. Never unpark-then-delete — that guarantees a 128 `git worktree add`
+   spin.
+
+3. **The branch is the source of truth; a worktree checkout is disposable.** Removing
+   `.worktrees/<slug>` loses the per-worktree `.pipeline/` state (task-status + the
+   evidence sidecar), which then causes false `no_task_progress` stalls on already-committed
+   work (#497). Recreate a worktree from its branch and recover the lost evidence — do not
+   let the build redo finished tasks.
+
+4. **A manual PR is NOT a harness finish.** Opening a PR by hand does not tell the daemon
+   the work shipped, so it re-dispatches the feature forever (#438) and the only stopgap is
+   parking — a leak, not a finish. The finish is `conduct shipped-record --slug <slug> --pr
+   <url>`, which commits `.docs/shipped/<slug>.md` so the merge atomically records the ship
+   and `daemon-backlog.ts` dedups it. If you complete work manually, you MUST also land its
+   shipped-record.
+
+Per this repo's own Design Principle, the durable fix for each of these is machinery
+(a guarded delete wrapper, a park-state check, an evidence-backfill on worktree recreate,
+a merge→shipped-record reconciler) — these prose rules are the interim guard until that
+machinery exists.
+
 ## Harness Architecture
 
 - **Skills** (`skills/`) — Each has a `SKILL.md` with YAML frontmatter. One skill, one responsibility.

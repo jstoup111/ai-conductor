@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlink } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlink, utimes } from 'fs/promises';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -289,6 +289,179 @@ describe('assertPublishWrapperEnv (raw tsup guard)', () => {
 
   it('does not throw when the wrapper marker env var is present', () => {
     expect(() => assertPublishWrapperEnv({ AI_CONDUCTOR_PUBLISH_WRAPPER: '1' })).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3 — self-guard env (CONDUCT_ENGINE_SELF_GUARD /
+// CONDUCT_ENGINE_SELF_VERSION) threaded from publish-engine.mjs into the
+// gcVersions call as `protectVersionIds`, fail-closed skip when the guard
+// is set but the self version is unresolved.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('publish-engine.mjs GC self-guard env', () => {
+  const OLD_ISO_DATE = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000); // 3 days ago
+
+  /**
+   * Seed `conductorRoot/dist-versions/` with `count` old, GC-eligible
+   * version dirs (valid EngineVersionId format, aged past the 24h default
+   * min-age, mtime set explicitly so age doesn't depend on wall-clock
+   * timing). Returns the seeded ids, oldest first.
+   */
+  async function seedOldVersions(count: number): Promise<string[]> {
+    const versionsDir = join(conductorRoot, 'dist-versions');
+    await mkdir(versionsDir, { recursive: true });
+    const ids: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const ts = new Date(OLD_ISO_DATE.getTime() - (count - i) * 1000);
+      const stamp = ts.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+      const id = `${stamp}-${String(i).padStart(12, '0')}`;
+      const dir = join(versionsDir, id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'index.js'), `export const seeded = ${i};\n`, 'utf-8');
+      await utimes(dir, ts, ts);
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  function runPublishWithEnv(env: NodeJS.ProcessEnv) {
+    return execa(
+      'node',
+      [
+        SCRIPT,
+        '--conductor-root',
+        conductorRoot,
+        '--tsup-cmd',
+        JSON.stringify(['node', stubPath]),
+      ],
+      {
+        reject: false,
+        env: {
+          ...process.env,
+          // Isolate from the real ~/.ai-conductor registry so GC's
+          // live-referenced check sees an empty (non-existent) registry.
+          AI_CONDUCTOR_REGISTRY: join(conductorRoot, 'no-such-registry.json'),
+          ...env,
+        },
+      },
+    );
+  }
+
+  it('with CONDUCT_ENGINE_SELF_GUARD=1 and a resolved self version, gcVersions protects that version from deletion', async () => {
+    // 5 old, otherwise-GC-eligible versions; keepLastK defaults to 3 and
+    // counts the newly-published version too, so without the guard the 2
+    // oldest of these 5 would be deleted (5 old + 1 new = 6 total, newest 3
+    // kept => 3 old survive by keepLastK, 2 old are eligible for deletion).
+    const oldIds = await seedOldVersions(5);
+    const selfVersion = oldIds[0]; // the oldest — would be deleted first without the guard
+
+    const result = await runPublishWithEnv({
+      CONDUCT_ENGINE_SELF_GUARD: '1',
+      CONDUCT_ENGINE_SELF_VERSION: selfVersion,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const remaining = await readdir(join(conductorRoot, 'dist-versions'));
+    expect(remaining).toContain(selfVersion);
+  });
+
+  it('with CONDUCT_ENGINE_SELF_GUARD=1 and an empty self version, GC is skipped entirely (zero deletions) and logs the reason', async () => {
+    const oldIds = await seedOldVersions(5);
+
+    const result = await runPublishWithEnv({
+      CONDUCT_ENGINE_SELF_GUARD: '1',
+      CONDUCT_ENGINE_SELF_VERSION: '',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('gc: skipped (self-guard, unresolved self version)');
+
+    // Nothing was deleted — every seeded old version, plus the freshly
+    // published one, is still present.
+    const remaining = await readdir(join(conductorRoot, 'dist-versions'));
+    for (const id of oldIds) {
+      expect(remaining).toContain(id);
+    }
+    // Task 7: explicit zero-deletions assertion — without the guard,
+    // keepLastK=3 would have deleted 2 of the 5 seeded old versions (see
+    // the resolved-self-version test above), so exact-count equality here
+    // is the assertion that distinguishes "skipped" from "still mostly ran".
+    expect(remaining.length).toBe(oldIds.length + 1);
+  });
+
+  it('with CONDUCT_ENGINE_SELF_GUARD unset, GC behaves exactly as before (backward compatible)', async () => {
+    const oldIds = await seedOldVersions(5);
+
+    const result = await runPublishWithEnv({});
+
+    expect(result.exitCode).toBe(0);
+    const remaining = await readdir(join(conductorRoot, 'dist-versions'));
+    // keepLastK=3 counts the new publish + the 2 newest old ones; the 3
+    // oldest seeded versions are GC-eligible and should be gone.
+    expect(remaining).not.toContain(oldIds[0]);
+    expect(remaining).not.toContain(oldIds[1]);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 6 — end-to-end: a long-lived daemon's version (`V_run`), seeded
+  // outside keepLastK with NO live pidfile referencing it (simulating the
+  // pre-`holdLock` startup window / a cross-context registry read — see
+  // plan Verified gap), survives a real publish+GC pass when the self-guard
+  // env points at it, and its directory remains fully readable afterward
+  // (no ENOENT) — proving Tasks 1/3/4 hold end-to-end, not just in
+  // isolation.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('protects a long-lived daemon version (no live pidfile) through a real publish+GC pass, and its files remain readable after', async () => {
+    const oldIds = await seedOldVersions(5);
+    const vRun = oldIds[0]; // oldest — outside keepLastK=3, GC-eligible, no pidfile references it
+
+    // RED demonstration: with the guard disabled, this exact scenario
+    // deletes V_run (no pidfile protection, no self-guard) — confirming the
+    // guard is what saves it below, not some other retention rule.
+    const redProbe = await runPublishWithEnv({});
+    const redRemaining = await readdir(join(conductorRoot, 'dist-versions'));
+    expect(redProbe.exitCode).toBe(0);
+    expect(redRemaining).not.toContain(vRun);
+
+    // Reset: re-seed a fresh conductorRoot scenario for the GREEN (guarded) run.
+    await rm(conductorRoot, { recursive: true, force: true });
+    conductorRoot = await mkdtemp(join(tmpdir(), 'publish-engine-test-'));
+    stubPath = join(conductorRoot, 'stub-tsup.mjs');
+    await writeFile(
+      stubPath,
+      [
+        'import { writeFile, mkdir } from "node:fs/promises";',
+        'const args = process.argv.slice(2);',
+        'const outDirIdx = args.indexOf("--out-dir");',
+        'const outDir = args[outDirIdx + 1];',
+        'await mkdir(outDir, { recursive: true });',
+        'await writeFile(`${outDir}/index.js`, "export const built = true;\\n");',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const oldIds2 = await seedOldVersions(5);
+    const vRun2 = oldIds2[0];
+
+    const guardedResult = await runPublishWithEnv({
+      CONDUCT_ENGINE_SELF_GUARD: '1',
+      CONDUCT_ENGINE_SELF_VERSION: vRun2,
+    });
+    expect(guardedResult.exitCode).toBe(0);
+
+    const remaining = await readdir(join(conductorRoot, 'dist-versions'));
+    expect(remaining).toContain(vRun2);
+
+    // Readback: the protected version's directory is not just present on
+    // disk but actually readable — no ENOENT reading its contents, the
+    // real-world consequence of the self-eviction bug (#673).
+    const vRunDir = join(conductorRoot, 'dist-versions', vRun2);
+    const files = await readdir(vRunDir);
+    expect(files).toContain('index.js');
+    const contents = await readFile(join(vRunDir, 'index.js'), 'utf-8');
+    expect(contents).toContain('seeded = 0');
   });
 });
 

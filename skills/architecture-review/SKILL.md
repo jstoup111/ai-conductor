@@ -189,11 +189,18 @@ no existing ADR covers it, one must be created before implementation proceeds.
 - Worktree isolation boundary changes (new shared services, new per-worktree resources)
 
 **ADR format:** Use `templates/adr.md.template`. Name each ADR
-`.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug.
-**Do NOT use sequential numbers** (ADR-001, ADR-007, …): parallel worktrees each grabbing
-"the next number" collide. The date+slug is the ADR's identifier; cite the filename stem when
-superseding or referencing one. If two ADRs land on the same date, the slug disambiguates.
-This applies to newly created ADRs only — existing numbered ADRs keep their names (append-only).
+`.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug — and title it
+`# ADR: <title>` (the heading carries **no** number). **Never use a sequential number, in the
+filename or the heading:**
+
+- ❌ WRONG: `adr-0001-ci-fix.md` with heading `# ADR-0001: …`
+- ✅ RIGHT: `adr-2026-07-20-ci-fix.md` with heading `# ADR: …`
+
+Sequential numbers collide when parallel worktrees each grab "the next number"; the date+slug never
+collides and IS the ADR's identifier — cite the **filename stem** (never a number) when superseding
+or referencing one. If two ADRs land on the same date, the slug disambiguates. This applies to newly
+created ADRs only — existing numbered ADRs keep their names (append-only). (A deterministic gate to
+reject number-named ADRs is tracked in intake #705.)
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 

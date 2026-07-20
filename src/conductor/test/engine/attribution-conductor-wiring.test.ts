@@ -1052,6 +1052,333 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
   });
 
   /**
+   * RED (Task 1, #570): the judge lane must dispatch on INHERITED residue —
+   * a resumed build where the residue-producing commit already landed
+   * before this attempt started, so `headShaBeforeBuild` (captured at
+   * build-step entry) already equals `headShaAfterBuild` (captured at gate
+   * evaluation, no new commits made during this attempt).
+   *
+   * PROBLEM: conductor.ts's dispatch predicate (~3223-3228) requires
+   * `!isZeroWork`, and `detectZeroWorkProduct` (attribution-enforcement.ts)
+   * treats `headBefore === headAfter` as zero-work whenever enforcement is
+   * configured (`isEnforcementConfigured`) — regardless of whether that
+   * "unchanged" HEAD still carries real, unjudged residue from a prior
+   * attempt. On a resumed build this collapses real residue into a
+   * false-positive zero-work signal and the judge is never dispatched.
+   *
+   * This test arms BOTH `attribution_judge_cutover` (gates the lane) and
+   * `attribution_enforcement_cutover` (arms `isEnforcementConfigured`, the
+   * precondition for `detectZeroWorkProduct` to actually evaluate head
+   * movement instead of short-circuiting to `false`) so the interaction bug
+   * is actually exercised. Task 2's commit (residue, untrailered) lands
+   * BEFORE `conductor.run()` starts — mirroring a resumed build where the
+   * work already happened in a prior attempt — and the stubbed `build` step
+   * makes no further commits, so `headBefore === headAfter` for this
+   * attempt even though task 2 is real, unjudged residue.
+   */
+  it('resumed build with inherited residue (headBefore === headAfter) still dispatches the judge lane', async () => {
+    const repo = await initRepo('wiring-rescue-resumed-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-resumed-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-resumed-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Arming attribution_enforcement_cutover below also arms the pre-dispatch
+    // attribution-machinery guard (conductor.ts checkAttributionMachineryIntact),
+    // which requires session-hooks/ scripts to exist before a build dispatch
+    // is allowed — independent of the judge-lane bug this test targets.
+    // Without this, the build step fails the machinery check before ever
+    // reaching the judge-lane dispatch code.
+    await mkdir(join(repo.root, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+    // Task 1 resolves mechanically (trailered commit). Task 2 is residue —
+    // implemented but untrailered, and (critically) already committed BEFORE
+    // conductor.run() starts, simulating a resumed build where this
+    // attempt's dispatch adds nothing new.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    const shaB = await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'satisfied',
+          citations: [{ sha: shaB, rationale: 'implements task 2 (b.ts)' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    });
+
+    // The stubbed build step makes NO commits during this attempt — the
+    // inherited-residue shape: headShaBeforeBuild (captured at step entry)
+    // already equals headShaAfterBuild (captured at gate evaluation).
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        // Arms isEnforcementConfigured so detectZeroWorkProduct actually
+        // evaluates headBefore === headAfter instead of short-circuiting.
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    // KEY ASSERTION (RED today): the judge lane must dispatch exactly once
+    // on the inherited residue task 2, even though headShaBeforeBuild ===
+    // headShaAfterBuild for this attempt. Today `isZeroWork` collapses this
+    // to a false-positive zero-work signal and dispatchVerifier is never
+    // called.
+    expect(dispatchVerifier).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * PIN (Task 2, #570): when `attribution_judge_cutover` is absent (undefined),
+   * the judge lane must NEVER dispatch — even with inherited residue (no new
+   * commits this attempt). This guarantee must hold both before AND after
+   * Task 4 removes the `!isZeroWork` clause from the dispatch predicate; the
+   * cutover gate at conductor.ts:~3037-3039 is the sole no-op guard being
+   * pinned here, independent of the zero-work signal.
+   */
+  it('cutover absent (undefined): judge lane never dispatches, even with inherited residue', async () => {
+    const repo = await initRepo('wiring-rescue-cutover-absent-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-cutover-absent-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-cutover-absent-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        // attribution_judge_cutover intentionally absent.
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
+   * PIN (Task 2, #570): when `attribution_judge_cutover` is set to a FUTURE
+   * timestamp (not yet armed), the judge lane must NEVER dispatch — even with
+   * inherited residue (no new commits this attempt). Same guarantee as the
+   * cutover-absent pin above, exercising the "not yet active" branch of the
+   * cutover gate instead of the "absent" branch.
+   */
+  it('cutover set to future timestamp: judge lane never dispatches, even with inherited residue', async () => {
+    const repo = await initRepo('wiring-rescue-cutover-future-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-cutover-future-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-cutover-future-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2999-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
+   * PIN (Task 3, #570): the judge lane must NEVER dispatch when the residue
+   * set is EMPTY — independent of the zero-work signal (`isZeroWork`) and of
+   * whether this attempt made new commits. `residueIds.length > 0` is a
+   * standalone guard at conductor.ts:~3223-3228 alongside `!isZeroWork`; this
+   * pins that guard's own no-op path so it can't silently regress (e.g. if a
+   * future change accidentally makes an empty residue array dispatch, or if
+   * removing the `!isZeroWork` clause in Task 4 were mistakenly paired with
+   * removing this clause too). Every task resolves mechanically (trailered
+   * commits), so `deriveCompletion` reports full completion and
+   * `residueIds` is empty.
+   *
+   * Two sub-cases, both asserting zero dispatchVerifier calls:
+   *   (a) no new commits during this attempt (headBefore === headAfter,
+   *       mirrors a resumed build with nothing left to judge)
+   *   (b) new commits made during this attempt (headBefore !== headAfter)
+   */
+  it('empty residue (all tasks resolved): judge lane never dispatches — no new commits this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-nocommit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-nocommit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-nocommit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Both tasks resolve mechanically via trailered commits, landing BEFORE
+    // conductor.run() starts — no residue, no new commits this attempt.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  it('empty residue (all tasks resolved): judge lane never dispatches — new commits made this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-commit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-commit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-commit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Task 1 resolves mechanically before the attempt starts.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    // The stubbed build step makes a NEW trailered commit during this
+    // attempt (headBefore !== headAfter), and also mechanically resolves
+    // task 2 — so residue is still empty despite fresh commits landing.
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+          return { success: true };
+        }
+        return makeStepRunner(dispatchVerifier, repo.root).run(step);
+      },
+      dispatchVerifier,
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
    * Story 4 (guard): the re-check added in Story 1 must only fire when the
    * lane actually stamped something. A lane that runs but stamps nothing
    * (e.g. a no-verdict result) must not trigger a redundant

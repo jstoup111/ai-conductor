@@ -643,6 +643,11 @@ describe('zero-work kickback (#505 TS-16)', () => {
     writeIncompleteTaskStatus();
     await seedStateAtBuild();
 
+    const emittedTypes: string[] = [];
+    events.on('zero_work_product', (evt) => {
+      emittedTypes.push(evt.type);
+    });
+
     let buildCalls = 0;
     let secondCallRetryReason: string | undefined;
     const runner: StepRunner = {
@@ -677,11 +682,62 @@ describe('zero-work kickback (#505 TS-16)', () => {
 
     expect(buildCalls).toBeGreaterThanOrEqual(2);
     expect(secondCallRetryReason).toMatch(/zero progress/i);
+    expect(secondCallRetryReason).toContain('Previous attempt made zero progress');
+
+    // #570 guard: the kickback path's own `zero_work_product` event must
+    // still fire post-fix — this is a wholly separate signal from the
+    // attribution judge-lane dispatch that #570 modified.
+    expect(emittedTypes).toContain('zero_work_product');
 
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
     const evidence = await createTaskEvidence(dir);
     expect(evidence.noEvidenceAttempts).toBeGreaterThan(0);
     expect(evidence.noEvidenceReasons).toContain('zero_work_product');
+  });
+
+  it('#570 guard: a progress-making attempt resets the no-evidence counter and emits no zero_work_product event', async () => {
+    writeIncompleteTaskStatus();
+    await seedStateAtBuild();
+
+    const emittedTypes: string[] = [];
+    events.on('zero_work_product', (evt) => {
+      emittedTypes.push(evt.type);
+    });
+
+    let buildCalls = 0;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildCalls++;
+          // First attempt resolves the task — real forward progress, so
+          // resolvedTasksAfter > resolvedTasksBefore and
+          // areAllTasksComplete() is true, which makes
+          // detectZeroWorkProduct short-circuit to false regardless of
+          // HEAD movement (no real git needed — execa is mocked in this
+          // file).
+          writeCompleteTaskStatus();
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      verifyArtifacts: true,
+    });
+
+    await conductor.run();
+
+    expect(emittedTypes).not.toContain('zero_work_product');
+
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const evidence = await createTaskEvidence(dir);
+    expect(evidence.noEvidenceAttempts).toBe(0);
+    expect(evidence.noEvidenceReasons).toEqual([]);
   });
 
   it('does not tag noEvidenceReasons with zero_work_product for an ordinary (non-zero-work) completion-gate miss', async () => {
