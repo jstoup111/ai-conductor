@@ -32,6 +32,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   message now distinguishes a budget inherited from a prior park/unpark cycle from
   fresh no-evidence failures accumulated since the last unpark, so operators can tell
   whether a halt reflects new misses or leftover count (#667).
+- `bin/install` no longer redirects `rtk init`'s stderr to `/dev/null`, which
+  silently swallowed rtk's interactive prompt and made the installer appear to
+  hang with no visible output. The prompt (and any error) now reaches the
+  terminal so the user can respond.
 - Stamped the missing `Owner:` intake marker for the
   `finish-staleness-grep-never-matches-rebase-finish` spec
   (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
