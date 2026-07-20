@@ -276,4 +276,88 @@ describe('gcVersions', () => {
     expect(result.deleted).not.toContain(protectedId);
     expect(await listVersions(storeRoot)).toContain(protectedId);
   });
+
+  it('protectVersionIds: protects exactly the named version among several equally-eligible siblings, deleting all others (guard is not widened)', async () => {
+    const { gcVersions, listVersions } = await loadEngineStore();
+
+    const protectedId = '20260101T000000Z-aaaaaaaaaaaa';
+    const siblingIds = [
+      '20260102T000000Z-bbbbbbbbbbbb',
+      '20260103T000000Z-cccccccccccc',
+      '20260104T000000Z-dddddddddddd',
+    ];
+
+    // Every one of these — the protected version AND its siblings — is
+    // ancient, not current, not live-referenced, and outside keep-K: all
+    // four legacy conditions say "delete" for all of them equally. Only
+    // `protectedId` is named in protectVersionIds.
+    await makeVersion(protectedId, 200 * ONE_DAY_MS);
+    for (const id of siblingIds) {
+      await makeVersion(id, 200 * ONE_DAY_MS);
+    }
+    await makeVersion('20260701T000000Z-eeeeeeeeeeee', 30 * ONE_DAY_MS); // current
+
+    const result = await gcVersions({
+      conductorRoot,
+      currentVersionId: '20260701T000000Z-eeeeeeeeeeee' as any,
+      minAgeMsecs: ONE_DAY_MS,
+      keepLastK: 0,
+      protectVersionIds: [protectedId as any],
+      registryPath,
+      now: NOW,
+      warn: () => {},
+    });
+
+    // The protected version survives...
+    expect(result.deleted).not.toContain(protectedId);
+    // ...but the guard must NOT widen to cover its equally-eligible siblings:
+    // every one of them is deleted exactly as if no guard existed.
+    for (const id of siblingIds) {
+      expect(result.deleted).toContain(id);
+    }
+    expect(result.deletedCount).toBe(siblingIds.length);
+
+    const remaining = await listVersions(storeRoot);
+    expect(remaining).toContain(protectedId);
+    for (const id of siblingIds) {
+      expect(remaining).not.toContain(id);
+    }
+  });
+
+  it('regression: with protectVersionIds absent/empty, the four legacy delete conditions behave exactly as before', async () => {
+    const { gcVersions, listVersions } = await loadEngineStore();
+
+    const currentId = '20260703T120000Z-dddddddddddd';
+    const keptByAgeId = '20260703T060000Z-cccccccccccc'; // too young to delete
+    const referencedId = '20260101T000000Z-eeeeeeeeeeee'; // ancient but live-referenced
+    const eligibleId = '20260601T000000Z-aaaaaaaaaaaa'; // ancient, unreferenced, outside keep-K
+
+    await makeVersion(eligibleId, 30 * ONE_DAY_MS);
+    await makeVersion(referencedId, 30 * ONE_DAY_MS);
+    await makeVersion(keptByAgeId, 6 * 60 * 60 * 1000); // 6 hours old, under minAge
+    await makeVersion(currentId, 0);
+
+    await registerRepoWithPidfile('repo-a', join(storeRoot, referencedId, 'engine'));
+
+    // protectVersionIds explicitly empty — must be a no-op vs. omitting it.
+    const result = await gcVersions({
+      conductorRoot,
+      currentVersionId: currentId as any,
+      minAgeMsecs: ONE_DAY_MS,
+      keepLastK: 1,
+      protectVersionIds: [],
+      registryPath,
+      now: NOW,
+      warn: () => {},
+    });
+
+    expect(result.deleted).toEqual([eligibleId]);
+    expect(result.deletedCount).toBe(1);
+
+    const remaining = await listVersions(storeRoot);
+    expect(remaining).not.toContain(eligibleId);
+    expect(remaining).toContain(referencedId); // condition 2: live-referenced
+    expect(remaining).toContain(keptByAgeId); // condition 3: too young
+    expect(remaining).toContain(currentId); // condition 1: current
+  });
 });
