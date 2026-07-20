@@ -11170,6 +11170,86 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     expect(dispatchedSteps).not.toContain('remediate');
   });
 
+  it('no_task_progress stall (not halt_marker) → remediate IS dispatched with synthesized prompt (#569)', async () => {
+    // #569: no_task_progress stalls should get the same auto-remediation
+    // dispatch that halt_marker stalls already receive. Unlike halt_marker
+    // (where the agent itself writes the question), no_task_progress has no
+    // question authored by the agent — the conductor must synthesize one
+    // from the completion-gate signals (pending tasks, resolved-count
+    // stagnation, lack of evidence) and hand that to /remediate.
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          // On every attempt, resolved task count never advances (stays at 0
+          // resolved out of 1 task) — this forces 'no_task_progress' since
+          // resolvedTasksAfter <= resolvedTasksBefore across attempts.
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Route back to build so the dispatch resolves cleanly.
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Retry build with synthesized guidance.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    // remediate must be dispatched for no_task_progress, same as halt_marker.
+    const remediateCalls = dispatchedSteps.filter((s) => s === 'remediate').length;
+    expect(remediateCalls).toBeGreaterThanOrEqual(1);
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A synthesized prompt must be written for /remediate to consume,
+    // capturing the signals that produced the no_task_progress verdict.
+    const evidenceContent = await readFile(
+      join(dir, '.pipeline/build-stall-question.md'),
+      'utf-8',
+    );
+    expect(evidenceContent).toContain('pending');
+    expect(evidenceContent).toContain('0');
+    expect(evidenceContent).toContain('zero_work_product');
+  });
+
   it('auto-park condition met → park HALT wins, stall branch never runs', async () => {
     // Seed with task evidence counter at threshold (3)
     const res = await readState(statePath);
