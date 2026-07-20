@@ -25,6 +25,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Build dispatches can no longer run attribution-blind — a pre-dispatch invariant
+  now fails loudly (skips/fails the dispatch, writing `.pipeline/HALT` after 2
+  attempts) when attribution machinery is broken (missing `task-status.json`,
+  uninstalled session hooks, unwritable stamp path), and a loud
+  `unattributed_dispatch` event surfaces unattributed-dispatch streaks at the
+  build seam via `readDispatchAttribution`/`detectUnattributedDispatch`, instead
+  of silently deferring to the evidence gate. `Task: none` is now treated as an
+  error signal to watch for, not silently tolerated (#671).
 - `conduct daemon unpark` now resets the no-evidence budget
   (`noEvidenceAttempts`/`noEvidenceReasons`) for both operator- and auto-parked features
   instead of only auto-parked ones, so an operator-unparked feature also gets a fresh

@@ -769,6 +769,31 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 
 **Evidence as source of truth:** The `evidenceStamps` in `.pipeline/task-evidence.json` are the single source of truth for task completion. On every stamp write and at the end of each derived-completion pass, `.pipeline/task-status.json` rows are automatically reconciled from stamps, ensuring rows never lag behind evidence.
 
+#### Build dispatches must not run attribution-blind (#671)
+
+Before this hardening, a build step whose attribution machinery was silently
+broken (e.g. `task-status.json` missing, session hooks not installed, the
+stamp path unwritable) could still dispatch — every sub-dispatch would land
+as `Task: none`, and the gap was only visible later, at the evidence gate.
+Two engine-side safeguards close that gap at the build seam itself:
+
+- **`readDispatchAttribution(root)`** (`src/engine/attribution-enforcement.ts`)
+  parses `.pipeline/dispatch-count` and splits it into `{ attributed,
+  unattributed, taskIds }`, rather than a single opaque count.
+- **`detectUnattributedDispatch(attribution, threshold)`** flags when a
+  dispatch cycle's unattributed count crosses the threshold; the conductor
+  emits a loud `unattributed_dispatch` event during/right after dispatch,
+  instead of deferring discovery to the evidence gate.
+- **`checkAttributionMachineryIntact()`** (`src/engine/conductor.ts`) is a
+  pre-dispatch guard: when attribution enforcement is configured
+  (`isEnforcementConfigured`) and the build step's attribution machinery is
+  broken, the build dispatch is skipped/fails loudly rather than proceeding
+  attribution-blind, and `.pipeline/HALT` is written after 2 failed attempts.
+
+Hook-lane contracts (`git-hook-assets.ts`, `session-hook-assets.ts`) are
+unchanged by this — abstention still exits 0 with no trailer, and no code
+path guesses a task id on the agent's behalf.
+
 #### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
 
 The deterministic evidence gate (trailers, path corroboration) is the sole
