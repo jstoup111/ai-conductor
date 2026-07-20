@@ -559,7 +559,7 @@ export async function runDaemon(
       try {
         await deps.sweepObservationWatch();
       } catch (err) {
-        log(`[daemon] observation sweep failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
+        log(`[daemon] sweepObservationWatch error (continuing): ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   };
