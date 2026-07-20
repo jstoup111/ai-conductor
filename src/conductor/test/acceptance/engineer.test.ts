@@ -84,8 +84,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  process.env.AI_CONDUCTOR_REGISTRY = savedEnv.AI_CONDUCTOR_REGISTRY;
-  process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv.AI_CONDUCTOR_ENGINEER_DIR;
+  if (savedEnv.AI_CONDUCTOR_REGISTRY === undefined) delete process.env.AI_CONDUCTOR_REGISTRY;
+  else process.env.AI_CONDUCTOR_REGISTRY = savedEnv.AI_CONDUCTOR_REGISTRY;
+  if (savedEnv.AI_CONDUCTOR_ENGINEER_DIR === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
+  else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv.AI_CONDUCTOR_ENGINEER_DIR;
   await rm(workDir, { recursive: true, force: true });
 });
 
@@ -611,5 +613,17 @@ describe('Scenario 7: non-autonomy gate + measurable flywheel', () => {
     await ledger.record('alpha', 'only');
     const trend = await computeFlywheelTrend(createReader(), ledger);
     expect(trend.direction).toBe('insufficient_data');
+  });
+
+  it('poisoned AI_CONDUCTOR_ENGINEER_DIR="undefined" makes the ledger throw instead of writing under cwd (#574)', async () => {
+    process.env.AI_CONDUCTOR_ENGINEER_DIR = 'undefined';
+    try {
+      const mkLedger = requireFn(await load(TREND_MOD), 'createAuthoredLedger');
+      const ledger = mkLedger();
+      await expect(ledger.record('p', 'f')).rejects.toThrow();
+      await expect(access(join(process.cwd(), 'undefined'))).rejects.toThrow();
+    } finally {
+      process.env.AI_CONDUCTOR_ENGINEER_DIR = 'undefined'; // restored by afterEach below
+    }
   });
 });
