@@ -1688,8 +1688,10 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
       join(dir, '.pipeline', 'task-evidence.json'),
       JSON.stringify({
         evidenceStamps: {
-          '1': { sha: 'abc1234567890123456789012345678901234567' },
+          '1': { sha: 'abc1234567890123456789012345678901234567', form: 'commit' },
         },
+        noEvidenceAttempts: 0,
+        migrationGrandfather: [],
       }),
       'utf-8',
     );
