@@ -120,3 +120,82 @@ describe('deriveCompletion branch-aware corroboration: exact/suffix then dirname
     expect(result['1']?.completed).toBe(true);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: evidence stamp `form` reflects which corroboration branch
+// satisfied the task (#707 Task 3).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion evidence stamp form: trailer vs trailer-dirname (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  async function commitFile(relPath: string, body: string, taskTrailer: string): Promise<void> {
+    const abs = join(root, relPath);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    await git('add', '.');
+    await git('commit', '-q', '-m', `feat: work\n\nTask: ${taskTrailer}\n`);
+  }
+
+  async function derive(planPath: string) {
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+    await deriveCompletion(root, planPath, '', commits, evidence);
+    return evidence;
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-form-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('stamps form: trailer-dirname when credited via the bounded dirname pass', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    await commitFile('src/conductor/src/engine/other.ts', 'export const x = 1;', '1');
+
+    const evidence = await derive(planPath);
+    expect(evidence.evidenceStamps.get('1')?.form).toBe('trailer-dirname');
+  });
+
+  it('stamps form: trailer when credited via exact/suffix corroboration', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+- \`push-evidence.ts\`
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    await commitFile('src/conductor/src/engine/push-evidence.ts', 'export const x = 1;', '1');
+
+    const evidence = await derive(planPath);
+    expect(evidence.evidenceStamps.get('1')?.form).toBe('trailer');
+  });
+});

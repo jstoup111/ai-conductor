@@ -793,6 +793,7 @@ async function deriveCompletionInternal(
     // filesForCommit returns [] when git cannot resolve the sha — such
     // candidates must never mask a reachable satisfying one.
     let satisfyingSha: string | null = null;
+    let satisfyingForm: string = 'trailer';
     let newestNonEmpty: { sha: string; files: string[] } | null = null;
     for (const candidate of matchingCommits) {
       const filesInCommit = await filesForCommit(projectRoot, candidate.sha);
@@ -802,12 +803,14 @@ async function deriveCompletionInternal(
       if (!hasPlanFiles) {
         // Task has no specific paths; trailer alone is enough
         satisfyingSha = candidate.sha;
+        satisfyingForm = 'trailer';
         break;
       }
 
       const match = corroborationMatch(filesInCommit, taskPaths!);
       if (match) {
         satisfyingSha = candidate.sha;
+        satisfyingForm = match === 'dirname' ? 'trailer-dirname' : 'trailer';
         break;
       }
     }
@@ -816,7 +819,7 @@ async function deriveCompletionInternal(
       result[taskId].completed = true;
       result[taskId].status = 'completed';
       result[taskId].evidencedBy = satisfyingSha;
-      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: 'trailer' });
+      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: satisfyingForm });
       continue;
     }
 
