@@ -1115,6 +1115,41 @@ describe('parsePlanTaskVerifyOnly', () => {
     expect(verifyOnlyResult.get('1') ?? false).toBe(false);
     expect(verifyOnlyResult.get('2') ?? false).toBe(false);
   });
+
+  // Regression (Task 2, verify-only-prove-closed-task-evidence plan): the new
+  // `**Verify-only:**` marker grammar (Task 1) must be inert against the
+  // existing committed plan corpus, none of which carries the marker. Sweeps
+  // representative real fixtures under .docs/plans/ — spanning both header
+  // grammars (`### Task N:` and bare `### T<N>` shorthand) — and asserts
+  // parsePlanTaskVerifyOnly yields zero true entries and parsePlanTaskPaths'
+  // output is unchanged (snapshotted) for the same plan text.
+  describe('regression: existing plan corpus (no markers) is inert', () => {
+    const fixtures = [
+      '2026-07-12-rtk-hook-preservation.md',
+      '2026-06-30-daemon-owner-gate.md',
+      '2026-07-03-daemon-issue-priority-scheduling.md',
+      '2026-07-05-changelog-migration-block-enforcement.md',
+    ];
+
+    it.each(fixtures)('%s: zero verify-only true entries, unchanged parsePlanTaskPaths', async (fixture) => {
+      const mod = await loadAutoheal();
+      const fixturePath = join(__dirname, '../../../../.docs/plans/', fixture);
+      const planText = await readFile(fixturePath, 'utf-8');
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.size).toBeGreaterThan(0);
+
+      const serializedPaths = Array.from(pathsResult.entries()).map(([id, paths]) => [
+        id,
+        Array.from(paths).sort(),
+      ]);
+      expect(serializedPaths).toMatchSnapshot('parsePlanTaskPaths');
+
+      const verifyOnlyResult = mod.parsePlanTaskVerifyOnly(planText);
+      const trueEntries = Array.from(verifyOnlyResult.entries()).filter(([, v]) => v === true);
+      expect(trueEntries).toEqual([]);
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
