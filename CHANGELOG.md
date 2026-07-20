@@ -50,6 +50,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Source-Ref jstoup111/ai-conductor#587), ungating it from the owner gate's
   `unowned-post-cutover` hold.
 - `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+- Fresh build dispatch no longer false-halts with "Attribution machinery broken:
+  .pipeline/task-status.json is missing" — the pre-dispatch attribution-machinery
+  guard now seeds `task-status.json` from the committed plan
+  (`seedAndCheckAttributionMachinery`) before evaluating, instead of tripping on a
+  fresh/legitimate dispatch where the plan exists and machinery is otherwise intact
+  (#692).
 
 ### Added
 - Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
