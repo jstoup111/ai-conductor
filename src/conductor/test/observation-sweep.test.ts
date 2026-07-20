@@ -15,6 +15,15 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
   return fn as (...args: any[]) => any;
 }
 
+/**
+ * Format a timestamp as an ISO string without milliseconds, matching the
+ * `YYYY-MM-DDTHH:MM:SSZ` format daemon.log lines use (and that
+ * findObservation's timestamp regex expects).
+ */
+function isoNoMs(ms: number): string {
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 describe('observation-sweep', () => {
   describe('awaiting-merge state machine', () => {
     let mod: Record<string, unknown>;
@@ -353,11 +362,11 @@ describe('observation-sweep', () => {
         JSON.stringify(entry) + '\n',
       );
 
-      // Write fake daemon.log with matching observation
+      // Write fake daemon.log with matching observation, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
-2026-07-11T10:10:00Z [daemon] continuing
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] test-fixed: bug is fixed now
+${isoNoMs(mergedAt + 10000)} [daemon] continuing
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -427,10 +436,10 @@ describe('observation-sweep', () => {
         JSON.stringify(entry) + '\n',
       );
 
-      // Write fake daemon.log with matching observation
+      // Write fake daemon.log with matching observation, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] test-fixed: bug is fixed now
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -491,10 +500,10 @@ describe('observation-sweep', () => {
         JSON.stringify(entry) + '\n',
       );
 
-      // Write fake daemon.log with matching observation
+      // Write fake daemon.log with matching observation, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] test-fixed: bug is fixed now
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -566,11 +575,11 @@ describe('observation-sweep', () => {
         JSON.stringify(recentScanEntry) + '\n' + JSON.stringify(dueScanEntry) + '\n',
       );
 
-      // Write fake daemon.log with matching observations
+      // Write fake daemon.log with matching observations, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed
-2026-07-11T10:10:00Z [daemon] test-fixed-2: another bug is fixed
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] test-fixed: bug is fixed
+${isoNoMs(mergedAt + 10000)} [daemon] test-fixed-2: another bug is fixed
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -626,10 +635,10 @@ describe('observation-sweep', () => {
         JSON.stringify(entry) + '\n',
       );
 
-      // Write fake daemon.log with matching observation
+      // Write fake daemon.log with matching observation, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] test-fixed: bug is fixed now
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] test-fixed: bug is fixed now
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -937,11 +946,11 @@ Another line without timestamp test-substring
         JSON.stringify(entry) + '\n',
       );
 
-      // Write daemon.log with matching observation (hardcoded ISO string without milliseconds)
+      // Write daemon.log with matching observation, timestamped after mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-11T10:00:00Z [daemon] starting
-2026-07-11T10:05:00Z [daemon] observed-sig: fix was observed in production
-2026-07-11T10:10:00Z [daemon] continuing
+      const logContent = `${isoNoMs(mergedAt + 1000)} [daemon] starting
+${isoNoMs(mergedAt + 5000)} [daemon] observed-sig: fix was observed in production
+${isoNoMs(mergedAt + 10000)} [daemon] continuing
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
@@ -1074,10 +1083,10 @@ Another line without timestamp test-substring
         JSON.stringify(entry) + '\n',
       );
 
-      // Write daemon.log with observation timestamped during window (hardcoded ISO without ms)
+      // Write daemon.log with observation timestamped during window, relative to mergedAt
       const logDir = path.join(tempDir, '.daemon');
-      const logContent = `2026-07-04T10:00:00Z [daemon] late-observed-sig: fix was in production
-2026-07-11T10:00:00Z [daemon] continuing
+      const logContent = `${isoNoMs(mergedAt + 86400000)} [daemon] late-observed-sig: fix was in production
+${isoNoMs(mergedAt + 2 * 86400000)} [daemon] continuing
 `;
       await fs.writeFile(path.join(logDir, 'daemon.log'), logContent);
 
