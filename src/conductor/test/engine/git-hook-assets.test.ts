@@ -399,6 +399,50 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).not.toBe(0);
     });
 
+    it('lands an empty commit with a Task: trailer plus Evidence: skipped <reason> and no Evidence: satisfied-by', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped evidence with task trailer\n\nTask: 1\nEvidence: skipped covered by task 2 (a2cde88)',
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('rejects an empty commit with Evidence: skipped and an empty/whitespace-only reason', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped with blank reason\n\nTask: 1\nEvidence: skipped    ',
+      );
+      expect(res.code).not.toBe(0);
+    });
+
+    it('lands an empty commit with Evidence: skipped <reason> and no Task: trailer', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped evidence, no task trailer\n\nEvidence: skipped covered by task 2 (a2cde88)',
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects an empty commit with an unresolvable Evidence: satisfied-by sha (unchanged behavior)', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: unresolvable satisfied-by\n\nEvidence: satisfied-by 0000000000000000000000000000000000000000',
+      );
+      expect(res.code).not.toBe(0);
+    });
+
     it('lands a non-empty, trailer-less commit when CONDUCT_ENGINE_COMMIT=1 and the marker is present', async () => {
       await writeMarker();
       await writeFile(join(repoDir, 'engine.txt'), 'engine', 'utf-8');
