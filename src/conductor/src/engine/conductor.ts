@@ -36,7 +36,8 @@ import {
   type NoVerdictOutcome,
 } from './group-core.js';
 import { evaluateWhen } from './when-expression.js';
-import type { HarnessConfig } from '../types/config.js';
+import type { HarnessConfig, EffortLevel } from '../types/config.js';
+import { escalateAttempt } from './escalation.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
@@ -328,6 +329,16 @@ export interface StepRunOptions {
    * steps, where resume is derived from the runner's own session state.
    */
   resume?: boolean;
+  /**
+   * Retry-as-escalation per-attempt overrides (#188). When set, the runner
+   * dispatches at this model/effort instead of the step's resolved base. The
+   * conductor computes them from `escalateAttempt(base, attempt, escalate)` on
+   * each attempt; the runner still routes `modelOverride` through
+   * `ModelAvailability.effectiveModel` so the escalated tier composes with the
+   * #186 availability ladder. Absent on attempt 1 / when `escalate:false`.
+   */
+  modelOverride?: string;
+  effortOverride?: EffortLevel;
 }
 
 export interface StepRunner {
@@ -2772,6 +2783,20 @@ export class Conductor {
         while (attempt < stepMaxRetries) {
           attempt++;
 
+          // #188 retry-as-escalation: recompute the per-attempt (model, effort)
+          // as a pure function of the 1-based `attempt`. Attempt 1 returns the
+          // base; attempt 2 bumps effort; attempt 3+ bumps the model tier. It
+          // derives from `attempt`, so the non-consuming `attempt--; continue`
+          // paths (rate-limit, stale session, auth park) re-run at the SAME rung
+          // (S10). The model target still routes through effectiveModel in the
+          // step runner, so it composes with the #186 availability ladder (S8).
+          const esc = escalateAttempt(
+            resolved.model,
+            resolved.effort,
+            attempt,
+            resolved.escalate,
+          );
+
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
           // started immediately before the build step's await and stopped in a
           // `finally` so it can never outlive the attempt, regardless of which
@@ -2860,7 +2885,11 @@ export class Conductor {
                     ? await this.runRebaseStep(state)
                     : this.isSelfBuild() && step.name === 'build'
                       ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                      : await this.stepRunner.run(step.name, state, { retryReason: retryHint });
+                      : await this.stepRunner.run(step.name, state, {
+                          retryReason: retryHint,
+                          modelOverride: esc.model,
+                          effortOverride: esc.effort,
+                        });
           } finally {
             buildWatcher?.stop();
             if (markerActive) {
