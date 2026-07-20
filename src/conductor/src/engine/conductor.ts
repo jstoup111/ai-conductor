@@ -581,7 +581,10 @@ function stepHasCompletionCheck(step: StepName): boolean {
  * dispatch. Returns a diagnostic naming the broken piece, or `null` when
  * intact.
  */
-async function checkAttributionMachineryIntact(projectRoot: string): Promise<string | null> {
+export async function checkAttributionMachineryIntact(
+  projectRoot: string,
+  opts?: { planResolvable?: boolean },
+): Promise<string | null> {
   const pipelineDir = join(projectRoot, '.pipeline');
 
   // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
@@ -597,6 +600,13 @@ async function checkAttributionMachineryIntact(projectRoot: string): Promise<str
   const taskStatusPath = join(pipelineDir, 'task-status.json');
   const taskStatusOk = await accessFile(taskStatusPath).then(() => true).catch(() => false);
   if (!taskStatusOk) {
+    if (opts?.planResolvable === false) {
+      return (
+        `Attribution machinery broken: plan could not be resolved — cannot ` +
+        `seed task-status.json.\n` +
+        `Check .docs/plans/ for an unambiguous plan artifact.`
+      );
+    }
     return (
       `Attribution machinery broken: .pipeline/task-status.json is missing.\n` +
       `Build dispatch requires task-status.json to be seeded and the ` +

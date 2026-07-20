@@ -34,7 +34,7 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor, checkAttributionMachineryIntact } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { runAttributionLane } from '../../src/engine/attribution-lane.js';
@@ -1569,5 +1569,22 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
       // clean up the temp directory.
       await chmod(currentTaskPath, 0o644);
     }
+  });
+
+  it('task-status.json absent + plan unresolvable → diagnostic names the plan, not task-status.json', async () => {
+    // Session hooks present and stamp path writable — only task-status.json
+    // is missing, and the caller has already determined the plan itself
+    // could not be resolved (ambiguous/missing plan artifact), not merely
+    // that seeding hasn't happened yet.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const diagnostic = await checkAttributionMachineryIntact(dir, { planResolvable: false });
+
+    expect(diagnostic).not.toBeNull();
+    expect(diagnostic).toMatch(/plan/i);
+    expect(diagnostic).not.toContain('task-status.json is missing');
   });
 });
