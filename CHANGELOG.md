@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- `architecture-review` skill: tightened the ADR-naming rule with explicit
+  WRONG/RIGHT examples and the heading convention (`# ADR:`, no number), after a
+  spec authored `adr-0001-…`/`adr-0002-…` in violation of the existing date-based
+  convention. A deterministic gate to reject number-named ADRs is captured in
+  intake #705.
+
 ### Added
 
 - Spec for issue #677 — verify-only (prove-closed) plan tasks get a
