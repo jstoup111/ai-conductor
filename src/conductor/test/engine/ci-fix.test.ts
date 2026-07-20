@@ -772,11 +772,72 @@ describe('ci-fix: productionCiFixRunner delegates to injected StepRunner dispatc
       }): Promise<{ kind: string }>;
     };
 
-    const outcome = await runner.run({ worktreePath, hint, entry, dispatcher: fakeDispatcher });
+    // test/setup.ts globally sets AI_CONDUCTOR_NO_REAL_EXEC so no test ever
+    // triggers a real exec by accident. That's exactly the kill-switch this
+    // runner honors (see the T7 regression test below), so to observe the
+    // dispatcher actually being invoked, this test must opt out of the
+    // global kill-switch for its own duration and restore it afterward.
+    const savedKillSwitch = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    let outcome: { kind: string };
+    try {
+      outcome = await runner.run({ worktreePath, hint, entry, dispatcher: fakeDispatcher });
+    } finally {
+      if (savedKillSwitch !== undefined) process.env.AI_CONDUCTOR_NO_REAL_EXEC = savedKillSwitch;
+    }
 
     expect(outcome).toEqual({ kind: 'changed' });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual({ worktreePath, hint, entry });
+  });
+});
+
+// ── T7: AI_CONDUCTOR_NO_REAL_EXEC still short-circuits the dispatcher seam ──
+//
+// CF-1 (above) rewired `productionCiFixRunner` to delegate to an injected
+// StepRunner-backed dispatcher instead of shelling out via execa. This test
+// makes explicit that the kill-switch check still runs BEFORE the dispatcher
+// is invoked, so setting AI_CONDUCTOR_NO_REAL_EXEC continues to prevent any
+// fix session — real or dispatcher-mediated — from being dispatched.
+describe('ci-fix: productionCiFixRunner honors AI_CONDUCTOR_NO_REAL_EXEC against the dispatcher seam (T7)', () => {
+  it('never invokes the injected dispatcher and returns a noop outcome when the kill-switch is set', async () => {
+    // test/setup.ts already sets this globally; assert explicitly for clarity
+    // and to survive any future change to that global default.
+    expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeTruthy();
+
+    const calls: Array<{ worktreePath: string; hint: string; entry: WatchEntry }> = [];
+    const fakeDispatcher = {
+      resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: WatchEntry }) => {
+        calls.push(ctx);
+        return { kind: 'changed' as const };
+      },
+    };
+
+    const entry: WatchEntry = {
+      prUrl: 'https://github.com/foo/bar/pull/42',
+      slug: 'foo/bar#42',
+      repoCwd: '/fake/repo',
+      ciFixAttempts: 0,
+    };
+
+    const runner = productionCiFixRunner as unknown as {
+      run(opts: {
+        worktreePath: string;
+        hint: string;
+        entry: WatchEntry;
+        dispatcher?: typeof fakeDispatcher;
+      }): Promise<{ kind: string }>;
+    };
+
+    const outcome = await runner.run({
+      worktreePath: '/fake/repo/.worktrees/ci-fix-foo-bar-42',
+      hint: 'CI checks failed: build',
+      entry,
+      dispatcher: fakeDispatcher,
+    });
+
+    expect(outcome).toEqual({ kind: 'noop' });
+    expect(calls).toHaveLength(0);
   });
 });
 
