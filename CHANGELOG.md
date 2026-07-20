@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Spec for issue #569 — build-stall auto-remediation now also fires for
+  `no_task_progress` (zero-work) stalls, not only `halt_marker` stalls: a
+  synthesized remediation prompt (from the completion-gate reason, the stall
+  transition, and the `zero_work_product` no-evidence tag) is routed through the
+  same `/remediate` dispatch, bounded by the shared `MAX_KICKBACKS_PER_GATE`
+  budget, with the durable no-evidence counter still owning the terminal
+  HALT/park decision; also a distinct terminal HALT reason for a stalled build
+  instead of the misleading generic "retries exhausted"
+  (`.docs/plans/build-stall-remediation-skips-no-task-progress.md`).
 - Spec for issue #671 — build dispatches must not run attribution-blind: a
   deterministic pre-dispatch invariant on the attribution machinery, a loud
   unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
