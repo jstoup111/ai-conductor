@@ -1785,4 +1785,114 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     // The newly-appearing plan task should be seeded as pending.
     expect(task2?.status).toBe('pending');
   });
+
+  /**
+   * Task 6 (#676 follow-up): regression locks proving the seam's real
+   * protection still holds after Task 5's seeding change, plus a check that
+   * enforcement-off scoping was untouched by that change.
+   */
+
+  it('(a) session-hooks missing → seedAndCheckAttributionMachinery still returns the session-hooks diagnostic unchanged', async () => {
+    // task-status.json present (so the seed path is a no-op / not the thing
+    // under test) but session-hooks/ absent entirely.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
+
+    expect(diagnostic).not.toBeNull();
+    expect(diagnostic).toMatch(/session-hooks|session hooks/i);
+  });
+
+  it('(b) stamp path unwritable → seedAndCheckAttributionMachinery still returns the stamp-path diagnostic unchanged', async () => {
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const currentTaskPath = join(dir, '.pipeline', 'current-task');
+    await writeFile(currentTaskPath, 'Task: 1\n', 'utf-8');
+    await chmod(currentTaskPath, 0o444);
+
+    try {
+      const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
+
+      expect(diagnostic).not.toBeNull();
+      expect(diagnostic).toMatch(/current-task|stamp path|writable/i);
+    } finally {
+      await chmod(currentTaskPath, 0o644);
+    }
+  });
+
+  it('(c) no .pipeline/ dir at all → checkAttributionMachineryIntact returns null (benign, no false HALT)', async () => {
+    // A fresh project root with no .pipeline/ directory whatsoever — the
+    // documented "nothing to attribute against yet" case.
+    const freshDir = await mkdtemp(join(tmpdir(), 'attribution-no-pipeline-dir-'));
+    try {
+      const diagnostic = await checkAttributionMachineryIntact(freshDir);
+      expect(diagnostic).toBeNull();
+    } finally {
+      await rm(freshDir, { recursive: true, force: true });
+    }
+  });
+
+  it('(d) enforcement NOT configured → the build seam never invokes seedAndCheckAttributionMachinery (no pre-dispatch seed side effect)', async () => {
+    // No .pipeline/ at all, and deliberately no attribution_enforcement_cutover
+    // in config — isEnforcementConfigured must be false, so the seam's guard
+    // condition (`step.name === 'build' && isEnforcementConfigured(this.config)`)
+    // must short-circuit to null without ever calling
+    // seedAndCheckAttributionMachinery, meaning no .pipeline/ dir or
+    // task-status.json gets created as a side effect of dispatching build.
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = 'enforcement-off-fixture';
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      // No attribution_enforcement_cutover — enforcement not configured.
+      config: {} as HarnessConfig,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(true);
+
+    // No seeding side effect: task-status.json must NOT have been created by
+    // the seam (seedAndCheckAttributionMachinery was never invoked). Note:
+    // dir already has .pipeline/ from beforeEach, so we check specifically
+    // that the seeding write never happened.
+    const taskStatusExists = await readFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(taskStatusExists).toBeNull();
+  });
 });
