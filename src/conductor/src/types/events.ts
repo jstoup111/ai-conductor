@@ -33,6 +33,15 @@ export type ConductorEvent =
       reason: string;
       resolvedBefore?: number;
       resolvedAfter?: number;
+      /**
+       * #188 retry-as-escalation: the (model, effort) the UPCOMING attempt
+       * (`attempt` above) will dispatch at, per the escalation ladder. Absent
+       * on a `escalate:false` step (identical retry — no movement to record) and
+       * on pre-#188 event logs (backward-compatible; `aggregateRetryHotspots`
+       * tolerates their absence).
+       */
+      escalatedModel?: string;
+      escalatedEffort?: string;
     }
   | {
       // #646: rerun-vs-route classification, emitted on every classifier-

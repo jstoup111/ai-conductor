@@ -8445,8 +8445,10 @@ describe('engine/conductor', () => {
       expect(hintedRuns.length).toBeGreaterThan(0);
     });
 
-    it('honors per-step default retries (e.g. explore → 5)', async () => {
-      // Pre-populate state so we start at explore (DEFAULT_STEP_RETRIES.explore=5).
+    it('honors per-step default retries (e.g. explore → 3)', async () => {
+      // Pre-populate state so we start at explore. #188 retry-as-escalation
+      // dropped DEFAULT_STEP_RETRIES.explore from 5 → 3 (a retry now escalates
+      // effort/model instead of repeating an identical attempt).
       await writeState(statePath, {
         bootstrap: 'done',
         memory: 'done',
@@ -8471,8 +8473,8 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // explore default is 5 retries
-      expect(attempts).toBe(5);
+      // explore default is now 3 retries (#188)
+      expect(attempts).toBe(3);
     });
   });
 

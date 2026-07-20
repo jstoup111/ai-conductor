@@ -20,6 +20,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
+  of repeating an identical attempt. A new pure `escalateAttempt` (with
+  `EFFORT_ORDER`, `MODEL_TIER_ORDER`, `bumpEffort`, `bumpModel` in
+  `engine/escalation.ts`) transforms the resolved base `(model, effort)` by the
+  1-based attempt: attempt 2 bumps effort one level, attempt 3+ bumps the model
+  one tier (both capped at the top rung). The bumped model still routes through
+  the #186 availability ladder (`ModelAvailability.effectiveModel`), so a dead
+  escalated tier is substituted with a live one. A new per-step
+  `escalate?: boolean` config knob (default true; also valid at `phases`/
+  `defaults`) opts out to pin the base config across retries. The `step_retry`
+  event gains optional `escalatedModel`/`escalatedEffort` (the upcoming
+  attempt's rung) and `aggregateRetryHotspots` surfaces the terminal rung for
+  retro Part C (`.docs/plans/retry-as-escalation.md`).
 - Spec for issue #677 — verify-only (prove-closed) plan tasks get a
   deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
   the judged attribution lane for marked residue tasks (dark-cutover-safe),
@@ -58,6 +71,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   provenance) and the auto-park halt message distinguishes an inherited
   budget from fresh failures
   (`.docs/plans/noevidenceattempts-persists-across-unpark-so-re-di.md`).
+
+### Changed
+
+- Issue #188 — deep-step retry budgets reduced from 5 to 3 for `explore`, `prd`,
+  `plan`, and `build` (`DEFAULT_STEP_RETRIES`). Because a retry now escalates
+  (effort, then model tier) rather than repeating an identical attempt, five
+  identical retries were wasteful; 3 is the floor that still reaches the
+  attempt-3 model-bump rung. `architecture_review` is out of scope and stays 5.
+
+## Migration
+
+Retry-as-escalation (#188) is **on by default** — existing pipelines begin
+escalating `(model, effort)` on retry and deep-step retry budgets drop 5 → 3.
+This is a behavior change, not a schema break: `escalate` is a new **optional**
+`HarnessConfig` field (in `.ai-conductor/config.yml`, not `settings.json`), fully
+back-compatible, so no `bin/migrate` step is required. To preserve the exact
+pre-#188 identical-retry behavior for a step, pin it off:
+
+```yaml
+# .ai-conductor/config.yml
+steps:
+  build:
+    escalate: false   # every retry reuses the base (model, effort)
+```
+
+`escalate: false` is also accepted at `phases.<PHASE>` and `defaults` to opt a
+whole phase or the entire pipeline out. Restoring the old budgets is independent:
+set `steps.<step>.max_retries: 5` where desired.
 
 ### Fixed
 

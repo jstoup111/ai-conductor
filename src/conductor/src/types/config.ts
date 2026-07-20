@@ -74,6 +74,13 @@ export interface StepConfig {
   /** Skip this step entirely. Built-in gating/structural steps cannot be disabled. */
   disable?: boolean;
 
+  /**
+   * Retry-as-escalation opt-out (#188). Default true: on retry the step climbs
+   * the escalation ladder (effort, then model tier). Set false to pin the base
+   * model/effort across every retry (identical-retry, pre-#188 behavior).
+   */
+  escalate?: boolean;
+
   /** Replace the default SKILL.md file with this path. */
   skill?: string;
 
@@ -141,6 +148,8 @@ export interface PhaseConfig {
   model?: string;
   effort?: EffortLevel;
   max_retries?: number;
+  /** Retry-as-escalation opt-out for every step in the phase (#188). Default true. */
+  escalate?: boolean;
   by_tier?: Partial<Record<ComplexityTier, TierOverride>>;
 }
 
@@ -151,6 +160,8 @@ export interface DefaultsConfig {
   model?: string;
   effort?: EffortLevel;
   max_retries?: number;
+  /** Retry-as-escalation opt-out for every step (#188). Default true. */
+  escalate?: boolean;
 }
 
 /**

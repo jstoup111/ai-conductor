@@ -381,7 +381,22 @@ export class DefaultStepRunner implements StepRunner {
     const branchSessionId = opts?.sessionId;
     const resume = branchSessionId !== undefined ? (opts?.resume ?? false) : this.sessionStarted;
     const autonomous = AUTONOMOUS_STEPS.has(step);
-    const resolved = this.resolvedConfigFor(step, state.complexity_tier);
+    const baseResolved = this.resolvedConfigFor(step, state.complexity_tier);
+
+    // #188 retry-as-escalation: the conductor computes per-attempt model/effort
+    // overrides via escalateAttempt(base, attempt, escalate) and passes them
+    // here. Layer them over the resolved base without mutating it. The escalated
+    // model still flows through modelAvailability.effectiveModel() below (both
+    // the autonomous and interactive dispatch paths read resolved.model), so an
+    // escalated tier that is dead is substituted by the #186 availability ladder.
+    const resolved: ResolvedStepConfig =
+      opts?.modelOverride !== undefined || opts?.effortOverride !== undefined
+        ? {
+            ...baseResolved,
+            model: opts.modelOverride ?? baseResolved.model,
+            effort: opts.effortOverride ?? baseResolved.effort,
+          }
+        : baseResolved;
 
     const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
 
