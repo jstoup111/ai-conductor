@@ -199,3 +199,80 @@ describe('deriveCompletion evidence stamp form: trailer vs trailer-dirname (#707
     expect(evidence.evidenceStamps.get('1')?.form).toBe('trailer');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveCompletion: #445 non-regression — ancestor-dir-only and repo-root-only
+// commits must NOT be credited by the bounded dirname pass (#707 Task 4).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('deriveCompletion #445 non-regression: ancestor/repo-root do not corroborate (#707)', () => {
+  let root: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execa('git', args, { cwd: root });
+  }
+
+  async function commitFile(relPath: string, body: string, taskTrailer: string): Promise<void> {
+    const abs = join(root, relPath);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    await git('add', '.');
+    await git('commit', '-q', '-m', `feat: work\n\nTask: ${taskTrailer}\n`);
+  }
+
+  async function derive(planPath: string) {
+    const commits = await listCommitsWithTrailers(root);
+    const evidence = await createTaskEvidence(root);
+    return deriveCompletion(root, planPath, '', commits, evidence);
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'corr-nonregression-'));
+    resetDeriveWarnOnce();
+    await git('init', '-q', '-b', 'main');
+    await git('config', 'user.email', 't@t');
+    await git('config', 'user.name', 't');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function writePlan(planPath: string): Promise<void> {
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+  }
+
+  it('a commit touching only an ancestor directory (not the immediate dir) is NOT credited', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await writePlan(planPath);
+
+    // src/conductor/src is an ancestor of src/conductor/src/engine (the
+    // immediate dir of the declared path), not the immediate dir itself.
+    await commitFile('src/conductor/src/cli.ts', 'export const x = 1;', '1');
+
+    const result = await derive(planPath);
+    expect(result['1']?.completed).toBeFalsy();
+  });
+
+  it('a commit touching only repo-root files (README.md, VERSION) is NOT credited', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await writePlan(planPath);
+
+    await writeFile(join(root, 'README.md'), '# readme');
+    await writeFile(join(root, 'VERSION'), '0.0.1');
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'feat: work\n\nTask: 1\n');
+
+    const result = await derive(planPath);
+    expect(result['1']?.completed).toBeFalsy();
+  });
+});
