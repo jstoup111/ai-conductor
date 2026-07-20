@@ -864,6 +864,11 @@ pipeline. This prevents accidental typos and makes the CLI more discoverable:
 - **Conduct-TS forwarded verbs are documented:** Verbs like `daemon`, `render-diagrams`, 
   `engineer`, etc. are forwarded to conduct-ts if it's available on PATH. Run `conduct --help` 
   to see the full list.
+- **`engineer` subcommand help and unknown-flag rejection:** every `conduct-ts engineer
+  <subcommand> --help`/`-h` prints usage with zero side effects (no registry read, no
+  worktree/ledger mutation, no `gh` call) instead of executing the subcommand, and an
+  unrecognized flag on any `engineer` subcommand is now rejected (exit 1) instead of being
+  silently ignored. See `src/conductor/README.md` for the full subcommand reference.
 
 For details, see [Unknown-Command Guard](https://github.com/anthropics/ai-conductor#unknown-command-guard).
 

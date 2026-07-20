@@ -2737,6 +2737,13 @@ the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an o
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
 
+**Subcommand `--help`/`-h` and unknown-flag rejection.** Every `conduct-ts engineer <subcommand>`
+(including `resolve` and `migrate-issue-deps`) short-circuits on `--help`/`-h`: it prints usage text
+for that subcommand and exits **with zero side effects** — no registry read, no worktree/ledger
+mutation, no `gh` call — instead of executing the subcommand. An unrecognized flag passed to any
+`engineer` subcommand is now **rejected** (exit 1, clear stderr, zero state mutation) rather than
+being silently ignored, matching the top-level unknown-option guard described below.
+
 **Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
 dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
 "<i>"` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>` branch (reusing the
