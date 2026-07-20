@@ -34,6 +34,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `no_task_progress` (zero-work) build stalls now route through the same `/remediate`
+  auto-remediation dispatch as `halt_marker` stalls (a synthesized prompt built from the run's
+  own context), bounded by the shared remediation budget, with the durable no-evidence counter
+  still owning the terminal HALT/park decision. Exhausted `no_task_progress` builds now halt
+  with a distinct, specific reason instead of the generic "retries exhausted" message (#569).
 - Build dispatches can no longer run attribution-blind — a pre-dispatch invariant
   now fails loudly (skips/fails the dispatch, writing `.pipeline/HALT` after 2
   attempts) when attribution machinery is broken (missing `task-status.json`,

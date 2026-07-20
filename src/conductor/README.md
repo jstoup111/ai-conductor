@@ -191,10 +191,17 @@ member's evidence file (`prd_audit` + `architecture_review_as_built` in one disp
 context) — never one dispatch per member — drawing from the same shared
 `MAX_KICKBACKS_PER_GATE` budget.
 
-**Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
+**Daemon build-stall remediation (ADR-2026-07-10, #569).** When the build step writes
 `.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
 `Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
-and routes through `/remediate` before halting:
+and routes through `/remediate` before halting. Zero-work stalls (`stalled ===
+'no_task_progress'`) are also routed through the same `/remediate` dispatch and share the
+`MAX_KICKBACKS_PER_GATE` budget below, but differ on the terminal decision: the durable
+no-evidence counter (not the remediation outcome) still owns HALT/park, so a non-recovering
+`/remediate` outcome for a `no_task_progress` stall falls through to retry/auto-park instead of
+an immediate terminal HALT, and an exhausted `no_task_progress` build halts with a distinct,
+specific reason (`build stalled: no task progress (...)`) rather than the generic "retries
+exhausted" message. The `halt_marker` flow below is unchanged:
 
 - **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
   reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
