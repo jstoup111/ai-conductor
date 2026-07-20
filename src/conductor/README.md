@@ -1014,8 +1014,11 @@ exit 1 rather than silently falling through — see `detectHaltIssuesSweepComman
 **Monitor hook line.** `monitor.sh` (out-of-repo) should invoke the sweep once per cycle:
 
 ```bash
-conduct-ts halt-issues sweep || true
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
 ```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`halt-issues-cli.ts:85-87`) return a usage guide instead of running the sweep.
 
 `|| true` prevents a sweep failure from killing the monitor loop; the sweep is idempotent
 (already-stamped/closed issues are skipped) so the next cycle retries cleanly.

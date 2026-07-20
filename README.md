@@ -335,8 +335,12 @@ conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]
 after each halt-monitor cycle so filed issues get reconciled continuously:
 
 ```bash
-conduct-ts halt-issues sweep || true
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
 ```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`src/conductor/src/engine/halt-issues/halt-issues-cli.ts:85-87`) return a usage guide
+instead of running the sweep.
 
 The `|| true` keeps a sweep failure from taking down the monitor loop — the sweep is
 safe to retry on the next cycle since it's idempotent (stamped issues and already-closed
