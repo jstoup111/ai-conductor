@@ -12,6 +12,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Spec for issue #695 — intake doesn't enforce priority + linking + sizing
+  (100/107 open issues unsized): a deterministic **criteria gate** that keeps an
+  un-criteria'd issue out of the dispatchable set — captures missing a
+  `priority:`/`size: S|M|L` label are flagged `intake:needs-triage` at poll time
+  and deferred at claim time (new additive `needs-criteria` outcome, distinct
+  from `all-blocked`/`empty`), composing with priority banding + blocker deferral
+  and failing open on a `gh` outage — plus a human-in-the-loop **backfill**
+  (inventory + assisted triage that proposes size/priority/links for operator
+  confirmation, never auto-labeling)
+  (`.docs/plans/2026-07-20-intake-criteria-enforcement.md`,
+  `.docs/stories/2026-07-20-intake-criteria-enforcement.md`).
 - Spec for issue #671 — build dispatches must not run attribution-blind: a
   deterministic pre-dispatch invariant on the attribution machinery, a loud
   unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
