@@ -120,6 +120,15 @@ export interface CheckAndAutoParkOpts {
   reason?: string;
   /** Optional event sink; receives one `auto_park` event when a park fires. */
   emit?: (evt: unknown) => void;
+  /**
+   * Ids of unresolved/residue tasks that the CALLER has already determined
+   * are marked `**Verify-only:** yes` in the plan. Only consulted in the
+   * no-evidence-counter branch (never the explicit `opts.reason` seed-time
+   * path). When non-empty, the composed reason gains a distinct suffix
+   * ` — unresolved verify-only tasks: <ids>`. Omitting it (or passing an
+   * empty array) produces byte-identical reason text to today.
+   */
+  verifyOnlyUnresolvedIds?: string[];
 }
 
 /**
@@ -149,6 +158,9 @@ export async function checkAndAutoPark(
       reason = inherited
         ? `no completion evidence — inherited an already-exhausted budget of ${opts.maxAttempts} attempts`
         : `no completion evidence after ${opts.maxAttempts} attempts`;
+      if (opts.verifyOnlyUnresolvedIds && opts.verifyOnlyUnresolvedIds.length > 0) {
+        reason += ` — unresolved verify-only tasks: ${opts.verifyOnlyUnresolvedIds.join(', ')}`;
+      }
     }
   }
 

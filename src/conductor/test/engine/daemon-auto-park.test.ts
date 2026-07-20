@@ -502,3 +502,101 @@ describe('engine/daemon-auto-park — Task 5 (RED): inherited-budget halt messag
     expect(evt.reason.toLowerCase()).not.toContain('inherited');
   });
 });
+
+// ── Task 7: park reason names unresolved verify-only ids ──
+describe('Task 7: park reason names unresolved verify-only ids', () => {
+  let dir: string;
+  const SLUG = 'test-feature-task7';
+  const MAX_ATTEMPTS = 3;
+
+  async function seedAttempts(n: number): Promise<void> {
+    const pipelineDir = join(dir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(
+      join(pipelineDir, 'task-evidence.json'),
+      JSON.stringify(
+        {
+          evidenceStamps: {},
+          noEvidenceAttempts: n,
+          noEvidenceReasons: [],
+          migrationGrandfather: [],
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-task7-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('all unresolved ids verify-only marked -> reason names them', async () => {
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      verifyOnlyUnresolvedIds: ['4'],
+      emit: (evt) => events.push(evt),
+    });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason).toContain('unresolved verify-only tasks: 4');
+  });
+
+  it('mixed residue -> generic clause and verify-only suffix appear distinctly', async () => {
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      verifyOnlyUnresolvedIds: ['2'],
+      emit: (evt) => events.push(evt),
+    });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason).toContain(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
+    expect(evt.reason).toContain('unresolved verify-only tasks: 2');
+  });
+
+  it('regression: no verifyOnlyUnresolvedIds passed -> reason byte-identical to today', async () => {
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      emit: (evt) => events.push(evt),
+    });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
+  });
+
+  it('regression: empty verifyOnlyUnresolvedIds array -> reason byte-identical to today', async () => {
+    await seedAttempts(MAX_ATTEMPTS);
+    const events: unknown[] = [];
+
+    const result = await checkAndAutoPark(dir, SLUG, {
+      daemon: true,
+      maxAttempts: MAX_ATTEMPTS,
+      verifyOnlyUnresolvedIds: [],
+      emit: (evt) => events.push(evt),
+    });
+
+    expect(result.parked).toBe(true);
+    const evt = events[0] as { reason: string };
+    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
+  });
+});

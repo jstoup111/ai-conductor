@@ -131,7 +131,7 @@ import {
   type ShouldEscalateKickbackResult,
 } from './kickback-escalation.js';
 import { WorktreeManager } from './worktree.js';
-import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
+import { deriveCompletion, applyDerivedCompletion, parsePlanTaskVerifyOnly } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -3250,10 +3250,7 @@ export class Conductor {
               // take effect on the NEXT derivation cycle (same evaluation loop —
               // no explicit re-derive here, as the lane runs inside the auto-heal
               // block which already re-checks completion once healing fires).
-              if (
-                derivedCompletion !== null &&
-                isAttributionJudgeCutoverActive(this.config.attribution_judge_cutover)
-              ) {
+              if (derivedCompletion !== null) {
                 // Extract residue: task IDs where completion is not achieved
                 const residueIds = Object.keys(derivedCompletion).filter(
                   (id) => !derivedCompletion[id]?.completed && derivedCompletion[id]?.status !== 'skipped',
@@ -3261,22 +3258,50 @@ export class Conductor {
 
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
 
-                // Dispatch the lane if there's residue and cutover is armed
                 const planPathOrNull = (await this.completionCtx(state)).planPath;
+
+                const cutoverActive = isAttributionJudgeCutoverActive(
+                  this.config.attribution_judge_cutover,
+                );
+
+                // Task 3 (verify-only-prove-closed-task-evidence): class-scoped
+                // lane arming. Even with the global cutover dark, residue tasks
+                // explicitly marked `**Verify-only:** yes` in the plan still
+                // arm the lane — but ONLY for that marked subset. Judging is
+                // never widened to unmarked residue when the class-scoped
+                // predicate alone armed the lane.
+                let verifyOnlyResidue: string[] = [];
+                if (residueIds.length > 0 && planPathOrNull) {
+                  const planText = await readFile(planPathOrNull, 'utf-8').catch(() => '');
+                  if (planText) {
+                    const verifyOnlyMap = parsePlanTaskVerifyOnly(planText);
+                    verifyOnlyResidue = residueIds.filter((id) => verifyOnlyMap.get(id) === true);
+                  }
+                }
+
+                const laneArmed =
+                  (cutoverActive && residueIds.length > 0) || verifyOnlyResidue.length > 0;
+
+                // Dispatch the lane if it's armed (full cutover, or class-scoped
+                // verify-only residue) and the plan/head guards are satisfied.
                 if (
-                  residueIds.length > 0 &&
+                  laneArmed &&
                   planPathOrNull &&
                   headShaAfterBuild
                 ) {
                   const planPath: string = planPathOrNull;
                   const headSha: string = headShaAfterBuild;
+                  // When cutover is active, judge the full residue (unchanged
+                  // behavior). When only the class-scoped predicate armed the
+                  // lane, narrow to ONLY the verify-only-marked subset.
+                  const effectiveResidueIds = cutoverActive ? residueIds : verifyOnlyResidue;
                   const git = makeGitRunner(this.projectRoot);
                   const laneResult: AttributionLaneResult = await runAttributionLane({
                     projectRoot: this.projectRoot,
                     planPath,
-                    residueIds,
+                    residueIds: effectiveResidueIds,
                     headSha,
-                    cutoverArmed: true, // Already gated by isAttributionJudgeCutoverActive above
+                    cutoverArmed: true, // Already gated by laneArmed above
                     isZeroWorkProduct: false, // Already checked above
                     git: (args) => git(args),
                     dispatchVerifier: async (inputs) => {
@@ -3635,11 +3660,41 @@ export class Conductor {
                     }
                   }
 
+                  // Task 7 (verify-only-prove-closed-task-evidence): when the
+                  // durable no-evidence counter parks (not the explicit
+                  // empty/missing-plan path above), name any unresolved
+                  // residue tasks that are marked `**Verify-only:** yes` in
+                  // the plan so the park reason surfaces them distinctly.
+                  // Defensive: a missing/unreadable plan file must never
+                  // throw here — fails closed to no ids (byte-identical old
+                  // behavior).
+                  const residueIdsForPark: string[] =
+                    derivedCompletion !== null
+                      ? Object.keys(derivedCompletion).filter(
+                          (id) =>
+                            !derivedCompletion[id]?.completed &&
+                            derivedCompletion[id]?.status !== 'skipped',
+                        )
+                      : [];
+                  let verifyOnlyUnresolvedIds: string[] = [];
+                  if (residueIdsForPark.length > 0 && parkCtx.planPath) {
+                    try {
+                      const planTextForPark = await readFile(parkCtx.planPath, 'utf-8');
+                      const verifyOnlyMap = parsePlanTaskVerifyOnly(planTextForPark);
+                      verifyOnlyUnresolvedIds = residueIdsForPark.filter(
+                        (id) => verifyOnlyMap.get(id) === true,
+                      );
+                    } catch {
+                      // Missing/unreadable plan file — fail closed to no ids.
+                    }
+                  }
+
                   const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
                     maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
                     daemon: this.daemon,
                     cycleStartAttempts: cycleStartNoEvidenceAttempts,
                     ...(effectiveEmptyPlan ? { reason: 'empty/missing plan' } : {}),
+                    ...(verifyOnlyUnresolvedIds.length > 0 ? { verifyOnlyUnresolvedIds } : {}),
                     emit: (evt) =>
                       void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
                   });
