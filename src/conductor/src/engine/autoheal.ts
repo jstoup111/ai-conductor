@@ -67,6 +67,25 @@ function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<strin
   });
 }
 
+/**
+ * Branch-aware corroboration (#707): try exact/suffix overlap first; only on
+ * a miss, try the bounded immediate-parent-dir overlap. Returns which branch
+ * (if any) satisfied corroboration so callers can distinguish the two for
+ * stamping purposes (Task 3) without re-deriving the match.
+ */
+function corroborationMatch(
+  filesInCommit: string[],
+  taskPaths: ReadonlySet<string>,
+): 'exact-suffix' | 'dirname' | null {
+  if (filesOverlappingTaskPaths(filesInCommit, taskPaths).length > 0) return 'exact-suffix';
+  for (const f of filesInCommit) {
+    for (const p of taskPaths) {
+      if (fileDirMatchesPlanPath(f, p)) return 'dirname';
+    }
+  }
+  return null;
+}
+
 // Simple logger interface for fail-closed operations
 interface EvidenceRangeLogger {
   anomalies: string[];
@@ -786,8 +805,8 @@ async function deriveCompletionInternal(
         break;
       }
 
-      const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
-      if (overlap.length > 0) {
+      const match = corroborationMatch(filesInCommit, taskPaths!);
+      if (match) {
         satisfyingSha = candidate.sha;
         break;
       }
@@ -1008,7 +1027,7 @@ export function parseTrailers(trailerText: string): Record<string, string[]> {
 }
 
 export async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
-  const out = await execa('git', ['diff-tree', '--name-only', '-r', sha], {
+  const out = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
     cwd: projectRoot,
     reject: false,
   });
