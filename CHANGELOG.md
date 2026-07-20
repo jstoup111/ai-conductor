@@ -10,6 +10,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- ci-fix resolver no longer invokes the nonexistent `claude --fix-session` flag;
+  dispatches a real fix via StepRunner, classifies spawn errors, and validates
+  invocation at daemon startup
+
 ### Changed
 
 - Operator config: `harness_self_host.version_freeze` advanced 0.99.19 → 0.99.20
