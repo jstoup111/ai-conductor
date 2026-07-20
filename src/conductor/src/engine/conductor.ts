@@ -51,6 +51,8 @@ import {
   removeBuildStepMarker,
   detectZeroWorkProduct,
   readDispatchCount,
+  readDispatchAttribution,
+  detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
 import { runAttributionLane, type AttributionLaneResult, dispatchAttributionVerifier } from './attribution-lane.js';
@@ -2715,6 +2717,22 @@ export class Conductor {
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
             // completes, further down.
+          }
+
+          // Task 3 (#671): unattributed-dispatch loud signal. Fires at the
+          // build dispatch seam itself — earlier than and distinct from
+          // detectZeroWorkProduct/the evidence gate — when this cycle's
+          // dispatch-count crosses the unattributed threshold.
+          if (step.name === 'build' && isEnforcementConfigured(this.config)) {
+            const attribution = await readDispatchAttribution(this.projectRoot);
+            const unattributedResult = detectUnattributedDispatch(attribution);
+            if (unattributedResult) {
+              await this.events.emit({
+                type: 'unattributed_dispatch',
+                step: step.name,
+                unattributedCount: unattributedResult.unattributedCount,
+              });
+            }
           }
 
           // Rate limit: wait deterministically, then retry WITHOUT burning the

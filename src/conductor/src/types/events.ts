@@ -305,6 +305,18 @@ export type ConductorEvent =
       dispatchCount: number;
       headSha: string | null;
     }
+  // ── Task 3 (#671): unattributed-dispatch loud signal ──
+  | {
+      /**
+       * A build dispatch cycle's `.pipeline/dispatch-count` crossed the
+       * unattributed-dispatch threshold — distinct from and earlier than
+       * `zero_work_product`. Emitted at the build seam itself, not deferred
+       * to the evidence gate.
+       */
+      type: 'unattributed_dispatch';
+      step: StepName;
+      unattributedCount: number;
+    }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */

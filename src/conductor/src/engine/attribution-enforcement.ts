@@ -192,3 +192,32 @@ export async function detectZeroWorkProduct(params: ZeroWorkDetectionParams): Pr
 
   return dispatchCount === 0 || headUnchanged;
 }
+
+// Task 3 (#671): unattributed-dispatch detection. Distinct from
+// detectZeroWorkProduct — this fires earlier, at the build dispatch seam
+// itself, on the raw attributed/unattributed split rather than on
+// HEAD-movement/dispatch-count. A count-based threshold (not a ratio) so a
+// mixed cycle that still crosses the streak threshold is caught even when
+// it isn't 100% unattributed.
+
+export interface UnattributedDispatchResult {
+  triggered: true;
+  reason: 'unattributed_dispatch';
+  unattributedCount: number;
+}
+
+/**
+ * Detect an unattributed-dispatch streak within a single build cycle's
+ * `DispatchAttribution`. Triggers when `unattributed` is nonzero and meets
+ * or exceeds `threshold` (default 3). Returns `null` when quiet (no
+ * dispatch activity at all, or below threshold).
+ */
+export function detectUnattributedDispatch(
+  attribution: DispatchAttribution,
+  threshold = 3,
+): UnattributedDispatchResult | null {
+  const { unattributed } = attribution;
+  if (unattributed <= 0) return null;
+  if (unattributed < threshold) return null;
+  return { triggered: true, reason: 'unattributed_dispatch', unattributedCount: unattributed };
+}
