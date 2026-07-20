@@ -129,6 +129,18 @@ by **gate verdicts** instead of a fixed order:
   step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
   with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
   exit markerless and the daemon never reads their markers.
+- **Retry-as-escalation** (`engine/escalation.ts`, #188) — a step's retry is not an
+  identical re-run: it escalates from the resolved base `(model, effort)`, indexed by the
+  1-based attempt. Attempt 1 = base; attempt 2 bumps effort one level
+  (`low→medium→high→xhigh→max`); attempt 3+ holds that effort and bumps the model one tier
+  (`haiku→sonnet→opus→fable`), capped at each ladder's top (a no-op rung, not an error).
+  The bumped model still flows through the #186 availability ladder, so a dead escalated
+  tier is substituted with a live one. Escalation derives purely from `attempt`, so the
+  non-consuming `attempt--; continue` paths (rate-limit, stale session, auth park) re-run
+  at the same rung. Deep-step budgets (`explore`/`prd`/`plan`/`build`) are **3** (floor
+  that still reaches the attempt-3 model bump). Opt out per step with
+  `steps.<step>.escalate: false` to pin the base config across retries. Each `step_retry`
+  event carries the upcoming attempt's `escalatedModel`/`escalatedEffort` for retro Part C.
 - **Fresh session per step** — unconditionally, in all modes and all phases (interactive
   `/conduct` included; each step reads its inputs from committed `.docs/` artifacts, not
   conversational memory), the LLM session is reset before **every** executed step
