@@ -3374,6 +3374,22 @@ export class Conductor {
                 join(this.projectRoot, '.pipeline'),
               );
 
+              // Task 5 (verify-only-prove-closed-task-evidence): the verdict
+              // hint queued into pendingRetryHints just above (Task 13) is
+              // seeded from the map only ONCE per retry-loop entry (top of
+              // this function), so it would otherwise sit unused until a
+              // future, separate dispatch of the 'build' step — never
+              // reaching the very next attempt inside THIS retry loop, where
+              // the abstain reason is actually needed. Consume it here,
+              // merging it into the mechanical completion-gate hint so the
+              // next attempt (still within this loop) names the unsatisfied
+              // verify-only task loudly instead of silently burning budget.
+              const queuedVerdictHint = pendingRetryHints.get('build');
+              if (queuedVerdictHint !== undefined) {
+                pendingRetryHints.delete('build');
+                retryHint = `${retryHint ?? ''}\n\n${queuedVerdictHint}`.trim();
+              }
+
               // #646: rerun-vs-route classifier. Generalizes the original
               // prd_audit-only short-circuit (retained verbatim below when
               // the kill-switch is off) to all three SHIP-tail verdict

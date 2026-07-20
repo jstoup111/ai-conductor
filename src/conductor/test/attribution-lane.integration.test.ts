@@ -134,10 +134,12 @@ function makeStepRunner(
   buildResult: StepRunResult,
   dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']>,
   repo: Repo,
-): StepRunner {
+): { runner: StepRunner; buildCalls: Array<{ retryReason?: string }> } {
+  const buildCalls: Array<{ retryReason?: string }> = [];
   const runner: StepRunner = {
-    run: async (step: StepName, _state: ConductState, _opts?: StepRunOptions): Promise<StepRunResult> => {
+    run: async (step: StepName, _state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> => {
       if (step === 'build') {
+        buildCalls.push({ retryReason: opts?.retryReason });
         return buildResult;
       }
       const pipelineDir = join(repo.root, '.pipeline');
@@ -219,7 +221,7 @@ function makeStepRunner(
     },
     dispatchVerifier,
   };
-  return runner;
+  return { runner, buildCalls };
 }
 
 function makeRealGitRunner(repo: Repo): (
@@ -289,7 +291,7 @@ describe('integration: verify-only judged stamp resolves a task end-to-end (#677
       })),
     }));
 
-    const runner = makeStepRunner({ success: true }, dispatchVerifier, repo);
+    const { runner } = makeStepRunner({ success: true }, dispatchVerifier, repo);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -327,5 +329,240 @@ describe('integration: verify-only judged stamp resolves a task end-to-end (#677
     const evidence = await taskEvidenceRaw(repo);
     expect(JSON.stringify(evidence)).toMatch(/semantic-verified/);
     expect(evidence?.noEvidenceAttempts).toBe(0);
+  });
+
+  // ── Task 5: adversarial paths ───────────────────────────────────────────
+
+  it('a verify-only residue task whose citation names a NONEXISTENT sha is refused — no stamp, task stays unresolved', async () => {
+    const repo = await initRepo('lane-nonexistent-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'lane-nonexistent-fixture');
+
+    await writePlan(
+      repo,
+      'lane-nonexistent-fixture',
+      '### Task 2\n**Files likely touched:** `a.ts`\n\nA.\n' +
+        '### Task 4\n**Verify-only:** yes\n**Files likely touched:** `b.ts`\n\nProve closed.\n',
+    );
+    await writeTaskStatus(repo, ['2', '4']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 2\n');
+
+    const nonexistentSha = 'abc123def456abc123def456abc123def456abc';
+    const { dispatchVerifier, calls } = makeVerdictWritingDispatcher(repo, (residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'satisfied',
+        citations: [{ sha: nonexistentSha, rationale: 'sha does not exist' }],
+        testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+      })),
+    }));
+
+    const { runner } = makeStepRunner({ success: true }, dispatchVerifier, repo);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+    const evidence = await taskEvidenceRaw(repo);
+    expect(JSON.stringify(evidence ?? {})).not.toMatch(/semantic-verified/);
+  });
+
+  it('a verify-only residue task whose citation names a sha that is NOT an ancestor of HEAD is refused — no stamp, task stays unresolved', async () => {
+    const repo = await initRepo('lane-non-ancestor-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'lane-non-ancestor-fixture');
+
+    await writePlan(
+      repo,
+      'lane-non-ancestor-fixture',
+      '### Task 2\n**Files likely touched:** `a.ts`\n\nA.\n' +
+        '### Task 4\n**Verify-only:** yes\n**Files likely touched:** `b.ts`\n\nProve closed.\n',
+    );
+    await writeTaskStatus(repo, ['2', '4']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 2\n');
+
+    // A commit that exists in the repo's object database but lives on a
+    // side branch never merged into HEAD — reachable, but not an ancestor.
+    await execa('git', ['checkout', '-b', 'side-branch'], { cwd: repo.root });
+    const sideSha = await commit(repo, 'off-branch.ts', 'export const z = 1;\n', 'chore: off-branch commit');
+    await execa('git', ['checkout', 'main'], { cwd: repo.root });
+
+    const { dispatchVerifier, calls } = makeVerdictWritingDispatcher(repo, (residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'satisfied',
+        citations: [{ sha: sideSha, rationale: 'off-branch, not an ancestor' }],
+        testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+      })),
+    }));
+
+    const { runner } = makeStepRunner({ success: true }, dispatchVerifier, repo);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+    const evidence = await taskEvidenceRaw(repo);
+    expect(JSON.stringify(evidence ?? {})).not.toMatch(/semantic-verified/);
+  });
+
+  it('a verdict entry naming a task ID outside the dispatched residue set is not stamped — the residue task stays unresolved', async () => {
+    const repo = await initRepo('lane-non-residue-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'lane-non-residue-fixture');
+
+    // Task 2 already resolved mechanically (trailered commit) — it is NOT
+    // part of the residue dispatched to the verifier. Task 4 is the only
+    // verify-only residue task.
+    await writePlan(
+      repo,
+      'lane-non-residue-fixture',
+      '### Task 2\n**Files likely touched:** `a.ts`\n\nA.\n' +
+        '### Task 4\n**Verify-only:** yes\n**Files likely touched:** `b.ts`\n\nProve closed.\n',
+    );
+    await writeTaskStatus(repo, ['2', '4']);
+    const shaA = await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 2\n');
+
+    // The verifier is only ever asked to judge residue (task 4), but a
+    // buggy/adversarial verdict response smuggles a "satisfied" entry for
+    // task 2 (already resolved, not residue) and omits task 4 entirely.
+    const { dispatchVerifier, calls } = makeVerdictWritingDispatcher(repo, (residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: [
+        {
+          taskId: '2',
+          verdict: 'satisfied',
+          citations: [{ sha: shaA, rationale: 'not part of the dispatched residue' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        },
+      ],
+    }));
+
+    const { runner } = makeStepRunner({ success: true }, dispatchVerifier, repo);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    // The verifier was only ever asked about task 4.
+    for (const call of calls) {
+      expect(call.residueIds).toEqual(['4']);
+    }
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+    const evidence = await taskEvidenceRaw(repo);
+    expect(JSON.stringify(evidence ?? {})).not.toMatch(/semantic-verified/);
+  });
+
+  it('a verifier abstain (unsatisfied verdict) on a verify-only residue task surfaces a loud reason naming the task in the next BUILD retry hint — no stamp, budget increments', async () => {
+    const repo = await initRepo('lane-abstain-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'lane-abstain-fixture');
+
+    await writePlan(
+      repo,
+      'lane-abstain-fixture',
+      '### Task 2\n**Files likely touched:** `a.ts`\n\nA.\n' +
+        '### Task 4\n**Verify-only:** yes\n**Files likely touched:** `b.ts`\n\nProve closed.\n',
+    );
+    await writeTaskStatus(repo, ['2', '4']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 2\n');
+
+    const { dispatchVerifier, calls } = makeVerdictWritingDispatcher(repo, (residueIds) => ({
+      schema: 1,
+      anchor: { head: '', residue: residueIds },
+      results: residueIds.map((id) => ({
+        taskId: id,
+        verdict: 'unsatisfied',
+        reason: 'no commit substantiates task 4',
+      })),
+    }));
+
+    const { runner, buildCalls } = makeStepRunner({ success: true }, dispatchVerifier, repo);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      // Two attempts so the second attempt's retryReason (queued by the
+      // first attempt's gate-miss lane dispatch) is observable.
+      maxRetries: 2,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(buildCalls.length).toBeGreaterThanOrEqual(2);
+    const secondAttemptHint = buildCalls[1]?.retryReason ?? '';
+    expect(secondAttemptHint).toMatch(/task 4/);
+    expect(secondAttemptHint).toMatch(/no commit substantiates task 4/);
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+    const evidence = await taskEvidenceRaw(repo);
+    expect(JSON.stringify(evidence ?? {})).not.toMatch(/semantic-verified/);
   });
 });
