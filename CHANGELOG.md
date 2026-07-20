@@ -2031,6 +2031,13 @@ no action needed — the token requirement is skipped.
   reports "setup failed" when `bin/setup` succeeded (#582).
 - `bin/update`, a standalone self-update/channel CLI extracted from `bin/conduct`: `bin/update` (no args) forces an update check now, `bin/update --auto` checks only if `autoCheck` config is not `false`, `bin/update --set-channel <tagged|main>` sets the update channel (exit 2 on invalid), and `bin/update -h|--help` prints usage.
 - The auto-update check is now re-homed onto `conduct-ts` startup, which spawns `bin/update --auto` as a one-shot subprocess, instead of running inline as bash functions in `bin/conduct`.
+- `conduct-ts halt-issues sweep` subcommand: reconciles GitHub issues auto-filed by the
+  out-of-repo halt-monitor daemon (`monitor.sh`, #355) against shipped fixes — stamps
+  filed issues with a Halt-Slug marker, detects shipping evidence, and closes resolved
+  issues (respecting the `halt-sweep:keep-open` label escape hatch). Additive
+  subcommand, not a breaking surface — no migration block needed. See `README.md` and
+  `src/conductor/README.md` for flags and the `monitor.sh` hook line
+  (`conduct-ts halt-issues sweep || true`).
 
 ## Migration
 

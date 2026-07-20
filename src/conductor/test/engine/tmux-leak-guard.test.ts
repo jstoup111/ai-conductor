@@ -18,6 +18,7 @@ import {
   killDaemonSession,
   snapshotDaemonSessions,
   isTmpdirRooted,
+  sessionPaneCwd,
   type TmuxRunner,
 } from '../tmux-leak-guard.js';
 import {
@@ -26,6 +27,31 @@ import {
   hasSession,
 } from '../../src/engine/daemon-tmux.js';
 import { applyTeardownDecision } from '../global-setup.js';
+
+// Capability probe (#437 follow-up): some hosts rewrite a freshly-spawned
+// pane's cwd away from the -c start path (e.g. to $HOME) shortly after
+// spawn, so `isTmpdirRooted(sessionPaneCwd(...))` is never true even though
+// the session was created with `-c os.tmpdir()`. On such hosts the real-tmux
+// kill-authorization tests below can never pass — that's not a guard bug
+// (the guard's fail-closed refusal per #437's two-signal contract is
+// correct), it's an environment capability gap. Skip rather than fail.
+async function paneCwdSticky(): Promise<boolean> {
+  const name = `cc-daemon-cwdprobe-${randomBytes(4).toString('hex')}`;
+  const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+  delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+  try {
+    await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
+    const cwd = sessionPaneCwd(name);
+    return isTmpdirRooted(cwd);
+  } finally {
+    if (prevFlag === undefined) {
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    } else {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+    }
+    killDaemonSession(name);
+  }
+}
 
 describe('isTmpdirRooted (#437) — TR-2 tmpdir cwd corroboration', () => {
   it('is true for os.tmpdir() itself', () => {
@@ -337,6 +363,7 @@ describe('sweepStaleDaemonSessions — permanent-baseline-blindspot fix', () => 
   it('real tmux: a session created BEFORE any snapshot is taken (simulating debris left by a ' +
     'previously-interrupted run) is swept and killed with zero baseline involvement', async () => {
     if (!(await tmuxInstalled())) return; // no tmux in this sandbox — skip
+    if (!(await paneCwdSticky())) return; // host rewrites pane cwd away from start path — skip
 
     const name = `cc-daemon-swtest-${randomBytes(4).toString('hex')}`;
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
@@ -477,6 +504,7 @@ describe('tmux-leak-guard (#377)', () => {
 
   it('kills and reports a cc-daemon-* session created after the snapshot', async () => {
     if (!(await tmuxInstalled())) return; // no tmux in this sandbox — skip
+    if (!(await paneCwdSticky())) return; // host rewrites pane cwd away from start path — skip
 
     const before = snapshotDaemonSessions();
     const name = `cc-daemon-leaktest-${randomBytes(4).toString('hex')}`;

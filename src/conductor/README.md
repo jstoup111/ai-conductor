@@ -971,6 +971,81 @@ things on top of that, without a parallel dispatch path:
   consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
   the rebase step silently unmarked.
 
+#### `halt-issues sweep` — filed halt-monitor issue lifecycle (#355)
+
+`monitor.sh` — the halt-monitor daemon that watches the fleet and auto-files a GitHub
+issue when a feature halts — lives **out-of-repo** (#355); this repo owns only the
+reconciliation side: `conduct-ts halt-issues sweep` (CLI wiring in
+`src/engine/halt-issues/halt-issues-cli.ts`, pure orchestrator in
+`src/engine/halt-issues/sweep.ts`).
+
+**Pipeline (`sweep.ts`):**
+1. Parse `--monitor-log` → extract verdicts (which halted feature/slug maps to which
+   filed issue).
+2. Load the `--ledger` JSON file, rebuilding it from the parsed verdicts if it's
+   missing or corrupt (`ledger.ts`).
+3. For each verdict entry: stamp the issue body with a Halt-Slug marker
+   (`closer.ts::stampIssue`, idempotent — re-stamping a already-stamped body is a
+   no-op), check whether the halt condition has since shipped
+   (`resolution.ts::resolveEntry`, ship-evidence + recurrence guard), and if resolvable,
+   close the issue (`closer.ts::closeIssue`).
+4. Write the ledger back atomically (write-to-temp + rename).
+5. Print a summary; exit 0 even when individual entries recorded errors (`lastError` on
+   the ledger entry) — the sweep is designed to be re-run every monitor cycle and
+   self-heal, not to hard-fail the daemon.
+
+Per-entry try/catch isolates one bad entry from blocking the rest of the batch; nothing
+in the sweep body throws past its own boundary.
+
+**CLI:** `conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]`
+
+| Flag | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `--repo-dir <dir>` | yes | — | Repo to search for shipping evidence |
+| `--gh-repo <owner/name>` | yes | — | GitHub repo the filed issues live in |
+| `--dry-run` | no | off | Run the pipeline read-only; no ledger or GitHub writes |
+| `--monitor-log <path>` | no | `~/.ai-conductor/halt-monitor/monitor.log` | Halt-monitor's log |
+| `--ledger <path>` | no | `~/.ai-conductor/halt-issues/ledger.json` | Sweep's state file |
+
+An unknown `--flag` or a missing required flag returns the `guide` (help text) path with
+exit 1 rather than silently falling through — see `detectHaltIssuesSweepCommand` in
+`halt-issues-cli.ts`.
+
+**Monitor hook line.** `monitor.sh` (out-of-repo) should invoke the sweep once per cycle:
+
+```bash
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
+```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`halt-issues-cli.ts:85-87`) return a usage guide instead of running the sweep.
+
+`|| true` prevents a sweep failure from killing the monitor loop; the sweep is idempotent
+(already-stamped/closed issues are skipped) so the next cycle retries cleanly.
+
+**`halt-sweep:keep-open` label contract.** `closer.ts::closeIssue` checks
+`gh.getIssueLabels` for `halt-sweep:keep-open` before every close attempt. If present, it
+returns `closedBy: 'kept-open'`, `lastError: 'kept-open (label)'`, and makes **no writes**
+— the issue stays open indefinitely regardless of shipping evidence. This is the escape
+hatch for a known-false-positive or deliberately-unfixed halt that an operator wants
+tracked but never auto-closed. Removing the label lets the next sweep close it normally.
+
+Beyond the label, `closeIssue` also treats a `null` (404) or already-`closed` issue state
+as `closedBy: 'external'` (no writes) — someone closed it by hand, the sweep doesn't
+re-touch it.
+
+**Ledger rebuild semantics (`ledger.ts`).** The ledger is a JSON file keyed by issue. On
+load:
+- Missing file → start from an empty schema (first run).
+- Present but fails `JSON.parse` (corruption) → the file is renamed to
+  `ledger.json.corrupt-<timestamp>` (quarantined, not deleted) with a stderr warning, and
+  the sweep proceeds with an empty schema.
+- `rebuild()` repopulates the empty/quarantined ledger from the current monitor-log
+  verdicts. This loses previously-recorded per-issue progress (stamps, resolution
+  status) but never loses correctness: already-closed issues are re-detected via live
+  GitHub issue state on the next `closeIssue` call, not blindly re-closed or
+  re-commented.
+
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
 Two bug reports (#204, #205) traced back to the same root cause: `.daemon/processed/` is a
