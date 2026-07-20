@@ -157,6 +157,13 @@ export const FALLBACK_EFFORT: EffortLevel = 'medium';
 export const FALLBACK_RETRIES = 3;
 export const FALLBACK_REVIEW: ReviewMode = 'manual';
 
+/**
+ * Default for the per-step `escalate` knob (#188). True means retries climb the
+ * escalation ladder (effort, then model tier). Existing configs begin escalating
+ * by default — the intended behavior change, documented as a migration note.
+ */
+export const DEFAULT_STEP_ESCALATE = true;
+
 // ────────────────────────────────────────────────────────────────────────────
 // Resolution
 // ────────────────────────────────────────────────────────────────────────────
@@ -170,6 +177,12 @@ export interface ResolvedStepConfig {
   skill?: string;
   hooks: { before?: string; after?: string };
   disabled: boolean;
+  /**
+   * Retry-as-escalation flag (#188). When true (default), the retry loop climbs
+   * the escalation ladder on each attempt; when false, every attempt uses the
+   * base (model, effort).
+   */
+  escalate: boolean;
 }
 
 export interface ResolveOptions {
@@ -253,6 +266,15 @@ export function resolveStepConfig(
   // of the step's skill contract, not a tuning knob.
   const review: ReviewMode = DEFAULT_STEP_REVIEW[step] ?? FALLBACK_REVIEW;
 
+  // #188: escalate follows the same step → phase → defaults precedence as the
+  // other knobs (no tier/CLI override — it's a coarse per-step policy switch),
+  // defaulting to DEFAULT_STEP_ESCALATE (true) when unset everywhere.
+  const escalate: boolean =
+    stepCfg?.escalate ??
+    phaseCfg?.escalate ??
+    defaultsCfg?.escalate ??
+    DEFAULT_STEP_ESCALATE;
+
   return {
     step,
     model,
@@ -265,6 +287,7 @@ export function resolveStepConfig(
       after: stepCfg?.hooks?.after,
     },
     disabled: stepCfg?.disable === true,
+    escalate,
   };
 }
 
