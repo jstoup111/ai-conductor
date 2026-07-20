@@ -1653,6 +1653,78 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     }
   });
 
+  it('Task 5 (#692): fresh build dispatch with resolvable plan + missing task-status.json → seam seeds it and dispatches build without a HALT', async () => {
+    // Fresh-dispatch fixture: session hooks present, stamp path writable,
+    // task-status.json deliberately ABSENT (never seeded), but a resolvable
+    // plan exists under .docs/plans/ — mirrors a legitimate fresh build
+    // dispatch where seeding simply hasn't happened yet. Before this task,
+    // the seam called the bare checkAttributionMachineryIntact (no seeding),
+    // so this would halt naming "task-status.json is missing" on attempt 1.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'fresh-build-dispatch-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    // Seed every step before 'build' as done, and set feature_desc so the
+    // plan is resolvable at the seam.
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = featureDesc;
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    // Build must dispatch on attempt 1 — no HALT for missing task-status.json.
+    expect(buildWasDispatched).toBe(true);
+
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/task-status\.json is missing/i);
+    }
+
+    // task-status.json must have been seeded as a side effect of running
+    // this step, proving the seam went through seedAndCheckAttributionMachinery
+    // rather than the bare check.
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+    expect(seeded.tasks).toHaveLength(1);
+    expect(seeded.tasks[0].id).toBe('1');
+  });
+
   it('resumed build with prior completed progress → seedAndCheckAttributionMachinery preserves completed row and reports intact', async () => {
     // Session hooks present and stamp path writable — mirrors a resumed
     // dispatch on a build that already made real progress in a prior run.
