@@ -275,4 +275,29 @@ describe('deriveCompletion #445 non-regression: ancestor/repo-root do not corrob
     const result = await derive(planPath);
     expect(result['1']?.completed).toBeFalsy();
   });
+
+  it('a task inheriting Files via "same as Task N" is NOT dirname-credited by a commit touching an unrelated directory', async () => {
+    const planPath = join(root, '.docs/plans/p.md');
+    await mkdir(dirname(planPath), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Plan
+
+### Task 1: Implementation
+**Files:** src/conductor/src/engine/conductor.ts
+
+### Task 2: Inherits Task 1's Files
+**Files:** same as Task 1
+`,
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: plan');
+
+    // Task 2's declared (inherited) dir is src/conductor/src/engine — this
+    // commit touches an unrelated directory and carries Task 2's trailer.
+    await commitFile('src/cli.ts', 'export const x = 1;', '2');
+
+    const result = await derive(planPath);
+    expect(result['2']?.completed).toBeFalsy();
+  });
 });
