@@ -1597,11 +1597,25 @@ still counts as a consumed attempt, never an unbounded retry loop).
 PR branch, creates an isolated worktree at the branch tip (never touches the primary checkout),
 builds a RETRY hint from the failing check names plus a bounded `gh run view --log-failed`
 excerpt (degrades gracefully to names+links if log fetch fails), and runs an injected fix-runner
-seam inside the worktree. If the fix-runner reports a change, the same acceptance guards and
-suite gate used by `mergeable_autoresolve` run before a lease-protected
-`git push --force-with-lease` — any guard or gate failure skips the push and logs an escalated
-outcome without throwing. The resolver never merges a PR and never touches the shipped-work
-ledger; it only ever pushes a refresh to the PR's existing branch.
+seam inside the worktree. The production fix-runner (`productionCiFixRunner`, wired in
+`daemon-cli.ts`) no longer shells out to a `claude --fix-session` flag — that flag never
+existed, so every real invocation used to crash. It now dispatches through a
+StepRunner-backed one-shot session (`DefaultStepRunner.resolveCiFailure`, `engine/
+step-runners.ts`, constructed per-dispatch in `daemon-cli.ts`), mirroring the existing
+`resolveSetupFailure` seam used by setup-failure triage. If the fix-runner reports a change,
+the same acceptance guards and suite gate used by `mergeable_autoresolve` run before a
+lease-protected `git push --force-with-lease` — any guard or gate failure skips the push and
+logs an escalated outcome without throwing. The resolver never merges a PR and never touches
+the shipped-work ledger; it only ever pushes a refresh to the PR's existing branch.
+
+**Error classification and startup preflight.** Resolver/dispatch errors are no longer logged
+as a bare stringified error: `classifyFixError` (`engine/ci-fix.ts`) tags each failure as
+`flag-invalid`, `auth`, `spawn-env`, or `unknown`, and the daemon log records the tag alongside
+the underlying message so a broken invocation surface is diagnosable instead of a generic
+crash trace. Separately, `preflightCiFixInvocation` (`engine/ci-fix.ts`) runs once at daemon
+startup — not per-PR — as a cheap dry probe of the `claude` fix-invocation surface. If the
+probe fails, ci-fix is disabled for that daemon run (logged once) rather than crashing the
+daemon or silently failing on the first real PR.
 
 **Escalation (exhaustion).** Once `ciFixAttempts` reaches 2 and checks are still `failed`, the
 sweep escalates instead of dispatching a third attempt: it ensures+adds the sticky
