@@ -269,6 +269,12 @@ export interface GcVersionsOpts {
   now?: Date;
   /** Warning sink (tests capture; default: console.warn). One line per warning. */
   warn?: (message: string) => void;
+  /**
+   * Version ids to never delete this pass, regardless of the four legacy
+   * conditions — e.g. the version the CALLING daemon's own dist is running
+   * out of, so a GC pass can never self-evict the process invoking it.
+   */
+  protectVersionIds?: EngineVersionId[];
 }
 
 export interface GcVersionsResult {
@@ -290,7 +296,7 @@ const NO_DELETIONS: Omit<GcVersionsResult, 'deleted'> & { deleted: EngineVersion
  * `src/engine` run, which references no published version and therefore
  * blocks nothing).
  */
-function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
+export function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
   const segments = engineDir.split(/[\\/]/);
   const match = segments.find((segment) => isEngineVersionId(segment));
   return match as EngineVersionId | undefined;
@@ -385,9 +391,11 @@ export async function gcVersions(opts: GcVersionsOpts): Promise<GcVersionsResult
 
   const versions = await listVersions(storeRoot); // ascending: oldest first (id begins with timestamp)
   const protectedByKeepK = new Set(versions.slice(Math.max(0, versions.length - keepLastK)));
+  const protectedSelf = new Set(opts.protectVersionIds ?? []);
 
   const deleted: EngineVersionId[] = [];
   for (const versionId of versions) {
+    if (protectedSelf.has(versionId)) continue; // self-eviction guard: never delete an explicitly protected version
     if (versionId === opts.currentVersionId) continue; // condition 1: never delete current
     if (liveReferenced.has(versionId)) continue; // condition 2: never delete live-referenced
     if (protectedByKeepK.has(versionId)) continue; // condition 4: keep newest K regardless of age

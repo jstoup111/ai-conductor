@@ -291,9 +291,28 @@ export async function publish(opts) {
     // throw out of `gcVersions` is also caught here so a GC hiccup never
     // turns a successful publish into a failed one (exit 0 either way).
     try {
-      const { deletedCount } = await gcVersions({ conductorRoot, currentVersionId: versionId, env });
-      if (deletedCount > 0) {
-        console.error(`[publish-engine] gc: deleted ${deletedCount} old version(s)`);
+      // Self-eviction guard (Task 3): when the calling daemon has stamped
+      // its own running version into the env (Task 4), never let this GC
+      // pass delete that version out from under it. `CONDUCT_ENGINE_SELF_GUARD`
+      // is set unconditionally by a guarded daemon before it can resolve its
+      // own version id, so an empty `CONDUCT_ENGINE_SELF_VERSION` alongside
+      // it means "guard active but self version unresolved" — fail closed by
+      // skipping the entire GC pass rather than risk deleting the running
+      // dist. Guard unset entirely -> unguarded caller (e.g. a bare CLI
+      // publish) -> GC runs exactly as before.
+      const selfGuard = env.CONDUCT_ENGINE_SELF_GUARD;
+      const selfVersion = env.CONDUCT_ENGINE_SELF_VERSION;
+      if (selfGuard && !selfVersion) {
+        console.error('[publish-engine] gc: skipped (self-guard, unresolved self version)');
+      } else {
+        const gcOpts = { conductorRoot, currentVersionId: versionId, env };
+        if (selfGuard && selfVersion) {
+          gcOpts.protectVersionIds = [selfVersion];
+        }
+        const { deletedCount } = await gcVersions(gcOpts);
+        if (deletedCount > 0) {
+          console.error(`[publish-engine] gc: deleted ${deletedCount} old version(s)`);
+        }
       }
     } catch (err) {
       console.error(
