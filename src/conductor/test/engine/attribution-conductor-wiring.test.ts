@@ -34,7 +34,7 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor, checkAttributionMachineryIntact } from '../../src/engine/conductor.js';
+import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMachinery } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { runAttributionLane } from '../../src/engine/attribution-lane.js';
@@ -1586,5 +1586,35 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     expect(diagnostic).not.toBeNull();
     expect(diagnostic).toMatch(/plan/i);
     expect(diagnostic).not.toContain('task-status.json is missing');
+  });
+
+  it('task-status.json absent + resolvable plan → seedAndCheckAttributionMachinery seeds task-status.json and reports intact', async () => {
+    // Session hooks present and stamp path writable — only task-status.json
+    // is missing, mirroring a fresh dispatch where seeding simply hasn't
+    // happened yet (not a broken-plan scenario).
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-and-check-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+    expect(diagnostic).toBeNull();
+
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+    expect(seeded.tasks).toHaveLength(1);
+    expect(seeded.tasks[0].id).toBe('1');
+    expect(seeded.tasks[0].status).toBe('pending');
   });
 });
