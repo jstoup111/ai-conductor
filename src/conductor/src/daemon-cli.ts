@@ -23,7 +23,7 @@ import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from 
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
-import { holdLock, readPidRecord, ownsLock } from './engine/daemon-lock.js';
+import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
   formatDaemonLogLine,
@@ -438,6 +438,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // surfaces as a cryptic "no parseable result" HALT). The interactive prompt to
   // self-heal lives at `daemon start`.
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
+  // Stamp this process's own engine version onto env BEFORE any GC-triggering
+  // step runs, so publish-engine.mjs's gcVersions call (Task 3) can never
+  // delete the dist-versions/<id> this daemon is currently running out of.
+  Object.assign(process.env, selfGuardEnv());
   await ensureFresh();
   // The local branch worktrees fork from and discovery reads. Resolve origin's
   // real default (main/master/trunk) rather than hardcoding 'main'; the daemon

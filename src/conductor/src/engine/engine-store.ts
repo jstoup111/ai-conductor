@@ -296,7 +296,7 @@ const NO_DELETIONS: Omit<GcVersionsResult, 'deleted'> & { deleted: EngineVersion
  * `src/engine` run, which references no published version and therefore
  * blocks nothing).
  */
-function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
+export function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
   const segments = engineDir.split(/[\\/]/);
   const match = segments.find((segment) => isEngineVersionId(segment));
   return match as EngineVersionId | undefined;
