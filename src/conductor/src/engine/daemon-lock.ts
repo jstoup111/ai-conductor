@@ -23,6 +23,7 @@ import { unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { versionIdFromEngineDir } from './engine-store.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal constants — ONLY place that encodes the pidfile path.
@@ -154,6 +155,25 @@ const defaultKill: KillProbe = (pid, signal) => {
 // is currently executing (dist-versions/<id>/engine, or a dev src/engine dir
 // under ts-node/tsx). Computed once; never derived from caller input.
 const OWN_ENGINE_DIR = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Build the env stamp that tells `publish-engine.mjs`'s `gcVersions` call
+ * (Task 3) which version id backs THIS process's own running dist, so a GC
+ * pass triggered by this daemon can never self-evict itself. The guard flag
+ * is always set; the version id is empty when `OWN_ENGINE_DIR` doesn't embed
+ * a resolvable version id (e.g. a dev/unpublished `src/engine` run) — GC then
+ * runs unprotected rather than blocking on a version that doesn't exist.
+ */
+export function selfGuardEnv(): {
+  CONDUCT_ENGINE_SELF_GUARD: string;
+  CONDUCT_ENGINE_SELF_VERSION: string;
+} {
+  const versionId = versionIdFromEngineDir(OWN_ENGINE_DIR);
+  return {
+    CONDUCT_ENGINE_SELF_GUARD: '1',
+    CONDUCT_ENGINE_SELF_VERSION: versionId ?? '',
+  };
+}
 
 async function writePidfileExcl(repoPath: string, transient?: boolean): Promise<PidRecord> {
   await mkdir(daemonDir(repoPath), { recursive: true });

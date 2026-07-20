@@ -2763,6 +2763,11 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // #569 Task 5: set when a build stall is diagnosed as no_task_progress —
+        // consulted at the terminal fallback below to give the operator a
+        // distinct, actionable HALT reason instead of the generic
+        // "retries exhausted" message.
+        let lastBuildStallReason: string | undefined;
 
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -3433,7 +3438,22 @@ export class Conductor {
                   stalled = 'halt_marker';
                 } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
                   stalled = 'no_task_progress';
+                  // #569 Task 5: record a distinct, actionable reason for
+                  // the terminal HALT fallback in case this build step
+                  // ultimately exhausts retries after this stall.
+                  lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
                 }
+
+                // #569: snapshot the evidence sidecar's noEvidenceReasons
+                // BEFORE the durable-counter block below writes its own
+                // (possibly empty) in-memory `this.taskEvidence` back to
+                // disk — that write clobbers any reason tags a step runner
+                // wrote directly to task-evidence.json this attempt. The
+                // no_task_progress remediation-prompt synthesis further
+                // down needs the pre-clobber tags.
+                const noEvidenceReasonsSnapshotForStall = (
+                  await createTaskEvidence(this.projectRoot)
+                ).noEvidenceReasons;
 
                 // Task 12: Durable no-evidence counter. Increment on EVERY
                 // gate miss without progress (H7 — the counter accrues across
@@ -3633,7 +3653,39 @@ export class Conductor {
                     );
                     // Task 8: save the question for use in degraded remediation error handling
                     stallQuestion = question;
+                  } else if (
+                    stalled === 'no_task_progress' &&
+                    this.daemon &&
+                    this.mode === 'auto'
+                  ) {
+                    // #569: synthesize a remediation prompt from in-scope
+                    // signals so a zero-work stall gets the same /remediate
+                    // dispatch treatment as a halt_marker stall, instead of
+                    // silently skipping it.
+                    const reasonPart = completion.reason
+                      ? `Completion gate: ${completion.reason}`
+                      : 'Completion gate: no progress';
+                    const progressPart =
+                      `Build stall: no forward progress (resolved ` +
+                      `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
+                    // Use the pre-clobber snapshot captured earlier this
+                    // attempt (see `noEvidenceReasonsSnapshotForStall`
+                    // above) rather than the in-memory `this.taskEvidence`,
+                    // which is only ever populated once at construction
+                    // time and the on-disk file, which the durable-counter
+                    // write above may have already overwritten.
+                    const evidenceReasons = noEvidenceReasonsSnapshotForStall;
+                    const evidencePart =
+                      evidenceReasons && evidenceReasons.length > 0
+                        ? ` Evidence: ${evidenceReasons.join(', ')}.`
+                        : '';
+                    const synthesized = `${progressPart} ${reasonPart}.${evidencePart}`;
+                    effectiveQuestion = await writeStallQuestionEvidence(
+                      this.projectRoot,
+                      synthesized,
+                    );
                   }
+                  const isZeroWorkStall = stalled === 'no_task_progress';
 
                   await clearHaltMarker(this.projectRoot);
                   await this.events.emit({
@@ -3649,7 +3701,11 @@ export class Conductor {
                   // is shown instead.
                   if (this.daemon && this.mode === 'auto' && effectiveQuestion) {
                     // Task 8: Budget exhausted — fail-safe HALT with question
-                    if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                    // #569: a zero-work (no_task_progress) stall never
+                    // terminal-HALTs on budget exhaustion from this block —
+                    // it falls through to the existing retry/durable
+                    // no-evidence-counter/auto-park path instead.
+                    if (!isZeroWorkStall && remediationRounds >= MAX_KICKBACKS_PER_GATE) {
                       const haltContent =
                         effectiveQuestion +
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
@@ -3685,32 +3741,46 @@ export class Conductor {
                         state,
                         steps,
                         `Remediate build stall: ${effectiveQuestion}`,
-                        { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+                        {
+                          source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
+                          evidenceFile: '.pipeline/build-stall-question.md',
+                        },
                       );
                     } catch (err) {
                       // Task 8: Degraded remediation exit (throw). Write HALT with question.
                       // The /remediate dispatch itself crashed; log it and use the question
                       // to halt the run so a human can investigate.
                       console.error('build-stall remediation dispatch threw:', err);
-                      const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
 
+                    // #569: when the dispatch threw for a zero-work stall,
+                    // outcome is left undefined (the throw's HALT body was
+                    // skipped above) — there's nothing more to route here,
+                    // so fall straight through to the end of this dispatch
+                    // block without touching outcome.kind.
+                    if (outcome) {
                     if (outcome.kind === 'route') {
                       // Task 5: answerable build stall — resume within the retry loop
                       // instead of rewinding to the outer step loop. When remediation
@@ -3733,26 +3803,31 @@ export class Conductor {
                       // outcome must route back to 'build' (answering the stall question).
                       // If remediation misroutes to a non-build step, halt with the
                       // question to signal the human that remediation is broken.
-                      const detail =
-                        `misrouted to '${outcome.target}': build stall answers must be ` +
-                        `disposition='build', not routed elsewhere.`;
-                      const haltContent = effectiveQuestion + '\n\n' + detail;
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const detail =
+                          `misrouted to '${outcome.target}': build stall answers must be ` +
+                          `disposition='build', not routed elsewhere.`;
+                        const haltContent = effectiveQuestion + '\n\n' + detail;
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
                     if (outcome.kind === 'halt') {
                       // Task 6: Write HALT with question first, then disposition detail.
@@ -3760,48 +3835,59 @@ export class Conductor {
                       // determined requires human DECIDE, avoiding the generic
                       // "retries exhausted" message and ensuring the question is the
                       // first line the human sees.
-                      const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
                     }
                     if (outcome.kind === 'none') {
                       // Task 8: Degraded remediation exit (malformed/stale/dropped).
                       // No valid dispositions from /remediate; halt with the question
                       // so human can investigate why remediation failed.
-                      const haltContent =
-                        effectiveQuestion +
-                        '\n\nremediation produced no valid dispositions ' +
-                        '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
-                      await writeState(this.stateFilePath, state);
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
+                      // #569: a zero-work stall never terminal-HALTs from
+                      // this block — it falls through to the existing
+                      // retry/durable no-evidence-counter/auto-park path.
+                      if (!isZeroWorkStall) {
+                        const haltContent =
+                          effectiveQuestion +
+                          '\n\nremediation produced no valid dispositions ' +
+                          '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
+                        await mkdir(join(this.projectRoot, '.pipeline'), {
+                          recursive: true,
+                        }).catch(() => {});
+                        await writeFile(
+                          join(this.projectRoot, LOOP_HALT_MARKER),
+                          haltContent + '\n',
+                          'utf-8',
+                        ).catch(() => {
+                          /* best-effort marker */
+                        });
+                        await writeState(this.stateFilePath, state);
+                        const prUrl = await this.surfaceRemediationPr(haltContent);
+                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
+                    }
                     }
                   }
 
@@ -4560,12 +4646,19 @@ export class Conductor {
               join(this.projectRoot, LOOP_HALT_MARKER),
               'utf-8',
             ).catch(() => null);
+            // #569 Task 5: a no_task_progress build stall is a more specific
+            // and actionable diagnosis than a generic unchanged-input note,
+            // so it takes precedence over `unchangedInputNote` (but never
+            // over an existing, more-specific HALT marker written by
+            // auto-park/budget-exhaustion/remediation above).
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : unchangedInputNote
-                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : lastBuildStallReason
+                  ? lastBuildStallReason
+                  : unchangedInputNote
+                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );
