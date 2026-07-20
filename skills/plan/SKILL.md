@@ -81,6 +81,8 @@ repo-relative paths corroborate precisely and never collide.
 
 **Wired-into:** [where the new production surface is called from, or an inheritance/waiver form — see below]
 
+**Verify-only:** [yes, or omit — see 5d below]
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
@@ -131,6 +133,20 @@ its Lightweight Mode section), so there is no `## Wiring Surface` section to der
 from. In that case `/plan` self-authors reasonable `Wired-into:` lines directly,
 using the same four-form grammar above, based on its own knowledge of where the
 task's surface will be called from.
+
+### 5d. `Verify-only:` Marker
+
+A task block MAY include a `**Verify-only:** yes` line to declare that the task is
+expected to prove existing behavior already satisfies its acceptance criteria, rather
+than land new code. The match is exact (case-insensitive) on the literal value `yes`;
+any other value, or the line's absence, means the task is NOT verify-only.
+
+Verify-only tasks preferably complete via an empty commit rather than a code commit:
+carry a `Task: <id>` trailer and an `Evidence: skipped <reason>` trailer (see
+`skills/tdd/SKILL.md`'s "Commit-less Completions: Evidence Trailers" section for the
+exact commit form and the sibling `Evidence: satisfied-by <sha>` form). Do not force a
+throwaway code change onto a task just to produce a corroborating commit when the task's
+own acceptance criteria are already met.
 
 ### 4. Task Ordering Rules
 
