@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { TokenUsage } from '../execution/llm-provider.js';
+import { EFFORT_ORDER, MODEL_TIER_ORDER } from './escalation.js';
 
 /**
  * Thrown when events.jsonl cannot be found or read.
@@ -73,12 +74,34 @@ export interface RetryHotspot {
   step: string;
   count: number;
   topReason: string;
+  /**
+   * #188 retry-as-escalation: the terminal escalation rung this step reached —
+   * the highest-ranked `escalatedModel` / `escalatedEffort` observed across its
+   * `step_retry` events (escalation is monotonic, so this is how far up each
+   * ladder the step climbed). Absent when no event carried escalation fields
+   * (a `escalate:false` step, or a pre-#188 event log — backward-compatible).
+   */
+  escalatedModel?: string;
+  escalatedEffort?: string;
 }
 
-/** Retry count + most-common reason per step (only steps that retried). */
+/** Higher index in `order` = further up the ladder. Unknown values rank -1. */
+function pickHigher(
+  current: string | undefined,
+  candidate: string | undefined,
+  order: readonly string[],
+): string | undefined {
+  if (candidate === undefined) return current;
+  if (current === undefined) return candidate;
+  return order.indexOf(candidate) > order.indexOf(current) ? candidate : current;
+}
+
+/** Retry count + most-common reason + terminal escalation rung per step. */
 export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
   const retryCounts = new Map<string, number>();
   const retryReasons = new Map<string, Map<string, number>>();
+  const maxModel = new Map<string, string>();
+  const maxEffort = new Map<string, string>();
   for (const evt of events) {
     if (!evt.step || evt.type !== 'step_retry') continue;
     retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
@@ -89,6 +112,14 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
       retryReasons.set(evt.step, reasons);
     }
     reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+
+    // Track the furthest-up rung seen for this step (monotonic ladder).
+    const em = typeof evt.escalatedModel === 'string' ? evt.escalatedModel : undefined;
+    const ee = typeof evt.escalatedEffort === 'string' ? evt.escalatedEffort : undefined;
+    const higherModel = pickHigher(maxModel.get(evt.step), em, MODEL_TIER_ORDER);
+    if (higherModel !== undefined) maxModel.set(evt.step, higherModel);
+    const higherEffort = pickHigher(maxEffort.get(evt.step), ee, EFFORT_ORDER);
+    if (higherEffort !== undefined) maxEffort.set(evt.step, higherEffort);
   }
   const out: RetryHotspot[] = [];
   for (const [step, count] of retryCounts.entries()) {
@@ -101,7 +132,12 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
         topReason = r;
       }
     }
-    out.push({ step, count, topReason });
+    const hotspot: RetryHotspot = { step, count, topReason };
+    const em = maxModel.get(step);
+    const ee = maxEffort.get(step);
+    if (em !== undefined) hotspot.escalatedModel = em;
+    if (ee !== undefined) hotspot.escalatedEffort = ee;
+    out.push(hotspot);
   }
   out.sort((a, b) => b.count - a.count);
   return out;

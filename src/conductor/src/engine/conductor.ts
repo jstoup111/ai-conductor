@@ -3131,6 +3131,15 @@ export class Conductor {
             }
 
             if (attempt < stepMaxRetries) {
+              // #188: carry the (model, effort) the NEXT attempt will use so
+              // retro Part C can measure how far up the ladder the step climbed.
+              // Omitted entirely when escalate:false (no movement to record, S5).
+              const escNext = escalateAttempt(
+                resolved.model,
+                resolved.effort,
+                attempt + 1,
+                resolved.escalate,
+              );
               await this.events.emit({
                 type: 'step_retry',
                 step: step.name,
@@ -3138,6 +3147,10 @@ export class Conductor {
                 maxAttempts: stepMaxRetries,
                 reason: lastError,
                 ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
+                ...(resolved.escalate && {
+                  escalatedModel: escNext.model,
+                  escalatedEffort: escNext.effort,
+                }),
               });
               continue;
             }
@@ -3972,6 +3985,14 @@ export class Conductor {
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
+                // #188: same escalation annotation as the dispatch-failure emit
+                // above — the (model, effort) the upcoming attempt will use.
+                const escNext = escalateAttempt(
+                  resolved.model,
+                  resolved.effort,
+                  attempt + 1,
+                  resolved.escalate,
+                );
                 await this.events.emit({
                   type: 'step_retry',
                   step: step.name,
@@ -3980,6 +4001,10 @@ export class Conductor {
                   reason: completion.reason ?? 'completion check failed',
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
+                  ...(resolved.escalate && {
+                    escalatedModel: escNext.model,
+                    escalatedEffort: escNext.effort,
+                  }),
                 });
                 // T4: this attempt made forward progress and is under the
                 // progress-attempt ceiling — undo the `attempt++` at the top
