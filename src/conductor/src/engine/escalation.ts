@@ -28,6 +28,12 @@ export const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
  */
 export const MODEL_TIER_ORDER = ['haiku', 'sonnet', 'opus', 'fable'] as const;
 
+/** The (model, effort) an attempt will dispatch at. */
+export interface EscalatedAttempt {
+  model: string;
+  effort: EffortLevel;
+}
+
 /**
  * Bump an effort level `steps` rungs up EFFORT_ORDER, clamped to the top
  * (`max`). An effort already at the top is a no-op (S6). An effort not present
@@ -53,4 +59,35 @@ export function bumpModel(model: string, steps: number): string {
   const advance = steps > 0 ? steps : 0;
   const next = Math.min(idx + advance, MODEL_TIER_ORDER.length - 1);
   return MODEL_TIER_ORDER[next];
+}
+
+/**
+ * Escalation ladder as a pure function of the 1-based `attempt`.
+ *
+ *   escalate === false → base, unchanged (S5 opt-out).
+ *   attempt <= 1       → base (first attempt is never escalated, S1 given).
+ *   attempt === 2      → base model, effort bumped one level (S1).
+ *   attempt >= 3       → model bumped (attempt − 2) tiers, effort held at the
+ *                        attempt-2 level (one bump) (S2).
+ *
+ * Bumps are cumulative, monotonic, and capped at each ladder's top rung —
+ * `escalateAttempt` never de-escalates and never throws (S6, S7).
+ */
+export function escalateAttempt(
+  baseModel: string,
+  baseEffort: EffortLevel,
+  attempt: number,
+  escalate: boolean,
+): EscalatedAttempt {
+  if (escalate === false || attempt <= 1) {
+    return { model: baseModel, effort: baseEffort };
+  }
+  if (attempt === 2) {
+    return { model: baseModel, effort: bumpEffort(baseEffort, 1) };
+  }
+  // attempt >= 3: effort stays at the attempt-2 rung; model climbs.
+  return {
+    model: bumpModel(baseModel, attempt - 2),
+    effort: bumpEffort(baseEffort, 1),
+  };
 }
