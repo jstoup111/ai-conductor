@@ -1321,3 +1321,156 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
     expect(fired).toBeUndefined();
   });
 });
+
+/**
+ * RED (Task 5, #676): pre-dispatch attribution-machinery guard at the
+ * build-step dispatch seam.
+ *
+ * PROBLEM: conductor.ts's build-step dispatch (around the
+ * `writeBuildStepMarker` call, ~2674-2677) currently has no check that the
+ * attribution machinery the enforcement/judge lanes depend on
+ * (`.pipeline/task-status.json`, `.pipeline/session-hooks/`, the
+ * `.pipeline/current-task` stamp path) is actually intact before dispatching
+ * a build step. When enforcement is configured (cutover in the past) and
+ * that machinery is broken/missing, dispatch silently proceeds today — a
+ * later task (Task 6) will add a loud pre-dispatch check here. These tests
+ * assert the desired FUTURE behavior and therefore fail (RED) until Task 6
+ * lands.
+ */
+describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #676)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-machinery-guard-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    // .pipeline exists but is deliberately left WITHOUT session-hooks/ and
+    // WITHOUT task-status.json — the broken-machinery fixture for tests 1
+    // and 2 below.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('build step + broken attribution machinery + enforcement configured → dispatch fails loudly naming attribution machinery / .pipeline/current-task', async () => {
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    // The build step must NOT have been dispatched at all — the guard must
+    // fire before the step runner is ever invoked for 'build'.
+    expect(buildWasDispatched).toBe(false);
+
+    // Dispatch must fail LOUDLY via a HALT marker naming the broken
+    // machinery — not a silent no-op and not a generic/unrelated halt
+    // reason.
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toMatch(/\.pipeline\/current-task|attribution machinery/i);
+  });
+
+  it('non-build step (plan) + broken attribution machinery → dispatch proceeds unaffected', async () => {
+    const dispatchedSteps: string[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        dispatchedSteps.push(step);
+        return { success: true };
+      },
+    };
+
+    // Seed every step before 'plan' as done so the conductor's own
+    // step-ordering preconditions don't block dispatch before we ever
+    // reach the seam under test — mirrors seedToBuildGate's pattern above.
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'plan') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = 'attribution-machinery-guard-fixture';
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      fromStep: 'plan',
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // Plan step dispatched normally.
+    expect(dispatchedSteps).toContain('plan');
+
+    // No HALT related to attribution machinery — the guard is build-step
+    // specific and must not affect non-build steps.
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    }
+  });
+
+  it('build step + healthy/intact attribution machinery + enforcement configured → dispatch proceeds normally', async () => {
+    // Seed intact attribution machinery: task-status.json and
+    // session-hooks/ both present.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(true);
+
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    }
+  });
+});
