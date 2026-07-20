@@ -27,7 +27,7 @@ import { makeGitRunner, type GitRunner } from './rebase.js';
 import { createTaskEvidence, writeJudgedStamps } from './task-evidence.js';
 import { parseAttributionVerdict } from './attribution-verdict.js';
 import { validateCitations } from './attribution-validate.js';
-import { parsePlanTaskPaths } from './autoheal.js';
+import { parsePlanTaskPaths, parsePlanTaskVerifyOnly } from './autoheal.js';
 
 /**
  * Verifier dispatch options.
@@ -496,6 +496,19 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     // Load the plan to extract task paths for citation validation
     const planText = await readFile(planPath, 'utf-8');
     const planTaskPaths = parsePlanTaskPaths(planText);
+    // Task 4 (verify-only-prove-closed-task-evidence): a verify-only task
+    // legitimately has no dedicated commit of its own — its citation proves
+    // closure via evidence that lives on a DIFFERENT task's files (that's
+    // the entire point of "prove closed"). Requiring the citation to
+    // overlap this task's own declared `Files:` lines would defeat the
+    // feature, so the path-overlap check (attribution-validate.ts Check 5)
+    // is relaxed ONLY for verify-only tasks by passing an empty paths set.
+    // Existence, ancestry, non-empty, and not-bookkeeping stay fully
+    // enforced (adr-2026-07-17-verify-only-judged-closure.md Decision 2:
+    // "existing + ancestry, reusing the lane's validation") — forged and
+    // non-ancestor citations are still refused (Task 5's adversarial scope
+    // is untouched).
+    const verifyOnlyMap = parsePlanTaskVerifyOnly(planText);
 
     // Extract unsatisfied verdicts and their reasons
     const unsatisfied = new Map<string, string>();
@@ -518,7 +531,10 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
 
         // Validate citations against the task's declared paths
         if (Array.isArray(citations) && citations.length > 0 && testEvidence) {
-          const taskPaths = planTaskPaths.get(taskId) ?? new Set<string>();
+          const taskPaths =
+            verifyOnlyMap.get(taskId) === true
+              ? new Set<string>()
+              : planTaskPaths.get(taskId) ?? new Set<string>();
           const normalizedCitations = citations.map((c: unknown) => {
             const cObj = c as Record<string, unknown>;
             return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };
