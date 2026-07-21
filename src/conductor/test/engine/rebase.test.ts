@@ -14,10 +14,12 @@ import {
   writeHalt,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  emitGateInvalidationEvents,
   type GitRunner,
   type GitResult,
   type RebaseOutcome,
 } from '../../src/engine/rebase.js';
+import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
@@ -203,11 +205,24 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
   });
 
-  it('changed → rebase satisfied + build/build_review/wiring_check/manual_test kicked back (from rebase)', async () => {
+  it('changed (featureSurface uncomputable) → rebase satisfied + full fail-closed set kicked back (from rebase)', async () => {
+    // No `featureSurface` on this outcome — F is uncomputable, so this
+    // exercises the ADR-2026-07-20 fail-closed fallback, not the delta-aware
+    // classifier. Per the ADR's fail-closed invariant, the fallback set must
+    // cover every judged gate the classifier could otherwise invalidate —
+    // including prd_audit/architecture_review_as_built (ADR amendment; see
+    // the "featureSurface missing" test below for the full rationale).
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
@@ -220,10 +235,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(wiringCheck?.kickback?.from).toBe('rebase');
   });
 
-  it('changed but manual_test did not run → only build kicked back', async () => {
+  it('changed but manual_test did not run (featureSurface uncomputable) → build/build_review/wiring_check/audits kicked back, manual_test excluded', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
   });
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
@@ -242,12 +263,18 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
   });
 
-  it('preVerify capability absent (undefined) → byte-identical behavior, reverified: []', async () => {
+  it('preVerify capability absent (undefined, featureSurface uncomputable) → fail-closed set, reverified: []', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true, undefined);
-    // Verify existing behavior is unchanged (byte-identical)
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     // Verify new field is present and empty when preVerify is absent
     expect(r.reverified).toEqual([]);
     const build = await readVerdict(dir, 'build');
@@ -277,8 +304,15 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Rebase gate satisfied
     expect(r.satisfied).toBe(true);
 
-    // build is reverified, NOT in kickedBack
-    expect(r.kickedBack).toEqual(['build_review', 'wiring_check', 'manual_test']);
+    // build is reverified, NOT in kickedBack (featureSurface uncomputable —
+    // fail-closed set, includes the judged audits per the ADR amendment)
+    expect(r.kickedBack).toEqual([
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -311,8 +345,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Rebase gate satisfied
     expect(r.satisfied).toBe(true);
 
-    // build is kicked back, NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    // build is kicked back, NOT in reverified (featureSurface uncomputable —
+    // fail-closed set, includes the judged audits per the ADR amendment)
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback (byte-identical to today)
@@ -347,8 +389,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Rebase gate satisfied
     expect(r.satisfied).toBe(true);
 
-    // build is kicked back (fail-closed), NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    // build is kicked back (fail-closed), NOT in reverified (featureSurface
+    // uncomputable here too — fail-closed set includes the judged audits)
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with fail-closed kickback
@@ -382,8 +432,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Rebase gate satisfied
     expect(r.satisfied).toBe(true);
 
-    // build is reverified (not in kickedBack), build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build_review', 'wiring_check']);
+    // build is reverified (not in kickedBack), build_review kicked back,
+    // manual_test NOT present (ranManualTest: false); featureSurface is
+    // uncomputable here too, so the fail-closed set still includes the
+    // judged audits (ADR amendment) regardless of ranManualTest.
+    expect(r.kickedBack).toEqual([
+      'build_review',
+      'wiring_check',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -416,7 +474,15 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build and build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
+    // (ranManualTest: false); fail-closed set still includes the judged
+    // audits (featureSurface uncomputable, ADR amendment).
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback
@@ -433,6 +499,327 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // manual_test verdict should NOT be written (ranManualTest: false)
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest).toBeNull();
+  });
+
+  it('Task 6: delta-aware — foreign runtime + feature test file → audits preserved, wiring_check/manual_test invalidated', async () => {
+    // Feature's claimed surface is src/feature.ts only. The rebase delta
+    // touches a foreign runtime file (src/foreign.ts) and one of the
+    // feature's own test files (src/feature.test.ts) — no feature runtime
+    // source changed.
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    // Pre-seed prd_audit / architecture_review_as_built as done so we can
+    // assert they are left untouched (preserved), not overwritten.
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+    await writeVerdict(dir, 'architecture_review_as_built', {
+      satisfied: true,
+      reason: 'prior review',
+      checkedAt: 1,
+    });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    // build_review ('any-codetest') and wiring_check/manual_test
+    // ('all-runtime', foreignSrc non-empty) are invalidated; the two
+    // feature-runtime audits are preserved (featureSrc is empty).
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    expect(r.kickedBack).not.toContain('prd_audit');
+    expect(r.kickedBack).not.toContain('architecture_review_as_built');
+
+    const wiringCheck = await readVerdict(dir, 'wiring_check');
+    expect(wiringCheck?.satisfied).toBe(false);
+    expect(wiringCheck?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+
+    // Preserved audits are untouched — verdict stays exactly what it was.
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(true);
+    expect(prdAudit?.reason).toBe('prior audit');
+    expect(prdAudit?.checkedAt).toBe(1);
+
+    const archReview = await readVerdict(dir, 'architecture_review_as_built');
+    expect(archReview?.satisfied).toBe(true);
+    expect(archReview?.reason).toBe('prior review');
+    expect(archReview?.checkedAt).toBe(1);
+  });
+
+  it('Task 8: emits rebase_gate_invalidated for each invalidated gate with matched delta paths', async () => {
+    // Same delta as the Task 6 fixture above: feature surface is
+    // src/feature.ts only; the rebase delta touches a foreign runtime file
+    // (src/foreign.ts) and a feature test file (src/feature.test.ts). That
+    // invalidates build_review ('any-codetest') and wiring_check/manual_test
+    // ('all-runtime', foreignSrc non-empty), while preserving the
+    // feature-runtime-scoped audits (featureSrc is empty).
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    const events = new ConductorEventEmitter();
+    const invalidated: Array<{ gate: string; matchedPaths: string[] }> = [];
+    events.on('rebase_gate_invalidated', (e) => {
+      if (e.type === 'rebase_gate_invalidated') {
+        invalidated.push({ gate: e.gate, matchedPaths: e.matchedPaths });
+      }
+    });
+
+    await emitGateInvalidationEvents(events, outcome, true);
+
+    const byGate = Object.fromEntries(invalidated.map((e) => [e.gate, e.matchedPaths]));
+    expect(Object.keys(byGate).sort()).toEqual(
+      ['build_review', 'manual_test', 'wiring_check'].sort(),
+    );
+    // wiring_check/manual_test are 'all-runtime' — matchedPaths is
+    // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
+    expect(byGate.wiring_check).toEqual(['src/foreign.ts']);
+    expect(byGate.manual_test).toEqual(['src/foreign.ts']);
+    // build_review is 'any-codetest' — matchedPaths is the full delta.
+    expect(byGate.build_review).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
+    // Preserved audits must not appear at all.
+    expect(byGate.prd_audit).toBeUndefined();
+    expect(byGate.architecture_review_as_built).toBeUndefined();
+  });
+
+  it('Task 9: emits rebase_gate_preserved for each preserved gate with its non-empty declared surface and empty matched delta', async () => {
+    // Same fixture as the Task 8 test above: feature surface is
+    // src/feature.ts only; the delta touches a foreign runtime file and a
+    // feature test file. prd_audit/architecture_review_as_built are
+    // feature-runtime scoped and featureSrc is empty, so both are preserved.
+    //
+    // Field semantics (amended per plan Task 9's own spec — "surface
+    // non-empty and deltaConsidered reflecting D" — and the ADR's audit-trail
+    // requirement): `surface` is the gate's DECLARED dependency surface (what
+    // it depends on — here, the feature's own runtime paths, `F ∩ runtime`),
+    // which is real and non-empty even when preserved; `deltaConsidered` is
+    // the delta actually matched against that surface (empty here — that
+    // emptiness is precisely why the gate was preserved).
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    const events = new ConductorEventEmitter();
+    const preserved: Array<{ gate: string; surface: string[]; deltaConsidered: string[] }> = [];
+    events.on('rebase_gate_preserved', (e) => {
+      if (e.type === 'rebase_gate_preserved') {
+        preserved.push({ gate: e.gate, surface: e.surface, deltaConsidered: e.deltaConsidered });
+      }
+    });
+
+    await emitGateInvalidationEvents(events, outcome, true);
+
+    const byGate = Object.fromEntries(preserved.map((e) => [e.gate, e]));
+    expect(Object.keys(byGate).sort()).toEqual(
+      ['prd_audit', 'architecture_review_as_built'].sort(),
+    );
+    // Declared surface: the feature's own runtime paths (F ∩ runtime) —
+    // 'src/feature.test.ts' is excluded (test path, not runtime).
+    expect(byGate.prd_audit.surface).toEqual(['src/feature.ts']);
+    expect(byGate.architecture_review_as_built.surface).toEqual(['src/feature.ts']);
+    // Matched delta for this gate's surface is empty — nothing in D hit
+    // src/feature.ts, which is exactly why it was preserved.
+    expect(byGate.prd_audit.deltaConsidered).toEqual([]);
+    expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
+    // Invalidated gates must not appear in the preserved set.
+    expect(byGate.build_review).toBeUndefined();
+    expect(byGate.wiring_check).toBeUndefined();
+    expect(byGate.manual_test).toBeUndefined();
+  });
+
+  it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+    await writeVerdict(dir, 'architecture_review_as_built', {
+      satisfied: true,
+      reason: 'prior review',
+      checkedAt: 1,
+    });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(false);
+    expect(prdAudit?.kickback?.from).toBe('rebase');
+
+    const archReview = await readVerdict(dir, 'architecture_review_as_built');
+    expect(archReview?.satisfied).toBe(false);
+    expect(archReview?.kickback?.from).toBe('rebase');
+  });
+
+  it('Task 6: featureSurface missing → falls back to the FULL fail-closed invalidation set (ADR-2026-07-20 amendment)', async () => {
+    // No featureSurface on the outcome — classifyGateInvalidation cannot be
+    // applied, so applyRebaseVerdicts must fall back to the fixed
+    // invalidation set rather than guess.
+    //
+    // This assertion was amended by adr-2026-07-20-post-rebase-delta-aware-
+    // invalidation.md (Task 14, conflict-check resolution): the ORIGINAL
+    // Task 6 behavior left prd_audit/architecture_review_as_built untouched
+    // by this fallback (byte-identical to pre-Task-6 behavior), but the ADR's
+    // fail-closed invariant explicitly requires the opposite — "fall back to
+    // today's invalidate-everything behavior... for every gate whose surface
+    // the delta cannot be proven to miss" — which includes the judged audits.
+    // An uncomputable F can't prove prd_audit's feature-runtime surface was
+    // missed, so leaving it `done` would be an unsound preservation. Tasks
+    // 10/11 hardened this fail-closed path; this test now asserts the
+    // corrected (full) set.
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(false);
+    expect(prdAudit?.kickback?.from).toBe('rebase');
+  });
+
+  it('Task 13 (Property A): preservation never invents a passed gate — a never-run prd_audit stays pending, not flipped to done', async () => {
+    // prd_audit was never run before the rebase (still 'pending' in
+    // .pipeline task-status — no verdict file at all, the same state a
+    // gate has before its first evaluation). The delta classifies prd_audit
+    // as preserved (featureSrc is empty — only a foreign runtime file and a
+    // feature test file changed, same fixture shape as the Task 6/8/9 tests
+    // above).
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    // No verdict written for prd_audit beforehand — it has never run.
+    const before = await readVerdict(dir, 'prd_audit');
+    expect(before).toBeNull();
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    // prd_audit is preserved (not invalidated) — it must not appear in
+    // kickedBack.
+    expect(r.kickedBack).not.toContain('prd_audit');
+
+    // Preservation is a pure no-op: it never writes a verdict for a gate
+    // that never ran. A never-run gate stays exactly as it was —
+    // no-verdict/pending — never manufactured into `done`/satisfied.
+    const after = await readVerdict(dir, 'prd_audit');
+    expect(after).toBeNull();
+    expect(after?.satisfied).not.toBe(true);
+  });
+
+  it("Task 13 (Property B): build's pre-verify path is unaffected by delta classification — identical treatment across feature-runtime, foreign-runtime, and test-only deltas", async () => {
+    // build is excluded from GATE_SURFACE/classifyGateInvalidation (confirmed
+    // by grep — it is not a key in GATE_SURFACE). Its invalidation/re-verify
+    // decision is driven solely by the ADR-2026-07-08 preVerify('build') pass,
+    // never by the delta's feature/foreign/test-only classification. Assert
+    // build's outcome (kicked back vs re-verified) is byte-identical across
+    // three deltas that classify very differently for the judged gates.
+    const preVerifyDone = async () => ({ done: true });
+    const preVerifyNotDone = async () => ({ done: false, reason: 'no evidence' });
+
+    const deltas: Array<{ label: string; outcome: RebaseOutcome }> = [
+      {
+        label: 'feature-runtime delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+      },
+      {
+        label: 'foreign-runtime delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/foreign.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+      },
+      {
+        label: 'test-only delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.test.ts'],
+          featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+        },
+      },
+    ];
+
+    for (const { outcome } of deltas) {
+      // Case 1: preVerify('build') confirms evidence-intact → re-verified,
+      // regardless of how the delta classifies for the judged gates.
+      const dirA = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
+      await mkdir(join(dirA, '.pipeline'), { recursive: true });
+      try {
+        const rA = await applyRebaseVerdicts(dirA, outcome, true, preVerifyDone);
+        expect(rA.reverified).toEqual(['build']);
+        expect(rA.kickedBack).not.toContain('build');
+        const buildA = await readVerdict(dirA, 'build');
+        expect(buildA?.satisfied).toBe(true);
+        expect(buildA?.reason).toBe(
+          're-verified mechanically after file-changing rebase — evidence remains intact',
+        );
+      } finally {
+        await rm(dirA, { recursive: true, force: true });
+      }
+
+      // Case 2: preVerify('build') finds evidence stale → kicked back,
+      // again regardless of the delta's judged-gate classification.
+      const dirB = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
+      await mkdir(join(dirB, '.pipeline'), { recursive: true });
+      try {
+        const rB = await applyRebaseVerdicts(dirB, outcome, true, preVerifyNotDone);
+        expect(rB.kickedBack).toContain('build');
+        expect(rB.reverified).toEqual([]);
+        const buildB = await readVerdict(dirB, 'build');
+        expect(buildB?.satisfied).toBe(false);
+        expect(buildB?.reason).toBe('invalidated by file-changing rebase');
+      } finally {
+        await rm(dirB, { recursive: true, force: true });
+      }
+    }
+
+    // Confirm classifyGateInvalidation itself never reads or emits `build` —
+    // it is not a key in GATE_SURFACE (grep-confirmed statically), so
+    // invalidated/preserved never contain it regardless of delta shape.
+    for (const { outcome } of deltas) {
+      if (outcome.kind !== 'changed' || !outcome.featureSurface) continue;
+      const { invalidated, preserved } = classifyGateInvalidation(
+        outcome.changedCodePaths,
+        outcome.featureSurface,
+        true,
+      );
+      expect(invalidated).not.toContain('build');
+      expect(preserved).not.toContain('build');
+    }
   });
 });
 
@@ -740,6 +1127,35 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     }
   }, 20000);
 
+  it('Task 5: carries the feature claimed surface F (changedPathsBetween(mergeBase, preTree)) on the `changed` outcome', async () => {
+    const { performRebase, makeGitRunner, changedPathsBetween } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const preTree = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const git = makeGitRunner(repo);
+    const expectedFeatureSurface = await changedPathsBetween(git, mergeBase, preTree);
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind === 'changed') {
+      expect(outcome.featureSurface).toEqual(expectedFeatureSurface);
+      expect(outcome.featureSurface).toContain('a.ts');
+    }
+  }, 20000);
+
   // Story 9 (amended, FR-9 remediation): classifyClean's `noop` is a code-path
   // heuristic for downstream re-verification, NOT the translation gate. A clean
   // rebase over a docs-only base advance reports `noop` yet still rewrites every
@@ -828,5 +1244,213 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     // …and NO residue is written.
     await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
+  }, 20000);
+});
+
+describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-f10-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('mergeBase unavailable (merge-base fails but leaks a bogus ref) → featureSurface undefined, fixed-set fallback applied', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Simulate a genuinely uncomputable mergeBase: the underlying `git
+    // merge-base` call fails (no common ancestor / shallow clone) but still
+    // leaks a non-empty, bogus ref on stdout — the case NOT already covered
+    // by the existing `mergeBase || undefined` empty-string check.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'merge-base') {
+        return {
+          exitCode: 1,
+          stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+          stderr: 'fatal: no merge base',
+        };
+      }
+      return real(args, opts);
+    };
+
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind === 'changed') {
+      // Never [] — that would falsely mean "feature touched nothing" and
+      // trigger unsound preservation.
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-f10a-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome, true);
+    // Fail-closed set (ADR-2026-07-20 amendment): includes the judged
+    // audits, not just the pre-#655 fixed four.
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+    await rm(pdir, { recursive: true, force: true });
+  }, 20000);
+
+  it('F diff (mergeBase..preTree) throws → featureSurface undefined, performRebase does not throw/reject', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Only the F diff call (the one addressed by mergeBase) throws — the D
+    // diff call (preTree..HEAD) and everything else runs for real.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'diff' && args.includes(mergeBase)) {
+        throw new Error('simulated git crash computing F');
+      }
+      return real(args, opts);
+    };
+
+    let outcome: RebaseOutcome | undefined;
+    await expect(
+      (async () => {
+        outcome = await performRebase(git, repo, 'main');
+      })(),
+    ).resolves.not.toThrow();
+
+    expect(outcome?.kind).toBe('changed');
+    if (outcome?.kind === 'changed') {
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-f10b-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome as RebaseOutcome, true);
+    // Fail-closed set (ADR-2026-07-20 amendment): includes the judged
+    // audits, not just the pre-#655 fixed four.
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+    await rm(pdir, { recursive: true, force: true });
+  }, 20000);
+});
+
+describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-d11-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('D diff (preTree..HEAD) throws → performRebase does not throw/reject, fixed-set fallback applied', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const preTree = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Only the D diff call (the one addressed by preTree..HEAD) throws —
+    // everything else (mergeBase, F diff, rebase itself) runs for real.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'diff' && args.includes(preTree) && args.includes('HEAD')) {
+        throw new Error('simulated git crash computing D');
+      }
+      return real(args, opts);
+    };
+
+    let outcome: RebaseOutcome | undefined;
+    await expect(
+      (async () => {
+        outcome = await performRebase(git, repo, 'main');
+      })(),
+    ).resolves.not.toThrow();
+
+    // Uncomputable D must not be silently treated as "no code/test paths
+    // changed" (would falsely noop) or as a delta-aware-eligible outcome —
+    // it must force fallback to the fixed invalidation set, exactly like
+    // an uncomputable F.
+    expect(outcome?.kind).toBe('changed');
+    if (outcome?.kind === 'changed') {
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-d11-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome as RebaseOutcome, true);
+    // Fail-closed set (ADR-2026-07-20 amendment): includes the judged
+    // audits, not just the pre-#655 fixed four.
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+    await rm(pdir, { recursive: true, force: true });
   }, 20000);
 });

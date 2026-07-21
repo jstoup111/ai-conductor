@@ -285,8 +285,8 @@ manual_test/wiring_check" (happy paths)
 4. Verify GREEN.
 5. Commit: "fix(engine): preserve only already-satisfied gates; keep build on pre-verify"
 **Files likely touched:**
-- `src/conductor/src/engine/rebase.ts` / `conductor.ts` — guard
-- `src/conductor/test/engine/*` — both cases
+- `src/conductor/test/engine/rebase.test.ts` — both cases (test-only: both invariants
+  already held by construction from Tasks 4-11's fail-closed, preserved-list-only design)
 **Wired-into:** none (no new production surface)
 **Dependencies:** Task 6, Task 7
 

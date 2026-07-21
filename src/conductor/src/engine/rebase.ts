@@ -7,6 +7,12 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
+import {
+  classifyGateInvalidation,
+  partitionDelta,
+  GATE_SURFACE,
+  isRuntimeSourcePath,
+} from './gate-invalidation.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -346,7 +352,7 @@ export async function writeHalt(
 
 export type RebaseOutcome =
   | { kind: 'noop' }
-  | { kind: 'changed'; changedCodePaths: string[] }
+  | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
   | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
@@ -432,7 +438,7 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
-    const outcome = await classifyClean(git, preTree);
+    const outcome = await classifyClean(git, preTree, mergeBase);
     // Every clean rebase that reaches here rewrites commit shas (the parent
     // changed), regardless of whether classifyClean's code-path heuristic
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
@@ -501,11 +507,47 @@ async function captureFeatureChangelog(
 async function classifyClean(
   git: GitRunner,
   preTree: string,
+  mergeBase?: string,
 ): Promise<RebaseOutcome> {
-  const changed = await changedPathsBetween(git, preTree, 'HEAD');
+  // D: the rebase delta (preTree..HEAD). If this diff itself throws (a git
+  // process crash, not just a non-zero exit — `changedPathsBetween` already
+  // treats a non-zero exit as `[]`), D is uncomputable. A delta-aware
+  // decision requires D to be trustworthy — an uncomputable D must never be
+  // silently treated as "no code/test paths changed" (that would falsely
+  // noop) nor left eligible for delta-aware invalidation. Fail closed by
+  // treating it as if code/test paths changed AND forcing featureSurface to
+  // undefined, so `applyRebaseVerdicts`/`classifyGateInvalidation` fall back
+  // to the fixed invalidation set exactly like an uncomputable F.
+  let changed: string[];
+  let dUncomputable = false;
+  try {
+    changed = await changedPathsBetween(git, preTree, 'HEAD');
+  } catch {
+    changed = [];
+    dUncomputable = true;
+  }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (codePaths.length === 0) return { kind: 'noop' };
-  return { kind: 'changed', changedCodePaths: codePaths };
+  if (!dUncomputable && codePaths.length === 0) return { kind: 'noop' };
+  // F: the feature's own claimed surface — files the feature's commits
+  // touched, before the rebase (mergeBase..preTree). Threaded onto the
+  // outcome for the delta-aware gate-invalidation classifier (Task 6+);
+  // this task only computes and carries it through.
+  let featureSurface: string[] | undefined;
+  if (!dUncomputable && mergeBase) {
+    try {
+      const r = await git(['diff', '--name-only', mergeBase, preTree]);
+      featureSurface =
+        r.exitCode !== 0
+          ? undefined
+          : r.stdout
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+    } catch {
+      featureSurface = undefined;
+    }
+  }
+  return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
 }
 
 /**
@@ -800,7 +842,9 @@ export async function applyRebaseVerdicts(
         ? 'branch already current with base'
         : outcome.kind === 'changelog_resolved'
           ? 'CHANGELOG-only conflict auto-resolved; branch current'
-          : 'rebased onto base (code changed — downstream re-verify)',
+          : outcome.featureSurface === undefined
+            ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
+            : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
   };
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
@@ -854,9 +898,44 @@ export async function applyRebaseVerdicts(
   // asserts new code is actually reachable from an entry point, which a
   // file-changing rebase can falsify just as easily as build_review's
   // grading, so it must be invalidated the same way (Task 11).
-  const targets: StepName[] = ranManualTest
-    ? ['build', 'build_review', 'wiring_check', 'manual_test']
-    : ['build', 'build_review', 'wiring_check'];
+  // Task 6 (ADR-2026-07-20): when the feature's claimed surface (F) is
+  // available, select the invalidation set via classifyGateInvalidation
+  // instead of the fixed set — a delta that never touches the feature's own
+  // runtime source (only foreign runtime, or test/docs paths) preserves the
+  // feature-runtime-scoped judged gates (prd_audit,
+  // architecture_review_as_built) rather than blindly re-opening them.
+  //
+  // Fallback (Tasks 10-11 harden this further): if `featureSurface` is
+  // missing on the outcome, F is uncomputable — fall back to the FULL
+  // legacy invalidate-all set as a safe default rather than guess. Per the
+  // ADR's fail-closed invariant, this must cover every judged gate this
+  // feature's classifier can invalidate — not just the pre-#655 fixed four
+  // — or a gate whose surface can't be proven to miss the delta would be
+  // silently left un-re-verified (prd_audit/architecture_review_as_built
+  // included).
+  const targets: StepName[] =
+    outcome.featureSurface !== undefined
+      ? ([
+          'build',
+          ...classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
+            .invalidated,
+        ] as StepName[])
+      : ranManualTest
+        ? ([
+            'build',
+            'build_review',
+            'wiring_check',
+            'manual_test',
+            'prd_audit',
+            'architecture_review_as_built',
+          ] as StepName[])
+        : ([
+            'build',
+            'build_review',
+            'wiring_check',
+            'prd_audit',
+            'architecture_review_as_built',
+          ] as StepName[]);
   for (const target of targets) {
     // Skip build if it was pre-verified (already wrote verdict above).
     if (target === 'build' && buildReVerified) {
@@ -893,6 +972,87 @@ export async function recordRebaseStepCompletion(
 ): Promise<void> {
   if (outcome.kind === 'conflict_halt') return;
   await saveStepStatus(stateFilePath, 'rebase', 'done');
+}
+
+/**
+ * Emit a `rebase_gate_invalidated` or `rebase_gate_preserved` event for
+ * every judged gate `classifyGateInvalidation` classified (Tasks 8-9,
+ * ADR-2026-07-20).
+ *
+ * For invalidated gates, `matchedPaths` carries only the delta paths that
+ * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
+ *   - 'feature-runtime' (prd_audit, architecture_review_as_built): featureSrc.
+ *   - 'all-runtime' (build_review, wiring_check, manual_test): featureSrc ∪
+ *     foreignSrc.
+ *   - 'any-codetest': the full delta (test ∪ featureSrc ∪ foreignSrc).
+ *
+ * For preserved gates, `surface` is the gate's DECLARED dependency surface
+ * (non-empty — what the gate depends on, per the ADR decision table), not
+ * the (empty, by construction) intersection with the delta — a preserved
+ * gate still has a real declared surface, it simply wasn't hit. For
+ * 'feature-runtime' kind this is `F ∩ runtime` (the feature's own runtime
+ * paths); for 'all-runtime'/'any-codetest' kind — whose declared surface is
+ * the whole runtime tree and isn't a finite path list derivable from this
+ * rebase's delta — a descriptive sentinel is used instead.
+ * `deltaConsidered` carries the same per-kind matched-path computation as
+ * `matchedPaths` above (empty for a preserved gate, by construction — that
+ * emptiness is precisely why it was preserved).
+ *
+ * A no-op when the outcome isn't a file-changing rebase, or `featureSurface`
+ * is unavailable (classifyGateInvalidation cannot be applied — see the
+ * fixed-set fallback in applyRebaseVerdicts).
+ */
+export async function emitGateInvalidationEvents(
+  events: ConductorEventEmitter,
+  outcome: RebaseOutcome,
+  ranManualTest: boolean,
+): Promise<void> {
+  if (outcome.kind !== 'changed' || outcome.featureSurface === undefined) return;
+
+  const { invalidated, preserved } = classifyGateInvalidation(
+    outcome.changedCodePaths,
+    outcome.featureSurface,
+    ranManualTest,
+  );
+  const { test, featureSrc, foreignSrc } = partitionDelta(
+    outcome.changedCodePaths,
+    outcome.featureSurface,
+  );
+
+  const matchedPathsFor = (gate: string): string[] => {
+    const surface = GATE_SURFACE[gate];
+    return surface === 'feature-runtime'
+      ? featureSrc
+      : surface === 'all-runtime'
+        ? [...featureSrc, ...foreignSrc]
+        : [...test, ...featureSrc, ...foreignSrc];
+  };
+
+  // Declared dependency surface (what the gate depends on) — distinct from
+  // matchedPathsFor's delta-intersection. Non-empty even when the gate is
+  // preserved (it always has real inputs; it just wasn't hit this rebase).
+  const featureRuntimeSurface = outcome.featureSurface.filter(isRuntimeSourcePath);
+  const declaredSurfaceFor = (gate: string): string[] => {
+    const surface = GATE_SURFACE[gate];
+    return surface === 'feature-runtime' ? featureRuntimeSurface : ['<all runtime source>'];
+  };
+
+  for (const gate of invalidated) {
+    await events.emit({
+      type: 'rebase_gate_invalidated',
+      gate: gate as StepName,
+      matchedPaths: matchedPathsFor(gate),
+    });
+  }
+
+  for (const gate of preserved) {
+    await events.emit({
+      type: 'rebase_gate_preserved',
+      gate: gate as StepName,
+      surface: declaredSurfaceFor(gate),
+      deltaConsidered: matchedPathsFor(gate),
+    });
+  }
 }
 
 /** Map a rebase outcome to its structured event. Best-effort emission. */

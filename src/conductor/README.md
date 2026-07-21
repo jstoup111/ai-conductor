@@ -389,9 +389,25 @@ stale base:
   fails or throws, identical to prior behavior: `{satisfied:false, kickback:{from:'rebase'}}` for
   `build` (+`manual_test` if it ran) and the selector routes back to `build` (fail-closed).
   Consequence: evidence-complete rebases drop from ~45–60 min build-agent dispatch to ~1–2 min
-  mechanical re-derivation; evidence-missing rebases re-dispatch normally. `build_review` and
-  `manual_test` remain unconditionally invalidated. A **docs-only / CHANGELOG-only** change does
-  **not** invalidate. See `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+  mechanical re-derivation; evidence-missing rebases re-dispatch normally. A **docs-only /
+  CHANGELOG-only** change does **not** invalidate. See
+  `.docs/decisions/adr-2026-07-08-post-rebase-gate-first-mechanical-reverify.md`.
+- **Delta-aware invalidation of judged gates** — `build_review`, `wiring_check`, `manual_test`,
+  `prd_audit`, and `architecture_review_as_built` are no longer unconditionally invalidated on
+  every rebase. `engine/gate-invalidation.ts` classifies each gate's surface (`build_review` →
+  any code/test path; `wiring_check`/`manual_test` → any runtime source path; `prd_audit`/
+  `architecture_review_as_built` → the feature's own claimed runtime surface, i.e.
+  `mergeBase..preTree`) and compares it against the rebase delta `D` (`preTree..HEAD`). A
+  gate whose declared surface the delta doesn't touch is **preserved** (its existing verdict
+  stands, no re-run); a gate whose surface the delta does touch is **invalidated** and re-runs
+  as before. This is on top of, not instead of, the `build` gate's own pre-verify path above.
+  Net effect: a rebase whose delta is test-only or touches only foreign (non-feature) files no
+  longer forces a full re-run of every judged gate — only the gates whose actual surface the
+  delta touches re-run. **Fails closed** to the old blanket-invalidate-everything behavior
+  whenever the delta `D` or the feature surface `F` is uncomputable (git errors, missing
+  merge-base) — it never silently under-invalidates. Each preserve/invalidate decision emits an
+  audit event: `rebase_gate_preserved` (`gate`, `surface`, `deltaConsidered`) or
+  `rebase_gate_invalidated` (`gate`, `matchedPaths`).
 - **CHANGELOG auto-resolve** — when `CHANGELOG.md` is the **sole** conflict and it's inside
   `## [Unreleased]`, the resolver takes the base's merged entries and re-appends this
   feature's `[Unreleased]` lines (captured `base..HEAD` pre-rebase) exactly once, then
