@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Added the missing `bin/intake-file` repo-root wrapper (the intake skill
+  instructs running `bin/intake-file`, but only `src/conductor/bin/intake-file`
+  existed; sibling `bin/intake-backfill` had a wrapper). Convention DECIDE
+  captured as #742.
+
 - Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
   diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
   without a mermaid fence; enforcement gap captured as #729).
