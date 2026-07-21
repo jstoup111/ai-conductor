@@ -34,6 +34,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   repository — an indeterminate reachability check now fails open (preserves the
   pin) instead of throwing, fixing a regression that broke unrelated gate-loop,
   conductor, and evidence-cli test suites relying on placeholder shas.
+### Fixed
+
+- Daemon build progress counter (`▶ build X/N`) now increments live from
+  git-derived task completion during a session, instead of staying at `0/N`
+  until the gate boundary (#757).
 
 ### Removed
 
