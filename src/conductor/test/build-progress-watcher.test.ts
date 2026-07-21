@@ -427,6 +427,26 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(buildProgressEvents()).toHaveLength(0);
   });
 
+  it('emits nothing (no 0/0 event) and does not throw when task-status.json is missing and planPath is also unresolvable', async () => {
+    // No writeTasks() call — .pipeline/task-status.json is missing. planPath
+    // points at a nonexistent file, so derivation is unavailable too. Both
+    // sources unavailable must preserve the existing "no data, skip this
+    // tick" behavior rather than emitting a bogus 0/0 progress event.
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+      planPath: join(dir, 'nonexistent-plan.md'),
+    });
+    watcher.start();
+
+    await expect(tick(watcher)).resolves.toBeUndefined();
+    watcher.stop();
+
+    expect(buildProgressEvents()).toHaveLength(0);
+  });
+
   it('carries featureSlug and noEvidenceAttempts on the emitted payload', async () => {
     await writeTasks(5, 21);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
