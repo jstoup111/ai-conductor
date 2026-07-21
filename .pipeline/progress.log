@@ -1,0 +1,4 @@
+## Batch 1 — 2026-07-21 (final batch, Small tier)
+- Completed: 1-13 (all tasks) | Rework: 0 cycles | Evaluator: APPROVE
+- Issue: 2 subagent dispatches (Task 3, Task 11) stalled without committing on first attempt due to nested sub-agent stamp loss; both succeeded on retry with direct-edit instruction
+- Next: none — feature complete, ready for /finish | State: 13/13 tasks, all tests passing, merge-ready
