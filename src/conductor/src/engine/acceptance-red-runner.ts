@@ -180,11 +180,14 @@ export type SelfHealAcceptanceRedResult =
   | { healed: false; reason: string };
 
 /**
- * Orchestrates a self-healing RED-evidence run: reads and validates the
- * acceptance run contract, cross-checks it against the feature's committed
- * spec files, guards its cwd, executes it via the injected `exec`, relocates
- * any stray nested marker, writes the result at the authoritative root path,
- * and re-validates with the existing {@link validateAcceptanceRedEvidence}.
+ * Orchestrates a self-healing RED-evidence run: first relocates any stray
+ * marker left nested from a PRIOR run up to the authoritative root path,
+ * then reads and validates the acceptance run contract, cross-checks it
+ * against the feature's committed spec files, guards its cwd, executes it
+ * via the injected `exec`, writes the fresh result at the authoritative root
+ * path (unconditionally, since a freshly executed result always supersedes
+ * whatever was there before), and re-validates with the existing
+ * {@link validateAcceptanceRedEvidence}.
  *
  * Any guard failure (parse/cross-check/cwd) short-circuits before `exec` is
  * ever called.
@@ -194,6 +197,13 @@ export async function selfHealAcceptanceRed(
 ): Promise<SelfHealAcceptanceRedResult> {
   const { worktree, specFiles, exec } = params;
   const resolvedRoot = resolve(worktree);
+
+  // Recover any stray marker left nested from a PRIOR run before doing
+  // anything else. This is independent of the current run's fresh result:
+  // it only promotes a nested marker to root when no root marker already
+  // exists, so it never clobbers a marker from this (or a prior) run.
+  normalizeNestedRedMarker(resolvedRoot);
+
   const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
 
   if (!existsSync(contractPath)) {
@@ -220,7 +230,6 @@ export async function selfHealAcceptanceRed(
   const resolvedCwd = resolve(resolvedRoot, contract.cwd);
   const execResult = await exec(contract.command, { cwd: resolvedCwd });
 
-  normalizeNestedRedMarker(resolvedRoot);
   writeRedMarkerAtRoot(resolvedRoot, execResult);
 
   const markerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
