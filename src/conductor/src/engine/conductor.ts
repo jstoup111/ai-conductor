@@ -6278,6 +6278,18 @@ export function buildRetryHint(
       '`finish-record` exits 0.'
     );
   }
+  if (step === 'manual_test') {
+    if (/is missing/i.test(r)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        'Record manual-test results now via:\n' +
+        '  conduct-ts manual-test-record --results <path> --pipeline-dir <dir>\n' +
+        'or, if this is an automated/headless run with no human tester available:\n' +
+        '  conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>'
+      );
+    }
+    return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
+  }
   if (step === 'build') {
     if (/tasks? not completed/i.test(r)) {
       return (

@@ -8940,6 +8940,22 @@ describe('buildRetryHint', () => {
     const hint = buildRetryHint('build', 'no tasks in task-status.json');
     expect(hint).toContain('.docs/plans');
   });
+
+  it('cites manual-test-record for a missing manual_test marker', () => {
+    const hint = buildRetryHint(
+      'manual_test',
+      '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+    );
+    expect(hint).toContain('conduct-ts manual-test-record');
+  });
+
+  it('does not mention --skip for a manual_test FAIL-reason miss', () => {
+    const hint = buildRetryHint(
+      'manual_test',
+      '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
+    );
+    expect(hint).not.toContain('--skip');
+  });
 });
 
 describe('auto-heal', () => {
