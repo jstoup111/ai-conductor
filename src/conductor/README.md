@@ -996,6 +996,11 @@ things on top of that, without a parallel dispatch path:
   `daemon.log` — five groups with precedence
   **HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE** (WAITING lists build-ready specs
   held back by an unresolved dependency — see "Dependency-ordered intake and dispatch" below).
+  **By default the PROCESSED group is hidden from both the console and `daemon.log`.**
+  `conduct-ts daemon --completed` (or the `--all` alias) shows the PROCESSED group on
+  the **console only**; `.daemon/daemon.log` never includes it, regardless of the flag.
+  `conduct-ts daemon-status` (`daemon-observe-cli.ts`) is unaffected — it already never
+  rendered PROCESSED.
   Each row carries the bits an operator triages on, mined best-effort from the worktree's
   `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
   + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last

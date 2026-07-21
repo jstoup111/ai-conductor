@@ -533,7 +533,12 @@ pipeline.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
-terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+terminal and `daemon.log`. **By default the PROCESSED (completed) group is omitted**
+from both the console and the persisted `.daemon/daemon.log`. Pass `conduct-ts daemon
+--completed` (or `--all`) to additionally show the PROCESSED group **on the console
+only** — `.daemon/daemon.log` never includes the PROCESSED group, regardless of the
+flag. This does not affect `conduct-ts daemon-status`, which never rendered PROCESSED.
+Each row shows the bits you triage on — complexity tier, the step a
 feature reached, and the PR link once one is open (shipped features list their PR too).
 **WAITING** lists build-ready specs held back by an unresolved GitHub issue dependency (a
 `Source-Ref:` marker linked via GitHub's issue-dependencies API): the gate resolves each spec's
