@@ -1,7 +1,19 @@
 import { describe, it, expect } from 'vitest';
 
-import { enumerateUnmergedBranches, intersectFiles } from '../../src/engine/overlap-scan.js';
+import { enumerateUnmergedBranches, intersectFiles, blockerSweep } from '../../src/engine/overlap-scan.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
+import type { BlockerResolver, BlockerVerdict } from '../../src/engine/blocker-resolver.js';
+
+function fakeResolver(verdict: BlockerVerdict): { resolver: BlockerResolver; calls: string[] } {
+  const calls: string[] = [];
+  const resolver: BlockerResolver = {
+    async resolve(sourceRef: string) {
+      calls.push(sourceRef);
+      return verdict;
+    },
+  };
+  return { resolver, calls };
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results (mirrors the
 // fakeGit convention in test/engine/rebase.test.ts).
@@ -107,5 +119,48 @@ describe('engine/overlap-scan — intersectFiles (Task 2)', () => {
 
   it('returns an empty array when the candidate list is empty', () => {
     expect(intersectFiles([], ['a.ts', 'b.ts'])).toEqual([]);
+  });
+});
+
+describe('engine/overlap-scan — blockerSweep (Task 3)', () => {
+  it('lists open blockers when the resolver verdict is blocked', async () => {
+    const { resolver, calls } = fakeResolver({
+      kind: 'blocked',
+      blockers: [{ repo: 'org/repo', number: 'A' }],
+    });
+
+    const result = await blockerSweep('org/repo#42', resolver);
+
+    expect(result.blockers).toEqual([{ repo: 'org/repo', number: 'A' }]);
+    expect(result.indeterminate).toEqual([]);
+    expect(calls).toEqual(['org/repo#42']);
+  });
+
+  it('returns no blockers/indeterminate when the resolver verdict is unblocked', async () => {
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await blockerSweep('org/repo#42', resolver);
+
+    expect(result.blockers).toEqual([]);
+    expect(result.indeterminate).toEqual([]);
+  });
+
+  it('surfaces indeterminate verdicts with detail', async () => {
+    const { resolver } = fakeResolver({ kind: 'indeterminate', detail: 'gh api timed out' });
+
+    const result = await blockerSweep('org/repo#42', resolver);
+
+    expect(result.blockers).toEqual([]);
+    expect(result.indeterminate).toEqual([{ detail: 'gh api timed out' }]);
+  });
+
+  it('skips the sweep entirely when sourceRef is absent — resolver never called', async () => {
+    const { resolver, calls } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await blockerSweep(undefined, resolver);
+
+    expect(result.blockers).toEqual([]);
+    expect(result.indeterminate).toEqual([]);
+    expect(calls).toEqual([]);
   });
 });

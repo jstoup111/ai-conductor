@@ -93,11 +93,36 @@ export function intersectFiles(candidate: string[], changed: string[]): string[]
   return result;
 }
 
-export function blockerSweep(
-  _sourceRef: string | undefined,
-  _resolver: BlockerResolver,
+/**
+ * Sweep for open blockers on `sourceRef`, delegating the blocked_by API call
+ * and closed-blocker filtering entirely to the injected `resolver` — this
+ * function only maps the resulting verdict onto the overlap report shape.
+ * Absent `sourceRef` (no linked issue) skips the sweep without calling the
+ * resolver at all.
+ */
+export async function blockerSweep(
+  sourceRef: string | undefined,
+  resolver: BlockerResolver,
 ): Promise<{ blockers: IssueRef[]; indeterminate: { detail: string }[] }> {
-  throw new Error('not implemented: blockerSweep (Task 3)');
+  if (!sourceRef) {
+    return { blockers: [], indeterminate: [] };
+  }
+
+  const verdict = await resolver.resolve(sourceRef);
+  switch (verdict.kind) {
+    case 'blocked':
+      return { blockers: verdict.blockers, indeterminate: [] };
+    case 'indeterminate':
+      return { blockers: [], indeterminate: [{ detail: verdict.detail }] };
+    case 'cycle':
+      return {
+        blockers: [],
+        indeterminate: [{ detail: `dependency cycle detected among: ${verdict.members.map((m) => `${m.repo}#${m.number}`).join(', ')}` }],
+      };
+    case 'unblocked':
+    default:
+      return { blockers: [], indeterminate: [] };
+  }
 }
 
 export function runOverlapScan(_args: RunOverlapScanArgs): Promise<OverlapReport> {
