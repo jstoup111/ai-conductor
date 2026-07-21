@@ -155,6 +155,12 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   conflict_check: {
     L: { model: 'fable' },
   },
+  explore: {
+    S: { effort: 'low' },
+  },
+  build: {
+    S: { max_retries: 3 },
+  },
 };
 
 export const FALLBACK_MODEL = 'sonnet';

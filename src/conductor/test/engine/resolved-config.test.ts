@@ -276,6 +276,13 @@ describe('engine/resolved-config', () => {
       const rL = resolveStepConfig('stories', 'DECIDE', undefined, { tier: 'L' });
       expect(rL.effort).toBe('high');
     });
+
+    it('explore and build S-tier overrides — explore low effort, build max_retries 3', () => {
+      const rExplore = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'S' });
+      expect(rExplore.effort).toBe('low');
+      const rBuild = resolveStepConfig('build', 'BUILD', undefined, { tier: 'S' });
+      expect(rBuild.max_retries).toBe(3);
+    });
   });
 
   describe('resolveStepConfig — skill / hooks / disable passthrough', () => {
