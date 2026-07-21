@@ -283,6 +283,18 @@ describe('engine/resolved-config', () => {
       const rBuild = resolveStepConfig('build', 'BUILD', undefined, { tier: 'S' });
       expect(rBuild.max_retries).toBe(3);
     });
+
+    it('explore/build S-tier rows carry no M/L keys — M/L resolution unchanged', () => {
+      // Guard: DEFAULT_STEP_TIER_OVERRIDES.explore and .build only define an
+      // S row. M and L tiers must fall through to the untouched base config.
+      const rExploreM = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'M' });
+      expect(rExploreM.effort).toBe('medium');
+      const rExploreL = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'L' });
+      expect(rExploreL.effort).toBe('medium');
+
+      const rBuildL = resolveStepConfig('build', 'BUILD', undefined, { tier: 'L' });
+      expect(rBuildL.max_retries).toBe(3); // base DEFAULT_STEP_RETRIES.build, not an override
+    });
   });
 
   describe('resolveStepConfig — skill / hooks / disable passthrough', () => {
