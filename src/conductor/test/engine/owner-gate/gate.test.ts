@@ -130,3 +130,33 @@ describe('decideSpecGate — explicit cross-operator ownership still skips, byte
     ).toEqual({ build: true });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 5 (FR-4, verify-only): decideSpecGate is a pure decision function whose
+// GateDecision return type has no "throw" / "halt" arm — a missing `Owner:`
+// marker is ALWAYS resolved to a plain returned decision, never an exception.
+// This pins that no new HALT/rejection was introduced anywhere in the un-owned
+// path across the full input space (present/absent stamp x every mergeTime x
+// cutover combination exercised elsewhere in this file).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('decideSpecGate — never throws for un-owned input (no new HALT, Task 5)', () => {
+  it('returns a plain decision (never throws) for every un-owned/merge-time/cutover combination', () => {
+    const mergeTimes = [null, '2020-01-01T00:00:00Z', CUTOVER, '2030-01-01T00:00:00Z', 'not-a-date'];
+    const cutovers = [null, CUTOVER, 'not-a-date'];
+    for (const mergeTime of mergeTimes) {
+      for (const cutover of cutovers) {
+        let decision: ReturnType<typeof decideSpecGate> | undefined;
+        expect(() => {
+          decision = decideSpecGate({ daemonOwner: owner, stamp: unowned, mergeTime, cutover });
+        }).not.toThrow();
+        expect(decision?.build).toBe(true);
+      }
+    }
+  });
+
+  it('returns a plain decision (never throws) for a stamped-but-mismatched owner too', () => {
+    expect(() => {
+      decideSpecGate({ daemonOwner: owner, stamp: stamped('mallory'), mergeTime: null, cutover: CUTOVER });
+    }).not.toThrow();
+  });
+});
