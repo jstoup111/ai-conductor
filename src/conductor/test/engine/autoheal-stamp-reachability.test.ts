@@ -133,4 +133,33 @@ describe('deriveCompletion pin-branch reachability gate', () => {
     expect(result['T'].auditEntry!.length).toBeGreaterThan(0);
     expect(result['T'].auditEntry).toContain(unreachableSha.slice(0, 7));
   });
+
+  it('keeps a task pinned completed when its sidecar stamp cites a reachable commit', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    await writeFile(join(gitDir, 'a.txt'), 'a\n');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit A'], { cwd: gitDir });
+    const reachableSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    await writeFile(join(gitDir, 'b.txt'), 'b\n');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit B'], { cwd: gitDir });
+
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task T: Reachable task\n\n`a.txt`\n');
+
+    // No commit in the commits list carries a `Task: T` trailer.
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('T', { sha: reachableSha, form: 'trailer' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['T'].completed).toBe(true);
+    expect(result['T'].status).toBe('completed');
+    expect(result['T'].evidencedBy).toBe(reachableSha);
+  });
 });
