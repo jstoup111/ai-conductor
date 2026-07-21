@@ -85,6 +85,58 @@ unaffected. To deliberately install from a worktree anyway, pass `--allow-worktr
 ./bin/install --update --allow-worktree-root
 ```
 
+## How the Pieces Fit Together
+
+Three cooperating roles drive every feature from idea to merged PR — the **engineer**
+(spec authoring), the **daemon** (autonomous build), and the **operator** (judgment +
+merges). GitHub issues/PRs are the coordination medium; the daemon never merges.
+
+```mermaid
+flowchart TB
+  OP(["Operator<br/>(you)"])
+
+  subgraph GH["GitHub — coordination medium"]
+    ISSUES["Issues<br/>(intake: symptom capture,<br/>priority / size / links)"]
+    SPECPR["Spec PR<br/>(Refs #N)"]
+    BUILDPR["Implementation PR<br/>(Closes #N)"]
+  end
+
+  subgraph ENG["Engineer — spec authoring (supervisor, /engineer)"]
+    CLAIM["claim intake"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs"]
+    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped)"]
+  end
+
+  subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
+    SCAN["backlog scan<br/>(specs on main · owner gate ·<br/>shipped-record dedup · priority order)"]
+    WT["dispatch → git worktree<br/>+ per-worktree engine build"]
+    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → evidence gate<br/>(completion derived from commits)"]
+    HEAL["self-heal:<br/>retry escalation (effort→model) ·<br/>stall remediation · ci-fix on red PRs ·<br/>halt / park for the operator"]
+    VAL["SHIP validators:<br/>manual_test · prd_audit ·<br/>architecture review (as built)"]
+    FIN["finish: rebase → push →<br/>PR + committed shipped-record"]
+    SCAN --> WT --> BUILD --> VAL --> FIN
+    BUILD <--> HEAL
+  end
+
+  OP -->|"file / approve intake"| ISSUES
+  ISSUES --> CLAIM
+  LAND --> SPECPR
+  SPECPR -->|"operator merges"| MAIN[("main")]
+  MAIN --> SCAN
+  FIN --> BUILDPR
+  BUILDPR -->|"operator merges<br/>(daemon never merges)"| MAIN
+  HEAL -.->|"halts / parks needing judgment"| OP
+  OP -->|"unpark · approve VERSION bumps"| DAEMON
+```
+
+- **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
+  lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
+- **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
+  through the full SDLC with deterministic evidence gates, self-heals stalls and red CI,
+  and opens the implementation PR with a committed shipped-record so the work is never
+  re-dispatched.
+- **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
+  escalates, and signs off version bumps.
+
 ## Quick Start
 
 ### Interactive (recommended for first use)

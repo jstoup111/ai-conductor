@@ -58,6 +58,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- README: "How the Pieces Fit Together" section with a mermaid component diagram
+  of the engineer / daemon / operator roles and how a feature flows from intake
+  issue to merged implementation PR.
+
+- Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
+  enforcement**: priority + size + dependency-linking are stamped at every intake
+  capture surface (a required-fields intake form + an isolated `intake-label-sync`
+  Action, a `bin/intake-file` filing helper, and a one-shot `bin/intake-backfill`)
+  so every issue is born complete, and the ~100-issue unsized backlog is completed
+  in one default-and-report pass. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", the spec adds **zero** downstream failure modes: the
+  claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon dispatch/build, pipeline
+  gates, and CI stay byte-identical and add no criteria check (a negative-path story
+  asserts this). Supersedes PR #696 (which enforced at claim time via a
+  `needs-criteria` deferral). Artifacts under
 - Committed shipped-records for four phantom features the daemon kept re-parking
   (background-intake-conduct-loop #382, wiring-reachability-gate #650,
   autoheal-path-corroboration #709, finish-staleness #596) so backlog dedup
