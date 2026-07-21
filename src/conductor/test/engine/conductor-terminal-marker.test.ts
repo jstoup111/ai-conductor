@@ -28,7 +28,7 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor, resolveLastStep } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 
 // A runner that should never be invoked in these tests (the loop exits before
@@ -223,5 +223,73 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
     expect(await exists(join(dir, '.pipeline/DONE'))).toBe(false);
+  });
+});
+
+describe('resolveLastStep (Task 3): pure helper, never returns "unknown"', () => {
+  it('prefers the furthest-progressed done step per canonical step order when no last_step/breadcrumb', () => {
+    expect(
+      resolveLastStep({ build: 'done', manual_test: 'done' } as unknown as ConductState, {}),
+    ).toBe('manual_test');
+  });
+
+  it('returns the literal "no step recorded" when nothing is known', () => {
+    expect(resolveLastStep({} as unknown as ConductState, {})).toBe('no step recorded');
+  });
+
+  it('never returns the bare string "unknown"', () => {
+    expect(resolveLastStep({} as unknown as ConductState, {})).not.toBe('unknown');
+    expect(
+      resolveLastStep({ build: 'done' } as unknown as ConductState, {}),
+    ).not.toBe('unknown');
+  });
+
+  it('prefers state.last_step over everything else', () => {
+    expect(
+      resolveLastStep(
+        { last_step: 'plan', build: 'done' } as unknown as ConductState,
+        {},
+      ),
+    ).toBe('plan');
+  });
+
+  it('falls back to breadcrumb.lastAdvancedStep when state.last_step is absent', () => {
+    expect(
+      resolveLastStep({} as unknown as ConductState, { lastAdvancedStep: 'stories' }),
+    ).toBe('stories');
+  });
+});
+
+describe('conductor/resolveLastStep', () => {
+  it('picks the furthest-progressed done step per canonical ALL_STEPS order', () => {
+    expect(
+      resolveLastStep({ build: 'done', manual_test: 'done' } as unknown as ConductState, {}),
+    ).toBe('manual_test');
+  });
+
+  it('returns the literal "no step recorded" when nothing is known', () => {
+    expect(resolveLastStep({} as unknown as ConductState, {})).toBe('no step recorded');
+  });
+
+  it('never returns the string "unknown"', () => {
+    expect(resolveLastStep({} as unknown as ConductState, {})).not.toBe('unknown');
+    expect(
+      resolveLastStep({ build: 'done', manual_test: 'done' } as unknown as ConductState, {}),
+    ).not.toBe('unknown');
+  });
+
+  it('prefers state.last_step over everything else', () => {
+    expect(
+      resolveLastStep(
+        { last_step: 'plan', build: 'done' } as unknown as ConductState,
+        { lastAdvancedStep: 'manual_test' },
+      ),
+    ).toBe('plan');
+  });
+
+  it('uses breadcrumb.lastAdvancedStep when state.last_step is absent', () => {
+    expect(resolveLastStep({} as unknown as ConductState, { lastAdvancedStep: 'stories' })).toBe(
+      'stories',
+    );
   });
 });

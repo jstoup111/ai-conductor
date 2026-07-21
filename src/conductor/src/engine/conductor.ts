@@ -5914,6 +5914,36 @@ export class Conductor {
 }
 
 /**
+ * Pure helper (no side effects): resolves the "last step" that a run reached,
+ * for use by the finally backstop's diagnostic HALT message so it never
+ * surfaces the literal 'unknown' to operators. Preference order:
+ *   1. state.last_step, if recorded
+ *   2. breadcrumb.lastAdvancedStep, if the run tracked one
+ *   3. the furthest-progressed 'done' step per canonical ALL_STEPS order
+ *   4. the literal 'no step recorded' as a last resort
+ */
+export function resolveLastStep(
+  state: Record<string, unknown> & { last_step?: string },
+  breadcrumb: { lastAdvancedStep?: string },
+): string {
+  if (state?.last_step) return state.last_step;
+  if (breadcrumb?.lastAdvancedStep) return breadcrumb.lastAdvancedStep;
+
+  let furthestIndex = -1;
+  let furthestStep: string | undefined;
+  for (let i = 0; i < ALL_STEPS.length; i++) {
+    const name = ALL_STEPS[i].name;
+    if (state?.[name] === 'done' && i > furthestIndex) {
+      furthestIndex = i;
+      furthestStep = name;
+    }
+  }
+  if (furthestStep) return furthestStep;
+
+  return 'no step recorded';
+}
+
+/**
  * Calculate the index in steps where resume should start, based on the current state.
  * Used for parity testing and direct resume-index calculation without gate verdict clamping.
  * Returns the index of the first pending step after the last done step, or 0 if feature is complete.
