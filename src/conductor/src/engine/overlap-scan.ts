@@ -28,11 +28,45 @@ export interface RunOverlapScanArgs {
   localBase: string;
 }
 
-export function enumerateUnmergedBranches(
-  _git: GitRunner,
-  _base: string,
+/**
+ * Candidate sibling branches to scan for overlap: local `spec/*` branches
+ * (in-flight DECIDE/BUILD work authored by this harness) plus any
+ * remote-tracking `spec/*` heads (open-PR branches fetched to a remote,
+ * e.g. `origin/spec/*`). Excludes branches already merged into `base` —
+ * a branch with zero commits ahead of `base` (`rev-list --count
+ * base..branch === 0`) carries nothing base doesn't already have, so it
+ * cannot overlap with in-progress work.
+ */
+export async function enumerateUnmergedBranches(
+  git: GitRunner,
+  base: string,
 ): Promise<string[]> {
-  throw new Error('not implemented: enumerateUnmergedBranches (Task 1)');
+  const refs = await git([
+    'for-each-ref',
+    '--format=%(refname:short)',
+    'refs/heads/spec/*',
+    'refs/remotes/*/spec/*',
+  ]);
+  const candidates = refs.exitCode === 0
+    ? refs.stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+    : [];
+
+  const unmerged: string[] = [];
+  for (const branch of candidates) {
+    if (branch === base || branch.endsWith(`/${base}`)) continue;
+    const r = await git(['rev-list', '--count', `${base}..${branch}`]);
+    const aheadCount = r.exitCode === 0 ? Number.parseInt(r.stdout.trim(), 10) : NaN;
+    // Non-zero (or indeterminate) ahead-count means the branch is not fully
+    // merged into base — keep it as a scan candidate. A confirmed 0 means
+    // fully merged — exclude it.
+    if (Number.isNaN(aheadCount) || aheadCount !== 0) {
+      unmerged.push(branch);
+    }
+  }
+  return unmerged;
 }
 
 export function intersectFiles(_candidate: string[], _changed: string[]): string[] {
