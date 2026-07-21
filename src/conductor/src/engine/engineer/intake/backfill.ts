@@ -1,6 +1,11 @@
 /**
- * intake-backfill: one-shot, non-interactive sweep that stamps `size:`/
- * `priority:` labels onto open, assigned issues that are missing them.
+ * backfill.ts: one-shot, non-interactive sweep that stamps `size:`/
+ * `priority:` labels onto issues missing them (Story 3, FR-3;
+ * #695 intake-only-enforcement).
+ *
+ * Seam contract (test/acceptance/intake-backfill-sweep.test.ts):
+ *   backfillIntakeLabels(issues, deps) where issues are
+ *   `{ ref: 'owner/repo#N', body, labels }` and deps is `{ gh, cwd }`.
  *
  * Reuses `parseSizeLabel`/`parsePriorityLabels` (backlog-priority.ts) to
  * detect which issues are incomplete, infers a value from the issue body
@@ -15,8 +20,8 @@
  *     label is skipped entirely (no gh calls, not counted in the report).
  */
 
-import { parsePriorityLabels, parseSizeLabel } from './backlog-priority.js';
-import { ensureLabel, restAddLabelArgs, type GhRunner } from './pr-labels.js';
+import { parsePriorityLabels, parseSizeLabel } from '../../backlog-priority.js';
+import { ensureLabel, restAddLabelArgs, type GhRunner } from '../../pr-labels.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,54 +34,47 @@ export const DEFAULT_PRIORITY: PriorityValue = 'medium';
 /** Label color applied when `label create` must auto-create a missing label. */
 const LABEL_COLOR = 'ededed';
 
-interface RawIssue {
-  number: number;
-  title?: string;
-  body?: string;
-  labels?: Array<{ name: string } | string>;
+export interface BacklogIssue {
+  /** `owner/repo#N` ref. */
+  ref: string;
+  body: string;
+  labels: string[];
 }
 
 export interface IntakeBackfillDeps {
   gh: GhRunner;
-  /** `owner/repo` slug passed to `gh issue list -R` / `gh api`. */
-  repo: string;
   /** Working directory for gh calls; defaults to '.'. */
   cwd?: string;
   log?: (msg: string) => void;
 }
 
+export interface AppliedLabel {
+  label: string;
+  source: 'inferred' | 'default';
+}
+
 /** One issue's outcome in the sweep report. */
 export interface BackfillOutcome {
-  number: number;
-  /** Which labels were applied this run ('size', 'priority', or both). */
-  applied: Array<'size' | 'priority'>;
-  size?: SizeValue;
-  priority?: PriorityValue;
-  /** How each applied value was determined. */
-  sizeSource?: 'inferred' | 'defaulted';
-  prioritySource?: 'inferred' | 'defaulted';
+  ref: string;
+  applied: AppliedLabel[];
 }
 
 export interface BackfillFailure {
-  number: number;
+  ref: string;
   error: string;
 }
 
 export interface BackfillReport {
+  /** Issues that got at least one label applied this run. */
+  labelled: BackfillOutcome[];
   /** Issues that already had both labels — no gh calls made. */
-  skipped: number[];
-  /** Issues that got at least one label sourced from body-text inference. */
-  inferred: BackfillOutcome[];
-  /** Issues that got at least one label from the hardcoded default. */
-  defaulted: BackfillOutcome[];
+  skipped: string[];
   /** Issues whose label-apply failed; the sweep continued past them. */
   failed: BackfillFailure[];
-}
-
-// ── Label normalisation ─────────────────────────────────────────────────────
-
-function labelNames(issue: RawIssue): string[] {
-  return (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name));
+  /** Always false — this sweep never HALTs. */
+  halted: boolean;
+  /** Always false — this sweep never prompts for confirmation. */
+  confirmationRequested: boolean;
 }
 
 // ── Body-text inference ─────────────────────────────────────────────────────
@@ -107,88 +105,84 @@ export function inferPriorityFromBody(body: string | undefined): PriorityValue |
   return match[1].toLowerCase() as PriorityValue;
 }
 
-// ── Issue listing ────────────────────────────────────────────────────────────
+// ── ref parsing ──────────────────────────────────────────────────────────────
 
-/**
- * List open issues assigned to the authenticated user, matching the idiom
- * established by github-issues.ts's poll() (`gh issue list --assignee @me
- * --state open --json ... -R <repo>`).
- */
-async function listAssignedOpenIssues(gh: GhRunner, repo: string, cwd: string): Promise<RawIssue[]> {
-  const { stdout } = await gh(
-    ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,title,body,labels', '-R', repo],
-    { cwd },
-  );
-  const parsed: unknown = JSON.parse(stdout || '[]');
-  return Array.isArray(parsed) ? (parsed as RawIssue[]) : [];
+/** Parse an `owner/repo#N` ref into its `repo` and `number` parts. */
+function parseRef(ref: string): { repo: string; number: string } | null {
+  const m = ref.match(/^([^/]+\/[^#]+)#(\d+)$/);
+  if (!m) return null;
+  return { repo: m[1], number: m[2] };
 }
 
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
- * Run the one-shot backfill sweep. Never throws for per-issue failures
- * (isolated via try/catch — see BackfillFailure); a transport-level failure
- * while LISTING issues does propagate, since there is nothing to sweep.
+ * Run the one-shot backfill sweep over an in-memory list of issues. Never
+ * throws — per-issue failures are isolated (see BackfillFailure) and a
+ * malformed ref is treated as a per-issue failure too, never a HALT.
  */
-export async function runIntakeBackfill(deps: IntakeBackfillDeps): Promise<BackfillReport> {
-  const { gh, repo } = deps;
+export async function backfillIntakeLabels(
+  issues: BacklogIssue[],
+  deps: IntakeBackfillDeps,
+): Promise<BackfillReport> {
+  const { gh } = deps;
   const cwd = deps.cwd ?? '.';
   const log = deps.log ?? (() => {});
 
-  const issues = await listAssignedOpenIssues(gh, repo, cwd);
-
-  const report: BackfillReport = { skipped: [], inferred: [], defaulted: [], failed: [] };
+  const report: BackfillReport = {
+    labelled: [],
+    skipped: [],
+    failed: [],
+    halted: false,
+    confirmationRequested: false,
+  };
 
   for (const issue of issues) {
-    const labels = labelNames(issue);
-    const existingSize = parseSizeLabel(labels);
-    const existingPriority = parsePriorityLabels(labels);
+    const existingSize = parseSizeLabel(issue.labels ?? []);
+    const existingPriority = parsePriorityLabels(issue.labels ?? []);
 
     if (existingSize && existingPriority) {
       // Already complete — idempotent skip, no gh calls.
-      report.skipped.push(issue.number);
+      report.skipped.push(issue.ref);
       continue;
     }
 
+    const parsedRef = parseRef(issue.ref);
+    if (!parsedRef) {
+      log(`intake-backfill: issue ${issue.ref} failed — unparseable ref`);
+      report.failed.push({ ref: issue.ref, error: `unparseable ref: ${issue.ref}` });
+      continue;
+    }
+    const { repo, number } = parsedRef;
+
     try {
-      const outcome: BackfillOutcome = { number: issue.number, applied: [] };
+      const applied: AppliedLabel[] = [];
 
       if (!existingSize) {
         const inferredSize = inferSizeFromBody(issue.body);
         const size = inferredSize ?? DEFAULT_SIZE;
-        const sizeSource = inferredSize ? 'inferred' : 'defaulted';
+        const source: 'inferred' | 'default' = inferredSize ? 'inferred' : 'default';
         const labelName = `size: ${size}`;
         await ensureLabel(gh, cwd, labelName, LABEL_COLOR, log);
-        await gh(restAddLabelArgs(repo, String(issue.number), labelName), { cwd });
-        outcome.size = size;
-        outcome.sizeSource = sizeSource;
-        outcome.applied.push('size');
+        await gh(restAddLabelArgs(repo, number, labelName), { cwd });
+        applied.push({ label: labelName, source });
       }
 
       if (!existingPriority) {
         const inferredPriority = inferPriorityFromBody(issue.body);
         const priority = inferredPriority ?? DEFAULT_PRIORITY;
-        const prioritySource = inferredPriority ? 'inferred' : 'defaulted';
+        const source: 'inferred' | 'default' = inferredPriority ? 'inferred' : 'default';
         const labelName = `priority: ${priority}`;
         await ensureLabel(gh, cwd, labelName, LABEL_COLOR, log);
-        await gh(restAddLabelArgs(repo, String(issue.number), labelName), { cwd });
-        outcome.priority = priority;
-        outcome.prioritySource = prioritySource;
-        outcome.applied.push('priority');
+        await gh(restAddLabelArgs(repo, number, labelName), { cwd });
+        applied.push({ label: labelName, source });
       }
 
-      // An issue counts as "inferred" if ANY applied label was inferred;
-      // otherwise (all applied labels defaulted) it counts as "defaulted".
-      const anyInferred = outcome.sizeSource === 'inferred' || outcome.prioritySource === 'inferred';
-      if (anyInferred) {
-        report.inferred.push(outcome);
-      } else {
-        report.defaulted.push(outcome);
-      }
+      report.labelled.push({ ref: issue.ref, applied });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log(`intake-backfill: issue #${issue.number} failed — ${message}`);
-      report.failed.push({ number: issue.number, error: message });
+      log(`intake-backfill: issue ${issue.ref} failed — ${message}`);
+      report.failed.push({ ref: issue.ref, error: message });
       // Isolated: continue the sweep past this issue.
     }
   }
@@ -208,26 +202,16 @@ export function renderBackfillReport(report: BackfillReport): string {
   lines.push('=======================');
   lines.push(`skipped (already complete): ${report.skipped.length}`);
   if (report.skipped.length > 0) {
-    lines.push(`  #${report.skipped.join(', #')}`);
+    lines.push(`  ${report.skipped.join(', ')}`);
   }
-  lines.push(`inferred: ${report.inferred.length}`);
-  for (const o of report.inferred) {
-    lines.push(`  #${o.number} — ${o.applied.join('+')} (${describeOutcome(o)})`);
-  }
-  lines.push(`defaulted: ${report.defaulted.length}`);
-  for (const o of report.defaulted) {
-    lines.push(`  #${o.number} — ${o.applied.join('+')} (${describeOutcome(o)})`);
+  lines.push(`labelled: ${report.labelled.length}`);
+  for (const o of report.labelled) {
+    const desc = o.applied.map((a) => `${a.label} [${a.source}]`).join(', ');
+    lines.push(`  ${o.ref} — ${desc}`);
   }
   lines.push(`failed: ${report.failed.length}`);
   for (const f of report.failed) {
-    lines.push(`  #${f.number} — ${f.error}`);
+    lines.push(`  ${f.ref} — ${f.error}`);
   }
   return lines.join('\n');
-}
-
-function describeOutcome(o: BackfillOutcome): string {
-  const parts: string[] = [];
-  if (o.size) parts.push(`size: ${o.size} [${o.sizeSource}]`);
-  if (o.priority) parts.push(`priority: ${o.priority} [${o.prioritySource}]`);
-  return parts.join(', ');
 }

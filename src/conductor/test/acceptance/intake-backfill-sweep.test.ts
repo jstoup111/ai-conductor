@@ -65,7 +65,7 @@ function makeFakeGh(opts: { failFor?: Set<string> } = {}) {
   const run = async (args: string[], _opts: { cwd: string }) => {
     calls.push({ args });
     if (args[0] === 'label' && args[1] === 'create') return { stdout: '' };
-    if (args.includes('labels') && args.some((a) => a.startsWith('labels[]='))) {
+    if (args.some((a) => a.includes('labels')) && args.some((a) => a.startsWith('labels[]='))) {
       const target = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+\/labels$/.test(a));
       const m = target?.match(/^repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/labels$/);
       const ref = m ? `${m[1]}#${m[2]}` : '';

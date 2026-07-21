@@ -8,13 +8,46 @@
 //
 // Usage: intake-backfill-cli.ts --repo <owner/repo>
 
-import { makeProductionGh } from './engine/pr-labels.js';
-import { runIntakeBackfill, renderBackfillReport } from './engine/intake-backfill.js';
+import { makeProductionGh, type GhRunner } from './engine/pr-labels.js';
+import {
+  backfillIntakeLabels,
+  renderBackfillReport,
+  type BacklogIssue,
+} from './engine/engineer/intake/backfill.js';
 
 function parseRepoArg(argv: string[]): string | null {
   const i = argv.indexOf('--repo');
   if (i === -1 || !argv[i + 1]) return null;
   return argv[i + 1];
+}
+
+interface RawIssue {
+  number: number;
+  body?: string;
+  labels?: Array<{ name: string } | string>;
+}
+
+function labelNames(issue: RawIssue): string[] {
+  return (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name));
+}
+
+/**
+ * List open issues assigned to the authenticated user, matching the idiom
+ * established by github-issues.ts's poll() (`gh issue list --assignee @me
+ * --state open --json ... -R <repo>`).
+ */
+async function listAssignedOpenIssues(gh: GhRunner, repo: string, cwd: string): Promise<BacklogIssue[]> {
+  const { stdout } = await gh(
+    ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,body,labels', '-R', repo],
+    { cwd },
+  );
+  const parsed: unknown = JSON.parse(stdout || '[]');
+  const raw = Array.isArray(parsed) ? (parsed as RawIssue[]) : [];
+  return raw.map((issue) => ({
+    ref: `${repo}#${issue.number}`,
+    body: issue.body ?? '',
+    labels: labelNames(issue),
+  }));
 }
 
 async function main(): Promise<void> {
@@ -25,9 +58,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const report = await runIntakeBackfill({
-    gh: makeProductionGh(),
-    repo,
+  const gh = makeProductionGh();
+  const cwd = '.';
+  const issues = await listAssignedOpenIssues(gh, repo, cwd);
+
+  const report = await backfillIntakeLabels(issues, {
+    gh,
+    cwd,
     log: (msg) => console.error(msg),
   });
 
@@ -40,7 +77,7 @@ async function main(): Promise<void> {
 main().catch((error) => {
   // Only a top-level failure (e.g. the initial issue-list call itself
   // failing) reaches here — per-issue failures are isolated inside
-  // runIntakeBackfill and never throw.
+  // backfillIntakeLabels and never throw.
   console.error(`intake-backfill: fatal error — ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
