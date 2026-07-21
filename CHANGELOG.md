@@ -10,6 +10,32 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Removed
+
+- Serena removed from the daemon's install path, bootstrap MCP registration,
+  `HARNESS.md` guidance, and the `GITIGNORE_SKELETON` — Serena semantic-search
+  tooling is out of scope for the daemon (#753, superseding #682/#728). Per
+  ADR D2, the harness never uninstalls `serena-agent` or `uv` on the machine —
+  that remains a manual, user-owned decision. Per ADR D3, the repo-local
+  `.serena/` gitignore line is retained deliberately, since Serena caches may
+  still exist locally regardless of harness install behavior.
+
+## Migration
+
+```bash migration
+# Unregister the harness-registered user-scope Serena MCP server (no-op if absent)
+if command -v claude >/dev/null 2>&1 && claude mcp get serena >/dev/null 2>&1; then
+  claude mcp remove --scope user serena
+  echo "Removed user-scope 'serena' MCP registration."
+else
+  echo "No user-scope 'serena' MCP registration found — nothing to do."
+fi
+echo "Optional manual cleanup (NOT run automatically):"
+echo "  uv tool uninstall serena-agent   # if you don't use Serena elsewhere"
+echo "  pkill -f 'serena start-mcp-server'   # stop stray servers from old sessions"
+echo "  rm -rf <project>/.serena/            # per-project semantic-index caches"
+```
+
 ### Fixed
 
 - Added the missing `bin/intake-file` repo-root wrapper (the intake skill
