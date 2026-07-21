@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { readSnapshot, BuildProgressWatcher } from '../src/engine/build-progress-watcher.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
+import { deriveCompletion, applyDerivedCompletion } from '../src/engine/autoheal.js';
 
 describe('readSnapshot', () => {
   let dir: string;
@@ -300,6 +301,107 @@ describe('readSnapshot', () => {
 
     expect(snapshot.resolved).toBe(1);
     expect(snapshot.total).toBe(2);
+  });
+
+  it('a fully-complete plan yields resolved === total', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    await writeFile(join(dir, 'second.txt'), 'content');
+    await execa('git', ['add', 'second.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: second task\n\nTask: 2\n'], { cwd: dir });
+
+    // task-status.json is stale — still reports 0 completed out of 2 — the
+    // live git-derived count must nonetheless reach the full total.
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'pending' },
+        { id: '2', title: 'Second', status: 'pending' },
+      ],
+    });
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    expect(snapshot.total).toBe(2);
+    expect(snapshot.resolved).toBe(snapshot.total);
+  });
+
+  it('the live git-derived resolved count agrees with what applyDerivedCompletion would reconcile onto task-status.json', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n\n### Task 3: Third\nDo the third thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    // Task 2 resolved via the skip no-op evidence form; Task 3 stays pending.
+    await execa(
+      'git',
+      [
+        'commit',
+        '--allow-empty',
+        '-m',
+        'chore(evidence): task deferred\n\nTask: 2\nEvidence: skipped not_applicable',
+      ],
+      { cwd: dir },
+    );
+
+    // task-status.json is stale — still reports 0 completed out of 3.
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'pending' },
+        { id: '2', title: 'Second', status: 'pending' },
+        { id: '3', title: 'Third', status: 'pending' },
+      ],
+    });
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    // Independently derive completion the same way the gate's write-back
+    // (applyDerivedCompletion) does, and reconcile it onto a fresh copy of
+    // task-status.json to get the count the gate would land.
+    const derived = await deriveCompletion(dir, planPath);
+    await applyDerivedCompletion(dir, derived);
+    const raw = await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8');
+    const reconciled = JSON.parse(raw) as { tasks: Array<{ status: string }> };
+    const gateResolved = reconciled.tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+
+    expect(snapshot.resolved).toBe(gateResolved);
+    expect(gateResolved).toBe(2);
   });
 });
 
