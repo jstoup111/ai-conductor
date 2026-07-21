@@ -5177,9 +5177,12 @@ export class Conductor {
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
       ) {
-        const reason = `loop exited without a terminal verdict (last step: ${
-          state.last_step ?? 'unknown'
-        }) — no DONE/HALT marker was written; parking for inspection`;
+        const reason = `loop exited without a terminal verdict (last step: ${resolveLastStep(
+          state,
+          this._breadcrumb,
+        )}) — no DONE/HALT marker was written; parking for inspection (last event: ${
+          this._breadcrumb.lastEventType ?? 'none'
+        }, exit index: ${this._breadcrumb.exitIndex ?? 'n/a'})`;
         await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
         await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
           () => {},

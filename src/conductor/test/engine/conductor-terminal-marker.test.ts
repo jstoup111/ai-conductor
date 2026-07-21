@@ -200,6 +200,49 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(breadcrumb?.lastEventType).toBe('gate_blocked');
   });
 
+  it('daemon: the backstop HALT reason includes resolved last step, last event, and exit index — never "unknown"', async () => {
+    // Task 4: the finally backstop must wire resolveLastStep + the breadcrumb
+    // into the HALT reason so operators get an actionable message instead of
+    // the bare 'unknown' placeholder. The marker file and the emitted
+    // loop_halt event must carry the IDENTICAL string.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'pending',
+    } as ConductState);
+
+    let emittedReason: string | undefined;
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') emittedReason = e.reason;
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const breadcrumb = (conductor as unknown as {
+      _breadcrumb?: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string };
+    })._breadcrumb;
+
+    expect(halt).toContain('manual_test');
+    expect(halt).toContain(`last event: ${breadcrumb?.lastEventType ?? 'none'}`);
+    expect(halt).toContain(`exit index: ${breadcrumb?.exitIndex ?? 'n/a'}`);
+    expect(halt).not.toMatch(/unknown/);
+
+    expect(emittedReason).toBeDefined();
+    expect(emittedReason).toBe(halt.replace(/\n$/, ''));
+  });
+
   it('non-daemon (interactive): a blocked-gate early return writes NO marker', async () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
