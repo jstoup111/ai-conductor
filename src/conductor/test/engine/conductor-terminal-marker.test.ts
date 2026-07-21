@@ -335,6 +335,106 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(haltEvents.length).toBeGreaterThan(0);
   });
 
+  it('daemon: reconstructs the last step from state when no last_step/breadcrumb is set, never "unknown"', async () => {
+    // Task 6: seed done progress ({ build: 'done', manual_test: 'done' }) with
+    // no `last_step` recorded and no usable breadcrumb (cleared the instant
+    // the loop's gate_blocked fires, mirroring the established pattern from
+    // the "no breadcrumb" test above). resolveLastStep must reconstruct
+    // 'manual_test' as the furthest-progressed done step in ALL_STEPS order.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'done',
+      manual_test: 'done',
+    } as ConductState);
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    events.on('gate_blocked', () => {
+      (conductor as unknown as { _breadcrumb: Record<string, unknown> })._breadcrumb = {};
+    });
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toContain('manual_test');
+    expect(halt).not.toMatch(/unknown/);
+    expect(haltEvents.some((r) => r.includes('manual_test'))).toBe(true);
+    expect(haltEvents.every((r) => !/unknown/.test(r))).toBe(true);
+  });
+
+  it('daemon: a fully empty state (no step keys, no last_step) still HALTs naming the absence, never "unknown"', async () => {
+    // Task 6: empty-state coverage. No step keys at all, and the breadcrumb
+    // cleared before the finally backstop runs (same established pattern),
+    // means resolveLastStep has nothing to reconstruct from and must fall
+    // back to the explicit 'no step recorded' sentinel rather than 'unknown'.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+    } as ConductState);
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    events.on('gate_blocked', () => {
+      (conductor as unknown as { _breadcrumb: Record<string, unknown> })._breadcrumb = {};
+    });
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toContain('no step recorded');
+    expect(halt).not.toMatch(/unknown/);
+    expect(haltEvents.some((r) => r.includes('no step recorded'))).toBe(true);
+    expect(haltEvents.every((r) => !/unknown/.test(r))).toBe(true);
+  });
+
+  it('source: the finally backstop no longer falls back to the literal `?? \'unknown\'` for the last step', async () => {
+    // Task 6: confirms the old unknown-fallback that used to name the last
+    // step in the HALT reason (superseded by resolveLastStep in Task 3/4) is
+    // fully gone from the backstop's reason-assembly code, not just
+    // untested. Scoped to the backstop's `reason = ...` assignment rather
+    // than the whole file: other, unrelated `?? 'unknown'` fallbacks exist
+    // elsewhere in conductor.ts (e.g. completion-check / HEAD-sha / retry-hint
+    // messages) and are out of scope for this task.
+    const source = await readFile(join(process.cwd(), 'src/engine/conductor.ts'), 'utf-8');
+    const marker = 'Terminal-marker guarantee (failure side).';
+    const backstopStart = source.indexOf(marker);
+    expect(backstopStart).toBeGreaterThan(-1);
+    const backstopSnippet = source.slice(backstopStart, backstopStart + 2000);
+    expect(backstopSnippet).toContain('resolveLastStep(');
+    expect(backstopSnippet).not.toContain("?? 'unknown'");
+  });
+
   it('non-daemon (interactive): a blocked-gate early return writes NO marker', async () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
