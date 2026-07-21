@@ -36,13 +36,14 @@ export type GateReason =
   | 'grandfathered'
   | 'other-owner'
   | 'unowned-post-cutover'
-  | 'unowned-indeterminate';
+  | 'unowned-indeterminate'
+  | 'unowned-defaulted';
 
 /** The gate outcome. On other-owner skips, `other` names the mismatched owner. */
 export type GateDecision =
   | { build: true; reason?: 'grandfathered' }
   | { build: false; reason: 'other-owner'; other: string }
-  | { build: false; reason: 'unowned-post-cutover' | 'unowned-indeterminate' };
+  | { build: true; reason: 'unowned-defaulted' };
 
 /**
  * Decide whether to build a content-eligible spec under owner-gating.
@@ -66,11 +67,11 @@ export function decideSpecGate(input: GateInput): GateDecision {
   const mergeMs = parseTime(mergeTime);
   const cutoverMs = parseTime(cutover);
   if (mergeMs === null || cutoverMs === null) {
-    return { build: false, reason: 'unowned-indeterminate' };
+    return { build: true, reason: 'unowned-defaulted' };
   }
   return mergeMs < cutoverMs
     ? { build: true, reason: 'grandfathered' }
-    : { build: false, reason: 'unowned-post-cutover' };
+    : { build: true, reason: 'unowned-defaulted' };
 }
 
 /** Parse an ISO-8601 instant to epoch ms, or null if absent/unparseable. */
