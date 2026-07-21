@@ -42,9 +42,12 @@ export function isRuntimeSourcePath(path: string): boolean {
 export type GateSurfaceKind = 'feature-runtime' | 'all-runtime' | 'any-codetest';
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
-  build_review: 'all-runtime',
+  // Grades the diff; any code/test path (including test-only) re-grades it.
+  build_review: 'any-codetest',
   wiring_check: 'all-runtime',
-  manual_test: 'any-codetest',
+  // Runtime behavior can be affected by foreign main-side runtime changes;
+  // only a test/docs-only delta is safe to preserve (ADR-2026-07-20).
+  manual_test: 'all-runtime',
   prd_audit: 'feature-runtime',
   architecture_review_as_built: 'feature-runtime',
 };
@@ -82,4 +85,53 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
   }
 
   return result;
+}
+
+/**
+ * Preserve/invalidate decision table for the post-rebase judged tail
+ * (ADR-2026-07-20). `D` is the rebase delta (`changedCodePaths`), `F` is the
+ * feature's claimed surface (`mergeBase..preTree`). `ranManualTest` gates
+ * whether `manual_test` is considered at all — if it never ran this rebase
+ * cycle, it is not a preserve/invalidate candidate and is excluded from both
+ * lists.
+ *
+ * Per gate surface kind (see `GATE_SURFACE`):
+ * - 'feature-runtime' (prd_audit, architecture_review_as_built): preserved
+ *   iff `featureSrc` is empty.
+ * - 'all-runtime' (build_review, wiring_check): preserved iff both
+ *   `featureSrc` and `foreignSrc` are empty.
+ * - 'any-codetest' (manual_test): preserved iff `D` is entirely empty
+ *   (test ∪ featureSrc ∪ foreignSrc all empty).
+ */
+export function classifyGateInvalidation(
+  D: string[],
+  F: string[],
+  ranManualTest: boolean,
+): { preserved: string[]; invalidated: string[] } {
+  const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
+  const preserved: string[] = [];
+  const invalidated: string[] = [];
+
+  for (const [gate, surface] of Object.entries(GATE_SURFACE)) {
+    if (gate === 'manual_test' && !ranManualTest) {
+      continue;
+    }
+
+    let isPreserved: boolean;
+    switch (surface) {
+      case 'feature-runtime':
+        isPreserved = featureSrc.length === 0;
+        break;
+      case 'all-runtime':
+        isPreserved = featureSrc.length === 0 && foreignSrc.length === 0;
+        break;
+      case 'any-codetest':
+        isPreserved = test.length === 0 && featureSrc.length === 0 && foreignSrc.length === 0;
+        break;
+    }
+
+    (isPreserved ? preserved : invalidated).push(gate);
+  }
+
+  return { preserved, invalidated };
 }
