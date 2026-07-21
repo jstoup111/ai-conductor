@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { enumerateUnmergedBranches } from '../../src/engine/overlap-scan.js';
+import { enumerateUnmergedBranches, intersectFiles } from '../../src/engine/overlap-scan.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results (mirrors the
@@ -93,5 +93,19 @@ describe('engine/overlap-scan — enumerateUnmergedBranches (Task 1)', () => {
     const result = await enumerateUnmergedBranches(git, 'main');
 
     expect(result).toEqual(['spec/feature-unknown']);
+  });
+});
+
+describe('engine/overlap-scan — intersectFiles (Task 2)', () => {
+  it('returns files present in both candidate and changed lists', () => {
+    expect(intersectFiles(['a.ts'], ['a.ts', 'b.ts'])).toEqual(['a.ts']);
+  });
+
+  it('does not match on prefix/substring — only exact path equality', () => {
+    expect(intersectFiles(['src/foo/helperx.ts'], ['src/foo/helper.ts'])).toEqual([]);
+  });
+
+  it('returns an empty array when the candidate list is empty', () => {
+    expect(intersectFiles([], ['a.ts', 'b.ts'])).toEqual([]);
   });
 });

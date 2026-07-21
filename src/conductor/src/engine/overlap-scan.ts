@@ -69,8 +69,28 @@ export async function enumerateUnmergedBranches(
   return unmerged;
 }
 
-export function intersectFiles(_candidate: string[], _changed: string[]): string[] {
-  throw new Error('not implemented: intersectFiles (Task 2)');
+/**
+ * Exact repo-relative intersection of two file-path lists. Normalizes both
+ * sides (strip leading `./`, collapse backslashes to forward slashes) then
+ * matches on strict path equality — no prefix/substring/basename matching,
+ * since those produce false positives (e.g. `helper.ts` vs `helperx.ts`).
+ */
+export function intersectFiles(candidate: string[], changed: string[]): string[] {
+  const normalize = (p: string): string => p.replace(/\\/g, '/').replace(/^\.\//, '');
+
+  const changedSet = new Set(changed.map(normalize));
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const raw of candidate) {
+    const norm = normalize(raw);
+    if (changedSet.has(norm) && !seen.has(norm)) {
+      seen.add(norm);
+      result.push(norm);
+    }
+  }
+
+  return result;
 }
 
 export function blockerSweep(
