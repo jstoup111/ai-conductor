@@ -31,7 +31,13 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
 - If **no stories reference HTTP endpoints, API routes, or user-facing UI**, report SKIP:
   "Manual test skipped — feature has no endpoint/UI criteria (services, jobs, mailers, CI)."
 - Suggest console-based verification instead: `rails console` smoke test or script execution.
-- Display skip reason to the user so conduct can mark the step as done.
+- Display the skip reason to the user, then **record it via the CLI** — this is the sole
+  way the step is marked done; there is no hand-written marker path:
+  ```
+  conduct-ts manual-test-record --skip --reason "<reason>" --pipeline-dir /abs/path/to/.pipeline
+  ```
+  Use the absolute worktree `.pipeline` path supplied in the step's system prompt (see the
+  "Daemon mode" note under Step 5 for why it must be absolute, not relative).
 
 ### 1. Detect Project Type
 
@@ -106,21 +112,39 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 
 ### 5. Display Results
 
-Display results to the user in the conversation AND save the same table to
-`.pipeline/manual-test-results.md`. The conductor's completion gate reads this
-file to verify manual-test ran for the current feature — without it, the
-step has no objective on-disk evidence and cannot pass. This is run evidence,
-not a committed design artifact: it lives under `.pipeline/` (gitignored) and
-uses a stable filename.
+Display results to the user in the conversation, then **record them via the CLI** —
+`manual-test-record` is the sole intended writer of `.pipeline/manual-test-results.md`;
+do not hand-write or append to that file yourself. The conductor's completion gate reads
+this file to verify manual-test ran for the current feature — without it, the step has no
+objective on-disk evidence and cannot pass.
 
-**Append, never overwrite.** Each run of this skill adds a new
-`## Attempt N — <ISO timestamp>` section to the file (create the file with
-`## Attempt 1 — …` on the first run). The conductor's gate evaluates only the
-LATEST attempt section, so a fixed old FAIL doesn't block you — but the history
-of what earlier attempts found is preserved for audit. Rewriting or deleting a
-previous attempt's rows destroys run evidence; do not do it.
+Record the run by piping (or pointing at) the results content and the absolute worktree
+`.pipeline` path supplied in the step's system prompt:
 
-Use this format (both in chat and in the file):
+```
+conduct-ts manual-test-record --results - --pipeline-dir /abs/path/to/.pipeline <<'EOF'
+<results table + bugs section, in the format below>
+EOF
+```
+
+or, if the results were written to a file first:
+
+```
+conduct-ts manual-test-record --results /path/to/results.md --pipeline-dir /abs/path/to/.pipeline
+```
+
+`manual-test-record` handles the append semantics (new `## Attempt N — <ISO timestamp>`
+section, LATEST-attempt gate evaluation, whitewash-guard bookkeeping) — you supply only the
+current attempt's table and bug list; do not construct attempt headers or timestamps
+yourself.
+
+**Append, never overwrite.** Each invocation of `manual-test-record --results` adds a new
+`## Attempt N — <ISO timestamp>` section to the file (the CLI creates the file with
+`## Attempt 1 — …` on the first run). The conductor's gate evaluates only the LATEST attempt
+section, so a fixed old FAIL doesn't block you — but the history of what earlier attempts
+found is preserved for audit, because the CLI is the only writer and it never truncates.
+
+Use this format for the content you pass to `--results` (both in chat and to the CLI):
 
 ```
 # Manual Test Results
@@ -142,6 +166,21 @@ Use this format (both in chat and in the file):
 which is what the conductor's freshness check needs (the file's mtime must be
 newer than the current session's start; a committed copy from a prior run
 would defeat that).
+
+**Daemon mode — record to the worktree, before cleanup.** When the daemon runs
+manual-test, the feature's `.pipeline` lives in the *worktree*. Run
+`manual-test-record` against the **absolute worktree `.pipeline` path** (the conductor
+supplies it in the step's system prompt) — never a relative `.pipeline/...` path — and do
+so before any cleanup step, exactly as `/finish` does for `finish-record`. A relative write
+can land in the wrong checkout and the gate (which reads the worktree) never sees it.
+
+**Refusal contract:** `manual-test-record` is the sole intended writer of
+`.pipeline/manual-test-results.md` — never hand-write, append to, or fabricate that file. If
+you cannot actually run the CLI (e.g. no pipeline directory was supplied, or the command
+fails), do NOT consider manual_test complete and do NOT invent a marker to paper over it —
+HALT and report the blocker. An absent or stale marker is the correct refusal signal the
+conductor watches for; a hand-written one defeats the gate's whole purpose (objective,
+CLI-verified on-disk evidence rather than a self-reported claim).
 
 **Whitewash guard (#367):** when the gate observes FAIL rows it records the
 current commit sha; a later attempt whose rows are all PASS is accepted only if
@@ -199,9 +238,9 @@ docker compose down
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
 - [ ] Results displayed to user
-- [ ] Per-story PASS/FAIL results written to `.pipeline/manual-test-results.md` BEFORE
-      exiting — the completion gate reads this file; a run that tests everything but
-      records nothing fails the step
+- [ ] Every exit path (Step 0 SKIP or Step 5 real-run PASS/FAIL) ended by actually invoking
+      `conduct-ts manual-test-record` (`--skip --reason ...` or `--results ...`) against the
+      absolute worktree `.pipeline` path — not a hand-written or fabricated marker
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly
