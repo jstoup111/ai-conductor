@@ -33,6 +33,48 @@ export interface BuildProgressSnapshot {
 }
 
 /**
+ * Compute the live `resolved` count for a set of plan tasks.
+ *
+ * When `planPath` is set, derives completion straight from git evidence
+ * (trailers/Evidence forms on commits since the plan anchor) via
+ * `deriveCompletion(..., { readOnly: true })` — read-only so this hot-path
+ * probe never writes the evidence sidecar. A task counts as resolved when
+ * `deriveCompletion` reports `completed: true` OR `status === 'skipped'`.
+ * This is what lets progress reflect commits that landed before
+ * `.pipeline/task-status.json` catches up (or when it never does, e.g. the
+ * gate write-back is skipped/stale) — the root cause of the 0/N-for-the-
+ * whole-build symptom.
+ *
+ * Falls back to the tolerant task-status-file-derived count (`tasks`
+ * filtered on `completed`/`skipped`) when `planPath` is absent, or if the
+ * git-derived probe itself throws/fails — this stays best-effort like the
+ * rest of {@link readSnapshot}.
+ */
+async function computeResolved(params: {
+  projectRoot: string;
+  planPath?: string;
+  tasks: ReturnType<typeof normalizeTasks>;
+  total: number;
+}): Promise<number> {
+  const { projectRoot, planPath, tasks } = params;
+  const fallback = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+
+  if (!planPath) return fallback;
+
+  try {
+    const { deriveCompletion } = await import('./autoheal.js');
+    const result = await deriveCompletion(projectRoot, planPath, undefined, undefined, undefined, {
+      readOnly: true,
+    });
+    return Object.values(result).filter((entry) => entry.completed || entry.status === 'skipped').length;
+  } catch {
+    // Git-derived probe failed (not a repo, no commits, plan unparseable,
+    // etc) — degrade to the task-status-file count rather than throwing.
+    return fallback;
+  }
+}
+
+/**
  * Read a tolerant snapshot of build progress for `projectRoot`.
  *
  * Sources:
@@ -47,8 +89,13 @@ export interface BuildProgressSnapshot {
  *   succeeds; the property is omitted entirely (not set to `undefined`
  *   loosely, but genuinely absent) when the probe fails, e.g. `projectRoot`
  *   isn't a git repo or has no commits yet.
+ *
+ * When `planPath` is supplied, `resolved` is instead derived live from git
+ * evidence via {@link computeResolved} — this keeps the counter moving even
+ * when `.pipeline/task-status.json` hasn't (yet) been written back by the
+ * gate for the tasks a build just completed.
  */
-export async function readSnapshot(projectRoot: string): Promise<BuildProgressSnapshot> {
+export async function readSnapshot(projectRoot: string, planPath?: string): Promise<BuildProgressSnapshot> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
 
   let tasks = normalizeTasks(undefined);
@@ -74,8 +121,8 @@ export async function readSnapshot(projectRoot: string): Promise<BuildProgressSn
     // File missing — fall through with the empty "no data" task list.
   }
 
-  const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
   const total = explicitTotal ?? tasks.length;
+  const resolved = await computeResolved({ projectRoot, planPath, tasks, total });
   const current = tasks.find((t) => t.status === 'in_progress');
 
   const snapshot: BuildProgressSnapshot = {

@@ -128,6 +128,46 @@ describe('readSnapshot', () => {
 
     expect(snapshot.noEvidenceAttempts).toBe(0);
   });
+
+  it('derives resolved from git when planPath is given, even though task-status.json still shows 0 completed', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    // deriveCompletion's default evidence-range resolution requires an
+    // origin remote (fail-closed otherwise) — stand up a bare repo to act
+    // as origin/main, matching autoheal.test.ts's fixture pattern.
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    // task-status.json is stale — still reports 0 completed out of 2.
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'pending' },
+        { id: '2', title: 'Second', status: 'pending' },
+      ],
+    });
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    expect(snapshot.resolved).toBe(1);
+    expect(snapshot.total).toBe(2);
+  });
 });
 
 describe('BuildProgressWatcher change-driven emission', () => {
