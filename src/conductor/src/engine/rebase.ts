@@ -7,7 +7,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
-import { classifyGateInvalidation } from './gate-invalidation.js';
+import { classifyGateInvalidation, partitionDelta, GATE_SURFACE } from './gate-invalidation.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -919,6 +919,53 @@ export async function recordRebaseStepCompletion(
 ): Promise<void> {
   if (outcome.kind === 'conflict_halt') return;
   await saveStepStatus(stateFilePath, 'rebase', 'done');
+}
+
+/**
+ * Emit a `rebase_gate_invalidated` event for each judged gate that
+ * `classifyGateInvalidation` decided to invalidate (Task 8, ADR-2026-07-20).
+ * `matchedPaths` carries only the delta paths that justify invalidating THIS
+ * specific gate, per its `GATE_SURFACE` kind:
+ *   - 'feature-runtime' (prd_audit, architecture_review_as_built): featureSrc.
+ *   - 'all-runtime' (build_review, wiring_check, manual_test): featureSrc ∪
+ *     foreignSrc.
+ *   - 'any-codetest': the full delta (test ∪ featureSrc ∪ foreignSrc).
+ *
+ * A no-op when the outcome isn't a file-changing rebase, or `featureSurface`
+ * is unavailable (classifyGateInvalidation cannot be applied — see the
+ * fixed-set fallback in applyRebaseVerdicts).
+ */
+export async function emitGateInvalidationEvents(
+  events: ConductorEventEmitter,
+  outcome: RebaseOutcome,
+  ranManualTest: boolean,
+): Promise<void> {
+  if (outcome.kind !== 'changed' || outcome.featureSurface === undefined) return;
+
+  const { invalidated } = classifyGateInvalidation(
+    outcome.changedCodePaths,
+    outcome.featureSurface,
+    ranManualTest,
+  );
+  const { test, featureSrc, foreignSrc } = partitionDelta(
+    outcome.changedCodePaths,
+    outcome.featureSurface,
+  );
+
+  for (const gate of invalidated) {
+    const surface = GATE_SURFACE[gate];
+    const matchedPaths =
+      surface === 'feature-runtime'
+        ? featureSrc
+        : surface === 'all-runtime'
+          ? [...featureSrc, ...foreignSrc]
+          : [...test, ...featureSrc, ...foreignSrc];
+    await events.emit({
+      type: 'rebase_gate_invalidated',
+      gate: gate as StepName,
+      matchedPaths,
+    });
+  }
 }
 
 /** Map a rebase outcome to its structured event. Best-effort emission. */

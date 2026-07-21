@@ -14,6 +14,7 @@ import {
   writeHalt,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  emitGateInvalidationEvents,
   type GitRunner,
   type GitResult,
   type RebaseOutcome,
@@ -482,6 +483,44 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(archReview?.satisfied).toBe(true);
     expect(archReview?.reason).toBe('prior review');
     expect(archReview?.checkedAt).toBe(1);
+  });
+
+  it('Task 8: emits rebase_gate_invalidated for each invalidated gate with matched delta paths', async () => {
+    // Same delta as the Task 6 fixture above: feature surface is
+    // src/feature.ts only; the rebase delta touches a foreign runtime file
+    // (src/foreign.ts) and a feature test file (src/feature.test.ts). That
+    // invalidates build_review ('any-codetest') and wiring_check/manual_test
+    // ('all-runtime', foreignSrc non-empty), while preserving the
+    // feature-runtime-scoped audits (featureSrc is empty).
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    const events = new ConductorEventEmitter();
+    const invalidated: Array<{ gate: string; matchedPaths: string[] }> = [];
+    events.on('rebase_gate_invalidated', (e) => {
+      if (e.type === 'rebase_gate_invalidated') {
+        invalidated.push({ gate: e.gate, matchedPaths: e.matchedPaths });
+      }
+    });
+
+    await emitGateInvalidationEvents(events, outcome, true);
+
+    const byGate = Object.fromEntries(invalidated.map((e) => [e.gate, e.matchedPaths]));
+    expect(Object.keys(byGate).sort()).toEqual(
+      ['build_review', 'manual_test', 'wiring_check'].sort(),
+    );
+    // wiring_check/manual_test are 'all-runtime' — matchedPaths is
+    // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
+    expect(byGate.wiring_check).toEqual(['src/foreign.ts']);
+    expect(byGate.manual_test).toEqual(['src/foreign.ts']);
+    // build_review is 'any-codetest' — matchedPaths is the full delta.
+    expect(byGate.build_review).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
+    // Preserved audits must not appear at all.
+    expect(byGate.prd_audit).toBeUndefined();
+    expect(byGate.architecture_review_as_built).toBeUndefined();
   });
 
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {

@@ -147,6 +147,7 @@ import {
   runGatedRebaseResolution,
   applyRebaseVerdicts,
   emitRebaseEvent,
+  emitGateInvalidationEvents,
   recordRebaseStepCompletion,
   writeHalt,
   originDefaultBranch,
@@ -5823,6 +5824,11 @@ export class Conductor {
         reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
       });
     }
+
+    // Task 8: emit rebase_gate_invalidated for each judged gate that
+    // classifyGateInvalidation decided to invalidate, with the specific
+    // matched delta paths that justified invalidating THAT gate.
+    await emitGateInvalidationEvents(this.events, outcome, ranManualTest);
 
     await emitRebaseEvent(this.events, outcome);
 
