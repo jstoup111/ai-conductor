@@ -197,6 +197,17 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
     state.track = 'technical';
     state.feature_desc = 'manual-test-auto-mode-marker-record';
     state.build_review = 'skipped';
+    // `prd_audit` skips via skippableForTracks: ['technical'] above. But
+    // `architecture_review_as_built` (the validation group's third member,
+    // alongside manual_test/prd_audit) only skips via its OWN tier ('S') or
+    // `skipWhenSkipped: 'architecture_review'` (steps.ts ~223) — tier M and a
+    // 'done' upstream `architecture_review` (set generically 'done' by the
+    // loop above) leave it dispatchable, which would widen the validation
+    // group to 3 members and HALT on the stub runner's missing as-built
+    // review artifact. Mark `architecture_review` 'skipped' explicitly so
+    // resolveGroupMembership's upstream-skip check narrows the group to the
+    // single manual_test branch this test actually exercises.
+    state.architecture_review = 'skipped';
     await writeState(statePath, state as unknown as ConductState);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
