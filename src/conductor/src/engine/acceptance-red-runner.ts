@@ -197,17 +197,13 @@ export async function selfHealAcceptanceRed(
   const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
 
   if (!existsSync(contractPath)) {
-    return { healed: false, reason: `acceptance run contract missing: ${contractPath}` };
+    return { healed: false, reason: `run contract missing: ${contractPath}` };
   }
 
   const raw = readFileSync(contractPath, "utf8");
   const parsed = parseAcceptanceRunContract(raw);
   if (!parsed.ok) {
-    const reason =
-      parsed.reason === "invalid JSON"
-        ? `invalid run contract JSON at ${contractPath}`
-        : parsed.reason;
-    return { healed: false, reason };
+    return { healed: false, reason: parsed.reason };
   }
 
   const crossChecked = crossCheckTargetSpecs(parsed.contract, specFiles);
