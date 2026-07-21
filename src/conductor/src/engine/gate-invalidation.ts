@@ -98,9 +98,9 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
  * Per gate surface kind (see `GATE_SURFACE`):
  * - 'feature-runtime' (prd_audit, architecture_review_as_built): preserved
  *   iff `featureSrc` is empty.
- * - 'all-runtime' (build_review, wiring_check): preserved iff both
+ * - 'all-runtime' (wiring_check, manual_test): preserved iff both
  *   `featureSrc` and `foreignSrc` are empty.
- * - 'any-codetest' (manual_test): preserved iff `D` is entirely empty
+ * - 'any-codetest' (build_review): preserved iff `D` is entirely empty
  *   (test ∪ featureSrc ∪ foreignSrc all empty).
  */
 export function classifyGateInvalidation(

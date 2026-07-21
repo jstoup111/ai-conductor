@@ -922,14 +922,21 @@ export async function recordRebaseStepCompletion(
 }
 
 /**
- * Emit a `rebase_gate_invalidated` event for each judged gate that
- * `classifyGateInvalidation` decided to invalidate (Task 8, ADR-2026-07-20).
- * `matchedPaths` carries only the delta paths that justify invalidating THIS
- * specific gate, per its `GATE_SURFACE` kind:
+ * Emit a `rebase_gate_invalidated` or `rebase_gate_preserved` event for
+ * every judged gate `classifyGateInvalidation` classified (Tasks 8-9,
+ * ADR-2026-07-20).
+ *
+ * For invalidated gates, `matchedPaths` carries only the delta paths that
+ * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
  *   - 'feature-runtime' (prd_audit, architecture_review_as_built): featureSrc.
  *   - 'all-runtime' (build_review, wiring_check, manual_test): featureSrc ∪
  *     foreignSrc.
  *   - 'any-codetest': the full delta (test ∪ featureSrc ∪ foreignSrc).
+ *
+ * For preserved gates, `surface` is the same per-kind path set — which is
+ * always empty by construction (that emptiness is precisely why the gate
+ * was preserved) — and `deltaConsidered` carries the full rebase delta `D`
+ * so the event still records what was checked against, for audit purposes.
  *
  * A no-op when the outcome isn't a file-changing rebase, or `featureSurface`
  * is unavailable (classifyGateInvalidation cannot be applied — see the
@@ -942,7 +949,7 @@ export async function emitGateInvalidationEvents(
 ): Promise<void> {
   if (outcome.kind !== 'changed' || outcome.featureSurface === undefined) return;
 
-  const { invalidated } = classifyGateInvalidation(
+  const { invalidated, preserved } = classifyGateInvalidation(
     outcome.changedCodePaths,
     outcome.featureSurface,
     ranManualTest,
@@ -952,18 +959,29 @@ export async function emitGateInvalidationEvents(
     outcome.featureSurface,
   );
 
-  for (const gate of invalidated) {
+  const matchedPathsFor = (gate: string): string[] => {
     const surface = GATE_SURFACE[gate];
-    const matchedPaths =
-      surface === 'feature-runtime'
-        ? featureSrc
-        : surface === 'all-runtime'
-          ? [...featureSrc, ...foreignSrc]
-          : [...test, ...featureSrc, ...foreignSrc];
+    return surface === 'feature-runtime'
+      ? featureSrc
+      : surface === 'all-runtime'
+        ? [...featureSrc, ...foreignSrc]
+        : [...test, ...featureSrc, ...foreignSrc];
+  };
+
+  for (const gate of invalidated) {
     await events.emit({
       type: 'rebase_gate_invalidated',
       gate: gate as StepName,
-      matchedPaths,
+      matchedPaths: matchedPathsFor(gate),
+    });
+  }
+
+  for (const gate of preserved) {
+    await events.emit({
+      type: 'rebase_gate_preserved',
+      gate: gate as StepName,
+      surface: matchedPathsFor(gate),
+      deltaConsidered: outcome.changedCodePaths,
     });
   }
 }

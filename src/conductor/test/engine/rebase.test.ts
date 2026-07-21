@@ -523,6 +523,47 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.architecture_review_as_built).toBeUndefined();
   });
 
+  it('Task 9: emits rebase_gate_preserved for each preserved gate with empty surface and full delta considered', async () => {
+    // Same fixture as the Task 8 test above: feature surface is
+    // src/feature.ts only; the delta touches a foreign runtime file and a
+    // feature test file. prd_audit/architecture_review_as_built are
+    // feature-runtime scoped and featureSrc is empty, so both are preserved.
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    const events = new ConductorEventEmitter();
+    const preserved: Array<{ gate: string; surface: string[]; deltaConsidered: string[] }> = [];
+    events.on('rebase_gate_preserved', (e) => {
+      if (e.type === 'rebase_gate_preserved') {
+        preserved.push({ gate: e.gate, surface: e.surface, deltaConsidered: e.deltaConsidered });
+      }
+    });
+
+    await emitGateInvalidationEvents(events, outcome, true);
+
+    const byGate = Object.fromEntries(preserved.map((e) => [e.gate, e]));
+    expect(Object.keys(byGate).sort()).toEqual(
+      ['prd_audit', 'architecture_review_as_built'].sort(),
+    );
+    // The preserved gate's own judged surface was found empty (that's why it
+    // was preserved) — surface reflects that emptiness.
+    expect(byGate.prd_audit.surface).toEqual([]);
+    expect(byGate.architecture_review_as_built.surface).toEqual([]);
+    // deltaConsidered is always the full rebase delta, for audit purposes.
+    expect(byGate.prd_audit.deltaConsidered).toEqual(['src/foreign.ts', 'src/feature.test.ts']);
+    expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([
+      'src/foreign.ts',
+      'src/feature.test.ts',
+    ]);
+    // Invalidated gates must not appear in the preserved set.
+    expect(byGate.build_review).toBeUndefined();
+    expect(byGate.wiring_check).toBeUndefined();
+    expect(byGate.manual_test).toBeUndefined();
+  });
+
   it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',
