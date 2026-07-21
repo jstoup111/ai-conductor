@@ -3266,6 +3266,68 @@ work it depends on.
   unreadable dependency marker can only make a spec wait longer, never jump the queue or build
   early.
 
+#### Intake-only criteria enforcement (priority + size + dependency-linking)
+
+Priority and size are the two labels the daemon backlog needs to schedule a spec (see
+`PRIORITY_BAND_RANK` above and `parsePriorityLabels`/`parseSizeLabel` in
+`engine/backlog-priority.ts`); dependency-linking is what the blocker resolver above walks.
+This feature (#695) stamps all three **at intake capture time only** — the daemon build
+gate, `dependency-claim.ts`, and `github-issues.ts`'s `poll()` are untouched, so a
+missing/malformed label can only ever cause an intake-time default, never a downstream
+build failure or HALT.
+
+- **`parseSizeLabel` (`engine/backlog-priority.ts`).** Closed-vocabulary parser beside
+  `parsePriorityLabels`: matches exactly `^size: (S|M|L)$` (case-sensitive, no partial
+  matches), and when an issue carries more than one `size:` label, largest wins (`L` > `M` >
+  `S`).
+- **Required form fields (`.github/ISSUE_TEMPLATE/intake.yml`).** `Priority`
+  (`critical`/`high`/`medium`/`low`) and `Size` (`S`/`M`/`L`) are now required dropdowns; an
+  optional free-text `Depends on` field accepts issue numbers or "none".
+- **`intake-label-sync` Action (`.github/workflows/intake-label-sync.yml`, triggered on
+  `issues: [opened, edited]`).** Parses the submitted form body (issue-form submissions
+  render each field's label as an `### <Label>` heading) and stamps the matching
+  `priority:`/`size:` labels plus one `blocked_by:#N` label per declared dependency,
+  defaulting to `priority: medium` / `size: M` on unparsable or missing input. Backed by
+  `syncIssueLabels()` (`engine/engineer/intake/label-sync.ts`), wired to the live workflow
+  via `scripts/intake-label-sync-apply.mts`. **Isolation:** `issues: write` / `contents:
+  read` permissions only, `continue-on-error: true` at the workflow level, and
+  `syncIssueLabels()` catches all errors internally and always resolves — a label-sync
+  failure can never fail this workflow or block `ci.yml` (they are entirely separate
+  workflows; this one never touches `ci.yml`). **Idempotent:** diffs the desired label set
+  against the issue's current labels and only calls the "set labels" REST endpoint when they
+  differ, so re-edits never duplicate labels.
+- **`bin/intake-file` (`src/intake-file` wraps `fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`).** Files an issue with priority/size/dependency
+  linking applied in one atomic operation, for filing from the CLI instead of the web form:
+  ```
+  bin/intake-file --title "..." --body "..." [--size S|M|L]
+    [--priority critical|high|medium|low] [--depends-on owner/repo#N] [--repo owner/repo]
+  ```
+  Resolution order for size/priority: explicit flag ▸ interactive prompt (only when stdin
+  and stdout are both a TTY) ▸ inferred from the body ▸ defaulted. `--depends-on` may be
+  passed multiple times; omitting it in an interactive session prompts for and records an
+  explicit "no dependencies" acknowledgement rather than leaving the field silently blank.
+  Exit code is 0 once the issue itself is created — a label-apply or dependency-link failure
+  after that point is reported as a warning on stdout/stderr, never turned into a non-zero
+  exit or a failed filing.
+- **`bin/intake-backfill` (`src/intake-backfill-cli.ts` wraps `backfillIntakeLabels()` in
+  `engine/engineer/intake/backfill.ts`).** One-shot, non-interactive sweep for issues filed
+  before this feature existed or filed by hand (`gh issue create`, bypassing
+  `bin/intake-file`):
+  ```
+  bin/intake-backfill --repo owner/repo
+  ```
+  Lists open issues assigned to the authenticated `gh` user (`gh issue list --assignee @me
+  --state open --json number,body,labels -R <repo>`, matching the idiom `github-issues.ts`'s
+  `poll()` already uses), backfills any missing `size:`/`priority:` label (infer from body ▸
+  default) via `backfillIntakeLabels()`, and prints an operator report via
+  `renderBackfillReport()` (labelled/skipped/failed breakdown). A per-issue failure is
+  isolated inside `backfillIntakeLabels()` and never aborts the sweep or the process; only a
+  top-level failure (e.g. the initial issue-list call itself) sets a non-zero exit code. Idempotent
+  and safe to re-run; an operator runs it once when adopting this feature to catch up the
+  pre-existing backlog, and again any time issues accumulate outside `bin/intake-file`/the web
+  form.
+
 #### Daemon liveness (pidfile-lock)
 
 `engine/engineer/daemon-lock.ts` owns a **one-per-repo mutex**: `.daemon/daemon.pid` is created with

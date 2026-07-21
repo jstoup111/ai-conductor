@@ -186,15 +186,25 @@ Keep it specific and under ~72 characters.
 4. **Claims are calibrated** — inferences and guesses are labeled as such, not stated
    as fact.
 5. **Impact is stated honestly** — required, one line minimum; never omitted.
-6. **A size tier is picked** — exactly one of `size: S` / `size: M` / `size: L`,
-   applied as a label in §8 (never written as prose in the body).
+6. **Size/priority are ready to hand to the filer**: either you've picked
+   `S`/`M`/`L` and (optionally) a priority tier to pass as flags in §8, or you're
+   content to let `bin/intake-file` infer/prompt/default them. Never hand-write a
+   size or priority as prose in the body — that discipline is now enforced by the
+   script, not the checklist.
 
 ### 8. File It
 
+Filing is not prose discipline — it is one atomic, deterministic operation run by
+`bin/intake-file` (`src/conductor/bin/intake-file`, backed by `fileIntakeIssue()`
+in `src/engine/engineer/intake/file-issue.ts`). It creates the issue, applies the
+`priority:`/`size:` labels, and records a `--depends-on` link — or an explicit
+"no dependencies" decision when `--depends-on` is omitted — in one call, so there
+is never a window where an issue exists unlabeled or with a silently-skipped
+dependency check.
+
 ```bash
-gh issue create \
+bin/intake-file \
   --title "<symptom-or-outcome title>" \
-  --assignee @me \
   --body "$(cat <<'EOF'
 ## Observed
 
@@ -215,25 +225,33 @@ Filer's guesses — DECIDE weighs alternatives and may discard these:
 
 - <guess>
 EOF
-)"
+)" \
+  --size M \
+  --priority high \
+  --depends-on owner/repo#123
 ```
 
-- **`--assignee @me` matters**: the engineer's intake poll only captures issues
-  assigned to the operator. An unassigned intake is invisible to the queue.
-- **Size label (REQUIRED, exact names)**: apply exactly one of `size: S`, `size: M`,
-  `size: L` — the very rough effort tier (S ≈ ~1-2h, M ≈ ~half day to a day,
-  L ≈ multi-day). Apply it **via REST after creating** — `gh issue edit --add-label`
-  is broken on this repo (classic Projects):
-  ```bash
-  gh api -X POST repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=size: M"
-  ```
-- **Priority label** (optional, exact names): `priority: critical`, `priority: high`,
-  `priority: medium`, `priority: low`. Apply via the same REST endpoint —
-  `gh api -X POST repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=priority: high"` —
-  never `gh issue edit --add-label`.
-- Impact is never omitted. A Hypotheses section with nothing to say is dropped
-  entirely, not left as an empty heading.
-- After creating, output the issue URL.
+- **`--title` and `--body` are required**; the script exits non-zero without them.
+- **`--size S|M|L`** (optional): if omitted, the script prompts interactively when
+  attached to a TTY, otherwise infers from body wording, otherwise defaults to `M`
+  — always reported back as `size=<value> (<source>)` so the filer sees which path
+  was taken. Never write the size as prose in the body; let the flag/inference own it.
+- **`--priority critical|high|medium|low`** (optional): same prompt ▸ infer ▸
+  default resolution as size, reported as `priority=<value> (<source>)`.
+- **`--depends-on owner/repo#N`** (repeatable, optional): links a blocking issue.
+  Omitting it entirely is fine — the script records an explicit
+  `dependencies: none` rather than silently skipping the question, so "no
+  dependencies" is always a decision, never an omission.
+- **`--repo owner/repo`** (optional): target a repo other than the current one.
+- The script assigns the filer via the normal `gh issue create` invocation it
+  wraps; a label-apply or `--depends-on` link failure after successful issue
+  creation surfaces as a `[intake-file] warning: ...` line and does **not** fail
+  the filing (exit 0) — only a failure to create the issue itself is a hard error
+  (non-zero exit).
+- Impact is never omitted from the body. A Hypotheses section with nothing to say
+  is dropped entirely, not left as an empty heading.
+- After running, report the printed `[intake-file] filed: <url>` line (and any
+  warnings) to the operator.
 
 ## Worked Example — Bad vs Good
 
@@ -269,5 +287,5 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 - [ ] Every outcome is observable without knowledge of the implementation
 - [ ] No fix directions, design sketches, or prescribed seams outside Hypotheses
 - [ ] Title states the symptom or outcome, not a solution
-- [ ] Filed with `--assignee @me`; exactly one `size: S/M/L` label applied via REST; priority label applied if warranted
+- [ ] Filed via `bin/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
 - [ ] Issue URL reported to the operator

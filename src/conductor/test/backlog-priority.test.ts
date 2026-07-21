@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parsePriorityLabels,
+  parseSizeLabel,
   createPriorityResolver,
   orderBacklog,
   ghIssueLabelReader,
@@ -157,6 +158,81 @@ describe('parsePriorityLabels — extract priority from issue labels', () => {
       expect(
         parsePriorityLabels(['priority-high', 'Priority: High', 'priority: medium', 'bug'])
       ).toBe('medium');
+    });
+  });
+});
+
+describe('parseSizeLabel — extract size from issue labels', () => {
+  describe('positive cases', () => {
+    it('single S size label returns S', () => {
+      expect(parseSizeLabel(['size: S'])).toBe('S');
+    });
+
+    it('single M size label returns M', () => {
+      expect(parseSizeLabel(['size: M'])).toBe('M');
+    });
+
+    it('single L size label returns L', () => {
+      expect(parseSizeLabel(['size: L'])).toBe('L');
+    });
+
+    it('mixed labels with size extracted correctly', () => {
+      expect(parseSizeLabel(['bug', 'intake', 'size: M'])).toBe('M');
+    });
+
+    it('multiple size labels returns largest (S and L present)', () => {
+      expect(parseSizeLabel(['size: S', 'size: L'])).toBe('L');
+    });
+
+    it('multiple size labels returns largest (S and M present)', () => {
+      expect(parseSizeLabel(['size: S', 'size: M'])).toBe('M');
+    });
+
+    it('all three sizes present returns largest', () => {
+      expect(parseSizeLabel(['size: S', 'size: M', 'size: L'])).toBe('L');
+    });
+  });
+
+  describe('negative cases — unknown labels', () => {
+    it('unknown size value "XL" returns undefined', () => {
+      expect(parseSizeLabel(['size: XL'])).toBeUndefined();
+    });
+
+    it('no space after colon "size:M" returns undefined', () => {
+      expect(parseSizeLabel(['size:M'])).toBeUndefined();
+    });
+
+    it('wrong case "Size: S" returns undefined', () => {
+      expect(parseSizeLabel(['Size: S'])).toBeUndefined();
+    });
+
+    it('non-abbreviated "size: small" returns undefined', () => {
+      expect(parseSizeLabel(['size: small'])).toBeUndefined();
+    });
+  });
+
+  describe('negative cases — empty/malformed inputs', () => {
+    it('empty array returns undefined', () => {
+      expect(parseSizeLabel([])).toBeUndefined();
+    });
+  });
+
+  describe('malformed entries — no throw', () => {
+    it('non-string junk filtered safely and does not throw', () => {
+      expect(() =>
+        parseSizeLabel([null as any, 123 as any, 'size: L', undefined as any])
+      ).not.toThrow();
+      expect(parseSizeLabel([null as any, 123 as any, 'size: L', undefined as any])).toBe('L');
+    });
+  });
+
+  describe('determinism — side effects', () => {
+    it('repeated calls with same input return same result', () => {
+      const labels = ['size: S', 'size: L'];
+      const result1 = parseSizeLabel(labels);
+      const result2 = parseSizeLabel(labels);
+      expect(result1).toBe(result2);
+      expect(result1).toBe('L');
     });
   });
 });

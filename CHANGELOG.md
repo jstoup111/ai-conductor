@@ -25,6 +25,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   dispatches a real fix via StepRunner, classifies spawn errors, and validates
   invocation at daemon startup
 
+- CI: `conductor` job now checks out with `fetch-depth: 0` so `origin/main` is
+  resolvable — the intake-only-enforcement acceptance spec's `git diff
+  origin/main` regression guard was crashing with `fatal: bad revision 'main'`
+  under GitHub Actions' default shallow (depth-1) checkout instead of running
+  its intended diff assertion.
+
 ### Changed
 
 - Operator config: `harness_self_host.version_freeze` advanced 0.99.19 → 0.99.20
@@ -48,20 +54,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
-  enforcement**: priority + size + dependency-linking are stamped at every intake
-  capture surface (a required-fields intake form + an isolated `intake-label-sync`
-  Action, a `bin/intake-file` filing helper, and a one-shot `bin/intake-backfill`)
-  so every issue is born complete, and the ~100-issue unsized backlog is completed
-  in one default-and-report pass. Per the operator directive "No failures — enforce
-  requirements at intake ONLY", the spec adds **zero** downstream failure modes: the
-  claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon dispatch/build, pipeline
-  gates, and CI stay byte-identical and add no criteria check (a negative-path story
-  asserts this). Supersedes PR #696 (which enforced at claim time via a
-  `needs-criteria` deferral). Artifacts under
+- Issue #695 — **intake-only criteria enforcement**: priority + size +
+  dependency-linking are now stamped at every intake capture surface. Ships a
+  `parseSizeLabel` closed-vocabulary parser beside `parsePriorityLabels`
+  (`engine/backlog-priority.ts`); required `Priority`/`Size` dropdowns + an
+  optional `Depends on` field on `.github/ISSUE_TEMPLATE/intake.yml`; an
+  isolated `intake-label-sync` GitHub Action (`syncIssueLabels()` in
+  `engine/engineer/intake/label-sync.ts`) that stamps `priority:`/`size:`/
+  `blocked_by:` labels on `issues: [opened, edited]`, defaulting on
+  unparsable input, entirely separate from and unable to fail `ci.yml`; a
+  `bin/intake-file` filing helper (`fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`) that files a criteria-complete issue
+  in one atomic operation; and a one-shot, idempotent `bin/intake-backfill`
+  sweep (`backfillIntakeLabels()` in `engine/engineer/intake/backfill.ts`)
+  that stamps missing labels on the existing backlog and emits an operator
+  report, never HALTing. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", this adds **zero** downstream failure modes:
+  the claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon
+  dispatch/build, pipeline gates, and CI stay byte-identical and add no
+  criteria check (a negative-path acceptance spec asserts this). Supersedes
+  PR #696 (which enforced at claim time via a `needs-criteria` deferral).
+  Artifacts under
   `.docs/{plans,stories,complexity,conflicts,architecture,decisions,intake}/intake-only-enforcement*`;
-  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`. Spec-only — no
-  implementation, no VERSION bump, no migration.
+  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`.
 - Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
   of repeating an identical attempt. A new pure `escalateAttempt` (with
   `EFFORT_ORDER`, `MODEL_TIER_ORDER`, `bumpEffort`, `bumpModel` in
