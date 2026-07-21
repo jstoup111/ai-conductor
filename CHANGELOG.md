@@ -2208,6 +2208,10 @@ no action needed — the token requirement is skipped.
   subcommand, not a breaking surface — no migration block needed. See `README.md` and
   `src/conductor/README.md` for flags and the `monitor.sh` hook line
   (`conduct-ts halt-issues sweep || true`).
+- Authored-keys write now rejects a non-absolute/`undefined` base with a clear
+  error instead of writing `undefined/authored-keys.json` under cwd; the
+  acceptance test no longer poisons `$AI_CONDUCTOR_ENGINEER_DIR`
+  (ai-conductor#574).
 
 ## Migration
 
