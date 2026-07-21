@@ -368,4 +368,17 @@ describe('engine/overlap-scan — renderReport (Task 6)', () => {
     expect(output.toLowerCase()).toMatch(/rename/);
     expect(output.toLowerCase()).toMatch(/may not (be )?detect/);
   });
+
+  it('surfaces skip notes and never prints the clean line when a scan degraded', () => {
+    const report: OverlapReport = {
+      ...emptyReport,
+      skipNotes: ["skipped scan: base ref 'main' could not be resolved"],
+    };
+
+    const output = renderReport(report);
+
+    expect(output).toContain("skipped scan: base ref 'main' could not be resolved");
+    expect(output.toLowerCase()).not.toContain('no overlap detected; no open blockers');
+    expect(output.toLowerCase()).toMatch(/rename/);
+  });
 });

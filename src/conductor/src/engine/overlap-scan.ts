@@ -184,9 +184,14 @@ export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapR
 }
 
 export function renderReport(report: OverlapReport): string {
-  const { seamOverlaps, blockers, indeterminate } = report;
+  const { seamOverlaps, blockers, indeterminate, skipNotes } = report;
 
-  if (seamOverlaps.length === 0 && blockers.length === 0 && indeterminate.length === 0) {
+  if (
+    seamOverlaps.length === 0 &&
+    blockers.length === 0 &&
+    indeterminate.length === 0 &&
+    skipNotes.length === 0
+  ) {
     return 'No overlap detected; no open blockers. (Note: renames or name-only diffs may not be detected.)';
   }
 
@@ -202,6 +207,10 @@ export function renderReport(report: OverlapReport): string {
 
   for (const entry of indeterminate) {
     lines.push(`Indeterminate: ${entry.detail}`);
+  }
+
+  for (const note of skipNotes) {
+    lines.push(`Advisory: ${note}`);
   }
 
   lines.push('Note: renames or name-only diffs may not be detected by this scan.');
