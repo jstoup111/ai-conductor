@@ -222,18 +222,17 @@ const NOTFOUND_SENTINEL: PrMergeState = {
   checksOutcome: 'none',
 };
 
-/** Patterns whose presence in an error message indicate a PR is genuinely gone. */
-const NOT_FOUND_PATTERNS = [
-  'not found',
-  'could not resolve to', // gh GraphQL: "Could not resolve to a PullRequest with the number N"
-  'no pull requests',
-  '404',
-  'no such',
-];
+/**
+ * gh's stable GraphQL not-found phrase, e.g. "Could not resolve to a
+ * PullRequest with the number N." This is narrower than a loose set of
+ * English substrings (like bare "not found" or "404") that can appear in
+ * unrelated transient/network errors and cause false-positive pruning.
+ */
+const GH_GRAPHQL_NOT_FOUND = 'could not resolve to a pullrequest';
 
 function isNotFoundError(err: unknown): boolean {
   const msg = String(err instanceof Error ? err.message : err).toLowerCase();
-  return NOT_FOUND_PATTERNS.some((p) => msg.includes(p));
+  return msg.includes(GH_GRAPHQL_NOT_FOUND);
 }
 
 /**

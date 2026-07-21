@@ -238,13 +238,31 @@ describe('checksOutcome classification', () => {
 
     it('returns checksOutcome "none" for NOTFOUND_SENTINEL (PR not found)', async () => {
       const fakeGhRunner = async () => {
-        throw new Error('could not resolve to PullRequest');
+        throw new Error('could not resolve to a PullRequest');
       };
 
       const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
       expect(state.checksOutcome).toBe('none');
       expect(state.state).toBe('NOTFOUND');
       expect(state.mergeable).toBe('UNKNOWN');
+    });
+
+    it('treats gh GraphQL "Could not resolve to a PullRequest" (case-insensitive) as NOTFOUND', async () => {
+      const fakeGhRunner = async () => {
+        throw new Error('Could not resolve to a PullRequest with the number 1.');
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('NOTFOUND');
+    });
+
+    it('does not treat a generic "not found" message without the gh GraphQL signal as NOTFOUND', async () => {
+      const fakeGhRunner = async () => {
+        throw new Error('resource not found');
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('UNKNOWN');
     });
 
     it('preserves isMergeable behavior with green checks and new checksOutcome field', async () => {
