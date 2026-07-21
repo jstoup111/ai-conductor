@@ -73,7 +73,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // the loop returns without writing a marker. The finally backstop must
     // convert that into a HALT.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -440,7 +440,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
