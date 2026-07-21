@@ -123,6 +123,27 @@ describe('engine/selector — selectNextGate', () => {
     expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
   });
 
+  it('explicit manual_test: skipped satisfies prd_audit prerequisite on Small (ADR D5)', () => {
+    // Explicit status (not just tier-inferred skip): confirms stepSatisfied()
+    // treats 'skipped' as resolving the ['manual_test'] prerequisite on
+    // prd_audit, so the tail chain is not blocked.
+    const state: ConductState = {
+      ...frontDone(),
+      complexity_tier: 'S',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      manual_test: 'skipped',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      build_review: VSAT,
+      wiring_check: VSAT,
+    };
+    const d = selectNextGate(input(state, verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
+  });
+
   it('does not skip manual_test on Medium or Large', () => {
     for (const tier of ['M', 'L'] as const) {
       const state: ConductState = { ...frontDone(), complexity_tier: tier };
