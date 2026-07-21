@@ -1171,6 +1171,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const region = latestAttemptRegion(content);
+
+    // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
+    // skipped (no endpoint/UI stories to exercise) rather than carrying a
+    // PASS/FAIL table. Treat it as done once it's fresh for this session —
+    // same freshness bar as a real PASS/FAIL attempt — so auto mode does not
+    // hang the gate forever waiting for a results table that will never be
+    // written.
+    if (isSkipAttempt(region)) {
+      if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
+        return {
+          done: false,
+          reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+        };
+      }
+      return { done: true };
+    }
+
     const failRows = region.split('\n').filter(isManualTestFailRow);
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.

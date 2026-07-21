@@ -41,6 +41,7 @@ import {
   planHasDependencyTree,
   validateBuildReviewVerdict,
   isSkipAttempt,
+  MANUAL_TEST_SKIP_SENTINEL,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult } from '../../src/engine/artifacts.js';
 
@@ -1663,6 +1664,26 @@ describe('engine/artifacts', () => {
           '| Story | Criterion | Result | Notes |\n|---|---|---|---|\n' +
           '| FAIL kicks back to build with evidence | N/A | SKIP | engine-internal |\n' +
           '| fail-closed verdict predicate | N/A | SKIP | engine-internal |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when the latest attempt is a fresh SKIP sentinel (auto mode, no stories to exercise)', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when an earlier attempt was PASS but the LATEST attempt is a SKIP sentinel', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-21T00:00:00Z\n' +
+          '| Story | Result |\n|---|---|\n| Foo | PASS |\n' +
+          `## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
       );
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result).toEqual({ done: true });
