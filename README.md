@@ -518,6 +518,18 @@ BLOCKED as-built architecture review (`.pipeline/architecture-review-as-built.md
 each fixable gap back to the right step with concrete tasks, reserving the HALT for gaps that
 genuinely need a human decision (architectural clarity or product scope).
 
+**Acceptance-red self-heal (#741, supersedes #297).** The `acceptance_specs` gate no
+longer HALTs whenever RED specs exist on disk but their evidence marker
+(`.pipeline/acceptance-specs-red.json`) is missing or invalid. The writing-system-tests
+skill records a `.pipeline/acceptance-specs-run.json` run contract (`{command, cwd,
+targetSpecs}`) at spec-authoring time; on a marker-miss with spec files present, the
+engine executes that recorded contract once — before spending retry budget — writes the
+marker at the authoritative worktree-root path, and re-validates via the existing
+validator. An absent/malformed contract still fails the step with an explicit reason
+(the self-heal never guesses a command), and a genuinely non-RED suite still fails
+validation after execution. See `src/conductor/README.md` → "Acceptance-red self-heal"
+for the implementation.
+
 **Progress-aware build halt (`build_progress_halt`).** A build step that keeps resolving
 tasks on every attempt — but hasn't yet cleared the completion gate — is no longer halted
 just because it exceeded `max_retries`. As long as the resolved-task count keeps advancing,

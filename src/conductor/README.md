@@ -98,6 +98,35 @@ the gate can only loosen. A leading `*/` in a glob expands to each immediate sub
 (skipping `node_modules`/dot-dirs), so package names need not be hard-coded. Config flows to
 the check via `CompletionContext.config`.
 
+#### Acceptance-red self-heal: run contract + engine-owned execution (#741, supersedes #297)
+
+RED-evidence for `acceptance_specs` used to depend on the writing-system-tests skill both
+authoring the specs *and* reliably executing them to produce
+`.pipeline/acceptance-specs-red.json` — a step that could silently drift or land at the
+wrong path, HALTing on a marker miss even though the RED specs existed on disk. The skill
+now instead records its judgement (what command proves RED, from where) as a run contract,
+and the engine executes it deterministically:
+
+- **Run contract** — the skill writes `.pipeline/acceptance-specs-run.json`
+  (`{ command, cwd, targetSpecs }`) at spec-authoring time. The engine never guesses the
+  test command; it only ever replays what the skill recorded.
+- **`acceptance-red-runner.ts`** (`engine/`) parses/validates the contract (shape, `cwd`
+  exists, `targetSpecs` cross-checked against the globbed spec files), executes the
+  recorded command from the recorded `cwd`, writes `.pipeline/acceptance-specs-red.json` at
+  the **worktree root** (normalizing up a stray nested marker if the command wrote one
+  relative to `cwd`), and re-validates via the existing `validateAcceptanceRedEvidence` —
+  reused unchanged, so every prior negative path still fails the same way.
+- **Self-heal seam in `Conductor.run`** — mirrors the existing `deriveCompletion` self-heal
+  pattern: on an `acceptance_specs` completion-gate miss that names a missing/invalid RED
+  marker *and* spec files are present, the runner is invoked once per step attempt, before
+  the retry budget is spent.
+- **Fail-safe, never masks a real failure** — an absent or malformed contract makes the
+  self-heal decline (not guess); the step fails with an explicit reason and the retry
+  re-dispatches the skill with a directive to author the contract. A genuinely non-RED
+  suite (e.g. specs that pass when they should fail) still fails validation after
+  execution — the self-heal only replaces manual/flaky execution, it never launders the
+  result.
+
 ### Gate-driven loop
 
 Once `build` engages, `advanceTail()` drives

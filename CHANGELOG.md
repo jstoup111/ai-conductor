@@ -35,6 +35,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   previous invalidate-everything behavior whenever the rebase delta or the feature's
   claimed surface can't be computed. New audit events `rebase_gate_preserved` and
   `rebase_gate_invalidated` record every preserve/re-run decision (#655).
+- `acceptance_specs` no longer HALTs on a missing/invalid RED-evidence marker when RED
+  specs already exist on disk: the writing-system-tests skill now records a
+  `.pipeline/acceptance-specs-run.json` run contract at spec-authoring time, and the
+  engine self-heals by executing that contract once (before spending retry budget),
+  writing `.pipeline/acceptance-specs-red.json` at the worktree root, and re-validating
+  via the existing validator — never masking a genuine non-RED failure (#741, supersedes #297)
 
 ## Migration
 
