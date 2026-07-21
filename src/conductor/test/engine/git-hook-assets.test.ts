@@ -61,6 +61,27 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(/conduct-ts/);
     });
+
+    it('reconciles a self-stamped Task: trailer unconditionally, rather than early-exiting when one is already present (#reconciliation)', () => {
+      // Regression lock for the fix: the hook used to bail out early via
+      // `git interpret-trailers --parse ... | grep -q '^Task:' ... exit 0`
+      // as soon as ANY Task: trailer already existed in the message — even
+      // a stale/self-stamped one that no longer matched .pipeline/current-task.
+      // That old early-exit pattern must not reappear.
+      expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(
+        /grep -q '\^Task:'[^\n]*\n[^\n]*exit 0/
+      );
+
+      // The replacement behavior: unconditionally reconcile via
+      // `--if-exists replace` whenever TASK_ID is non-empty, so the
+      // engine's current-task id always wins over any prior trailer.
+      expect(PREPARE_COMMIT_MSG_HOOK).toMatch(
+        /git interpret-trailers --in-place --if-exists replace --trailer "Task: \$TASK_ID"/
+      );
+
+      // The guard must be scoped to "we have a task id", not "no trailer yet".
+      expect(PREPARE_COMMIT_MSG_HOOK).toMatch(/if \[\[ -n "\$TASK_ID" \]\]; then/);
+    });
   });
 
   describe('COMMIT_MSG_HOOK', () => {
@@ -227,6 +248,21 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
       const body = await git('log', '-1', '--format=%B');
       expect(body.stdout).not.toMatch(/^Task:/m);
+    });
+
+    it('reconciles a stale self-stamped Task: trailer to match .pipeline/current-task rather than leaving it as-is', async () => {
+      // Regression for Task 1: the old hook early-exited as soon as any
+      // Task: trailer was present, so a stale/self-stamped id (e.g. from a
+      // copy-pasted commit template) would survive unreconciled. The
+      // reconciled hook must always replace it with the engine's
+      // current-task id when one is set.
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'current-task'), '1\n', 'utf-8');
+      const res = await commitFile('f.txt', 'f', 'feat: reconcile stale trailer\n\nTask: 999');
+      expect(res.code).toBe(0);
+      const body = await git('log', '-1', '--format=%B');
+      expect(body.stdout).toMatch(/^Task: 1$/m);
+      expect(body.stdout).not.toMatch(/^Task: 999$/m);
     });
 
     it('rejects an unattributed commit made with git commit -m (direct form)', async () => {

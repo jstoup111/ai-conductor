@@ -458,7 +458,11 @@ export function waitingDetail(verdict: BlockerVerdict): string {
  * in fallback mode, a single marker line `(priority: chronological fallback)`
  * is added to the ELIGIBLE section instead of per-line annotations.
  */
-export function renderDashboard(state: InheritedState, priorityResolution?: PriorityResolution): string {
+export function renderDashboard(
+  state: InheritedState,
+  opts?: { includeCompleted?: boolean },
+  priorityResolution?: PriorityResolution,
+): string {
   const lines: string[] = [];
   lines.push('── inherited state ──────────────────────────────────────────');
 
@@ -549,9 +553,11 @@ export function renderDashboard(state: InheritedState, priorityResolution?: Prio
     lines.push(`  (priority: chronological fallback)`);
   }
 
-  const processed = state.processed.filter((p) => !parkedSet.has(p.slug));
-  lines.push(`PROCESSED (${processed.length})`);
-  for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
+  if (opts?.includeCompleted) {
+    const processed = state.processed.filter((p) => !parkedSet.has(p.slug));
+    lines.push(`PROCESSED (${processed.length})`);
+    for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
+  }
 
   lines.push('─────────────────────────────────────────────────────────────');
   return lines.join('\n');

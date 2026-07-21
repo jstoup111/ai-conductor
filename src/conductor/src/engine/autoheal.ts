@@ -750,6 +750,10 @@ async function deriveCompletionInternal(
           result[taskId].status = 'skipped';
           result[taskId].skipReason = reason;
           result[taskId].completed = false;
+          evidence.evidenceStamps.set(taskId, {
+            sha: evidenceCommit.sha,
+            form: 'evidence:skipped',
+          });
           continue;
         }
       }
@@ -1230,6 +1234,14 @@ const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(
 // or any other value is fail-closed false, same as an absent marker.
 const VERIFY_ONLY_LINE = /^\s*(?:[-*]\s+)?\*\*Verify-only\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
+// `**Type:**` marker line (no-diff-task-evidence-stamp plan, Task 2). Union
+// semantics with VERIFY_ONLY_LINE: a task is verify-only-eligible if EITHER
+// marker is present. The value is split on `+` into tokens; only an exact
+// (trimmed, case-insensitive) token match of "verification" counts — a
+// substring match would false-positive on values like "verification-only" or
+// "preverification", so this stays fail-closed.
+const TYPE_LINE = /^\s*(?:[-*]\s+)?\*\*Type\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
 /** Path-looking tokens from a **Files:** line (plain text or backticked). */
 function extractFilesLinePaths(rest: string): string[] {
   const paths: string[] = [];
@@ -1416,12 +1428,16 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
 }
 
 /**
- * Parses `**Verify-only:** yes` marker lines per task block
- * (verify-only-prove-closed-task-evidence plan, Task 1). Exact-match "yes"
- * (case-insensitive) only — "maybe", empty, or missing all resolve to false
- * (fail-closed). A standalone sibling of `parsePlanTaskPaths` — it does NOT
- * alter that function's existing `Map<string, Set<string>>` shape/behavior,
- * so every current consumer is unaffected.
+ * Parses per-task-block verify-only-eligibility markers
+ * (verify-only-prove-closed-task-evidence plan, Task 1; extended by
+ * no-diff-task-evidence-stamp plan, Task 2). A task is eligible (`true`) if
+ * EITHER: its block has a `**Verify-only:** yes` marker (exact-match "yes",
+ * case-insensitive; "maybe", empty, or missing resolve to false), OR its
+ * block has a `**Type:**` line whose `+`-split values include the exact
+ * token "verification" (case-insensitive). A standalone sibling of
+ * `parsePlanTaskPaths` — it does NOT alter that function's existing
+ * `Map<string, Set<string>>` shape/behavior, so every current consumer is
+ * unaffected.
  */
 export function parsePlanTaskVerifyOnly(text: string): Map<string, boolean> {
   const taskHeader =
@@ -1447,6 +1463,14 @@ export function parsePlanTaskVerifyOnly(text: string): Map<string, boolean> {
     if (verifyOnlyMatch) {
       const isYes = verifyOnlyMatch[1].trim().toLowerCase() === 'yes';
       if (isYes) {
+        for (const id of currentIds) result.set(id, true);
+      }
+    }
+
+    const typeMatch = line.match(TYPE_LINE);
+    if (typeMatch) {
+      const tokens = typeMatch[1].split('+').map((token) => token.trim().toLowerCase());
+      if (tokens.includes('verification')) {
         for (const id of currentIds) result.set(id, true);
       }
     }

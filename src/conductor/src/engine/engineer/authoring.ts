@@ -42,6 +42,7 @@ import { TargetPathMissingError } from './target.js';
 import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
+import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
 import { writeTrackMarker } from './track-marker.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
@@ -557,8 +558,18 @@ export async function runAuthoring(
     const unresolvableGh: GhRunner = async () => {
       throw new Error('runAuthoring: no gh runner injected for owner resolution');
     };
+    // When no ownerConfig is injected (or it carries no spec_owner), fall back to
+    // the machine identity (~/.ai-conductor/config.yml spec_owner) — mirroring
+    // conductor.ts:4967 and loop.ts:545 — so autonomous authoring (no caller-
+    // supplied ownerConfig) is born owned instead of silently un-owned.
+    // readMachineOwnerConfig NEVER throws; a config-load failure degrades to
+    // { spec_owner: null } and the chain falls through to gh login.
+    const ownerConfig =
+      deps.ownerConfig && deps.ownerConfig.spec_owner
+        ? deps.ownerConfig
+        : await readMachineOwnerConfig();
     const ownerResolution = await resolveDaemonOwner(
-      deps.ownerConfig ?? {},
+      ownerConfig,
       deps.gh ?? unresolvableGh,
       repoPath,
     );

@@ -285,7 +285,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       ],
       processedCount: 2,
     };
-    const out = renderDashboard(state);
+    const out = renderDashboard(state, { includeCompleted: true });
     expect(out).toContain('HALTED (1)');
     expect(out).toContain(
       'h1 [L] @prd_audit — rebase conflict  → https://github.com/o/r/pull/7',
@@ -301,17 +301,41 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
   });
 
   it('zero-state renders all four groups at 0', () => {
-    const out = renderDashboard({
-      halted: [],
-      inProgress: [],
-      eligible: [],
-      processed: [],
-      processedCount: 0,
-    });
+    const out = renderDashboard(
+      {
+        halted: [],
+        inProgress: [],
+        eligible: [],
+        processed: [],
+        processedCount: 0,
+      },
+      { includeCompleted: true },
+    );
     expect(out).toContain('HALTED (0)');
     expect(out).toContain('IN-PROGRESS (0)');
     expect(out).toContain('ELIGIBLE (0)');
     expect(out).toContain('PROCESSED (0)');
+  });
+});
+
+describe('engine/daemon-dashboard — renderDashboard includeCompleted option', () => {
+  const state: InheritedState = {
+    halted: [],
+    inProgress: [],
+    eligible: [],
+    processed: [{ slug: 'p1' }],
+    processedCount: 1,
+  };
+
+  it('default call (no opts) omits the PROCESSED group', () => {
+    const out = renderDashboard(state);
+    expect(out).not.toContain('PROCESSED');
+  });
+
+  it('opts.includeCompleted: true includes the PROCESSED group', () => {
+    const out = renderDashboard(state, { includeCompleted: true });
+    expect(out).toContain('PROCESSED (1)');
+    expect(out).toContain('p1');
   });
 });
 
@@ -530,7 +554,7 @@ describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 
         },
       ],
     };
-    const out = renderDashboard(state);
+    const out = renderDashboard(state, { includeCompleted: true });
 
     const slugs = [
       'halted-slug',
@@ -590,6 +614,86 @@ describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () 
   });
 });
 
+describe('engine/daemon-dashboard — ACTIVE groups unaffected by includeCompleted (Task 4 regression)', () => {
+  // Fixed representative state exercising every non-PROCESSED group. Proves the
+  // includeCompleted gating (Task 1) touches ONLY the PROCESSED section — every
+  // other group renders byte-identically whether opts is omitted, false, or true.
+  const representativeState: InheritedState = {
+    halted: [
+      {
+        slug: 'h1',
+        reason: 'rebase conflict',
+        step: 'prd_audit',
+        tier: 'L',
+        prUrl: 'https://github.com/o/r/pull/7',
+      },
+    ],
+    inProgress: [{ slug: 'ip1', step: 'build', tier: 'M' }],
+    eligible: [{ slug: 'e1', tier: 'S' }, { slug: 'e2' }],
+    processed: [
+      { slug: 'p1', prUrl: 'https://github.com/o/r/pull/3' },
+      { slug: 'p2' },
+    ],
+    processedCount: 2,
+    waiting: [
+      {
+        slug: 'w1',
+        verdict: { kind: 'blocked', blockers: [{ repo: 'o/r', number: '10' }] },
+      },
+    ],
+    gated: [
+      {
+        kind: 'spec',
+        slug: 'g1',
+        reason: 'other-owner',
+        otherOwner: 'alice',
+        remedy: 'ask alice',
+      },
+    ],
+    parked: [{ slug: 'pk1', provenance: 'operator', reason: 'manual' }],
+  };
+
+  /** Strip the PROCESSED section (header + member lines) out of a rendered dashboard. */
+  function withoutProcessedSection(out: string): string {
+    return out
+      .split('\n')
+      .filter((line) => !line.startsWith('PROCESSED') && !/^ {2}• p[12]\b/.test(line))
+      .join('\n');
+  }
+
+  it('active groups (PARKED/HALTED/IN-PROGRESS/GATED/WAITING/ELIGIBLE) are byte-identical with opts omitted vs. { includeCompleted: true }', () => {
+    const withoutOpts = renderDashboard(representativeState);
+    const withOpts = renderDashboard(representativeState, { includeCompleted: true });
+    expect(withoutProcessedSection(withoutOpts)).toEqual(withoutProcessedSection(withOpts));
+
+    // Sanity: the two DO differ (PROCESSED gating actually happened), and every
+    // active group's expected content is present.
+    expect(withoutOpts).not.toContain('PROCESSED');
+    expect(withOpts).toContain('PROCESSED (2)');
+    for (const out of [withoutOpts, withOpts]) {
+      expect(out).toContain('PARKED (1)');
+      expect(out).toContain('pk1');
+      expect(out).toContain('HALTED (1)');
+      expect(out).toContain('h1');
+      expect(out).toContain('IN-PROGRESS (1)');
+      expect(out).toContain('ip1');
+      expect(out).toContain('GATED (1)');
+      expect(out).toContain('g1');
+      expect(out).toContain('WAITING (1)');
+      expect(out).toContain('w1');
+      expect(out).toContain('ELIGIBLE (2)');
+      expect(out).toContain('e1');
+      expect(out).toContain('e2');
+    }
+  });
+
+  it('active groups are byte-identical with opts omitted vs. { includeCompleted: false }', () => {
+    const omitted = renderDashboard(representativeState);
+    const explicitFalse = renderDashboard(representativeState, { includeCompleted: false });
+    expect(omitted).toEqual(explicitFalse);
+  });
+});
+
 describe('engine/daemon-dashboard — band annotations and fallback marker (Task 14)', () => {
   it('ELIGIBLE group band annotations: lines in ELIGIBLE section gain [band] suffixes from item band field', () => {
     const state: InheritedState = {
@@ -615,7 +719,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
         ['e5', 'no-issue'],
       ]),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     expect(out).toContain('e1 [S] [high]');
     expect(out).toContain('e2 [medium]');
     expect(out).toContain('e3 [low]');
@@ -635,7 +739,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       processedCount: 0,
     };
     const resolution: PriorityResolution = { mode: 'fallback' };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     expect(out).toContain('(priority: chronological fallback)');
     expect(out).toContain('• e1');
     expect(out).toContain('• e2');
@@ -656,7 +760,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       mode: 'banded',
       bands: new Map(),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, { includeCompleted: true }, resolution);
     expect(out).toContain('ELIGIBLE (0)');
     expect(out).toContain('HALTED (0)');
     expect(out).toContain('IN-PROGRESS (0)');
@@ -679,7 +783,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       mode: 'banded',
       bands: new Map([['e1', 'high']]),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, { includeCompleted: true }, resolution);
     // Check all four groups are present with correct structure
     expect(out).toContain('HALTED (1)');
     expect(out).toContain('h1');
@@ -704,7 +808,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       processedCount: 0,
     };
     const resolution: PriorityResolution = { mode: 'fallback' };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     // Lines should exist without band annotations
     expect(out).toContain('• e1');
     expect(out).toContain('• e2');

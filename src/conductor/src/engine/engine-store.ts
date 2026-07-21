@@ -120,6 +120,48 @@ async function computeContentStamp(srcDir: string): Promise<string> {
   return hash.digest('hex').slice(0, 12);
 }
 
+export interface ComputeEngineSourceKeyOpts {
+  /** The conductor package root (e.g. `src/conductor`). */
+  conductorRoot: string;
+}
+
+/** Build-config inputs hashed alongside the `src/` tree, relative to `conductorRoot`. */
+const ENGINE_SOURCE_KEY_CONFIG_FILES = [
+  'package.json',
+  'package-lock.json',
+  'tsconfig.json',
+  'tsup.config.ts',
+  'scripts/publish-guard.mjs',
+];
+
+/**
+ * Compute a sha256 over a defined, explicit superset of tsup's real build
+ * inputs: the entire `src/` tree (recursively) plus the build-config files
+ * listed in `ENGINE_SOURCE_KEY_CONFIG_FILES`, all resolved relative to
+ * `conductorRoot`. Reuses the same sorted `path\0bytes\0` hashing convention
+ * as `computeContentStamp` so the two stay consistent. Deterministic across
+ * calls on identical content; changes whenever any file in the defined input
+ * set changes; unaffected by files outside that set (over-inclusion is
+ * deliberate — it can only cost an unnecessary rebuild, never a stale skip).
+ */
+export async function computeEngineSourceKey(opts: ComputeEngineSourceKeyOpts): Promise<string> {
+  const { conductorRoot } = opts;
+  const srcDir = join(conductorRoot, 'src');
+  const srcFiles = (await collectFiles(srcDir, srcDir)).map((relPath) => join('src', relPath));
+  const relPaths = [...srcFiles, ...ENGINE_SOURCE_KEY_CONFIG_FILES];
+  relPaths.sort();
+
+  const hash = createHash('sha256');
+  for (const relPath of relPaths) {
+    const contents = await readFile(join(conductorRoot, relPath));
+    hash.update(relPath);
+    hash.update('\0');
+    hash.update(contents);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
 async function collectFiles(root: string, dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const results: string[] = [];

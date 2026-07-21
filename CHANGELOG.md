@@ -16,6 +16,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   instructs running `bin/intake-file`, but only `src/conductor/bin/intake-file`
   existed; sibling `bin/intake-backfill` had a wrapper). Convention DECIDE
   captured as #742.
+- no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
+  `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
+  the judged-closure lane (#733)
 
 - Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
   diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
@@ -59,6 +62,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- README: "How the Pieces Fit Together" section with a mermaid component diagram
+  of the engineer / daemon / operator roles and how a feature flows from intake
+  issue to merged implementation PR.
+
+- Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
+  enforcement**: priority + size + dependency-linking are stamped at every intake
+  capture surface (a required-fields intake form + an isolated `intake-label-sync`
+  Action, a `bin/intake-file` filing helper, and a one-shot `bin/intake-backfill`)
+  so every issue is born complete, and the ~100-issue unsized backlog is completed
+  in one default-and-report pass. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", the spec adds **zero** downstream failure modes: the
+  claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon dispatch/build, pipeline
+  gates, and CI stay byte-identical and add no criteria check (a negative-path story
+  asserts this). Supersedes PR #696 (which enforced at claim time via a
+  `needs-criteria` deferral). Artifacts under
 - Committed shipped-records for four phantom features the daemon kept re-parking
   (background-intake-conduct-loop #382, wiring-reachability-gate #650,
   autoheal-path-corroboration #709, finish-staleness #596) so backlog dedup
@@ -154,6 +172,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (effort, then model tier) rather than repeating an identical attempt, five
   identical retries were wasteful; 3 is the floor that still reaches the
   attempt-3 model-bump rung. `architecture_review` is out of scope and stays 5.
+- Owner-gate: an un-owned merged spec is **no longer silently skipped**. `decideSpecGate`
+  now returns `{ build: true, reason: 'unowned-defaulted' }` for a post-cutover or
+  indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts` default-builds it
+  attributed to the daemon's own resolved owner, emitting a loud, actionable log line naming
+  the slug and defaulted owner and pointing at the remedy (add an explicit `Owner:` marker on
+  the default branch). `other-owner` (stamped with a different operator's identity) remains
+  the only skip reason; grandfathering via `owner_gate_cutover` is unchanged.
+- Owner-gate: intake markers are now **born owned**. `runAuthoring` falls back to machine
+  identity (`readMachineOwnerConfig()`, `spec_owner` → `gh` login) whenever no `ownerConfig`
+  is injected, so every DECIDE-phase write path stamps an `Owner:` marker at authoring time
+  by default instead of relying on the gate to compensate for un-owned arrivals later.
 
 ## Migration
 
@@ -232,6 +261,7 @@ set `steps.<step>.max_retries: 5` where desired.
   (#692).
 
 ### Added
+- Spec landed for a config-driven custom-step framework + build-start base-refresh instance (`.docs/{track,complexity,stories,plans}/daemon-build-start-base-refresh.md`): generalises the conductor so a repo may declare extra pipeline steps under `.ai-conductor/config.yml` `steps:` — each with an `after:` insertion point and EXACTLY ONE body: a `skill:` (SKILL.md), an engine-native `action:` (deterministic in-process action), or a hook-only `hooks.before` script — spliced into the sequence for THAT repo only (daemon-gated, empty/no-op for all consumers). Extends the pre-existing partial mechanism (`StepConfig` `after`/`skill`/`enforcement`/`hooks`, `buildStepRegistry`, `runWithHooks`) by making `skill:` OPTIONAL, adding the engine-action registry, wiring the currently-unwired hook/action dispatch, and rejecting `after:` cycles. The build-start base-refresh is wired as one instance (`after: plan`, `action: base-refresh`): it runs `git fetch origin` + rebase onto `origin/<default>` before the first BUILD-phase step, so evidence anchors sit on the already-rebased base (reduces the #535/PR-593 `anchor is unreachable` window). Load-bearing reconciliation: base-refresh is an engine `action`, not a bash hook, because a detached shell hook cannot reuse the in-process `resolveBase`/`performRebase`/`runGatedRebaseResolution` (would lose the gated `/rebase` resolver + CHANGELOG auto-resolve + fail-closed HALT). Daemon-only; conflict → `/rebase` HALT; no-origin/non-daemon → no-op. Sibling of #598 (stale engine binary) — kept separate. Tier M. Implementation tracked separately; this entry documents the queued spec.
 - Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
   SHIP validators (`manual_test`, `prd_audit`, `architecture_review_as_built`) fan out as
   a built-in concurrent validation group (`VALIDATION_GROUP`/`STEP_GROUPS`,

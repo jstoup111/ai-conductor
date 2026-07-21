@@ -28,6 +28,8 @@ export interface DaemonCommandOptions {
   idlePollSeconds?: number;
   /** Stop after this many consecutive empty polls (continuous mode). */
   maxIdlePolls?: number;
+  /** Show completed features in status output. Aliases: `--completed`, `--all`. Default false. */
+  showCompleted: boolean;
 }
 
 /** Parse the value of a named flag (e.g. `--max-items 5`) from an argv array. */
@@ -181,5 +183,6 @@ export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null
     maxRuntimeSeconds: intFlag(argv, '--max-runtime'),
     idlePollSeconds: intFlag(argv, '--idle-poll', 60),
     maxIdlePolls: intFlag(argv, '--max-idle-polls'),
+    showCompleted: argv.includes('--completed') || argv.includes('--all'),
   };
 }

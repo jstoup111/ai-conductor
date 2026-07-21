@@ -85,6 +85,58 @@ unaffected. To deliberately install from a worktree anyway, pass `--allow-worktr
 ./bin/install --update --allow-worktree-root
 ```
 
+## How the Pieces Fit Together
+
+Three cooperating roles drive every feature from idea to merged PR — the **engineer**
+(spec authoring), the **daemon** (autonomous build), and the **operator** (judgment +
+merges). GitHub issues/PRs are the coordination medium; the daemon never merges.
+
+```mermaid
+flowchart TB
+  OP(["Operator<br/>(you)"])
+
+  subgraph GH["GitHub — coordination medium"]
+    ISSUES["Issues<br/>(intake: symptom capture,<br/>priority / size / links)"]
+    SPECPR["Spec PR<br/>(Refs #N)"]
+    BUILDPR["Implementation PR<br/>(Closes #N)"]
+  end
+
+  subgraph ENG["Engineer — spec authoring (supervisor, /engineer)"]
+    CLAIM["claim intake"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs"]
+    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped)"]
+  end
+
+  subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
+    SCAN["backlog scan<br/>(specs on main · owner gate ·<br/>shipped-record dedup · priority order)"]
+    WT["dispatch → git worktree<br/>+ per-worktree engine build"]
+    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → evidence gate<br/>(completion derived from commits)"]
+    HEAL["self-heal:<br/>retry escalation (effort→model) ·<br/>stall remediation · ci-fix on red PRs ·<br/>halt / park for the operator"]
+    VAL["SHIP validators:<br/>manual_test · prd_audit ·<br/>architecture review (as built)"]
+    FIN["finish: rebase → push →<br/>PR + committed shipped-record"]
+    SCAN --> WT --> BUILD --> VAL --> FIN
+    BUILD <--> HEAL
+  end
+
+  OP -->|"file / approve intake"| ISSUES
+  ISSUES --> CLAIM
+  LAND --> SPECPR
+  SPECPR -->|"operator merges"| MAIN[("main")]
+  MAIN --> SCAN
+  FIN --> BUILDPR
+  BUILDPR -->|"operator merges<br/>(daemon never merges)"| MAIN
+  HEAL -.->|"halts / parks needing judgment"| OP
+  OP -->|"unpark · approve VERSION bumps"| DAEMON
+```
+
+- **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
+  lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
+- **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
+  through the full SDLC with deterministic evidence gates, self-heals stalls and red CI,
+  and opens the implementation PR with a committed shipped-record so the work is never
+  re-dispatched.
+- **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
+  escalates, and signs off version bumps.
+
 ## Quick Start
 
 ### Interactive (recommended for first use)
@@ -533,7 +585,12 @@ pipeline.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
-terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+terminal and `daemon.log`. **By default the PROCESSED (completed) group is omitted**
+from both the console and the persisted `.daemon/daemon.log`. Pass `conduct-ts daemon
+--completed` (or `--all`) to additionally show the PROCESSED group **on the console
+only** — `.daemon/daemon.log` never includes the PROCESSED group, regardless of the
+flag. This does not affect `conduct-ts daemon-status`, which never rendered PROCESSED.
+Each row shows the bits you triage on — complexity tier, the step a
 feature reached, and the PR link once one is open (shipped features list their PR too).
 **WAITING** lists build-ready specs held back by an unresolved GitHub issue dependency (a
 `Source-Ref:` marker linked via GitHub's issue-dependencies API): the gate resolves each spec's
@@ -1178,27 +1235,38 @@ spec_owner: your-github-login
 - **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
   and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
   falls back to building every operator's work.
-- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
-  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
-  the default branch (or grandfather it via `owner_gate_cutover`).
+- **Born owned, not silently skipped:** every DECIDE-phase write path stamps an `Owner:`
+  marker from machine identity (`spec_owner` → `gh` login) at authoring time, so intake
+  markers arrive with an owner by default. If a spec still arrives un-owned (pre-cutover
+  history, or an indeterminate merge time), the gate no longer skips it — it **default-builds
+  under the daemon's own resolved owner** (`unowned-defaulted`) and emits a distinct, deduped
+  log line naming the slug and defaulted owner and telling you to add an explicit `Owner:`
+  marker on the default branch to make ownership unambiguous. `other-owner` specs (stamped
+  with a **different** operator's identity) are still skipped — that case is unchanged.
+- **Enforcement is harness-native, not a local script:** this born-owned stamping and
+  default-build behavior is carried by `conduct-ts` itself (authoring + gate). This repo's
+  own `test/test_harness_integrity.sh` also checks that `.docs/intake/*.md` carry an `Owner:`
+  marker, but that is a supplementary local belt for this self-host repo — not the mechanism
+  that enforces ownership in consumer projects.
 
 **GATED dashboard section:** every daemon status view (`conduct-ts daemon-status`, the
 startup dashboard, `.daemon/gated.json`) carries a `GATED (n)` group alongside
 PARKED/HALTED/PROCESSED/IN-PROGRESS/WAITING/ELIGIBLE. It always renders explicitly — even
 `GATED (0)` — so an empty backlog is never mistaken for "nothing to do" when the real cause
 is an unresolved owner gate. Each `kind: 'spec'` row names the slug, the skip reason
-(`other-owner` / `unowned-post-cutover` / `unowned-indeterminate`), the other operator when
-known, and a remedy hint; each `kind: 'repo'` row is a section-level warning (e.g. "building
-NOTHING — identity unresolved" or "un-owned specs skipped — no owner_gate_cutover
-configured") for conditions with no single owning slug.
+(`other-owner` — the only reason a spec is still skipped rather than default-built), the other
+operator when known, and a remedy hint; each `kind: 'repo'` row is a section-level warning
+(e.g. "building NOTHING — identity unresolved") for conditions with no single owning slug.
+Un-owned arrivals no longer appear here as a skip: they default-build under
+`unowned-defaulted` (see above) and are surfaced only via the loud daemon log line, not the
+GATED group.
 
 **Gate write-back (owner-gated PR/issue announcement):** on every discovery pass, the daemon
 also announces each owner-gated spec where a GitHub artifact exists to announce on:
   - if the spec already has an implementation PR open (e.g. a prior build attempt halted
     before ownership changed underneath it), the PR gets an `owner-gated` label and a single
     upserted marker comment naming the reason/remedy/other-owner — edited in place on later
-    passes rather than duplicated, and updated when the reason transitions (e.g.
-    `unowned-indeterminate` → `other-owner`);
+    passes rather than duplicated;
   - if the spec originated from GitHub issue intake (carries a `Source-Ref: owner/repo#N`
     marker), the same label + marker comment are applied to the originating **issue** too, so
     the reporter sees why their request stalled without needing daemon/dashboard access.
@@ -1334,6 +1402,12 @@ build. Pairs with an `Evidence: skipped <reason>` trailer accepted by the
 generated commit-msg hook as an alternative to `Task:` on an intentionally
 empty commit (a non-empty reason is required; bare empty commits are still
 rejected).
+
+**No-diff completion currency (#733):** a `**Type:** verification` plan marker
+is recognized in union with `**Verify-only:** yes` and arms the same judged-closure
+lane; and an `Evidence: skipped <reason>` commit itself mints an `evidenceStamps`
+entry (`form: 'evidence:skipped'`), so a no-diff task can resolve without ever
+reaching the judge.
 
 **Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
 can be triggered by hand for a parked/halted feature:
