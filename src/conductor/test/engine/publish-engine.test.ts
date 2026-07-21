@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readdir, readFile, chmod, lstat, readlin
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
-import { assertPublishWrapperEnv } from '../../scripts/publish-engine.mjs';
+import { assertPublishWrapperEnv, publish } from '../../scripts/publish-engine.mjs';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests for scripts/publish-engine.mjs (Task 2, Phase 1 — FR-13 happy:
@@ -462,6 +462,76 @@ describe('publish-engine.mjs GC self-guard env', () => {
     expect(files).toContain('index.js');
     const contents = await readFile(join(vRunDir, 'index.js'), 'utf-8');
     expect(contents).toContain('seeded = 0');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 2 — pre-build source-cache skip + `.engine-source-key` sidecar
+// persistence. Plan ref: .docs/plans/engine-rebuild-content-cache.md, Design
+// "Pre-build skip" + "Sidecar record", Task 2.
+//
+// These tests call `publish()` directly (rather than through the CLI
+// subprocess harness used above) so they can inject the `computeSourceKey`
+// test seam, which has no CLI flag — mirroring how `publish-interrupted.test.ts`
+// injects `simulateCrashAfterFinalize` directly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('publish-engine.mjs pre-build source-cache skip (Task 2)', () => {
+  function makeCountingRunCommand() {
+    let calls = 0;
+    const runCommand = async (cmd: string[], execOpts: { cwd: string }) => {
+      calls += 1;
+      const [, scriptPath] = cmd;
+      const outDirIdx = cmd.indexOf('--out-dir');
+      const outDir = cmd[outDirIdx + 1];
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, 'index.js'), 'export const built = true;\n', 'utf-8');
+      void scriptPath;
+      void execOpts;
+    };
+    return { runCommand, getCalls: () => calls };
+  }
+
+  it('two publishes with an unchanged injected source key: 2nd build invoked 0 times, no staging dir, dist unchanged, same versionId, distinct log line', async () => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'stable-source-key';
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    const stderrLines: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      stderrLines.push(args.map(String).join(' '));
+    };
+    let second;
+    try {
+      second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    } finally {
+      console.error = origError;
+    }
+
+    expect(getCalls()).toBe(1); // still 1 — 2nd publish's build was skipped entirely
+    expect(second.versionId).toBe(first.versionId);
+
+    const rootEntries = await readdir(conductorRoot);
+    expect(rootEntries.filter((name) => name.startsWith('.engine-staging-'))).toEqual([]);
+
+    const target = await readlink(join(conductorRoot, 'dist'));
+    expect(target).toBe(join('dist-versions', first.versionId));
+
+    expect(stderrLines.some((line) => line.includes('engine source unchanged'))).toBe(true);
+  });
+
+  it('a first-ever publish writes .engine-source-key into the finalized version dir with the injected key value', async () => {
+    const { runCommand } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'first-publish-key-value';
+
+    const result = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+
+    const sidecarPath = join(result.dir, '.engine-source-key');
+    const sidecar = await readFile(sidecarPath, 'utf-8');
+    expect(sidecar).toBe('first-publish-key-value');
   });
 });
 
