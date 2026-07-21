@@ -44,7 +44,11 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 
 const FRONT_DONE: ConductState = {
-  complexity_tier: 'S',
+  // M tier: S-tier now legitimately skips manual_test (D5; see steps.ts
+  // skippableForTiers), which would make manual_test never dispatch at all —
+  // defeating this file's purpose of proving wiring_check sits between
+  // build_review and manual_test in the real gate-loop tail.
+  complexity_tier: 'M',
   feature_desc: 'add foo',
   worktree: 'done',
   memory: 'done',

@@ -121,6 +121,7 @@ describe('Integration: full conductor flow', () => {
       'architecture_review',
       'acceptance_specs',
       'architecture_review_as_built',
+      'manual_test',
       'retro',
     ];
 

@@ -92,6 +92,11 @@ describe('selector — wiring_check gates the build_review -> manual_test seam',
   it('a satisfied wiring_check verdict unblocks manual_test', () => {
     const state: ConductState = {
       ...frontDone(),
+      // M tier: S-tier legitimately skips manual_test (D5), which would
+      // make wiring_check's downstream neighbor prd_audit, not manual_test —
+      // defeating the point of this test (proving wiring_check unblocks
+      // manual_test specifically).
+      complexity_tier: 'M',
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
