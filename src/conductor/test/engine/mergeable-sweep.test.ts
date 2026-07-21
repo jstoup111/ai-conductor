@@ -383,14 +383,53 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
   });
 
   it('prunes a PR whose gh runner throws a not-found-style error (FR-13 NOTFOUND)', async () => {
-    // A genuinely deleted PR causes gh to throw with "not found" text.
+    // A genuinely deleted PR causes gh to throw with the structured GraphQL
+    // not-found signal AND a non-zero exit code (the classifier requires
+    // both — see isNotFoundError in pr-labels.ts).
     // prMergeState classifies this as NOTFOUND; sweep must prune it.
+    const err = Object.assign(new Error('could not resolve to a PullRequest'), {
+      code: 1,
+    });
     const { gh } = makeFakeGh({
-      [PR_URL]: new Error('could not resolve to a PullRequest'),
+      [PR_URL]: err,
     });
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
     expect(await readWatch(tmpDir)).toHaveLength(0);
+  });
+
+  it('prunes on a structured GraphQL not-found signal in stderr with a non-zero exit code', async () => {
+    // Task 4 regression: proves the sweep-level prune still fires end-to-end
+    // when prMergeState's NOTFOUND classification comes from the structured
+    // (exit code + GraphQL stderr) signal introduced in Tasks 1-3, not from
+    // loose message-wording matching.
+    const err = Object.assign(new Error('gh: graphql error'), {
+      code: 1,
+      stderr: 'GraphQL: Could not resolve to a PullRequest with the number 42. (repository.pullRequest)',
+    });
+    const logs: string[] = [];
+    const { gh } = makeFakeGh({ [PR_URL]: err });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) });
+    expect(await readWatch(tmpDir)).toHaveLength(0);
+    expect(logs.some((l) => l.includes(PR_URL) && l.includes('NOTFOUND'))).toBe(true);
+  });
+
+  it('keeps entry when error message loosely matches old English wording ("not found" / "404") but lacks the structured GraphQL signal', async () => {
+    // Task 4 regression: the classifier no longer mis-prunes on loose wording
+    // drift. A non-zero exit with an ambiguous/ordinary message containing
+    // "not found" or "404" (but NOT the gh GraphQL not-found phrase) must be
+    // treated as UNKNOWN/transient and the entry kept for retry.
+    const err = Object.assign(new Error('HTTP 404: resource not found'), {
+      code: 1,
+      stderr: '',
+    });
+    const { gh } = makeFakeGh({ [PR_URL]: err });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].prUrl).toBe(PR_URL);
   });
 
   it('keeps entry when gh throws a DNS transient error "could not resolve host" (NOT pruned)', async () => {
