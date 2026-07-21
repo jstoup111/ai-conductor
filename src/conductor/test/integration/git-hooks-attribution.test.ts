@@ -97,6 +97,15 @@ describe('integration/git-hooks-attribution', () => {
       expect(msg).not.toMatch(/^Task: 9$/m);
     });
 
+    it('is a no-op when the self-stamped Task: trailer already agrees with current-task (no duplicate trailer)', async () => {
+      await writeCurrentTask('10');
+      const res = await commitFile('b3.txt', 'b3', 'feat: add thing\n\nTask: 10');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      const matches = msg.match(/^Task: 10$/gm) ?? [];
+      expect(matches).toHaveLength(1);
+    });
+
     it('reconciles to current-task even when the old id also appears in the commit body (not confused by body text)', async () => {
       await writeCurrentTask('7');
       const res = await commitFile(
@@ -183,6 +192,28 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
       expect(msg).not.toMatch(/^Task: /m);
+    });
+
+    it('preserves an existing Task: 9 trailer unchanged when current-task is absent', async () => {
+      const res = await commitFile('task3a.txt', 'a', 'feat: existing trailer, no engine task\n\nTask: 9');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 9$/m);
+    });
+
+    it('adds no trailer when current-task is absent and the message has none', async () => {
+      const res = await commitFile('task3b.txt', 'b', 'feat: no trailer, no engine task');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).not.toMatch(/^Task: /m);
+    });
+
+    it('stamps Task: 3 from current-task on an untrailered commit (regression, unconditional branch)', async () => {
+      await writeCurrentTask('3');
+      const res = await commitFile('task3c.txt', 'c', 'feat: deterministic stamp still works');
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 3$/m);
     });
   });
 
