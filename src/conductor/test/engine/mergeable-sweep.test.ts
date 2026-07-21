@@ -439,6 +439,53 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
   });
 });
 
+describe('sweepMergeableLabels — Task 1: MAX_WATCH_ENTRIES cap', () => {
+  const MAX_WATCH_ENTRIES = 100;
+
+  it('trims the registry to the last MAX_WATCH_ENTRIES entries, dropping the oldest', async () => {
+    const total = MAX_WATCH_ENTRIES + 10;
+    const urls = Array.from(
+      { length: total },
+      (_, i) => `https://github.com/foo/bar/pull/${i + 1}`,
+    );
+    const prStates: Record<string, { stdout: string }> = {};
+    for (const url of urls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+    for (const url of urls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(MAX_WATCH_ENTRIES);
+    // The oldest (front) entries were dropped; survivors are the last
+    // MAX_WATCH_ENTRIES of the seeded, append-ordered list.
+    const expectedUrls = urls.slice(-MAX_WATCH_ENTRIES);
+    expect(remaining.map((e) => e.prUrl)).toEqual(expectedUrls);
+  });
+
+  it('does not drop any entries when under the cap', async () => {
+    const total = MAX_WATCH_ENTRIES - 10;
+    const urls = Array.from(
+      { length: total },
+      (_, i) => `https://github.com/foo/bar/pull/${i + 1}`,
+    );
+    const prStates: Record<string, { stdout: string }> = {};
+    for (const url of urls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+    for (const url of urls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(total);
+    expect(remaining.map((e) => e.prUrl)).toEqual(urls);
+  });
+});
+
 describe('sweepMergeableLabels — FR-12: needs-remediation → mergeable must be absent', () => {
   it('removes mergeable when PR carries needs-remediation and mergeable is present', async () => {
     const { gh, removeLabelCalls, addLabelCalls } = makeFakeGh({

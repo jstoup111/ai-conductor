@@ -73,6 +73,14 @@ export interface WatchEntry {
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
 
+/**
+ * Hard cap on the number of entries retained in the watch registry. The
+ * JSONL file is append-ordered oldest-first, so when the sweep exceeds this
+ * cap it trims from the front, keeping only the most recently enrolled
+ * entries — preventing unbounded growth (Task 1).
+ */
+const MAX_WATCH_ENTRIES = 100;
+
 // ── Registry helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -504,7 +512,11 @@ export async function sweepMergeableLabels({
       }
     }
 
-    await rewriteWatch(projectRoot, survivors);
+    // Task 1: cap the persisted registry so it cannot grow without bound.
+    // survivors is append-ordered oldest-first, so trim from the front.
+    const trimmed =
+      survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
+    await rewriteWatch(projectRoot, trimmed);
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
     log?.(`[mergeable-sweep] sweep error: ${err}`);
