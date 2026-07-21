@@ -129,7 +129,10 @@ always-run section of \`install()\`.
     await git('add', '.');
     await git('commit', '-q', '-m', 'docs: plan');
 
-    await commitFile('unrelated.txt', 'x', '1');
+    // Nested (not repo-root) so it does not share push-evidence.ts's
+    // dirname('.') under the #707 bounded dirname pass — a genuinely
+    // different immediate directory, which must still reject.
+    await commitFile('unrelated-dir/unrelated.txt', 'x', '1');
 
     const result = await derive(planPath);
     expect(result['1']?.completed).toBe(false);
@@ -170,7 +173,9 @@ always-run section of \`install()\`.
     await git('add', '.');
     await git('commit', '-q', '-m', 'docs: plan');
 
-    await commitFile('src/conductor/src/engine/unrelated.ts', 'export const y = 2;', '1');
+    // Genuinely different immediate directory (not same-dir, not
+    // exact/suffix) — the #707 dirname pass must NOT credit this.
+    await commitFile('src/other/unrelated.ts', 'export const y = 2;', '1');
 
     const result = await derive(planPath);
     expect(result['1']?.completed).toBe(false);

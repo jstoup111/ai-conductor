@@ -18,6 +18,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   convention. A deterministic gate to reject number-named ADRs is captured in
   intake #705.
 
+### Fixed
+
+- conduct-ts autoheal: path-corroboration now credits a `Task:`-trailered
+  commit whose files land in the same immediate directory as a plan-declared
+  path (bounded `trailer-dirname` corroboration), eliminating a
+  `no_task_progress` 0/N stall class where valid subsystem-local work was
+  rejected. Judge lane unchanged; #445 inheritance guard preserved by the
+  immediate-parent-dir bound. (#707)
+
 ### Added
 
 - Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead

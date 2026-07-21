@@ -108,7 +108,11 @@ describe('deriveCompletion path corroboration with basename plan paths (#425 inc
     await git('add', '.');
     await git('commit', '-q', '-m', 'docs: plan');
 
-    await writeFile(join(root, 'unrelated.txt'), 'x');
+    // Nested (not repo-root) so it does not share push-evidence.ts's
+    // dirname('.') under the #707 bounded dirname pass — a genuinely
+    // different immediate directory, which must still reject.
+    await mkdir(join(root, 'unrelated-dir'), { recursive: true });
+    await writeFile(join(root, 'unrelated-dir/unrelated.txt'), 'x');
     await git('add', '.');
     await git('commit', '-q', '-m', 'feat: work\n\nTask: 1\n');
 

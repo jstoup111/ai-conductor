@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
@@ -41,6 +41,22 @@ export function fileMatchesPlanPath(file: string, planDeclaredPath: string): boo
   return f === p || f.endsWith('/' + p);
 }
 
+/**
+ * Bounded immediate-parent-dir corroboration predicate (#707).
+ *
+ * Strips a leading `./` from both sides, then compares `dirname(file)` to
+ * `dirname(planDeclaredPath)` for exact equality. No ancestor/prefix logic —
+ * a file in a nested or sibling directory does not match. This is
+ * intentionally narrower than `fileMatchesPlanPath`'s suffix match; it is
+ * used where corroboration needs the file to sit in the exact same
+ * directory as the plan-declared path, not merely share a path suffix.
+ */
+export function fileDirMatchesPlanPath(file: string, planDeclaredPath: string): boolean {
+  const f = file.replace(/^\.\//, '');
+  const p = planDeclaredPath.replace(/^\.\//, '');
+  return dirname(f) === dirname(p);
+}
+
 /** Commit files that satisfy at least one of the task's plan-declared paths (#425). */
 function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<string>): string[] {
   return files.filter((f) => {
@@ -49,6 +65,25 @@ function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<strin
     }
     return false;
   });
+}
+
+/**
+ * Branch-aware corroboration (#707): try exact/suffix overlap first; only on
+ * a miss, try the bounded immediate-parent-dir overlap. Returns which branch
+ * (if any) satisfied corroboration so callers can distinguish the two for
+ * stamping purposes (Task 3) without re-deriving the match.
+ */
+function corroborationMatch(
+  filesInCommit: string[],
+  taskPaths: ReadonlySet<string>,
+): 'exact-suffix' | 'dirname' | null {
+  if (filesOverlappingTaskPaths(filesInCommit, taskPaths).length > 0) return 'exact-suffix';
+  for (const f of filesInCommit) {
+    for (const p of taskPaths) {
+      if (fileDirMatchesPlanPath(f, p)) return 'dirname';
+    }
+  }
+  return null;
 }
 
 // Simple logger interface for fail-closed operations
@@ -758,7 +793,9 @@ async function deriveCompletionInternal(
     // filesForCommit returns [] when git cannot resolve the sha — such
     // candidates must never mask a reachable satisfying one.
     let satisfyingSha: string | null = null;
+    let satisfyingForm: string = 'trailer';
     let newestNonEmpty: { sha: string; files: string[] } | null = null;
+    let dirnameSha: string | null = null;
     for (const candidate of matchingCommits) {
       const filesInCommit = await filesForCommit(projectRoot, candidate.sha);
       if (filesInCommit.length === 0) continue;
@@ -767,21 +804,35 @@ async function deriveCompletionInternal(
       if (!hasPlanFiles) {
         // Task has no specific paths; trailer alone is enough
         satisfyingSha = candidate.sha;
+        satisfyingForm = 'trailer';
         break;
       }
 
-      const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
-      if (overlap.length > 0) {
+      const match = corroborationMatch(filesInCommit, taskPaths!);
+      if (match === 'exact-suffix') {
+        // Exact/suffix matches always outrank a dirname match — scan the
+        // full candidate set for one before settling for the weaker form.
         satisfyingSha = candidate.sha;
+        satisfyingForm = 'trailer';
         break;
       }
+      if (match === 'dirname' && !dirnameSha) {
+        // Remember the first (newest) dirname hit, but keep scanning the
+        // rest of the candidate set for a stronger exact-suffix match.
+        dirnameSha = candidate.sha;
+      }
+    }
+
+    if (!satisfyingSha && dirnameSha) {
+      satisfyingSha = dirnameSha;
+      satisfyingForm = 'trailer-dirname';
     }
 
     if (satisfyingSha) {
       result[taskId].completed = true;
       result[taskId].status = 'completed';
       result[taskId].evidencedBy = satisfyingSha;
-      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: 'trailer' });
+      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: satisfyingForm });
       continue;
     }
 
@@ -992,7 +1043,7 @@ export function parseTrailers(trailerText: string): Record<string, string[]> {
 }
 
 export async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
-  const out = await execa('git', ['diff-tree', '--name-only', '-r', sha], {
+  const out = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
     cwd: projectRoot,
     reject: false,
   });

@@ -1918,7 +1918,7 @@ Some task.
     expect(result['3']).toHaveProperty('completed', false);
   });
 
-  it('does NOT complete task when trailer path overlap is zero', async () => {
+  it('completes task via bounded dirname corroboration when trailer file shares the declared immediate dir (#707)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
 
@@ -1937,7 +1937,9 @@ Update the API.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: 4 but touching DIFFERENT files
+    // Create a commit with Task: 4 touching a DIFFERENT file, but in the same
+    // immediate directory as the declared paths — credited via the bounded
+    // dirname pass (#707), not the old exact/suffix-only rule.
     await mkdir(join(gitDir, 'src'), { recursive: true });
     await writeFile(join(gitDir, 'src/utils.ts'), 'export const util = 1;');
     await execa('git', ['add', 'src/utils.ts'], { cwd: gitDir });
@@ -1948,9 +1950,8 @@ Update the API.
 
     const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
 
-    // Should NOT mark as completed (no path overlap)
     expect(result).toHaveProperty('4');
-    expect(result['4']).toHaveProperty('completed', false);
+    expect(result['4']).toHaveProperty('completed', true);
   });
 
   it('stores evidence stamp in sidecar when task completed', async () => {
@@ -1991,7 +1992,7 @@ Implement a feature.
     expect(stamp!.form).toBe('trailer');
   });
 
-  it('logs audit trail entry when path overlap is zero', async () => {
+  it('completes via bounded dirname corroboration when commit file is a same-dir sibling (#707)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
     const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -2010,7 +2011,9 @@ Update specific files.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: trailer but no path overlap
+    // Create a commit with Task: trailer touching a same-immediate-dir
+    // sibling — no exact/suffix overlap, but credited via the bounded
+    // dirname pass (#707).
     await mkdir(join(gitDir, 'src'), { recursive: true });
     await writeFile(join(gitDir, 'src/other.ts'), 'export const other = 1;');
     await execa('git', ['add', 'src/other.ts'], { cwd: gitDir });
@@ -2021,10 +2024,8 @@ Update specific files.
 
     const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
 
-    // Should have audit entry or warning about path mismatch
     expect(result).toHaveProperty('6');
-    expect(result['6']).toHaveProperty('completed', false);
-    expect(result['6']).toHaveProperty('auditEntry');
+    expect(result['6']).toHaveProperty('completed', true);
 
     mockWarn.mockRestore();
   });
@@ -2091,7 +2092,7 @@ Update specific files.
     expect(result['9']).toHaveProperty('completed', true);
   });
 
-  it('no stamp + failing trailer (path mismatch) still yields completed: false (no invented coverage)', async () => {
+  it('no stamp + trailer file in a genuinely different directory still yields completed: false (no invented coverage)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
     const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -2109,11 +2110,13 @@ Update specific files.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Commit carries the Task: trailer but touches unrelated files, and no
-    // sidecar stamp exists at all (no judge lane involvement).
-    await mkdir(join(gitDir, 'src'), { recursive: true });
-    await writeFile(join(gitDir, 'src/other-unrelated.ts'), 'export const other = 1;');
-    await execa('git', ['add', 'src/other-unrelated.ts'], { cwd: gitDir });
+    // Commit carries the Task: trailer but touches a file in a genuinely
+    // different directory (not same-immediate-dir, not exact/suffix), and no
+    // sidecar stamp exists at all (no judge lane involvement) — the #707
+    // dirname pass must NOT credit this.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/unrelated.ts'), 'export const other = 1;');
+    await execa('git', ['add', 'other/unrelated.ts'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'feat: other unrelated work\n\nTask: 10\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
@@ -2928,10 +2931,12 @@ Update specific file.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: task-6 (aliased form) that touches a DIFFERENT file
-    await mkdir(join(gitDir, 'docs'), { recursive: true });
-    await writeFile(join(gitDir, 'docs/path-b.md'), 'content');
-    await execa('git', ['add', 'docs/path-b.md'], { cwd: gitDir });
+    // Create a commit with Task: task-6 (aliased form) that touches a file in
+    // a genuinely different directory (not same-immediate-dir, not
+    // exact/suffix) — the #707 dirname pass must NOT credit this either.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/path-b.md'), 'content');
+    await execa('git', ['add', 'other/path-b.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'feat: wrong path\n\nTask: task-6\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
@@ -3491,13 +3496,15 @@ Update the declared file only.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // TWO trailered commits, NEITHER overlapping the declared path.
-    await mkdir(join(gitDir, 'src'), { recursive: true });
-    await writeFile(join(gitDir, 'src/wrong-a.ts'), 'export const a = 1;');
-    await execa('git', ['add', 'src/wrong-a.ts'], { cwd: gitDir });
+    // TWO trailered commits, NEITHER overlapping the declared path, AND in a
+    // genuinely different immediate directory (not same-dir as `src/`) so
+    // the #707 bounded dirname pass does not credit either.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/wrong-a.ts'), 'export const a = 1;');
+    await execa('git', ['add', 'other/wrong-a.ts'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'feat: wrong a\n\nTask: 13\n'], { cwd: gitDir });
-    await writeFile(join(gitDir, 'src/wrong-b.ts'), 'export const b = 1;');
-    await execa('git', ['add', 'src/wrong-b.ts'], { cwd: gitDir });
+    await writeFile(join(gitDir, 'other/wrong-b.ts'), 'export const b = 1;');
+    await execa('git', ['add', 'other/wrong-b.ts'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'feat: wrong b\n\nTask: 13\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
