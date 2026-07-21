@@ -6,6 +6,7 @@ import {
   DEFAULT_STEP_EFFORT,
   DEFAULT_STEP_RETRIES,
   DEFAULT_STEP_REVIEW,
+  DEFAULT_STEP_TIER_OVERRIDES,
   FALLBACK_MODEL,
   FALLBACK_EFFORT,
   FALLBACK_RETRIES,
@@ -294,6 +295,25 @@ describe('engine/resolved-config', () => {
 
       const rBuildL = resolveStepConfig('build', 'BUILD', undefined, { tier: 'L' });
       expect(rBuildL.max_retries).toBe(3); // base DEFAULT_STEP_RETRIES.build, not an override
+    });
+
+    // adr-2026-07-05-retry-as-escalation-ladder, Decision 4: any hardcoded
+    // S-tier max_retries floor is >= 3 — S-tier is the cheapest/fastest lane,
+    // so it must not silently get fewer retry attempts than the ladder assumes.
+    // This is an invariant-locking test (#188): no production change expected,
+    // it pins the floor so a future edit can't quietly regress it.
+    it('every S-tier max_retries in DEFAULT_STEP_TIER_OVERRIDES is >= 3', () => {
+      for (const [step, tiers] of Object.entries(DEFAULT_STEP_TIER_OVERRIDES)) {
+        const sRow = tiers?.S;
+        if (sRow && sRow.max_retries !== undefined) {
+          expect(sRow.max_retries).toBeGreaterThanOrEqual(3);
+        }
+      }
+    });
+
+    it('plan.S and build.S max_retries are pinned at exactly 3', () => {
+      expect(DEFAULT_STEP_TIER_OVERRIDES.plan?.S?.max_retries).toBe(3);
+      expect(DEFAULT_STEP_TIER_OVERRIDES.build?.S?.max_retries).toBe(3);
     });
   });
 
