@@ -12,10 +12,12 @@
 //   stamped & matches daemon owner        → build
 //   stamped & different owner             → skip (other-owner)
 //   un-owned, merged strictly BEFORE cutover → build (grandfathered)
-//   un-owned, merged ON/AFTER cutover     → skip (unowned-post-cutover)
-//   un-owned, merge time indeterminate    → skip (unowned-indeterminate)
+//   un-owned, merged ON/AFTER cutover     → build (unowned-defaulted)
+//   un-owned, merge time indeterminate    → build (unowned-defaulted)
 // A stamped-and-matching spec builds regardless of merge time — the cutover is
-// never consulted for stamped specs (ADR-3).
+// never consulted for stamped specs (ADR-3). Un-owned specs always build: the
+// cutover only decides the reason (grandfathered vs. unowned-defaulted), never
+// whether to build.
 
 import type { OwnerStamp } from './provenance.js';
 
@@ -49,10 +51,11 @@ export type GateDecision =
  * Decide whether to build a content-eligible spec under owner-gating.
  *
  * Stamped specs are decided purely by owner match (the cutover is never
- * consulted). Un-owned specs fall to the grandfather cutover: strictly before →
- * grandfathered build; on/after (or an indeterminate merge time) → skip. The
- * boundary is inclusive of the cutover instant (== cutover counts as on/after),
- * and an indeterminate merge time is a stable skip (same input → same decision).
+ * consulted). Un-owned specs always build: the grandfather cutover only
+ * selects the reason — strictly before cutover → grandfathered; on/after (or
+ * an indeterminate merge time) → unowned-defaulted. The boundary is inclusive
+ * of the cutover instant (== cutover counts as on/after), and an indeterminate
+ * merge time is a stable unowned-defaulted result (same input → same decision).
  */
 export function decideSpecGate(input: GateInput): GateDecision {
   const { daemonOwner, stamp, mergeTime, cutover } = input;

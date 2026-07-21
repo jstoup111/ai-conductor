@@ -467,9 +467,11 @@ export interface WaitingItem {
  * conditions) held back by the OWNERSHIP gate, not the dependency gate.
  *
  * - `kind: 'spec'` — a single merged spec skipped by the owner gate, carrying
- *   the reason (`other-owner` | `unowned-post-cutover` | `unowned-indeterminate`),
- *   the other operator's id when known (`other-owner` only), and an
- *   operator-actionable remedy hint.
+ *   the reason (`other-owner` — the only reason `decideSpecGate` still returns
+ *   a `build: false` for; un-owned specs always default-build, so
+ *   `unowned-post-cutover`/`unowned-indeterminate` are no longer produced),
+ *   the other operator's id when known, and an operator-actionable remedy
+ *   hint.
  * - `kind: 'repo'` — a repo-scoped (non-slug) owner-gate condition: either the
  *   daemon's own identity is unresolved (fail-closed, nothing scanned this
  *   pass) or the gate is active with no grandfather cutover configured.
@@ -480,7 +482,7 @@ export interface WaitingItem {
 export interface GatedSpecItem {
   kind: 'spec';
   slug: string;
-  reason: 'other-owner' | 'unowned-post-cutover' | 'unowned-indeterminate';
+  reason: 'other-owner';
   otherOwner?: string;
   remedy: string;
   // Task 21: the spec's originating `Source-Ref: owner/repo#N` intake marker,
@@ -491,7 +493,10 @@ export interface GatedSpecItem {
 }
 export interface GatedRepoItem {
   kind: 'repo';
-  warning: 'identity-unresolved' | 'no-cutover';
+  // 'no-cutover' is observability-only (warnGateNoCutoverOnce logs it but
+  // never pushes a GatedRepoItem) — only 'identity-unresolved' is ever
+  // constructed here.
+  warning: 'identity-unresolved';
   remedy: string;
 }
 export type GatedItem = GatedSpecItem | GatedRepoItem;
