@@ -7,7 +7,7 @@ import { ACCEPTANCE_SPECS_RED_EVIDENCE, validateAcceptanceRedEvidence } from "./
  * written by the acceptance_specs step, describing the command/cwd/target
  * specs the RED run must execute.
  */
-export const ACCEPTANCE_RUN_CONTRACT_PATH = join(".pipeline", "acceptance-specs-run.json");
+const ACCEPTANCE_RUN_CONTRACT_PATH = join(".pipeline", "acceptance-specs-run.json");
 
 export interface AcceptanceRunContract {
   command: string;
@@ -19,7 +19,7 @@ export type ParseAcceptanceRunContractResult =
   | { ok: true; contract: AcceptanceRunContract }
   | { ok: false; reason: string };
 
-export function parseAcceptanceRunContract(
+function parseAcceptanceRunContract(
   raw: string,
 ): ParseAcceptanceRunContractResult {
   let parsed: unknown;
@@ -65,7 +65,7 @@ export type CrossCheckTargetSpecsResult =
   | { ok: true; contract: AcceptanceRunContract }
   | { ok: false; reason: string };
 
-export function crossCheckTargetSpecs(
+function crossCheckTargetSpecs(
   contract: AcceptanceRunContract,
   globbedSpecFiles: string[],
 ): CrossCheckTargetSpecsResult {
@@ -86,7 +86,7 @@ export type CheckContractCwdResult =
   | { ok: true; contract: AcceptanceRunContract }
   | { ok: false; reason: string };
 
-export function checkContractCwd(
+function checkContractCwd(
   contract: AcceptanceRunContract,
   worktreeRoot: string,
 ): CheckContractCwdResult {
@@ -110,7 +110,7 @@ export function checkContractCwd(
  * never lands nested under a subdirectory (e.g. `<worktreeRoot>/src/conductor/.pipeline/`),
  * which is where the daemon's evidence check would fail to find it.
  */
-export function writeRedMarkerAtRoot(
+function writeRedMarkerAtRoot(
   worktreeRoot: string,
   markerContent: unknown,
 ): void {
@@ -138,7 +138,7 @@ const NESTED_RED_MARKER_RELATIVE_PATH = join(
  * untouched and the nested marker is never read into it — a nested marker is
  * only ever promoted to root when no root marker exists yet.
  */
-export function normalizeNestedRedMarker(worktreeRoot: string): void {
+function normalizeNestedRedMarker(worktreeRoot: string): void {
   const resolvedRoot = resolve(worktreeRoot);
   const rootPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
   const nestedPath = join(resolvedRoot, NESTED_RED_MARKER_RELATIVE_PATH);
