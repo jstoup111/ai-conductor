@@ -230,9 +230,34 @@ const NOTFOUND_SENTINEL: PrMergeState = {
  */
 const GH_GRAPHQL_NOT_FOUND = 'could not resolve to a pullrequest';
 
+/**
+ * Classify a caught `gh` exec error as a genuine "PR not found" (vs. a
+ * transient/unknown failure). Inspects the structured fields Node's
+ * `execFile`/`ExecFileException` attaches to the rejection — `code` (process
+ * exit code) and `stderr` — in addition to `err.message`.
+ *
+ * Returns true ONLY when BOTH hold:
+ *   (a) the process exited non-zero (a zero/undefined exit never indicates
+ *       "not found" — `gh` failures always carry a non-zero code), AND
+ *   (b) the combined stderr+message contains the gh GraphQL not-found
+ *       signal ({@link GH_GRAPHQL_NOT_FOUND}).
+ *
+ * Any other shape — a non-zero exit with empty/ambiguous stderr, a
+ * transient network error ("could not resolve host"), an auth failure,
+ * etc. — returns false, which callers treat as UNKNOWN (kept, not pruned).
+ * This is the fail-safe direction: ambiguity never causes a mis-prune.
+ */
 function isNotFoundError(err: unknown): boolean {
-  const msg = String(err instanceof Error ? err.message : err).toLowerCase();
-  return msg.includes(GH_GRAPHQL_NOT_FOUND);
+  const e = err as { message?: unknown; stderr?: unknown; code?: unknown } | null;
+
+  const code = e && typeof e === 'object' ? e.code : undefined;
+  if (code === 0 || code === undefined) return false;
+
+  const message = err instanceof Error ? err.message : String(err);
+  const stderr = e && typeof e === 'object' && typeof e.stderr === 'string' ? e.stderr : '';
+  const combined = `${stderr} ${message}`.toLowerCase();
+
+  return combined.includes(GH_GRAPHQL_NOT_FOUND);
 }
 
 /**

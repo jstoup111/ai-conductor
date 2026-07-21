@@ -238,7 +238,9 @@ describe('checksOutcome classification', () => {
 
     it('returns checksOutcome "none" for NOTFOUND_SENTINEL (PR not found)', async () => {
       const fakeGhRunner = async () => {
-        throw new Error('could not resolve to a PullRequest');
+        const err: any = new Error('could not resolve to a PullRequest');
+        err.code = 1;
+        throw err;
       };
 
       const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
@@ -249,7 +251,9 @@ describe('checksOutcome classification', () => {
 
     it('treats gh GraphQL "Could not resolve to a PullRequest" (case-insensitive) as NOTFOUND', async () => {
       const fakeGhRunner = async () => {
-        throw new Error('Could not resolve to a PullRequest with the number 1.');
+        const err: any = new Error('Could not resolve to a PullRequest with the number 1.');
+        err.code = 1;
+        throw err;
       };
 
       const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
@@ -259,6 +263,54 @@ describe('checksOutcome classification', () => {
     it('does not treat a generic "not found" message without the gh GraphQL signal as NOTFOUND', async () => {
       const fakeGhRunner = async () => {
         throw new Error('resource not found');
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('UNKNOWN');
+    });
+
+    it('treats a structured ExecFileException with non-zero code and GraphQL not-found stderr as NOTFOUND', async () => {
+      const fakeGhRunner = async () => {
+        const err: any = new Error('Command failed: gh pr view');
+        err.code = 1;
+        err.stderr = 'GraphQL: Could not resolve to a PullRequest with the number 1. (repository.pullRequest)';
+        throw err;
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('NOTFOUND');
+    });
+
+    it('does not treat a non-zero exit code with empty stderr as NOTFOUND (stays UNKNOWN)', async () => {
+      const fakeGhRunner = async () => {
+        const err: any = new Error('Command failed: gh pr view');
+        err.code = 1;
+        err.stderr = '';
+        throw err;
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('UNKNOWN');
+    });
+
+    it('does not treat a transient network error (non-zero code, unrelated stderr) as NOTFOUND', async () => {
+      const fakeGhRunner = async () => {
+        const err: any = new Error('Command failed: gh pr view');
+        err.code = 1;
+        err.stderr = 'error connecting to api.github.com: could not resolve host';
+        throw err;
+      };
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+      expect(state.state).toBe('UNKNOWN');
+    });
+
+    it('does not treat an auth failure (non-zero code, unrelated stderr) as NOTFOUND', async () => {
+      const fakeGhRunner = async () => {
+        const err: any = new Error('Command failed: gh pr view');
+        err.code = 4;
+        err.stderr = 'gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable. authentication failed';
+        throw err;
       };
 
       const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
