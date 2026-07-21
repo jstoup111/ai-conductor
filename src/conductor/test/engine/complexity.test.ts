@@ -3,7 +3,9 @@ import {
   classifySignal,
   assessTier,
   hasInsufficientInfo,
+  tierFromSizeLabel,
 } from '../../src/engine/complexity.js';
+import { escalateAttempt } from '../../src/engine/escalation.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 
 type Signal = 'models' | 'integrations' | 'auth' | 'stateMachines' | 'stories';
@@ -154,6 +156,19 @@ describe('complexity', () => {
     it('returns false for 3 or more signals', () => {
       expect(hasInsufficientInfo(3)).toBe(false);
       expect(hasInsufficientInfo(5)).toBe(false);
+    });
+  });
+
+  describe('tierFromSizeLabel', () => {
+    it('maps a label containing size: S to tier S', () => {
+      expect(tierFromSizeLabel('size: S')).toBe('S');
+    });
+
+    it('escalation still applies to the resulting S-tier config on attempt 2', () => {
+      const tier = tierFromSizeLabel('size: S');
+      expect(tier).toBe('S');
+      const result = escalateAttempt('sonnet', 'low', 2, true);
+      expect(result.effort).toBe('medium');
     });
   });
 });
