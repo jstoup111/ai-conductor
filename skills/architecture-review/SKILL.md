@@ -281,6 +281,13 @@ an observed caller there).
 Not required for **Small** tier features (architecture-review is skipped entirely for Small
 per the Lightweight Mode section above).
 
+**Early overlap scan (Medium/Large tier):** Before `/plan` runs, run `conduct-ts overlap-scan
+--files <Wiring Surface candidate paths>` over the paths named in `## Wiring Surface` above.
+Surface the rendered report to the author alongside the review output. This is **advisory
+only** — it never blocks the verdict or the review — it exists to flag unmerged dependent
+work touching the same files before `/plan` locks in a task breakdown that could collide
+with it.
+
 ### 9. Verdict Enforcement
 
 **APPROVED** — Proceed to `/writing-system-tests`.
