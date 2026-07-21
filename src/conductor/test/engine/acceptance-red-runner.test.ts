@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   crossCheckTargetSpecs,
   checkContractCwd,
   writeRedMarkerAtRoot,
+  normalizeNestedRedMarker,
 } from "../../src/engine/acceptance-red-runner";
 
 describe("parseAcceptanceRunContract", () => {
@@ -161,5 +162,76 @@ describe("writeRedMarkerAtRoot", () => {
     expect(existsSync(rootPath)).toBe(true);
     expect(existsSync(nestedPath)).toBe(false);
     expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual(markerContent);
+  });
+});
+
+describe("normalizeNestedRedMarker", () => {
+  let worktreeRoot: string;
+
+  afterEach(() => {
+    if (worktreeRoot) {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("relocates a stray nested marker up to the root path when no root marker exists", () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const nestedDir = join(worktreeRoot, "src", "conductor", ".pipeline");
+    const nestedPath = join(nestedDir, "acceptance-specs-red.json");
+    const rootPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
+    const nestedContent = {
+      executed: 2,
+      passed: 0,
+      failed: 2,
+      skipped: 0,
+      errors: 0,
+      command: "npm test",
+      targetSpecs: ["b.test.ts"],
+    };
+
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(nestedPath, JSON.stringify(nestedContent), "utf8");
+
+    normalizeNestedRedMarker(worktreeRoot);
+
+    expect(existsSync(rootPath)).toBe(true);
+    expect(existsSync(nestedPath)).toBe(false);
+    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual(nestedContent);
+  });
+
+  it("leaves the root marker untouched when both root and nested markers exist", () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const nestedDir = join(worktreeRoot, "src", "conductor", ".pipeline");
+    const nestedPath = join(nestedDir, "acceptance-specs-red.json");
+    const rootDir = join(worktreeRoot, ".pipeline");
+    const rootPath = join(rootDir, "acceptance-specs-red.json");
+
+    const rootContent = {
+      executed: 3,
+      passed: 0,
+      failed: 3,
+      skipped: 0,
+      errors: 0,
+      command: "npm test",
+      targetSpecs: ["a.test.ts"],
+    };
+    const nestedContent = {
+      executed: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      errors: 0,
+      command: "npm test",
+      targetSpecs: ["b.test.ts"],
+    };
+
+    mkdirSync(rootDir, { recursive: true });
+    writeFileSync(rootPath, JSON.stringify(rootContent), "utf8");
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(nestedPath, JSON.stringify(nestedContent), "utf8");
+
+    normalizeNestedRedMarker(worktreeRoot);
+
+    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual(rootContent);
   });
 });

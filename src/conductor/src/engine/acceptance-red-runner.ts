@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { ACCEPTANCE_SPECS_RED_EVIDENCE } from "./artifacts";
 
@@ -110,4 +110,42 @@ export function writeRedMarkerAtRoot(
   const markerPath = join(resolve(worktreeRoot), ACCEPTANCE_SPECS_RED_EVIDENCE);
   mkdirSync(dirname(markerPath), { recursive: true });
   writeFileSync(markerPath, JSON.stringify(markerContent), "utf8");
+}
+
+/**
+ * Known nested location a RED marker can stray into when an acceptance run's
+ * contract.cwd points at a subdirectory (e.g. `src/conductor`) instead of the
+ * worktree root.
+ */
+const NESTED_RED_MARKER_RELATIVE_PATH = join(
+  "src",
+  "conductor",
+  ACCEPTANCE_SPECS_RED_EVIDENCE,
+);
+
+/**
+ * Relocates a stray RED marker found nested under `<worktreeRoot>/src/conductor/`
+ * up to the authoritative root path, `<worktreeRoot>/.pipeline/acceptance-specs-red.json`.
+ *
+ * The root marker always wins: if one already exists there, it is left
+ * untouched and the nested marker is never read into it — a nested marker is
+ * only ever promoted to root when no root marker exists yet.
+ */
+export function normalizeNestedRedMarker(worktreeRoot: string): void {
+  const resolvedRoot = resolve(worktreeRoot);
+  const rootPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
+  const nestedPath = join(resolvedRoot, NESTED_RED_MARKER_RELATIVE_PATH);
+
+  if (!existsSync(nestedPath)) {
+    return;
+  }
+
+  if (existsSync(rootPath)) {
+    return;
+  }
+
+  const nestedContent = readFileSync(nestedPath, "utf8");
+  mkdirSync(dirname(rootPath), { recursive: true });
+  writeFileSync(rootPath, nestedContent, "utf8");
+  rmSync(nestedPath, { force: true });
 }
