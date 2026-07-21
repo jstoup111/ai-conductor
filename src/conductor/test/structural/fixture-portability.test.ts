@@ -550,4 +550,41 @@ describe('Structural guard: hasInitialBranchFlag matcher (git init --bare exempt
     expect(hasInitialBranchFlag("['init', '--initial-branch', 'main']")).toBe(true);
     expect(hasInitialBranchFlag("['init']")).toBe(false);
   });
+
+  it('a bare init with no branch-pin flag and no marker VIOLATES', () => {
+    const line = `await execa('git', ['init', '--bare', '-q']);`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.hasFlag).toBe(false);
+    expect(pattern?.markerPresent).toBe(false);
+  });
+
+  it('a bare init with a -b branch-pin flag PASSES', () => {
+    const line = `await execa('git', ['init', '--bare', '-b', 'main', '-q']);`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.hasFlag).toBe(true);
+  });
+
+  it('a bare init with a trailing portability-ok marker PASSES (even empty reason)', () => {
+    const line = `await execa('git', ['init', '--bare', '-q']); // portability-ok:`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.markerPresent).toBe(true);
+  });
+
+  it('known-bad fixture count still holds (non-regression)', () => {
+    const violations: typeof KNOWN_BAD_FIXTURES = [];
+
+    for (const fixture of KNOWN_BAD_FIXTURES) {
+      if (!isCommented(fixture)) {
+        const pattern = extractGitInitPattern(fixture);
+        if (pattern && !pattern.hasFlag && !pattern.markerPresent) {
+          violations.push(fixture);
+        }
+      }
+    }
+
+    expect(violations.length).toBe(KNOWN_BAD_FIXTURES.length);
+  });
 });
