@@ -11,22 +11,27 @@ mini-spec type + expander). The operator rejected adding a parallel flow.
 
 The existing pipeline already right-sizes Small — it just was never tuned to be cheap end-to-end:
 
-```
-                       the ONE pipeline (steps.ts ALL_STEPS)
-  ┌──────────────────────────── DECIDE ───────────────────────────┐  ┌──── BUILD/SHIP ────┐
-  explore  complexity  [arch_diagram] [arch_review] stories        build  build_review
-     │         │            SKIP-S        SKIP-S       │  [conflict]  │      wiring_check
-     │         │         (steps.ts:69)  (steps.ts:82)  │   SKIP-S     │      manual_test
-     │         │                                       │ (steps.ts:104)│     rebase / finish
-     └─ resolveStepConfig(step, phase, config, {tier}) ─────────────────────────────┘
-              (conductor.ts:1975-1977, :5961-5962)
-                          │
-                          ▼
-        DEFAULT_STEP_TIER_OVERRIDES[step][tier]   ← the seam we extend (resolved-config.ts:144-158)
-                          │  applied at the `hardcodedStepTier` rung (:234-236 → :245/:256/:266)
-                          ▼
-        base (model, effort, max_retries)  ──▶  escalateAttempt(base, attempt, escalate)
-                                                 (escalation.ts:76 — effort@2, model@3+)
+```mermaid
+flowchart TB
+  subgraph PIPE["the ONE pipeline — steps.ts ALL_STEPS"]
+    direction LR
+    subgraph DECIDE["DECIDE"]
+      EX["explore"] --> CX["complexity"]
+      CX --> AD["arch_diagram<br/>SKIP-S (steps.ts:69)"]
+      AD --> AR["arch_review<br/>SKIP-S (steps.ts:82)"]
+      AR --> ST["stories"]
+      ST --> CC["conflict_check<br/>SKIP-S (steps.ts:104)"]
+    end
+    subgraph SHIP["BUILD / SHIP — tier-invariant evidence tail"]
+      B["build"] --> BR["build_review"] --> WC["wiring_check"] --> MT["manual_test"] --> RB["rebase"] --> FIN["finish"]
+    end
+    CC --> B
+  end
+  RES["resolveStepConfig(step, phase, config, {tier})<br/>conductor.ts:1975-1977, :5961-5962"]
+  OVR["DEFAULT_STEP_TIER_OVERRIDES[step][tier]<br/>← the seam we extend (resolved-config.ts:144-158)<br/>applied at the hardcodedStepTier rung (:234-236)"]
+  BASE["base (model, effort, max_retries)"]
+  ESC["escalateAttempt(base, attempt, escalate)<br/>escalation.ts:76 — effort@2, model@3+"]
+  PIPE --> RES --> OVR --> BASE --> ESC
 ```
 
 ## Decision (component view)
