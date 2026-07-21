@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# intake-backfill — one-shot, non-interactive sweep that stamps missing
+# size:/priority: labels onto open, assigned GitHub issues (Task 6, FR-3).
+#
+# Reuses parseSizeLabel/parsePriorityLabels (src/conductor/src/engine/
+# backlog-priority.ts) to detect incomplete issues, infers values from the
+# issue body when possible, and otherwise defaults (size: M, priority:
+# medium). Applies labels via the gh REST API, auto-creating labels that
+# don't exist. Never HALTs and never prompts for confirmation.
+#
+# Usage:
+#   bin/intake-backfill --repo <owner/repo>
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONDUCTOR_DIR="${HARNESS_DIR}/src/conductor"
+
+cd "$CONDUCTOR_DIR"
+exec npx tsx "${CONDUCTOR_DIR}/src/intake-backfill-cli.ts" "$@"

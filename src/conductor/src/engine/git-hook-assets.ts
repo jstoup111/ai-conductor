@@ -8,8 +8,10 @@
 
 /**
  * prepare-commit-msg hook
- * Appends Task: <id> via git interpret-trailers when no trailer exists.
- * ID comes from .pipeline/current-task, else abstains.
+ * Stamps/reconciles Task: <id> via git interpret-trailers. The engine's
+ * .pipeline/current-task id always wins over any self-stamped Task: trailer
+ * already present in the message (replaces, never appends a duplicate).
+ * ID comes from .pipeline/current-task, else abstains (message untouched).
  * Abstains on amend, rebase-in-progress, or when current-task is absent.
  */
 export const PREPARE_COMMIT_MSG_HOOK = [
@@ -35,11 +37,6 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  exit 0',
   'fi',
   '',
-  '# Check if a Task: trailer already exists',
-  'if git interpret-trailers --parse < "$COMMIT_MSG_FILE" 2>/dev/null | grep -q \'^Task:\'; then',
-  '  exit 0',
-  'fi',
-  '',
   'WORKTREE_ROOT="$(git rev-parse --show-toplevel)"',
   'CURRENT_TASK_FILE="$WORKTREE_ROOT/.pipeline/current-task"',
   'TASK_STATUS_FILE="$WORKTREE_ROOT/.pipeline/task-status.json"',
@@ -50,9 +47,11 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  TASK_ID="$(cat "$CURRENT_TASK_FILE" 2>/dev/null || true)"',
   'fi',
   '',
-  '# If we have a task id, stamp the trailer',
+  '# If we have a task id, stamp/reconcile the trailer — the engine\'s',
+  '# current-task id always wins over any self-stamped Task: trailer already',
+  '# present in the message (--if-exists replace ensures replace, not append).',
   'if [[ -n "$TASK_ID" ]]; then',
-  '  git interpret-trailers --in-place --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
+  '  git interpret-trailers --in-place --if-exists replace --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
   'fi',
   '',
   '# Chain to the repository\'s own prepare-commit-msg hook if it exists',

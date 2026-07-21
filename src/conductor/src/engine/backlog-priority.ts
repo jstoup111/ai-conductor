@@ -73,6 +73,42 @@ export function parsePriorityLabels(
 }
 
 /**
+ * Extract the size label from a list of issue labels.
+ *
+ * Parses labels matching the pattern 'size: <size>' where <size> is one of:
+ * 'S', 'M', 'L'.
+ *
+ * When multiple size labels are present, the largest wins: L > M > S
+ *
+ * @param labels - Array of issue label strings
+ * @returns The largest size found, or undefined if no valid size labels exist
+ */
+export function parseSizeLabel(labels: string[]): 'S' | 'M' | 'L' | undefined {
+  const sizeRank = { L: 3, M: 2, S: 1 };
+  let maxRank = 0;
+  let maxSize: 'S' | 'M' | 'L' | undefined = undefined;
+
+  for (const label of labels) {
+    if (typeof label !== 'string') {
+      continue;
+    }
+    // Match labels with the exact pattern 'size: <size>'
+    // Requires exactly one space after the colon, case-sensitive
+    const match = label.match(/^size: (S|M|L)$/);
+    if (match) {
+      const size = match[1] as 'S' | 'M' | 'L';
+      const rank = sizeRank[size];
+      if (rank > maxRank) {
+        maxRank = rank;
+        maxSize = size;
+      }
+    }
+  }
+
+  return maxSize;
+}
+
+/**
  * Creates a stateful priority resolver that caches issue labels between daemon scans.
  *
  * The resolver maintains an in-memory cache (process-local, never persisted to disk) and

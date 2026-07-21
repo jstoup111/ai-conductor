@@ -585,7 +585,12 @@ pipeline.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
-terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+terminal and `daemon.log`. **By default the PROCESSED (completed) group is omitted**
+from both the console and the persisted `.daemon/daemon.log`. Pass `conduct-ts daemon
+--completed` (or `--all`) to additionally show the PROCESSED group **on the console
+only** — `.daemon/daemon.log` never includes the PROCESSED group, regardless of the
+flag. This does not affect `conduct-ts daemon-status`, which never rendered PROCESSED.
+Each row shows the bits you triage on — complexity tier, the step a
 feature reached, and the PR link once one is open (shipped features list their PR too).
 **WAITING** lists build-ready specs held back by an unresolved GitHub issue dependency (a
 `Source-Ref:` marker linked via GitHub's issue-dependencies API): the gate resolves each spec's
@@ -930,6 +935,57 @@ advisory, not binding.
 - [HARNESS.md Key Conventions](HARNESS.md#key-conventions) — "Intake states WHAT and outcomes — DECIDE owns HOW"
   documents this rule in detail.
 
+### Intake-Only Criteria Enforcement (Priority + Size + Dependency-Linking)
+
+Every intake issue must carry the criteria the daemon backlog needs to schedule it — a
+`priority:` label, a `size:` label, and (when applicable) a `blocked_by:` link — and this
+harness stamps them **at intake, never downstream**. No build, gate, or CI workflow ever
+blocks on missing criteria; an unlabeled issue simply defaults and moves on. See
+`src/conductor/README.md` → "Intake-only criteria enforcement" for the full pipeline; summary
+below.
+
+- **Required form fields.** [`.github/ISSUE_TEMPLATE/intake.yml`](.github/ISSUE_TEMPLATE/intake.yml)
+  now has required `Priority` (`critical`/`high`/`medium`/`low`) and `Size` (`S`/`M`/`L`)
+  dropdowns, plus an optional free-text `Depends on` field (issue numbers, or "none"),
+  alongside the existing Observed/Impact/Desired-outcome/Hypotheses sections.
+
+- **`intake-label-sync` Action.** [`.github/workflows/intake-label-sync.yml`](.github/workflows/intake-label-sync.yml)
+  fires on `issues: [opened, edited]`, parses the submitted form body, and stamps the
+  matching `priority:`/`size:` labels plus one `blocked_by:#N` label per dependency —
+  defaulting to `size: M` / `priority: medium` on unparsable or missing input rather than
+  leaving the issue unlabeled. It is entirely isolated from `ci.yml`: labels-only
+  permissions (`issues: write` / `contents: read`), `continue-on-error: true`, and the
+  underlying `syncIssueLabels()` (`src/conductor/src/engine/engineer/intake/label-sync.ts`)
+  catches all errors internally and always exits 0 — a label-sync failure can never fail a
+  build or block another workflow. Idempotent: re-editing an issue re-diffs and re-applies
+  labels rather than duplicating them.
+
+- **`bin/intake-file`** — files a criteria-complete issue in one atomic operation instead of
+  relying on the web form:
+  ```bash
+  src/conductor/bin/intake-file --title "..." --body "..." \
+    [--size S|M|L] [--priority critical|high|medium|low] \
+    [--depends-on owner/repo#N ...] [--repo owner/repo]
+  ```
+  Size and priority are resolved in order: explicit flag ▸ prompted (interactive TTY) ▸
+  inferred from the body ▸ defaulted. `--depends-on` may repeat; when omitted interactively
+  the tool records an explicit "no dependencies" acknowledgement rather than silently
+  leaving the field blank. Exits 0 once the issue is created, even if label application or a
+  dependency link partially fails — those surface as warnings, never as a filing failure.
+  Backed by `fileIntakeIssue()` (`src/conductor/src/engine/engineer/intake/file-issue.ts`).
+
+- **`bin/intake-backfill`** — a one-shot, non-interactive sweep for the existing backlog:
+  ```bash
+  src/conductor/bin/intake-backfill --repo owner/repo
+  ```
+  Lists open issues assigned to the authenticated `gh` user, backfills any missing
+  `size:`/`priority:` labels (infer from body ▸ default), and prints an operator report
+  (labelled/skipped/failed breakdown). Per-issue failures are isolated and never abort the
+  sweep; it is idempotent, safe to re-run, and never HALTs. Run it once after adopting this
+  feature to catch up pre-existing backlog issues that predate the required form fields, or
+  any time issues were filed by hand (`gh issue create`) bypassing `bin/intake-file`.
+  Backed by `backfillIntakeLabels()` (`src/conductor/src/engine/engineer/intake/backfill.ts`).
+
 ## Choosing a Conductor
 
 Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
@@ -1179,27 +1235,38 @@ spec_owner: your-github-login
 - **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
   and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
   falls back to building every operator's work.
-- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
-  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
-  the default branch (or grandfather it via `owner_gate_cutover`).
+- **Born owned, not silently skipped:** every DECIDE-phase write path stamps an `Owner:`
+  marker from machine identity (`spec_owner` → `gh` login) at authoring time, so intake
+  markers arrive with an owner by default. If a spec still arrives un-owned (pre-cutover
+  history, or an indeterminate merge time), the gate no longer skips it — it **default-builds
+  under the daemon's own resolved owner** (`unowned-defaulted`) and emits a distinct, deduped
+  log line naming the slug and defaulted owner and telling you to add an explicit `Owner:`
+  marker on the default branch to make ownership unambiguous. `other-owner` specs (stamped
+  with a **different** operator's identity) are still skipped — that case is unchanged.
+- **Enforcement is harness-native, not a local script:** this born-owned stamping and
+  default-build behavior is carried by `conduct-ts` itself (authoring + gate). This repo's
+  own `test/test_harness_integrity.sh` also checks that `.docs/intake/*.md` carry an `Owner:`
+  marker, but that is a supplementary local belt for this self-host repo — not the mechanism
+  that enforces ownership in consumer projects.
 
 **GATED dashboard section:** every daemon status view (`conduct-ts daemon-status`, the
 startup dashboard, `.daemon/gated.json`) carries a `GATED (n)` group alongside
 PARKED/HALTED/PROCESSED/IN-PROGRESS/WAITING/ELIGIBLE. It always renders explicitly — even
 `GATED (0)` — so an empty backlog is never mistaken for "nothing to do" when the real cause
 is an unresolved owner gate. Each `kind: 'spec'` row names the slug, the skip reason
-(`other-owner` / `unowned-post-cutover` / `unowned-indeterminate`), the other operator when
-known, and a remedy hint; each `kind: 'repo'` row is a section-level warning (e.g. "building
-NOTHING — identity unresolved" or "un-owned specs skipped — no owner_gate_cutover
-configured") for conditions with no single owning slug.
+(`other-owner` — the only reason a spec is still skipped rather than default-built), the other
+operator when known, and a remedy hint; each `kind: 'repo'` row is a section-level warning
+(e.g. "building NOTHING — identity unresolved") for conditions with no single owning slug.
+Un-owned arrivals no longer appear here as a skip: they default-build under
+`unowned-defaulted` (see above) and are surfaced only via the loud daemon log line, not the
+GATED group.
 
 **Gate write-back (owner-gated PR/issue announcement):** on every discovery pass, the daemon
 also announces each owner-gated spec where a GitHub artifact exists to announce on:
   - if the spec already has an implementation PR open (e.g. a prior build attempt halted
     before ownership changed underneath it), the PR gets an `owner-gated` label and a single
     upserted marker comment naming the reason/remedy/other-owner — edited in place on later
-    passes rather than duplicated, and updated when the reason transitions (e.g.
-    `unowned-indeterminate` → `other-owner`);
+    passes rather than duplicated;
   - if the spec originated from GitHub issue intake (carries a `Source-Ref: owner/repo#N`
     marker), the same label + marker comment are applied to the originating **issue** too, so
     the reporter sees why their request stalled without needing daemon/dashboard access.
@@ -1335,6 +1402,12 @@ build. Pairs with an `Evidence: skipped <reason>` trailer accepted by the
 generated commit-msg hook as an alternative to `Task:` on an intentionally
 empty commit (a non-empty reason is required; bare empty commits are still
 rejected).
+
+**No-diff completion currency (#733):** a `**Type:** verification` plan marker
+is recognized in union with `**Verify-only:** yes` and arms the same judged-closure
+lane; and an `Evidence: skipped <reason>` commit itself mints an `evidenceStamps`
+entry (`form: 'evidence:skipped'`), so a no-diff task can resolve without ever
+reaching the judge.
 
 **Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
 can be triggered by hand for a parked/halted feature:

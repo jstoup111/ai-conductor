@@ -1150,6 +1150,59 @@ describe('parsePlanTaskVerifyOnly', () => {
       expect(trueEntries).toEqual([]);
     });
   });
+
+  // Union semantics (Task 2, no-diff-task-evidence-stamp plan): a `**Type:**`
+  // line whose value contains the exact token `verification` (split on `+`)
+  // is ALSO verify-only-eligible, in addition to `**Verify-only:** yes`.
+  it('marks a task true when its block has `**Type:** verification`', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** verification
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('still marks a task true via `**Verify-only:** yes` (unchanged)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** yes
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it.each([
+    'happy-path',
+    'negative-path',
+    'refactor',
+    'feature',
+    'integration',
+    'infrastructure',
+    'review',
+    'happy-path + negative-path',
+    'verification-only',
+    'preverification',
+  ])('fail-closed: `**Type:** %s` does not match (not exact token verification)', async (value) => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** ${value}
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1') ?? false).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2622,6 +2675,72 @@ Work on the literal task-N form.
     const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
     expect(src).not.toMatch(/--reverse/);
   });
+
+  // Own-diff-before-lane ordering (no-diff-task-evidence-stamp plan, Task 3;
+  // re-asserts under `**Type:** verification` eligibility). A task with a
+  // real Task-trailered commit whose diff overlaps its declared paths is
+  // resolved HERE, in `deriveCompletion`'s mechanical trailer pass, before
+  // the judged-closure lane ever runs. `conductor.ts` derives its residue
+  // set as the task IDs where `derivedCompletion[id].completed` is false
+  // (~line 3267); a task stamped `completed: true` by this pass is therefore
+  // absent from residue regardless of whether it also carries a
+  // `**Type:** verification` (or `**Verify-only:** yes`) eligibility marker
+  // — the mechanical match takes precedence and the lane is never consulted
+  // for it. This holds independent of Task 2's widened eligibility parsing,
+  // since `deriveCompletion` does not consult `parsePlanTaskVerifyOnly` at
+  // all; the marker is orthogonal to own-diff resolution.
+  it('resolves a Type: verification task via the trailer path when its own diff overlaps declared paths — completed:true, evidenced by the trailer commit (own-diff-before-lane ordering)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: GREEN + full-suite check
+**Type:** verification
+
+Prove the suite passes.
+
+- \`src/verify.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // A REAL commit trailered to task 7 whose diff overlaps the task's own
+    // declared path — this is the own-diff shape, not a no-diff/verify-only
+    // shape, so it must resolve mechanically.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/verify.ts'), 'export const verify = 1;');
+    await execa('git', ['add', 'src/verify.ts'], { cwd: gitDir });
+    const commitSha = (
+      await execa('git', ['commit', '-m', 'test: verify\n\nTask: 7\n'], { cwd: gitDir })
+    ) && (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Type: verification eligibility does not block (or require) the
+    // mechanical trailer match — this task resolves like any other.
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7'].evidencedBy).toBe(commitSha);
+
+    // Stamped via the trailer path specifically (not a judged/semantic
+    // stamp) — confirming the lane was never consulted for this task.
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('7');
+    expect(stamp?.form).toBe('trailer');
+
+    // Own-diff-before-lane ordering: this task is therefore excluded from
+    // the residue set a caller (e.g. conductor.ts's gate-miss branch) would
+    // otherwise compute as `Object.keys(result).filter(id => !result[id].completed)`.
+    const residueIds = Object.keys(result).filter((id) => !result[id].completed);
+    expect(residueIds).not.toContain('7');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2707,6 +2826,69 @@ A task that will be skipped.
     expect(result).toHaveProperty('8');
     expect(result['8']).toHaveProperty('status', 'skipped');
     expect(result['8']).toHaveProperty('skipReason', 'build unavailable');
+  });
+
+  it('mints an evidenceStamps entry for Evidence: skipped so the gate treats it as resolved (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 14: Skippable task with stamp
+A task that will be skipped and must still mint an evidence stamp.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a no-op commit with the ADR-canonical form: `Task: <id>` PLUS
+    // the Evidence: skipped trailer.
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nTask: 14\nEvidence: skipped no diff for this task\n'], { cwd: gitDir });
+    const skipSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('14');
+    expect(result['14']).toHaveProperty('status', 'skipped');
+    expect(result['14']).toHaveProperty('completed', false);
+
+    expect(evidence.evidenceStamps.has('14')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('14');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(skipSha);
+    expect(stamp!.form).toBe('evidence:skipped');
+  });
+
+  it('leaves evidenceStamps empty for a task with no Evidence: skipped (or any) commit (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with a task that has no matching commit at all.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 15: Untouched task
+No commit will reference this task.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('15');
+    expect(result['15']).toHaveProperty('completed', false);
+    expect(evidence.evidenceStamps.has('15')).toBe(false);
   });
 
   it('does NOT complete task with dangling satisfied-by sha', async () => {

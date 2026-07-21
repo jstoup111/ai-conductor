@@ -177,7 +177,10 @@ describe('owner-gate dashboard GATED group acceptance (Covers: FR-1, FR-3, FR-4,
       },
     ];
 
-    const rendered = renderDashboard({ ...state, gated } as InheritedState & { gated: GatedEntry[] });
+    const rendered = renderDashboard(
+      { ...state, gated } as InheritedState & { gated: GatedEntry[] },
+      { includeCompleted: true },
+    );
 
     expect(extractSection(rendered, 'PROCESSED')).toContain('processed-and-gated');
     // Fails today: no GATED group exists, so this can't yet assert the

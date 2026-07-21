@@ -49,7 +49,11 @@ const LABEL_COLOR = 'FBCA04';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type GatedReason = 'other-owner' | 'unowned-post-cutover' | 'unowned-indeterminate';
+// 'other-owner' is the only reason `decideSpecGate` still returns a
+// `build: false` for — un-owned specs always default-build now (see
+// gate.ts), so 'unowned-post-cutover'/'unowned-indeterminate' can no longer
+// reach a GatedSpecEntry.
+export type GatedReason = 'other-owner';
 
 export interface GatedSpecEntry {
   kind: 'spec';
@@ -129,12 +133,12 @@ function renderCommentBody(spec: GatedSpecEntry): string {
  *
  * Reason transitions (Task 18): the underlying {@link upsertComment} locates
  * the existing comment purely by the stable `OWNER_GATED_MARKER`, never by
- * body content — so when a spec's gated `reason` changes between scan passes
- * (e.g. `unowned-indeterminate` -> `other-owner` -> back again), the same
- * comment is found and PATCHed with the freshly rendered body instead of a
- * new comment being created. This holds across any number of back-and-forth
- * transitions: exactly one comment ever exists, and its body always reflects
- * the most recently observed reason/remedy/owner.
+ * body content — so when a spec's gated `remedy`/`otherOwner` changes between
+ * scan passes (e.g. the offending owner stamp is edited to name a different
+ * operator), the same comment is found and PATCHed with the freshly rendered
+ * body instead of a new comment being created. This holds across any number
+ * of transitions: exactly one comment ever exists, and its body always
+ * reflects the most recently observed reason/remedy/owner.
  */
 export async function upsertGatedMarkerComment(
   spec: GatedSpecEntry,

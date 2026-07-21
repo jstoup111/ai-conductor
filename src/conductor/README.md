@@ -697,23 +697,39 @@ lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
   unresolved `daemonOwner` short-circuits discovery: the daemon builds **nothing** and emits a
   single loud, deduped "identity unresolved" notice (reversing the prior fail-open build-all).
   An **absent** `daemonOwner` (gate unwired) still runs legacy discovery unchanged.
-- **Loud un-owned skips (D5).** An un-owned merged spec is skipped with a distinct, deduped
-  line (`.daemon/warned/<slug>`) that states it is un-owned **and** how to fix it — add an
-  `Owner:` marker on the default branch, or grandfather via `owner_gate_cutover`.
+- **Loud un-owned default-build (D5, superseded — see below).** An un-owned merged spec is
+  **no longer skipped**. `decideSpecGate` returns `{ build: true, reason: 'unowned-defaulted' }`
+  for a post-cutover or indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts`
+  builds it into the buildable `items` set, attributed to the daemon's own resolved owner. It
+  still emits a distinct, deduped line (`.daemon/warned/<slug>`) — but now as an actionable
+  escalation naming the slug and the defaulted owner and telling you to add an explicit
+  `Owner:` marker on the default branch to make ownership unambiguous, not as a skip notice.
+  `other-owner` (stamped with a **different** operator's identity) is the only remaining
+  skip reason; that case is unchanged.
 - **Grandfather cutover (D6).** `owner_gate_cutover` (project config) builds un-owned specs
-  merged before the instant. It is a per-repo policy for repos with an unbuilt backlog and
-  **must not** be set on the harness self-host repo (all plans there are already merged, so the
-  window would rebuild everything). See the main README → "Operator identity & owner gate".
+  merged before the instant — this remains one path to `build: true`, now alongside the
+  broader `unowned-defaulted` default-build. It is a per-repo policy for repos with an unbuilt
+  backlog and **must not** be set on the harness self-host repo (all plans there are already
+  merged, so the window would rebuild everything). See the main README → "Operator identity &
+  owner gate".
+- **Born owned at authoring time.** `runAuthoring` (`owner-gate/authoring.ts`) now falls back
+  to machine identity (`readMachineOwnerConfig()`) whenever no `ownerConfig` is injected, so
+  every DECIDE-phase write path stamps an `Owner:` marker at authoring time by default —
+  intake markers are born owned rather than landing un-owned and relying on the gate to
+  compensate later. The `unowned-defaulted` gate path above now only fires for specs that
+  predate this stamping (pre-cutover history) or hit an indeterminate merge time.
 
-> The **authoring** side (universal `Owner:` stamping across every DECIDE path and refusing to
-> land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
-> this section documents the identity/config/daemon partition only.
+> The authoring-side born-owned stamping and the gate-side no-silent-skip default-build are
+> both implemented (see D5 and "Born owned at authoring time" above); this section documents
+> the full identity/config/daemon partition, authoring included.
 
 #### Gate write-back: owner-gated PR/issue announcement (Tasks 17-21)
 
-An owner-gate skip (D5 above) is loud in the daemon log and the GATED dashboard group, but
-neither surfaces on GitHub itself — an operator (or the reporter of an intake issue) who only
-watches the PR/issue never learns their spec is gated. `gate-writeback.ts` closes that gap:
+An owner-gate skip (`other-owner` — the only remaining skip reason since D5's
+`unowned-defaulted` default-builds instead) is loud in the daemon log and the GATED dashboard
+group, but neither surfaces on GitHub itself — an operator (or the reporter of an intake
+issue) who only watches the PR/issue never learns their spec is gated. `gate-writeback.ts`
+closes that gap:
 every `discover()` pass, for each `kind: 'spec'` `GatedItem`, the daemon (via the single
 `onGatedDiscovered` call site in `daemon-cli.ts`) attempts two independent, best-effort
 announcements:
@@ -724,9 +740,8 @@ announcements:
   (creating it repo-wide on first use) and upserts a single marker comment carrying the
   reason, remedy, and other-owner name (when known). The marker comment is located purely by
   the stable `OWNER_GATED_MARKER` string (never by body content), so repeated passes PATCH the
-  same comment in place — including across reason transitions (e.g.
-  `unowned-indeterminate` → `other-owner`) — rather than ever posting a duplicate. A terminal
-  PR state (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
+  same comment in place rather than ever posting a duplicate. A terminal PR state
+  (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
 - **`announceGatedIssue(spec, sourceRef, deps)`** — when the spec carries a
   `Source-Ref: owner/repo#N` intake marker, applies the same `owner-gated` label + upserted
   marker comment to the **originating issue**, independent of the PR path (a failure/success
@@ -953,6 +968,21 @@ the decision outcome; sampled spot-audits additionally append an agreement recor
 time; it never feeds back into gate decisions (audit is read-only, fire-and-forget,
 dispatched only after the build gate verdict is already final).
 
+#### No-diff task completion currency (#733)
+
+A task that legitimately produces no diff (a skip, or a pure verification pass)
+now earns completion currency two ways, closing the gap where such tasks
+starved `noEvidenceAttempts` toward auto-park:
+
+- **`Evidence: skipped <reason>` commit trailer:** mints an `evidenceStamps`
+  entry (`form: 'evidence:skipped'`) in `deriveCompletionInternal`, keyed to
+  that commit, so the task counts as resolved toward the completion gate
+  without needing a code change.
+- **`**Type:** verification` plan marker:** recognized in union with the
+  pre-existing `**Verify-only:** yes` marker by `parsePlanTaskVerifyOnly`,
+  arming the judged-closure lane (see the semantic attribution verification
+  lane above) for that task's residue even under a dark cutover.
+
 
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
@@ -966,6 +996,11 @@ things on top of that, without a parallel dispatch path:
   `daemon.log` — five groups with precedence
   **HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE** (WAITING lists build-ready specs
   held back by an unresolved dependency — see "Dependency-ordered intake and dispatch" below).
+  **By default the PROCESSED group is hidden from both the console and `daemon.log`.**
+  `conduct-ts daemon --completed` (or the `--all` alias) shows the PROCESSED group on
+  the **console only**; `.daemon/daemon.log` never includes it, regardless of the flag.
+  `conduct-ts daemon-status` (`daemon-observe-cli.ts`) is unaffected — it already never
+  rendered PROCESSED.
   Each row carries the bits an operator triages on, mined best-effort from the worktree's
   `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
   + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
@@ -3265,6 +3300,68 @@ work it depends on.
   WAITING (daemon) or deferred (intake claim), not dispatched or built; a malformed or
   unreadable dependency marker can only make a spec wait longer, never jump the queue or build
   early.
+
+#### Intake-only criteria enforcement (priority + size + dependency-linking)
+
+Priority and size are the two labels the daemon backlog needs to schedule a spec (see
+`PRIORITY_BAND_RANK` above and `parsePriorityLabels`/`parseSizeLabel` in
+`engine/backlog-priority.ts`); dependency-linking is what the blocker resolver above walks.
+This feature (#695) stamps all three **at intake capture time only** — the daemon build
+gate, `dependency-claim.ts`, and `github-issues.ts`'s `poll()` are untouched, so a
+missing/malformed label can only ever cause an intake-time default, never a downstream
+build failure or HALT.
+
+- **`parseSizeLabel` (`engine/backlog-priority.ts`).** Closed-vocabulary parser beside
+  `parsePriorityLabels`: matches exactly `^size: (S|M|L)$` (case-sensitive, no partial
+  matches), and when an issue carries more than one `size:` label, largest wins (`L` > `M` >
+  `S`).
+- **Required form fields (`.github/ISSUE_TEMPLATE/intake.yml`).** `Priority`
+  (`critical`/`high`/`medium`/`low`) and `Size` (`S`/`M`/`L`) are now required dropdowns; an
+  optional free-text `Depends on` field accepts issue numbers or "none".
+- **`intake-label-sync` Action (`.github/workflows/intake-label-sync.yml`, triggered on
+  `issues: [opened, edited]`).** Parses the submitted form body (issue-form submissions
+  render each field's label as an `### <Label>` heading) and stamps the matching
+  `priority:`/`size:` labels plus one `blocked_by:#N` label per declared dependency,
+  defaulting to `priority: medium` / `size: M` on unparsable or missing input. Backed by
+  `syncIssueLabels()` (`engine/engineer/intake/label-sync.ts`), wired to the live workflow
+  via `scripts/intake-label-sync-apply.mts`. **Isolation:** `issues: write` / `contents:
+  read` permissions only, `continue-on-error: true` at the workflow level, and
+  `syncIssueLabels()` catches all errors internally and always resolves — a label-sync
+  failure can never fail this workflow or block `ci.yml` (they are entirely separate
+  workflows; this one never touches `ci.yml`). **Idempotent:** diffs the desired label set
+  against the issue's current labels and only calls the "set labels" REST endpoint when they
+  differ, so re-edits never duplicate labels.
+- **`bin/intake-file` (`src/intake-file` wraps `fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`).** Files an issue with priority/size/dependency
+  linking applied in one atomic operation, for filing from the CLI instead of the web form:
+  ```
+  bin/intake-file --title "..." --body "..." [--size S|M|L]
+    [--priority critical|high|medium|low] [--depends-on owner/repo#N] [--repo owner/repo]
+  ```
+  Resolution order for size/priority: explicit flag ▸ interactive prompt (only when stdin
+  and stdout are both a TTY) ▸ inferred from the body ▸ defaulted. `--depends-on` may be
+  passed multiple times; omitting it in an interactive session prompts for and records an
+  explicit "no dependencies" acknowledgement rather than leaving the field silently blank.
+  Exit code is 0 once the issue itself is created — a label-apply or dependency-link failure
+  after that point is reported as a warning on stdout/stderr, never turned into a non-zero
+  exit or a failed filing.
+- **`bin/intake-backfill` (`src/intake-backfill-cli.ts` wraps `backfillIntakeLabels()` in
+  `engine/engineer/intake/backfill.ts`).** One-shot, non-interactive sweep for issues filed
+  before this feature existed or filed by hand (`gh issue create`, bypassing
+  `bin/intake-file`):
+  ```
+  bin/intake-backfill --repo owner/repo
+  ```
+  Lists open issues assigned to the authenticated `gh` user (`gh issue list --assignee @me
+  --state open --json number,body,labels -R <repo>`, matching the idiom `github-issues.ts`'s
+  `poll()` already uses), backfills any missing `size:`/`priority:` label (infer from body ▸
+  default) via `backfillIntakeLabels()`, and prints an operator report via
+  `renderBackfillReport()` (labelled/skipped/failed breakdown). A per-issue failure is
+  isolated inside `backfillIntakeLabels()` and never aborts the sweep or the process; only a
+  top-level failure (e.g. the initial issue-list call itself) sets a non-zero exit code. Idempotent
+  and safe to re-run; an operator runs it once when adopting this feature to catch up the
+  pre-existing backlog, and again any time issues accumulate outside `bin/intake-file`/the web
+  form.
 
 #### Daemon liveness (pidfile-lock)
 

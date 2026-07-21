@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
+  `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
+  the judged-closure lane (#733)
+
 - Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
   diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
   without a mermaid fence; enforcement gap captured as #729).
@@ -24,6 +28,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - ci-fix resolver no longer invokes the nonexistent `claude --fix-session` flag;
   dispatches a real fix via StepRunner, classifies spawn errors, and validates
   invocation at daemon startup
+
+- CI: `conductor` job now checks out with `fetch-depth: 0` so `origin/main` is
+  resolvable — the intake-only-enforcement acceptance spec's `git diff
+  origin/main` regression guard was crashing with `fatal: bad revision 'main'`
+  under GitHub Actions' default shallow (depth-1) checkout instead of running
+  its intended diff assertion.
 
 ### Changed
 
@@ -63,9 +73,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   gates, and CI stay byte-identical and add no criteria check (a negative-path story
   asserts this). Supersedes PR #696 (which enforced at claim time via a
   `needs-criteria` deferral). Artifacts under
+- Committed shipped-records for four phantom features the daemon kept re-parking
+  (background-intake-conduct-loop #382, wiring-reachability-gate #650,
+  autoheal-path-corroboration #709, finish-staleness #596) so backlog dedup
+  drops them permanently.
+
+- Issue #695 — **intake-only criteria enforcement**: priority + size +
+  dependency-linking are now stamped at every intake capture surface. Ships a
+  `parseSizeLabel` closed-vocabulary parser beside `parsePriorityLabels`
+  (`engine/backlog-priority.ts`); required `Priority`/`Size` dropdowns + an
+  optional `Depends on` field on `.github/ISSUE_TEMPLATE/intake.yml`; an
+  isolated `intake-label-sync` GitHub Action (`syncIssueLabels()` in
+  `engine/engineer/intake/label-sync.ts`) that stamps `priority:`/`size:`/
+  `blocked_by:` labels on `issues: [opened, edited]`, defaulting on
+  unparsable input, entirely separate from and unable to fail `ci.yml`; a
+  `bin/intake-file` filing helper (`fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`) that files a criteria-complete issue
+  in one atomic operation; and a one-shot, idempotent `bin/intake-backfill`
+  sweep (`backfillIntakeLabels()` in `engine/engineer/intake/backfill.ts`)
+  that stamps missing labels on the existing backlog and emits an operator
+  report, never HALTing. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", this adds **zero** downstream failure modes:
+  the claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon
+  dispatch/build, pipeline gates, and CI stay byte-identical and add no
+  criteria check (a negative-path acceptance spec asserts this). Supersedes
+  PR #696 (which enforced at claim time via a `needs-criteria` deferral).
+  Artifacts under
   `.docs/{plans,stories,complexity,conflicts,architecture,decisions,intake}/intake-only-enforcement*`;
-  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`. Spec-only — no
-  implementation, no VERSION bump, no migration.
+  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`.
 - Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
   of repeating an identical attempt. A new pure `escalateAttempt` (with
   `EFFORT_ORDER`, `MODEL_TIER_ORDER`, `bumpEffort`, `bumpModel` in
@@ -133,6 +168,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (effort, then model tier) rather than repeating an identical attempt, five
   identical retries were wasteful; 3 is the floor that still reaches the
   attempt-3 model-bump rung. `architecture_review` is out of scope and stays 5.
+- Owner-gate: an un-owned merged spec is **no longer silently skipped**. `decideSpecGate`
+  now returns `{ build: true, reason: 'unowned-defaulted' }` for a post-cutover or
+  indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts` default-builds it
+  attributed to the daemon's own resolved owner, emitting a loud, actionable log line naming
+  the slug and defaulted owner and pointing at the remedy (add an explicit `Owner:` marker on
+  the default branch). `other-owner` (stamped with a different operator's identity) remains
+  the only skip reason; grandfathering via `owner_gate_cutover` is unchanged.
+- Owner-gate: intake markers are now **born owned**. `runAuthoring` falls back to machine
+  identity (`readMachineOwnerConfig()`, `spec_owner` → `gh` login) whenever no `ownerConfig`
+  is injected, so every DECIDE-phase write path stamps an `Owner:` marker at authoring time
+  by default instead of relying on the gate to compensate for un-owned arrivals later.
 
 ## Migration
 
@@ -2197,6 +2243,10 @@ no action needed — the token requirement is skipped.
   subcommand, not a breaking surface — no migration block needed. See `README.md` and
   `src/conductor/README.md` for flags and the `monitor.sh` hook line
   (`conduct-ts halt-issues sweep || true`).
+- Authored-keys write now rejects a non-absolute/`undefined` base with a clear
+  error instead of writing `undefined/authored-keys.json` under cwd; the
+  acceptance test no longer poisons `$AI_CONDUCTOR_ENGINEER_DIR`
+  (ai-conductor#574).
 
 ## Migration
 

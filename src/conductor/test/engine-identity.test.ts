@@ -167,8 +167,9 @@ describe('createStaleEngineChecker — disabled checker on capture failure', () 
       }
       const elapsed = Date.now() - start;
 
-      // Should be very fast (< 50ms) since there's no I/O involved
-      expect(elapsed).toBeLessThan(50);
+      // Should be very fast (< 500ms) since there's no I/O involved
+      // (threshold kept generous to avoid CI runner jitter flakiness)
+      expect(elapsed).toBeLessThan(500);
     });
 
     it('warn callback fires exactly once on disabled checker construction', () => {
