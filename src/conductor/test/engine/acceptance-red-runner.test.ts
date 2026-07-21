@@ -330,4 +330,125 @@ describe("selfHealAcceptanceRed", () => {
       expect(result.reason).toMatch(/not among committed specs/);
     }
   });
+
+  function writeContract(root: string): void {
+    const pipelineDir = join(root, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(
+      join(pipelineDir, "acceptance-specs-run.json"),
+      JSON.stringify({
+        command: "npm test",
+        cwd: ".",
+        targetSpecs: ["a.test.ts"],
+      }),
+      "utf8",
+    );
+  }
+
+  it("returns healed:false with a real-evidence reason when the run looks GREEN (failed==0, passed>0)", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const exec = async (command: string) => ({
+      command,
+      targetSpecs: ["a.test.ts"],
+      executed: 3,
+      passed: 3,
+      failed: 0,
+      skipped: 0,
+      errors: 0,
+    });
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(result).toEqual({
+      healed: false,
+      reason:
+        "acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation",
+    });
+  });
+
+  it("returns healed:false with a real-evidence reason when specs were skipped and none executed", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const exec = async (command: string) => ({
+      command,
+      targetSpecs: ["a.test.ts"],
+      executed: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 3,
+      errors: 0,
+    });
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(result).toEqual({
+      healed: false,
+      reason:
+        "3 acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute",
+    });
+  });
+
+  it("returns healed:false with a real-evidence reason when the run errored at collection", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const exec = async (command: string) => ({
+      command,
+      targetSpecs: ["a.test.ts"],
+      executed: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      errors: 2,
+    });
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(result).toEqual({
+      healed: false,
+      reason:
+        "acceptance specs errored at collection (2) — they never ran; fix the specs so they execute (this is not RED)",
+    });
+  });
+
+  it("returns healed:false with a real-evidence reason when executed==0", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const exec = async (command: string) => ({
+      command,
+      targetSpecs: ["a.test.ts"],
+      executed: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      errors: 0,
+    });
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(result).toEqual({
+      healed: false,
+      reason: "acceptance-specs RED run executed 0 tests — the command did not select the feature's specs",
+    });
+  });
 });
