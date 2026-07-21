@@ -42,6 +42,7 @@ import {
   validateBuildReviewVerdict,
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
+  readManualTestFailRows,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult } from '../../src/engine/artifacts.js';
 
@@ -1712,6 +1713,35 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/FAIL/);
+    });
+
+    it('a later fresh SKIP attempt cannot launder a FAIL recorded earlier at the same HEAD sha', async () => {
+      // Attempt 1 records a real FAIL — this writes the fail-evidence marker
+      // (headSha: aaa111).
+      await createFile(RESULTS, FAIL_FILE);
+      const firstResult = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(firstResult.done).toBe(false);
+
+      // Attempt 2 is appended as a fresh SKIP section — HEAD has NOT moved
+      // (no fix commits), so this must not launder the recorded FAIL.
+      await createFile(
+        RESULTS,
+        FAIL_FILE + `\n## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/whitewash|no new commits/i);
+
+      // The FAIL rows from attempt 1 must remain readable so the
+      // manual_test→build kickback path still has concrete bug evidence.
+      const failRows = await readManualTestFailRows(dir);
+      expect(failRows.join('\n')).toMatch(/Bar.*FAIL/);
     });
   });
 
