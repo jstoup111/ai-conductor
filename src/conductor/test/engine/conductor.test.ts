@@ -6646,6 +6646,45 @@ describe('engine/conductor', () => {
       expect(result.state['conflict_check']).toBe('skipped');
     });
 
+    it('Task 12: non-rebase kickback (no preserve list) sweeps judged gates stale, not preserved', () => {
+      // Every navigateBack call site in conductor.ts EXCEPT the rebase-origin
+      // branch (advanceTail, lastRebaseOutcome?.kind === 'changed') omits the
+      // `preserve` argument, so it defaults to []. This locks that default
+      // behavior: a build_review-style kickback back to 'build' with
+      // prd_audit/architecture_review_as_built already 'done' must sweep
+      // them stale via the blanket cascade — proving the Task 7 delta-gating
+      // guard (which only fires for kickback.from === 'rebase') never
+      // leaks into other kickback origins.
+      const state: ConductState = {
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        stories: 'done',
+        plan: 'done',
+        build: 'done',
+        build_review: 'done',
+        wiring_check: 'done',
+        manual_test: 'done',
+        prd_audit: 'done',
+        architecture_review_as_built: 'done',
+      };
+
+      // Non-rebase kickback: e.g. build_review failing and routing back to
+      // 'build' — called with no `preserve` argument, exactly like every
+      // non-rebase call site in conductor.ts.
+      const result = navigateBack(state, 'build');
+
+      expect(result.state['build']).toBe('pending');
+      // Every downstream judged gate — including the audits that Task 7's
+      // rebase-origin guard would otherwise preserve — is swept stale.
+      expect(result.state['build_review']).toBe('stale');
+      expect(result.state['wiring_check']).toBe('stale');
+      expect(result.state['manual_test']).toBe('stale');
+      expect(result.state['prd_audit']).toBe('stale');
+      expect(result.state['architecture_review_as_built']).toBe('stale');
+    });
+
     it('navigateBack returns new loop index at target step', () => {
       const state: ConductState = {
         worktree: 'done',
