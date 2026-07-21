@@ -165,6 +165,9 @@ describe('engine/steps', () => {
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['wiring_check']);
       expect(s.isCheckpoint).toBe(true);
+      // ADR D5: Small-tier features skip manual testing (mirrors
+      // conflict_check/acceptance_specs S-tier skip).
+      expect(s.skippableForTiers).toEqual(['S']);
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
@@ -299,10 +302,10 @@ describe('engine/steps', () => {
   describe('shouldSkipForTier', () => {
     const sSkippable: StepName[] = [
       'conflict_check', 'architecture_diagram', 'architecture_review',
-      'acceptance_specs', 'retro',
+      'acceptance_specs', 'manual_test', 'retro',
     ];
 
-    it('Small tier skips the right 5 steps', () => {
+    it('Small tier skips the right 6 steps', () => {
       for (const step of sSkippable) {
         expect(shouldSkipForTier(step, 'S')).toBe(true);
       }
@@ -311,7 +314,7 @@ describe('engine/steps', () => {
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
-        'plan', 'build', 'wiring_check', 'manual_test', 'finish',
+        'plan', 'build', 'wiring_check', 'finish',
       ];
       for (const step of nonSkippable) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -362,12 +365,12 @@ describe('engine/steps', () => {
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
-    it('returns 6 steps for S tier', () => {
+    it('returns 7 steps for S tier', () => {
       const result = getSkippableSteps('S');
       // Returned in ALL_STEPS order (architecture now precedes conflict_check).
       expect(result).toEqual([
         'architecture_diagram', 'architecture_review', 'conflict_check',
-        'acceptance_specs', 'architecture_review_as_built', 'retro',
+        'acceptance_specs', 'manual_test', 'architecture_review_as_built', 'retro',
       ]);
     });
 

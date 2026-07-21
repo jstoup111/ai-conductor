@@ -111,6 +111,31 @@ describe('engine/selector — selectNextGate', () => {
     expect(d).toMatchObject({ kind: 'run', step: 'finish' });
   });
 
+  it('skips manual_test on Small (tier-skipped) and selects prd_audit (ADR D5)', () => {
+    const state: ConductState = { ...frontDone(), complexity_tier: 'S' };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      build_review: VSAT,
+      wiring_check: VSAT,
+      // manual_test has no verdict and is pending, but is skippable for Small
+    };
+    const d = selectNextGate(input(state, verdicts));
+    expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
+  });
+
+  it('does not skip manual_test on Medium or Large', () => {
+    for (const tier of ['M', 'L'] as const) {
+      const state: ConductState = { ...frontDone(), complexity_tier: tier };
+      const verdicts: Partial<Record<StepName, GateVerdict>> = {
+        build: VSAT,
+        build_review: VSAT,
+        wiring_check: VSAT,
+      };
+      const d = selectNextGate(input(state, verdicts));
+      expect(d).toMatchObject({ kind: 'run', step: 'manual_test' });
+    }
+  });
+
   it('does not select a step explicitly marked skipped', () => {
     const state: ConductState = {
       ...frontDone(),
