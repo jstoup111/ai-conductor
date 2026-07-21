@@ -1,6 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
-import { ACCEPTANCE_SPECS_RED_EVIDENCE } from "./artifacts";
+import { ACCEPTANCE_SPECS_RED_EVIDENCE, validateAcceptanceRedEvidence } from "./artifacts";
+
+/**
+ * Relative path (from the worktree root) to the acceptance run contract
+ * written by the acceptance_specs step, describing the command/cwd/target
+ * specs the RED run must execute.
+ */
+export const ACCEPTANCE_RUN_CONTRACT_PATH = join(".pipeline", "acceptance-specs-run.json");
 
 export interface AcceptanceRunContract {
   command: string;
@@ -148,4 +155,87 @@ export function normalizeNestedRedMarker(worktreeRoot: string): void {
   mkdirSync(dirname(rootPath), { recursive: true });
   writeFileSync(rootPath, nestedContent, "utf8");
   rmSync(nestedPath, { force: true });
+}
+
+/**
+ * Injected command runner for {@link selfHealAcceptanceRed}. Implementations
+ * actually execute `command` in `cwd` and return a RED-marker-shaped result
+ * (the same shape {@link validateAcceptanceRedEvidence} validates) describing
+ * what happened — it does NOT write the marker itself; the orchestrator is
+ * responsible for persisting it at the authoritative root path.
+ */
+export type AcceptanceRedExec = (
+  command: string,
+  opts: { cwd: string },
+) => Promise<unknown>;
+
+export interface SelfHealAcceptanceRedParams {
+  worktree: string;
+  specFiles: string[];
+  exec: AcceptanceRedExec;
+}
+
+export type SelfHealAcceptanceRedResult =
+  | { healed: true }
+  | { healed: false; reason: string };
+
+/**
+ * Orchestrates a self-healing RED-evidence run: reads and validates the
+ * acceptance run contract, cross-checks it against the feature's committed
+ * spec files, guards its cwd, executes it via the injected `exec`, relocates
+ * any stray nested marker, writes the result at the authoritative root path,
+ * and re-validates with the existing {@link validateAcceptanceRedEvidence}.
+ *
+ * Any guard failure (parse/cross-check/cwd) short-circuits before `exec` is
+ * ever called.
+ */
+export async function selfHealAcceptanceRed(
+  params: SelfHealAcceptanceRedParams,
+): Promise<SelfHealAcceptanceRedResult> {
+  const { worktree, specFiles, exec } = params;
+  const resolvedRoot = resolve(worktree);
+  const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
+
+  if (!existsSync(contractPath)) {
+    return { healed: false, reason: `acceptance run contract not found: ${contractPath}` };
+  }
+
+  const raw = readFileSync(contractPath, "utf8");
+  const parsed = parseAcceptanceRunContract(raw);
+  if (!parsed.ok) {
+    return { healed: false, reason: parsed.reason };
+  }
+
+  const crossChecked = crossCheckTargetSpecs(parsed.contract, specFiles);
+  if (!crossChecked.ok) {
+    return { healed: false, reason: crossChecked.reason };
+  }
+
+  const cwdChecked = checkContractCwd(crossChecked.contract, resolvedRoot);
+  if (!cwdChecked.ok) {
+    return { healed: false, reason: cwdChecked.reason };
+  }
+
+  const { contract } = cwdChecked;
+  const resolvedCwd = resolve(resolvedRoot, contract.cwd);
+  const execResult = await exec(contract.command, { cwd: resolvedCwd });
+
+  normalizeNestedRedMarker(resolvedRoot);
+  writeRedMarkerAtRoot(resolvedRoot, execResult);
+
+  const markerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
+  const markerRaw = readFileSync(markerPath, "utf8");
+  let markerParsed: unknown;
+  try {
+    markerParsed = JSON.parse(markerRaw);
+  } catch {
+    return { healed: false, reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not valid JSON` };
+  }
+
+  const validated = validateAcceptanceRedEvidence(markerParsed);
+  if (!validated.ok) {
+    return { healed: false, reason: validated.reason };
+  }
+
+  return { healed: true };
 }

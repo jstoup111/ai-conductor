@@ -8,6 +8,7 @@ import {
   checkContractCwd,
   writeRedMarkerAtRoot,
   normalizeNestedRedMarker,
+  selfHealAcceptanceRed,
 } from "../../src/engine/acceptance-red-runner";
 
 describe("parseAcceptanceRunContract", () => {
@@ -233,5 +234,100 @@ describe("normalizeNestedRedMarker", () => {
     normalizeNestedRedMarker(worktreeRoot);
 
     expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual(rootContent);
+  });
+});
+
+describe("selfHealAcceptanceRed", () => {
+  let worktreeRoot: string;
+
+  afterEach(() => {
+    if (worktreeRoot) {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the contract command via exec and writes a passing RED marker at root", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    const contractPath = join(pipelineDir, "acceptance-specs-run.json");
+    writeFileSync(
+      contractPath,
+      JSON.stringify({
+        command: "npm test",
+        cwd: ".",
+        targetSpecs: ["a.test.ts"],
+      }),
+      "utf8",
+    );
+
+    const execCalls: { command: string; cwd: string }[] = [];
+    const exec = async (command: string, opts: { cwd: string }) => {
+      execCalls.push({ command, cwd: opts.cwd });
+      return {
+        command,
+        targetSpecs: ["a.test.ts"],
+        executed: 3,
+        passed: 0,
+        failed: 3,
+        skipped: 0,
+        errors: 0,
+      };
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalls).toEqual([{ command: "npm test", cwd: join(worktreeRoot, ".") }]);
+    expect(result).toEqual({ healed: true });
+
+    const rootPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
+    expect(existsSync(rootPath)).toBe(true);
+    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual({
+      command: "npm test",
+      targetSpecs: ["a.test.ts"],
+      executed: 3,
+      passed: 0,
+      failed: 3,
+      skipped: 0,
+      errors: 0,
+    });
+  });
+
+  it("returns healed:false without calling exec when targetSpecs cross-check fails", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    const contractPath = join(pipelineDir, "acceptance-specs-run.json");
+    writeFileSync(
+      contractPath,
+      JSON.stringify({
+        command: "npm test",
+        cwd: ".",
+        targetSpecs: ["missing.test.ts"],
+      }),
+      "utf8",
+    );
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/not among committed specs/);
+    }
   });
 });
