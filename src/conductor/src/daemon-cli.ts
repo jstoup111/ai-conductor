@@ -228,6 +228,12 @@ export interface DaemonModeOptions {
    * Tests inject a fake to verify the exit call is made.
    */
   exitProcess?: (code: number) => void;
+  /**
+   * Task 3: Show completed (PROCESSED) features in the startup dashboard's
+   * console output. Defaults to false/undefined — the persisted log sink
+   * NEVER includes PROCESSED regardless of this flag.
+   */
+  showCompleted?: boolean;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -439,7 +445,7 @@ export function buildProgressReKickDeps(
  * runDaemon / makeRunFeature.
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
-  const { projectRoot } = opts;
+  const { projectRoot, showCompleted } = opts;
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
   // actionable error rather than silently dispatching unregistered skills (which
@@ -1313,7 +1319,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
             parked.push({ slug, provenance: provenance || undefined, reason });
           }
         }
-        log(`\n${renderDashboard({ ...state, parked })}`);
+        // Task 3: split the previously single tee'd call so the persisted
+        // daemon.log NEVER carries the PROCESSED group (kept lean for
+        // grep/tail), while the console optionally shows it per
+        // `showCompleted` (--completed/--all). Uses the same formatting
+        // conventions as the `log()` closure above.
+        const dashboardState = { ...state, parked };
+        logSink?.write(
+          formatDaemonLogLine(`[daemon] ${stripAnsi(`\n${renderDashboard(dashboardState)}`)}`),
+        );
+        console.log(
+          `${chalk.dim('[daemon]')} \n${renderDashboard(dashboardState, { includeCompleted: showCompleted })}`,
+        );
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
       // the backlog reads. On idle refresh we fast-forward it first so the SHA
