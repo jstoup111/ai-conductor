@@ -25,6 +25,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   dispatches a real fix via StepRunner, classifies spawn errors, and validates
   invocation at daemon startup
 
+- CI: `conductor` job now checks out with `fetch-depth: 0` so `origin/main` is
+  resolvable — the intake-only-enforcement acceptance spec's `git diff
+  origin/main` regression guard was crashing with `fatal: bad revision 'main'`
+  under GitHub Actions' default shallow (depth-1) checkout instead of running
+  its intended diff assertion.
+
 ### Changed
 
 - Operator config: `harness_self_host.version_freeze` advanced 0.99.19 → 0.99.20
