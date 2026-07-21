@@ -535,6 +535,158 @@ describe('publish-engine.mjs pre-build source-cache skip (Task 2)', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 3 — changed-source and fail-open rebuild paths. Plan ref:
+// .docs/plans/engine-rebuild-content-cache.md, Design "Pre-build skip"
+// steps 1-3, Task 3.
+//
+// Each test asserts the build IS invoked (rebuild happens, not skipped) in a
+// case where a naive/buggy pre-build skip implementation would wrongly skip
+// the build. Reuses the same direct-`publish()`-import harness as the Task 2
+// skip tests above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('publish-engine.mjs changed-source / fail-open rebuild paths (Task 3)', () => {
+  // Each call writes distinct build output (a per-call marker) so a real
+  // rebuild always mints a genuinely new versionId — distinguishing "build
+  // ran again and produced a fresh version" from the (also-legitimate but
+  // orthogonal) output-content idempotence guard collapsing two builds with
+  // *identical* output into the same version.
+  function makeCountingRunCommand() {
+    let calls = 0;
+    const runCommand = async (cmd: string[], execOpts: { cwd: string }) => {
+      calls += 1;
+      const outDirIdx = cmd.indexOf('--out-dir');
+      const outDir = cmd[outDirIdx + 1];
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, 'index.js'), `export const built = ${calls};\n`, 'utf-8');
+      void execOpts;
+    };
+    return { runCommand, getCalls: () => calls };
+  }
+
+  it('rebuilds when the injected computeSourceKey differs from the recorded sidecar value', async () => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    let key = 'key-one';
+    const computeSourceKey = async () => key;
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    key = 'key-two';
+    const second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+
+    expect(getCalls()).toBe(2); // build invoked again — key mismatch
+    expect(second.versionId).not.toBe(first.versionId);
+
+    const target = await readlink(join(conductorRoot, 'dist'));
+    expect(target).toBe(join('dist-versions', second.versionId));
+
+    const sidecar = await readFile(join(second.dir, '.engine-source-key'), 'utf-8');
+    expect(sidecar).toBe('key-two');
+  });
+
+  it('rebuilds and heals when the current version directory has been removed even though the key would match', async () => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'stable-key';
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    // Dangling `current`: the version dir the symlink points at is gone.
+    await rm(first.dir, { recursive: true, force: true });
+
+    const second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+
+    expect(getCalls()).toBe(2); // build invoked again — current dir missing
+    expect(second.versionId).not.toBe(first.versionId);
+
+    const target = await readlink(join(conductorRoot, 'dist'));
+    expect(target).toBe(join('dist-versions', second.versionId));
+    await expect(lstat(second.dir)).resolves.toBeDefined();
+  });
+
+  it('rebuilds when the current version directory exists but has no .engine-source-key sidecar at all', async () => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'stable-key';
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    // Simulate a version published before the sidecar existed / a corrupted
+    // finalize that never wrote it.
+    await rm(join(first.dir, '.engine-source-key'), { force: true });
+
+    const second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+
+    expect(getCalls()).toBe(2); // build invoked again — no sidecar to compare against
+    expect(second.versionId).not.toBe(first.versionId);
+  });
+
+  it.each([
+    ['empty file', ''],
+    ['garbage content', '\x00not-a-plausible-key\x00\n\n'],
+  ])('rebuilds when the sidecar is corrupt/empty (%s)', async (_label, corruptContents) => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'stable-key';
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    await writeFile(join(first.dir, '.engine-source-key'), corruptContents, 'utf-8');
+
+    const second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+
+    expect(getCalls()).toBe(2); // build invoked again — recorded key isn't a plausible match
+    expect(second.versionId).not.toBe(first.versionId);
+  });
+
+  it('fails open: rebuilds and completes publish successfully when the injected computeSourceKey throws', async () => {
+    const { runCommand, getCalls } = makeCountingRunCommand();
+    const computeSourceKey = async () => 'stable-key';
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, computeSourceKey });
+    expect(getCalls()).toBe(1);
+
+    const throwingComputeSourceKey = async () => {
+      throw new Error('boom: source-key computation exploded');
+    };
+
+    const stderrLines: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      stderrLines.push(args.map(String).join(' '));
+    };
+    let second;
+    try {
+      second = await publish({
+        conductorRoot,
+        tsupCommand: ['node', stubPath],
+        runCommand,
+        computeSourceKey: throwingComputeSourceKey,
+      });
+    } finally {
+      console.error = origError;
+    }
+
+    // publish() resolved normally — did not reject/throw.
+    expect(second).toBeDefined();
+    expect(getCalls()).toBe(2); // build invoked again — fail open on a throwing computeSourceKey
+    expect(second.versionId).not.toBe(first.versionId);
+
+    const target = await readlink(join(conductorRoot, 'dist'));
+    expect(target).toBe(join('dist-versions', second.versionId));
+
+    expect(stderrLines.some((line) => line.includes('source-key computation failed'))).toBe(true);
+
+    // The sidecar for the freshly-built version is best-effort and uses the
+    // (working) injected computeSourceKey passed to publish() for THIS call
+    // at sidecar-write time — but that same throwing fn is reused, so the
+    // write should fail non-fatally without failing the publish overall.
+    await expect(lstat(join(second.dir, '.engine-source-key'))).rejects.toBeDefined();
+  });
+});
+
 describe('package.json build script', () => {
   it('points at the publish-engine.mjs wrapper, not raw tsup', async () => {
     const pkgRaw = await readFile(join(process.cwd(), 'package.json'), 'utf-8');
