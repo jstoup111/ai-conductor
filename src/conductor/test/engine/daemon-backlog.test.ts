@@ -566,7 +566,7 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
     expect(item?.sourceRef).toBe('owner/repo#1');
   });
 
-  it('NEGATIVE PATH: a legacy idea-slug marker (not at the plan-stem path) stays un-owned, no fallback', async () => {
+  it('NEGATIVE PATH: a legacy idea-slug marker (not at the plan-stem path) stays un-owned, no fallback — but still default-builds (Story 3, FR-3)', async () => {
     const stem = '2026-07-03-feature';
     const legacyIdeaSlug = 'my-cool-old-idea-name';
     await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
@@ -588,11 +588,133 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
       cutover: '2026-06-30T00:00:00Z',
     });
 
-    // Un-owned (marker at the plan-stem path is absent) → skipped, not built.
-    expect(items.map((b) => b.slug)).not.toContain(stem);
+    // Un-owned (marker at the plan-stem path is absent), merged on/after the
+    // cutover: Layer B (ADR "…never silently skip") default-builds it under the
+    // daemon's own owner, attributed via reason `unowned-defaulted` — NEVER a
+    // silent skip. Fails today: current code still skips (build: false).
+    expect(items.map((b) => b.slug)).toContain(stem);
     // sourceRef is never populated either — the mismatched marker is never read.
+    const item = items.find((b) => b.slug === stem);
+    expect(item?.sourceRef).toBeUndefined();
+    // A LOUD, actionable escalation line names the slug, the defaulted owner,
+    // and how to make ownership explicit — surfaced as build-with-notice, not
+    // the deduped-forever silent skip this used to be.
     const line = logs.find((l) => l.includes(stem));
     expect(line).toMatch(/un-owned/i);
+    expect(line).toContain('alice'); // the defaulted (daemon's own) owner
+    expect(line).toMatch(/owner:/i); // names how to make ownership explicit
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Covers: FR-3 (Story 3 — owner-stamped-at-authoring, #721, Layer B)
+//
+// RED: an un-owned spec that reaches `discoverBacklog` (post-cutover or
+// indeterminate merge time) must be placed in the BUILDABLE `items` (never
+// `gated`), attributed to the daemon's own resolved owner, with a loud,
+// actionable escalation line — never the deduped-forever silent skip this
+// used to be. `other-owner` (Story 4) is explicitly unaffected — pinned
+// separately below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('discoverBacklog — un-owned arrival default-builds with a loud escalation (Story 3, FR-3)', () => {
+  const stem = '2026-07-10-unowned-defaulted';
+  const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const planWithDeps = (storiesRef?: string) =>
+    `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+
+  const fsSource = (root: string): BacklogTreeSource => ({
+    async listPlanFiles() {
+      try {
+        return (await readdir(join(root, '.docs/plans'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listShippedFiles() {
+      try {
+        return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async readFile(relPath) {
+      try {
+        return await fsReadFile(join(root, relPath), 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  function makeUnownedTree(mergeIso: string | null) {
+    return async (slug: string) => {
+      void slug;
+      return mergeIso;
+    };
+  }
+
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-unowned-defaulted-'));
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
+    await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('HAPPY PATH: un-owned + merged on/after the cutover → placed in items (buildable), not gated', async () => {
+    const tree = fsSource(dir);
+    const logs: string[] = [];
+    const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: tree,
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: makeUnownedTree('2026-07-01T00:00:00Z'),
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    expect(items.map((b) => b.slug)).toContain(stem);
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === stem)).toBe(false);
+    const line = logs.find((l) => l.includes(stem));
+    expect(line).toBeDefined();
+    expect(line).toContain('bob');
+  });
+
+  it('HAPPY PATH: un-owned + indeterminate merge time also → placed in items (buildable), not gated', async () => {
+    const tree = fsSource(dir);
+    const logs: string[] = [];
+    const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: tree,
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => ({ present: false as const }),
+      readMergeTime: makeUnownedTree(null),
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    expect(items.map((b) => b.slug)).toContain(stem);
+    expect(gated.some((g) => g.kind === 'spec' && g.slug === stem)).toBe(false);
+    const line = logs.find((l) => l.includes(stem));
+    expect(line).toBeDefined();
+  });
+
+  it('NEGATIVE PATH: an OTHER-owner stamped spec (Story 4) is still gated-out, unaffected by the un-owned default', async () => {
+    const tree = fsSource(dir);
+    const logs: string[] = [];
+    const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
+      treeSource: tree,
+      daemonOwner: { resolved: true, id: 'bob' },
+      readStamp: async () => ({ present: true as const, id: 'carol' }),
+      readMergeTime: makeUnownedTree(null),
+      cutover: '2026-06-30T00:00:00Z',
+    });
+
+    expect(items.map((b) => b.slug)).not.toContain(stem);
+    const gatedEntry = gated.find((g) => g.kind === 'spec' && g.slug === stem);
+    expect(gatedEntry).toMatchObject({ kind: 'spec', slug: stem, reason: 'other-owner', otherOwner: 'carol' });
   });
 });
 
