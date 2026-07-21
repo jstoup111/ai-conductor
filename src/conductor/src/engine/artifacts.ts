@@ -526,6 +526,24 @@ function isManualTestFailRow(line: string): boolean {
 }
 
 /**
+ * Fixed, greppable sentinel marking a manual-test attempt section as
+ * deliberately SKIPPED (auto mode, no endpoint/UI stories to exercise) rather
+ * than a normal PASS/FAIL verdict. Written on its own line inside the
+ * section so `isSkipAttempt` can detect it without parsing table rows.
+ */
+export const MANUAL_TEST_SKIP_SENTINEL = '<!-- manual-test:skipped -->';
+
+/**
+ * True when a manual-test attempt section was deliberately skipped (auto
+ * mode, no endpoint/UI stories) rather than carrying a PASS/FAIL table.
+ */
+export function isSkipAttempt(section: string): boolean {
+  return section
+    .split('\n')
+    .some((line) => line.trim() === MANUAL_TEST_SKIP_SENTINEL);
+}
+
+/**
  * Pull the value off the `Verdict:` line of an as-built review report, e.g.
  * `**Verdict:** APPROVED WITH DRIFT NOTES` → `APPROVED WITH DRIFT NOTES`.
  * Tolerates optional bold markers and an accidental double colon. Returns null

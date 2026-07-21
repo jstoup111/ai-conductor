@@ -40,6 +40,7 @@ import {
   planStem,
   planHasDependencyTree,
   validateBuildReviewVerdict,
+  isSkipAttempt,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult } from '../../src/engine/artifacts.js';
 
@@ -1538,6 +1539,19 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/);
+    });
+  });
+
+  describe('isSkipAttempt', () => {
+    it('is true when the section contains the manual-test SKIP sentinel', () => {
+      const section =
+        '<!-- manual-test:skipped -->\n**Result:** SKIPPED — no endpoint/UI stories';
+      expect(isSkipAttempt(section)).toBe(true);
+    });
+
+    it('is false for a normal PASS/FAIL table section', () => {
+      const section = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n';
+      expect(isSkipAttempt(section)).toBe(false);
     });
   });
 
