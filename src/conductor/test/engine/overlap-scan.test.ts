@@ -227,3 +227,87 @@ describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
     expect(result.indeterminate).toEqual([]);
   });
 });
+
+describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)', () => {
+  it('never throws when enumeration fails — records an advisory skip note', async () => {
+    const git: GitRunner = async (args) => {
+      if (args[0] === 'for-each-ref') {
+        throw new Error('git for-each-ref exploded');
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      sourceRef: undefined,
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([]);
+    expect(result.skipNotes.length).toBeGreaterThan(0);
+    expect(result.skipNotes.some((n) => n.toLowerCase().includes('enumerat'))).toBe(true);
+  });
+
+  it('preserves results from other branches when one branch diff throws', async () => {
+    const git: GitRunner = async (args) => {
+      if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'for-each-ref') {
+        return { exitCode: 0, stdout: 'spec/feature-a\nspec/feature-b\n', stderr: '' };
+      }
+      if (args[0] === 'rev-list') {
+        return { exitCode: 0, stdout: '1\n', stderr: '' };
+      }
+      if (args[0] === 'diff' && args.includes('spec/feature-a')) {
+        throw new Error('diff blew up for feature-a');
+      }
+      if (args[0] === 'diff' && args.includes('spec/feature-b')) {
+        return { exitCode: 0, stdout: 'src/foo.ts\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      sourceRef: undefined,
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([{ branch: 'spec/feature-b', files: ['src/foo.ts'] }]);
+    expect(result.skipNotes.some((n) => n.includes('spec/feature-a'))).toBe(true);
+  });
+
+  it('still returns seam overlaps when the blocker sweep throws', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['for-each-ref'], result: { stdout: 'spec/feature-a\n' } },
+      { match: ['rev-list', '--count', 'main..spec/feature-a'], result: { stdout: '1\n' } },
+      {
+        match: ['diff', '--name-only', 'main', 'spec/feature-a'],
+        result: { stdout: 'src/foo.ts\n' },
+      },
+    ]);
+    const resolver: BlockerResolver = {
+      async resolve() {
+        throw new Error('resolver exploded');
+      },
+    };
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      sourceRef: 'org/repo#42',
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([{ branch: 'spec/feature-a', files: ['src/foo.ts'] }]);
+    expect(result.blockers).toEqual([]);
+    expect(result.skipNotes.some((n) => n.toLowerCase().includes('blocker'))).toBe(true);
+  });
+});

@@ -136,21 +136,45 @@ export async function blockerSweep(
 export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapReport> {
   const { candidateFiles, git, resolver, sourceRef, localBase } = args;
 
+  const skipNotes: string[] = [];
+
   const base = await resolveBase(git, localBase);
-  const branches = await enumerateUnmergedBranches(git, base.ref);
+
+  let branches: string[] = [];
+  try {
+    branches = await enumerateUnmergedBranches(git, base.ref);
+  } catch (err) {
+    skipNotes.push(
+      `skipped sibling-branch enumeration: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const seamOverlaps: SeamOverlap[] = [];
   for (const branch of branches) {
-    const changed = await changedPathsBetween(git, base.ref, branch);
-    const files = intersectFiles(candidateFiles, changed);
-    if (files.length > 0) {
-      seamOverlaps.push({ branch, files });
+    try {
+      const changed = await changedPathsBetween(git, base.ref, branch);
+      const files = intersectFiles(candidateFiles, changed);
+      if (files.length > 0) {
+        seamOverlaps.push({ branch, files });
+      }
+    } catch (err) {
+      skipNotes.push(
+        `skipped diff for branch ${branch}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
-  const { blockers, indeterminate } = await blockerSweep(sourceRef, resolver);
+  let blockers: IssueRef[] = [];
+  let indeterminate: { detail: string }[] = [];
+  try {
+    ({ blockers, indeterminate } = await blockerSweep(sourceRef, resolver));
+  } catch (err) {
+    skipNotes.push(
+      `skipped blocker sweep: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
-  return { seamOverlaps, blockers, indeterminate, skipNotes: [] };
+  return { seamOverlaps, blockers, indeterminate, skipNotes };
 }
 
 export function renderReport(_report: OverlapReport): string {
