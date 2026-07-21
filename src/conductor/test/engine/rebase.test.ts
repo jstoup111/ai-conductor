@@ -19,6 +19,7 @@ import {
   type GitResult,
   type RebaseOutcome,
 } from '../../src/engine/rebase.js';
+import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
@@ -613,6 +614,124 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const prdAudit = await readVerdict(dir, 'prd_audit');
     expect(prdAudit?.satisfied).toBe(true);
     expect(prdAudit?.reason).toBe('prior audit');
+  });
+
+  it('Task 13 (Property A): preservation never invents a passed gate — a never-run prd_audit stays pending, not flipped to done', async () => {
+    // prd_audit was never run before the rebase (still 'pending' in
+    // .pipeline task-status — no verdict file at all, the same state a
+    // gate has before its first evaluation). The delta classifies prd_audit
+    // as preserved (featureSrc is empty — only a foreign runtime file and a
+    // feature test file changed, same fixture shape as the Task 6/8/9 tests
+    // above).
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    // No verdict written for prd_audit beforehand — it has never run.
+    const before = await readVerdict(dir, 'prd_audit');
+    expect(before).toBeNull();
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    // prd_audit is preserved (not invalidated) — it must not appear in
+    // kickedBack.
+    expect(r.kickedBack).not.toContain('prd_audit');
+
+    // Preservation is a pure no-op: it never writes a verdict for a gate
+    // that never ran. A never-run gate stays exactly as it was —
+    // no-verdict/pending — never manufactured into `done`/satisfied.
+    const after = await readVerdict(dir, 'prd_audit');
+    expect(after).toBeNull();
+    expect(after?.satisfied).not.toBe(true);
+  });
+
+  it("Task 13 (Property B): build's pre-verify path is unaffected by delta classification — identical treatment across feature-runtime, foreign-runtime, and test-only deltas", async () => {
+    // build is excluded from GATE_SURFACE/classifyGateInvalidation (confirmed
+    // by grep — it is not a key in GATE_SURFACE). Its invalidation/re-verify
+    // decision is driven solely by the ADR-2026-07-08 preVerify('build') pass,
+    // never by the delta's feature/foreign/test-only classification. Assert
+    // build's outcome (kicked back vs re-verified) is byte-identical across
+    // three deltas that classify very differently for the judged gates.
+    const preVerifyDone = async () => ({ done: true });
+    const preVerifyNotDone = async () => ({ done: false, reason: 'no evidence' });
+
+    const deltas: Array<{ label: string; outcome: RebaseOutcome }> = [
+      {
+        label: 'feature-runtime delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+      },
+      {
+        label: 'foreign-runtime delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/foreign.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+      },
+      {
+        label: 'test-only delta',
+        outcome: {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.test.ts'],
+          featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+        },
+      },
+    ];
+
+    for (const { outcome } of deltas) {
+      // Case 1: preVerify('build') confirms evidence-intact → re-verified,
+      // regardless of how the delta classifies for the judged gates.
+      const dirA = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
+      await mkdir(join(dirA, '.pipeline'), { recursive: true });
+      try {
+        const rA = await applyRebaseVerdicts(dirA, outcome, true, preVerifyDone);
+        expect(rA.reverified).toEqual(['build']);
+        expect(rA.kickedBack).not.toContain('build');
+        const buildA = await readVerdict(dirA, 'build');
+        expect(buildA?.satisfied).toBe(true);
+        expect(buildA?.reason).toBe(
+          're-verified mechanically after file-changing rebase — evidence remains intact',
+        );
+      } finally {
+        await rm(dirA, { recursive: true, force: true });
+      }
+
+      // Case 2: preVerify('build') finds evidence stale → kicked back,
+      // again regardless of the delta's judged-gate classification.
+      const dirB = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
+      await mkdir(join(dirB, '.pipeline'), { recursive: true });
+      try {
+        const rB = await applyRebaseVerdicts(dirB, outcome, true, preVerifyNotDone);
+        expect(rB.kickedBack).toContain('build');
+        expect(rB.reverified).toEqual([]);
+        const buildB = await readVerdict(dirB, 'build');
+        expect(buildB?.satisfied).toBe(false);
+        expect(buildB?.reason).toBe('invalidated by file-changing rebase');
+      } finally {
+        await rm(dirB, { recursive: true, force: true });
+      }
+    }
+
+    // Confirm classifyGateInvalidation itself never reads or emits `build` —
+    // it is not a key in GATE_SURFACE (grep-confirmed statically), so
+    // invalidated/preserved never contain it regardless of delta shape.
+    for (const { outcome } of deltas) {
+      if (outcome.kind !== 'changed' || !outcome.featureSurface) continue;
+      const { invalidated, preserved } = classifyGateInvalidation(
+        outcome.changedCodePaths,
+        outcome.featureSurface,
+        true,
+      );
+      expect(invalidated).not.toContain('build');
+      expect(preserved).not.toContain('build');
+    }
   });
 });
 
