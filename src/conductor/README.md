@@ -697,23 +697,39 @@ lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
   unresolved `daemonOwner` short-circuits discovery: the daemon builds **nothing** and emits a
   single loud, deduped "identity unresolved" notice (reversing the prior fail-open build-all).
   An **absent** `daemonOwner` (gate unwired) still runs legacy discovery unchanged.
-- **Loud un-owned skips (D5).** An un-owned merged spec is skipped with a distinct, deduped
-  line (`.daemon/warned/<slug>`) that states it is un-owned **and** how to fix it — add an
-  `Owner:` marker on the default branch, or grandfather via `owner_gate_cutover`.
+- **Loud un-owned default-build (D5, superseded — see below).** An un-owned merged spec is
+  **no longer skipped**. `decideSpecGate` returns `{ build: true, reason: 'unowned-defaulted' }`
+  for a post-cutover or indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts`
+  builds it into the buildable `items` set, attributed to the daemon's own resolved owner. It
+  still emits a distinct, deduped line (`.daemon/warned/<slug>`) — but now as an actionable
+  escalation naming the slug and the defaulted owner and telling you to add an explicit
+  `Owner:` marker on the default branch to make ownership unambiguous, not as a skip notice.
+  `other-owner` (stamped with a **different** operator's identity) is the only remaining
+  skip reason; that case is unchanged.
 - **Grandfather cutover (D6).** `owner_gate_cutover` (project config) builds un-owned specs
-  merged before the instant. It is a per-repo policy for repos with an unbuilt backlog and
-  **must not** be set on the harness self-host repo (all plans there are already merged, so the
-  window would rebuild everything). See the main README → "Operator identity & owner gate".
+  merged before the instant — this remains one path to `build: true`, now alongside the
+  broader `unowned-defaulted` default-build. It is a per-repo policy for repos with an unbuilt
+  backlog and **must not** be set on the harness self-host repo (all plans there are already
+  merged, so the window would rebuild everything). See the main README → "Operator identity &
+  owner gate".
+- **Born owned at authoring time.** `runAuthoring` (`owner-gate/authoring.ts`) now falls back
+  to machine identity (`readMachineOwnerConfig()`) whenever no `ownerConfig` is injected, so
+  every DECIDE-phase write path stamps an `Owner:` marker at authoring time by default —
+  intake markers are born owned rather than landing un-owned and relying on the gate to
+  compensate later. The `unowned-defaulted` gate path above now only fires for specs that
+  predate this stamping (pre-cutover history) or hit an indeterminate merge time.
 
-> The **authoring** side (universal `Owner:` stamping across every DECIDE path and refusing to
-> land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
-> this section documents the identity/config/daemon partition only.
+> The authoring-side born-owned stamping and the gate-side no-silent-skip default-build are
+> both implemented (see D5 and "Born owned at authoring time" above); this section documents
+> the full identity/config/daemon partition, authoring included.
 
 #### Gate write-back: owner-gated PR/issue announcement (Tasks 17-21)
 
-An owner-gate skip (D5 above) is loud in the daemon log and the GATED dashboard group, but
-neither surfaces on GitHub itself — an operator (or the reporter of an intake issue) who only
-watches the PR/issue never learns their spec is gated. `gate-writeback.ts` closes that gap:
+An owner-gate skip (`other-owner` — the only remaining skip reason since D5's
+`unowned-defaulted` default-builds instead) is loud in the daemon log and the GATED dashboard
+group, but neither surfaces on GitHub itself — an operator (or the reporter of an intake
+issue) who only watches the PR/issue never learns their spec is gated. `gate-writeback.ts`
+closes that gap:
 every `discover()` pass, for each `kind: 'spec'` `GatedItem`, the daemon (via the single
 `onGatedDiscovered` call site in `daemon-cli.ts`) attempts two independent, best-effort
 announcements:
@@ -724,9 +740,8 @@ announcements:
   (creating it repo-wide on first use) and upserts a single marker comment carrying the
   reason, remedy, and other-owner name (when known). The marker comment is located purely by
   the stable `OWNER_GATED_MARKER` string (never by body content), so repeated passes PATCH the
-  same comment in place — including across reason transitions (e.g.
-  `unowned-indeterminate` → `other-owner`) — rather than ever posting a duplicate. A terminal
-  PR state (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
+  same comment in place rather than ever posting a duplicate. A terminal PR state
+  (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
 - **`announceGatedIssue(spec, sourceRef, deps)`** — when the spec carries a
   `Source-Ref: owner/repo#N` intake marker, applies the same `owner-gated` label + upserted
   marker comment to the **originating issue**, independent of the PR path (a failure/success

@@ -1178,27 +1178,38 @@ spec_owner: your-github-login
 - **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
   and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
   falls back to building every operator's work.
-- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
-  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
-  the default branch (or grandfather it via `owner_gate_cutover`).
+- **Born owned, not silently skipped:** every DECIDE-phase write path stamps an `Owner:`
+  marker from machine identity (`spec_owner` → `gh` login) at authoring time, so intake
+  markers arrive with an owner by default. If a spec still arrives un-owned (pre-cutover
+  history, or an indeterminate merge time), the gate no longer skips it — it **default-builds
+  under the daemon's own resolved owner** (`unowned-defaulted`) and emits a distinct, deduped
+  log line naming the slug and defaulted owner and telling you to add an explicit `Owner:`
+  marker on the default branch to make ownership unambiguous. `other-owner` specs (stamped
+  with a **different** operator's identity) are still skipped — that case is unchanged.
+- **Enforcement is harness-native, not a local script:** this born-owned stamping and
+  default-build behavior is carried by `conduct-ts` itself (authoring + gate). This repo's
+  own `test/test_harness_integrity.sh` also checks that `.docs/intake/*.md` carry an `Owner:`
+  marker, but that is a supplementary local belt for this self-host repo — not the mechanism
+  that enforces ownership in consumer projects.
 
 **GATED dashboard section:** every daemon status view (`conduct-ts daemon-status`, the
 startup dashboard, `.daemon/gated.json`) carries a `GATED (n)` group alongside
 PARKED/HALTED/PROCESSED/IN-PROGRESS/WAITING/ELIGIBLE. It always renders explicitly — even
 `GATED (0)` — so an empty backlog is never mistaken for "nothing to do" when the real cause
 is an unresolved owner gate. Each `kind: 'spec'` row names the slug, the skip reason
-(`other-owner` / `unowned-post-cutover` / `unowned-indeterminate`), the other operator when
-known, and a remedy hint; each `kind: 'repo'` row is a section-level warning (e.g. "building
-NOTHING — identity unresolved" or "un-owned specs skipped — no owner_gate_cutover
-configured") for conditions with no single owning slug.
+(`other-owner` — the only reason a spec is still skipped rather than default-built), the other
+operator when known, and a remedy hint; each `kind: 'repo'` row is a section-level warning
+(e.g. "building NOTHING — identity unresolved") for conditions with no single owning slug.
+Un-owned arrivals no longer appear here as a skip: they default-build under
+`unowned-defaulted` (see above) and are surfaced only via the loud daemon log line, not the
+GATED group.
 
 **Gate write-back (owner-gated PR/issue announcement):** on every discovery pass, the daemon
 also announces each owner-gated spec where a GitHub artifact exists to announce on:
   - if the spec already has an implementation PR open (e.g. a prior build attempt halted
     before ownership changed underneath it), the PR gets an `owner-gated` label and a single
     upserted marker comment naming the reason/remedy/other-owner — edited in place on later
-    passes rather than duplicated, and updated when the reason transitions (e.g.
-    `unowned-indeterminate` → `other-owner`);
+    passes rather than duplicated;
   - if the spec originated from GitHub issue intake (carries a `Source-Ref: owner/repo#N`
     marker), the same label + marker comment are applied to the originating **issue** too, so
     the reporter sees why their request stalled without needing daemon/dashboard access.
