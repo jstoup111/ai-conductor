@@ -529,6 +529,35 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(buildProgressEvents()).toHaveLength(0);
   });
 
+  it('reflects a decreased resolved count on the next tick instead of latching to the prior high-water mark', async () => {
+    await writeTasks(10, 21);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+    });
+    watcher.start();
+
+    // First tick establishes the baseline at resolved=10.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // The git-derived/task-status-derived count drops (e.g. a corrective
+    // rewrite of task-status.json, or a rebase that drops evidence commits).
+    // The next emitted `resolved` must reflect the new, lower value — never
+    // stay latched to the prior high-water mark of 10.
+    await writeTasks(3, 21);
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const last = events[events.length - 1];
+    expect(last.resolved).toBe(3);
+    expect(last.total).toBe(21);
+  });
+
   it('emits nothing (no 0/0 event) and does not throw when task-status.json is missing and planPath is also unresolvable', async () => {
     // No writeTasks() call — .pipeline/task-status.json is missing. planPath
     // points at a nonexistent file, so derivation is unavailable too. Both
