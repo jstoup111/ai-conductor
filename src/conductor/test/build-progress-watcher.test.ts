@@ -169,6 +169,34 @@ describe('readSnapshot', () => {
     expect(snapshot.total).toBe(2);
   });
 
+  it('falls back to the task-status count when deriveCompletion itself throws (not just a missing file)', async () => {
+    vi.doMock('../src/engine/autoheal.js', () => ({
+      deriveCompletion: vi.fn().mockRejectedValue(new Error('boom: simulated deriveCompletion internal failure')),
+    }));
+    vi.resetModules();
+    const { readSnapshot: readSnapshotWithMock } = await import('../src/engine/build-progress-watcher.js');
+
+    try {
+      const planPath = join(dir, '.docs/plans/test-plan.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(planPath, '# Test Plan\n\n### Task 1: First\nDo the first thing.\n');
+
+      await writeStatus({
+        tasks: [{ id: '1', title: 'First', status: 'completed' }],
+      });
+
+      // Must not throw even though deriveCompletion rejects internally.
+      const snapshot = await readSnapshotWithMock(dir, planPath);
+
+      // Falls back to the task-status-derived count (1 completed of 1).
+      expect(snapshot.resolved).toBe(1);
+      expect(snapshot.total).toBe(1);
+    } finally {
+      vi.doUnmock('../src/engine/autoheal.js');
+      vi.resetModules();
+    }
+  });
+
   it('counts a git-derived skipped task as resolved via planPath', async () => {
     await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
