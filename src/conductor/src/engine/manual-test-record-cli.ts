@@ -200,6 +200,13 @@ export async function dispatchManualTestRecord(
       return 1;
     }
 
+    if (content.trim().length === 0) {
+      console.error(
+        `manual-test-record: results payload from "${cmd.resultsPath}" is empty — refusing to record`,
+      );
+      return 1;
+    }
+
     return appendAttemptSection(
       cmd.pipelineDir,
       resultsPath,

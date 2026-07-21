@@ -284,5 +284,59 @@ describe('engine/manual-test-record-cli', () => {
       expect(files.has('/abs/pipeline/manual-test-results.md')).toBe(false);
       errSpy.mockRestore();
     });
+
+    it('fails closed when the results payload from a file is empty: non-zero exit, nothing written', async () => {
+      const { runners, files } = makeFakeFs(undefined, {
+        '/abs/results-input.md': '',
+      });
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/results-input.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).not.toBe(0);
+      expect(files.has('/abs/pipeline/manual-test-results.md')).toBe(false);
+      expect(runners.writeFile).not.toHaveBeenCalled();
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/empty/i);
+      errSpy.mockRestore();
+    });
+
+    it('fails closed when the results payload from stdin is empty: non-zero exit, nothing written', async () => {
+      const { runners, files } = makeFakeFs(undefined);
+      (runners.readStdin as ReturnType<typeof vi.fn>).mockResolvedValue('   \n  ');
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '-', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).not.toBe(0);
+      expect(files.has('/abs/pipeline/manual-test-results.md')).toBe(false);
+      expect(runners.writeFile).not.toHaveBeenCalled();
+      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/empty/i);
+      errSpy.mockRestore();
+    });
+  });
+
+  describe('dispatchManualTestRecord — guide/usage errors', () => {
+    it('returns non-zero and writes nothing when dispatched with {kind:"guide"}', async () => {
+      const runners: ManualTestRecordRunners = {
+        readFile: vi.fn(),
+        mkdir: vi.fn(),
+        writeFile: vi.fn(),
+        rename: vi.fn(),
+        rm: vi.fn(),
+        readStdin: vi.fn(),
+      };
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchManualTestRecord({ kind: 'guide' }, '/abs', runners);
+      expect(code).not.toBe(0);
+      expect(runners.writeFile).not.toHaveBeenCalled();
+      expect(runners.mkdir).not.toHaveBeenCalled();
+      expect(runners.rename).not.toHaveBeenCalled();
+      expect(errSpy).toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
   });
 });
