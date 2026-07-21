@@ -826,6 +826,19 @@ verification lane runs an engine-embedded judge to validate unresolved residue:
   and the residue is new (not memoized), the engine dispatches the attribution
   verifier.
 
+- **Class-scoped verify-only dispatch (#677):** a plan task marked
+  `**Verify-only:** yes` (a prove-closed task that legitimately produces no
+  commit — e.g. re-running an existing test suite to confirm coverage) arms
+  the judged lane for its own residue even when `attribution_judge_cutover` is
+  dark. When the gate-miss residue contains a mix of marked and unmarked ids,
+  only the marked subset is dispatched under a dark cutover; an armed cutover
+  is unaffected and keeps dispatching the full residue as before. Residue with
+  no marked ids is byte-identical to pre-#677 behavior (lane not dispatched
+  without the cutover). This closes the #677 evidence-stranding gap where a
+  verify-only task's lack of a commit burned `noEvidenceAttempts` and could
+  auto-park an otherwise evaluator-APPROVED build. See the `verifyOnlyResidue`
+  predicate in `engine/conductor.ts`.
+
 - **Memoization:** verdict requests are keyed by `(HEAD sha, sorted residue ids)`.
   An unchanged key never re-dispatches; a retry without new commits reuses the
   prior verdict at zero cost.
@@ -2732,6 +2745,16 @@ Operator unpark and manual re-kick both resume from where they left off.
 places a different provenance marker and serves a different purpose (manual hold). Both
 are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
 (machine-triggered after N attempts) while operator park is human-triggered.
+
+**Verify-only naming in the reason (#677):** when the unresolved residue at
+park time is (or includes) tasks marked `**Verify-only:** yes`, the auto-park
+reason is enriched with an ` — unresolved verify-only tasks: <ids>` suffix
+naming those specific task ids, instead of leaving the operator to guess which
+task stranded the build from the generic "no evidence after N attempts"
+message. Mixed residue keeps the generic reason and lists the verify-only ids
+alongside it; a park with no marked tasks in the unresolved set is
+byte-identical to today. See `daemon-auto-park.ts` (reason assembly) and
+`engine/conductor.ts` (unresolved-id collection).
 
 **Contradiction guard (#612):** Before honoring an `'empty plan'` trigger, the daemon
 cross-checks the run's own completion evidence — `summary.json` `tasks_completed`,

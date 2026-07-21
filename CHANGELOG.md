@@ -42,6 +42,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   event gains optional `escalatedModel`/`escalatedEffort` (the upcoming
   attempt's rung) and `aggregateRetryHotspots` surfaces the terminal rung for
   retro Part C (`.docs/plans/retry-as-escalation.md`).
+- Plan tasks can now be marked `**Verify-only:** yes` (documented in the
+  `/plan` and `/tdd` skill contracts) for prove-closed work that legitimately
+  produces no commit; the generated commit-msg hook accepts an
+  `Evidence: skipped <reason>` trailer as an alternative to `Task:` on an
+  otherwise-empty commit (a non-empty reason is required; a bare empty commit
+  or an unresolvable `satisfied-by` sha are still rejected); and an exhausted
+  auto-park reason now names the specific unresolved verify-only task ids
+  instead of only a generic "no task progress" message (#677).
 - Spec for issue #677 — verify-only (prove-closed) plan tasks get a
   deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
   the judged attribution lane for marked residue tasks (dark-cutover-safe),
@@ -111,6 +119,15 @@ set `steps.<step>.max_retries: 5` where desired.
 
 ### Fixed
 
+- Verify-only (prove-closed) tasks no longer strand the build gate (#677): a
+  gate-miss residue containing only `**Verify-only:** yes`-marked task ids now
+  arms the judged-attribution lane class-scoped — even when the global
+  `attribution_judge_cutover` flag is dark — so an evaluator-APPROVED,
+  legitimately-commit-less task is resolved in-loop instead of burning the
+  `noEvidenceAttempts` counter and auto-parking the build. Mixed residue (some
+  marked, some not) still arms only the marked subset under a dark cutover; an
+  armed cutover keeps today's full-residue dispatch unchanged; residue with no
+  marked ids is byte-identical to today (lane not dispatched).
 - The attribution judge lane now dispatches on inherited build-gate residue on
   resumed/stalled runs — dropped the attempt-scoped `!isZeroWork` guard that
   previously suppressed dispatch whenever `headShaBeforeBuild === headShaAfterBuild`

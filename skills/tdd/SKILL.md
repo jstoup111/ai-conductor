@@ -166,6 +166,13 @@ Not all tasks require code commits. Some tasks verify that existing behavior mee
 criteria, and some have no implementation work (documentation, architectural decisions, etc.).
 When a task completes without code changes, emit an empty commit with Evidence trailers.
 
+A plan task may carry a `**Verify-only:** yes` marker (see `skills/plan/SKILL.md` §5d)
+declaring up front that it is expected to prove existing behavior already satisfies its
+acceptance criteria. Such tasks preferably complete via one of the two empty-commit
+Evidence forms below — `Evidence: satisfied-by <sha>` when a prior commit already
+satisfies the criteria, or `Evidence: skipped <reason>` when there is no applicable
+satisfying commit — rather than a code commit.
+
 The engine reads commits only — it does not inspect task reports or summary lines. Evidence
 forms MUST be emitted as `git commit --allow-empty` with the Evidence trailer in the commit
 body. This ensures the conductor can track task completion by reading the commit log, achieving
