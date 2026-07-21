@@ -140,6 +140,12 @@ export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapR
 
   const base = await resolveBase(git, localBase);
 
+  const verify = await git(['rev-parse', '--verify', base.ref]);
+  if (verify.exitCode !== 0) {
+    skipNotes.push(`skipped scan: base ref '${base.ref}' could not be resolved`);
+    return { seamOverlaps: [], blockers: [], indeterminate: [], skipNotes };
+  }
+
   let branches: string[] = [];
   try {
     branches = await enumerateUnmergedBranches(git, base.ref);
