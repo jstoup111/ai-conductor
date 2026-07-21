@@ -434,6 +434,106 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest).toBeNull();
   });
+
+  it('Task 6: delta-aware — foreign runtime + feature test file → audits preserved, wiring_check/manual_test invalidated', async () => {
+    // Feature's claimed surface is src/feature.ts only. The rebase delta
+    // touches a foreign runtime file (src/foreign.ts) and one of the
+    // feature's own test files (src/feature.test.ts) — no feature runtime
+    // source changed.
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts', 'src/feature.test.ts'],
+      featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    };
+
+    // Pre-seed prd_audit / architecture_review_as_built as done so we can
+    // assert they are left untouched (preserved), not overwritten.
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+    await writeVerdict(dir, 'architecture_review_as_built', {
+      satisfied: true,
+      reason: 'prior review',
+      checkedAt: 1,
+    });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    // build_review ('any-codetest') and wiring_check/manual_test
+    // ('all-runtime', foreignSrc non-empty) are invalidated; the two
+    // feature-runtime audits are preserved (featureSrc is empty).
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    expect(r.kickedBack).not.toContain('prd_audit');
+    expect(r.kickedBack).not.toContain('architecture_review_as_built');
+
+    const wiringCheck = await readVerdict(dir, 'wiring_check');
+    expect(wiringCheck?.satisfied).toBe(false);
+    expect(wiringCheck?.kickback?.from).toBe('rebase');
+
+    const manualTest = await readVerdict(dir, 'manual_test');
+    expect(manualTest?.satisfied).toBe(false);
+
+    // Preserved audits are untouched — verdict stays exactly what it was.
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(true);
+    expect(prdAudit?.reason).toBe('prior audit');
+    expect(prdAudit?.checkedAt).toBe(1);
+
+    const archReview = await readVerdict(dir, 'architecture_review_as_built');
+    expect(archReview?.satisfied).toBe(true);
+    expect(archReview?.reason).toBe('prior review');
+    expect(archReview?.checkedAt).toBe(1);
+  });
+
+  it('Task 6: delta-aware — feature runtime source changed → all judged gates invalidated including audits', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+    await writeVerdict(dir, 'architecture_review_as_built', {
+      satisfied: true,
+      reason: 'prior review',
+      checkedAt: 1,
+    });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.satisfied).toBe(true);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'wiring_check',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(false);
+    expect(prdAudit?.kickback?.from).toBe('rebase');
+
+    const archReview = await readVerdict(dir, 'architecture_review_as_built');
+    expect(archReview?.satisfied).toBe(false);
+    expect(archReview?.kickback?.from).toBe('rebase');
+  });
+
+  it('Task 6: featureSurface missing → falls back to the fixed invalidation set (safe default)', async () => {
+    // No featureSurface on the outcome — classifyGateInvalidation cannot be
+    // applied, so applyRebaseVerdicts must fall back to the old blanket
+    // invalidation rather than guess. Audits are NOT touched by the
+    // fallback (byte-identical to pre-Task-6 behavior).
+    const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
+
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    const prdAudit = await readVerdict(dir, 'prd_audit');
+    expect(prdAudit?.satisfied).toBe(true);
+    expect(prdAudit?.reason).toBe('prior audit');
+  });
 });
 
 describe('engine/rebase — emitRebaseEvent (FR-10)', () => {

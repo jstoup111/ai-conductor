@@ -7,6 +7,7 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
+import { classifyGateInvalidation } from './gate-invalidation.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -862,9 +863,26 @@ export async function applyRebaseVerdicts(
   // asserts new code is actually reachable from an entry point, which a
   // file-changing rebase can falsify just as easily as build_review's
   // grading, so it must be invalidated the same way (Task 11).
-  const targets: StepName[] = ranManualTest
-    ? ['build', 'build_review', 'wiring_check', 'manual_test']
-    : ['build', 'build_review', 'wiring_check'];
+  // Task 6 (ADR-2026-07-20): when the feature's claimed surface (F) is
+  // available, select the invalidation set via classifyGateInvalidation
+  // instead of the fixed set — a delta that never touches the feature's own
+  // runtime source (only foreign runtime, or test/docs paths) preserves the
+  // feature-runtime-scoped judged gates (prd_audit,
+  // architecture_review_as_built) rather than blindly re-opening them.
+  //
+  // Fallback (Tasks 10-11 harden this further): if `featureSurface` is
+  // missing on the outcome, F is uncomputable — fall back to the old fixed
+  // set (today's blanket invalidation) as a safe default rather than guess.
+  const targets: StepName[] =
+    outcome.featureSurface !== undefined
+      ? ([
+          'build',
+          ...classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
+            .invalidated,
+        ] as StepName[])
+      : ranManualTest
+        ? ['build', 'build_review', 'wiring_check', 'manual_test']
+        : ['build', 'build_review', 'wiring_check'];
   for (const target of targets) {
     // Skip build if it was pre-verified (already wrote verdict above).
     if (target === 'build' && buildReVerified) {
