@@ -163,3 +163,98 @@ describe('deriveCompletion pin-branch reachability gate', () => {
     expect(result['T'].evidencedBy).toBe(reachableSha);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #535 no-regression check: stampShaReachable must resolve a cited sha through
+// the persisted rewrite map BEFORE the reachability check, so a commit moved
+// by a sanctioned rebase still resolves to its new (reachable) sha and stays
+// pinned — not demoted by the #766 reachability guard added in Task 1/2.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion pin-branch resolves through rewrite map before reachability check (#535)', () => {
+  it('a sidecar stamp citing a pre-rebase sha resolves via the rewrite map to the new (reachable) sha and stays pinned', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+
+    await writeFile(join(gitDir, 'a.txt'), 'a\n');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit A'], { cwd: gitDir });
+    const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Pre-rebase work commit X — this is what the sidecar stamp cites.
+    await writeFile(join(gitDir, 'work.txt'), 'work\n');
+    await execa('git', ['add', 'work.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: T\n'], { cwd: gitDir });
+    const preRebaseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Simulate a sanctioned rebase: rewind to base, add an upstream commit to
+    // change `onto`, then cherry-pick the work commit back on — it lands with
+    // a genuinely new sha X'.
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: gitDir });
+    await writeFile(join(gitDir, 'UPSTREAM.md'), 'upstream change\n');
+    await execa('git', ['add', 'UPSTREAM.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'chore: upstream commit (onto)'], { cwd: gitDir });
+    await execa('git', ['cherry-pick', preRebaseSha], { cwd: gitDir });
+    const postRebaseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Prune the pre-rebase object so X is genuinely gone (not merely
+    // lingering) — resolution must go through the map, not an accidental hit.
+    await execa('git', ['reflog', 'expire', '--expire=now', '--all'], { cwd: gitDir });
+    await execa('git', ['gc', '--prune=now'], { cwd: gitDir });
+    const goneCheck = await execa('git', ['cat-file', '-e', `${preRebaseSha}^{commit}`], {
+      cwd: gitDir,
+      reject: false,
+    });
+    expect(goneCheck.exitCode).not.toBe(0); // sanity: fixture genuinely pruned the old object
+
+    // Persist the rewrite map X -> X', exactly as performRebase would after a
+    // `changed` outcome.
+    await persistRewriteMap(gitDir, { [preRebaseSha]: postRebaseSha });
+
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task T: Rebased task\n\n`work.txt`\n');
+
+    // No commit in the commits list carries a `Task: T` trailer (the trailer
+    // was carried on the cherry-picked commit's own message, but we exercise
+    // the sidecar-stamp pin path specifically, independent of trailer scan).
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('T', { sha: preRebaseSha, form: 'trailer' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['T'].completed).toBe(true);
+    expect(result['T'].evidencedBy).toBe(postRebaseSha);
+  });
+
+  it('a sidecar stamp citing a sha never present in the rewrite map, and unreachable, demotes the task', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+
+    await writeFile(join(gitDir, 'a.txt'), 'a\n');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit A'], { cwd: gitDir });
+
+    // Persist a rewrite map with an unrelated entry, so the map is non-empty
+    // but the cited sha is not one of its keys.
+    await persistRewriteMap(gitDir, {
+      deadbeefdeadbeefdeadbeefdeadbeefdeadbeef: 'cafecafecafecafecafecafecafecafecafecafe',
+    });
+
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task T: Unmapped unreachable task\n\n`a.txt`\n');
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    const unmappedUnreachableSha = 'feedfacefeedfacefeedfacefeedfacefeedface';
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('T', { sha: unmappedUnreachableSha, form: 'trailer' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['T'].completed).toBe(false);
+  });
+});
