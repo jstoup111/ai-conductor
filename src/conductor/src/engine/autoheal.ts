@@ -750,6 +750,10 @@ async function deriveCompletionInternal(
           result[taskId].status = 'skipped';
           result[taskId].skipReason = reason;
           result[taskId].completed = false;
+          evidence.evidenceStamps.set(taskId, {
+            sha: evidenceCommit.sha,
+            form: 'evidence:skipped',
+          });
           continue;
         }
       }
