@@ -504,15 +504,31 @@ async function classifyClean(
   preTree: string,
   mergeBase?: string,
 ): Promise<RebaseOutcome> {
-  const changed = await changedPathsBetween(git, preTree, 'HEAD');
+  // D: the rebase delta (preTree..HEAD). If this diff itself throws (a git
+  // process crash, not just a non-zero exit — `changedPathsBetween` already
+  // treats a non-zero exit as `[]`), D is uncomputable. A delta-aware
+  // decision requires D to be trustworthy — an uncomputable D must never be
+  // silently treated as "no code/test paths changed" (that would falsely
+  // noop) nor left eligible for delta-aware invalidation. Fail closed by
+  // treating it as if code/test paths changed AND forcing featureSurface to
+  // undefined, so `applyRebaseVerdicts`/`classifyGateInvalidation` fall back
+  // to the fixed invalidation set exactly like an uncomputable F.
+  let changed: string[];
+  let dUncomputable = false;
+  try {
+    changed = await changedPathsBetween(git, preTree, 'HEAD');
+  } catch {
+    changed = [];
+    dUncomputable = true;
+  }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (codePaths.length === 0) return { kind: 'noop' };
+  if (!dUncomputable && codePaths.length === 0) return { kind: 'noop' };
   // F: the feature's own claimed surface — files the feature's commits
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
   // outcome for the delta-aware gate-invalidation classifier (Task 6+);
   // this task only computes and carries it through.
   let featureSurface: string[] | undefined;
-  if (mergeBase) {
+  if (!dUncomputable && mergeBase) {
     try {
       const r = await git(['diff', '--name-only', mergeBase, preTree]);
       featureSurface =

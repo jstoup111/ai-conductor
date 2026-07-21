@@ -1151,3 +1151,72 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     await rm(pdir, { recursive: true, force: true });
   }, 20000);
 });
+
+describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-d11-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('D diff (preTree..HEAD) throws → performRebase does not throw/reject, fixed-set fallback applied', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const preTree = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Only the D diff call (the one addressed by preTree..HEAD) throws —
+    // everything else (mergeBase, F diff, rebase itself) runs for real.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'diff' && args.includes(preTree) && args.includes('HEAD')) {
+        throw new Error('simulated git crash computing D');
+      }
+      return real(args, opts);
+    };
+
+    let outcome: RebaseOutcome | undefined;
+    await expect(
+      (async () => {
+        outcome = await performRebase(git, repo, 'main');
+      })(),
+    ).resolves.not.toThrow();
+
+    // Uncomputable D must not be silently treated as "no code/test paths
+    // changed" (would falsely noop) or as a delta-aware-eligible outcome —
+    // it must force fallback to the fixed invalidation set, exactly like
+    // an uncomputable F.
+    expect(outcome?.kind).toBe('changed');
+    if (outcome?.kind === 'changed') {
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-d11-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome as RebaseOutcome, true);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    await rm(pdir, { recursive: true, force: true });
+  }, 20000);
+});
