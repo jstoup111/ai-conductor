@@ -198,17 +198,34 @@ export async function selfHealAcceptanceRed(
   const { worktree, specFiles, exec } = params;
   const resolvedRoot = resolve(worktree);
 
-  // Recover any stray marker left nested from a PRIOR run before doing
-  // anything else. This is independent of the current run's fresh result:
-  // it only promotes a nested marker to root when no root marker already
-  // exists, so it never clobbers a marker from this (or a prior) run.
-  normalizeNestedRedMarker(resolvedRoot);
-
   const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
 
   if (!existsSync(contractPath)) {
+    // With no contract to validate against, we cannot safely promote a
+    // stray nested marker to the authoritative root path — doing so would
+    // fabricate root evidence for a run we never actually executed or
+    // cross-checked. Surface a specific "not at the authoritative path"
+    // diagnostic instead of silently promoting, and never touch the nested
+    // file in this branch.
+    const rootMarkerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
+    const nestedMarkerPath = join(resolvedRoot, NESTED_RED_MARKER_RELATIVE_PATH);
+    if (!existsSync(rootMarkerPath) && existsSync(nestedMarkerPath)) {
+      return {
+        healed: false,
+        reason:
+          `${ACCEPTANCE_SPECS_RED_EVIDENCE} found nested at ${nestedMarkerPath}, ` +
+          `not at the authoritative path ${rootMarkerPath}; run contract missing: ${contractPath}`,
+      };
+    }
     return { healed: false, reason: `run contract missing: ${contractPath}` };
   }
+
+  // Recover any stray marker left nested from a PRIOR run before doing
+  // anything else. This is independent of the current run's fresh result:
+  // it only promotes a nested marker to root when no root marker already
+  // exists, so it never clobbers a marker from this (or a prior) run. Only
+  // reached once a contract exists, so promotion never happens blind.
+  normalizeNestedRedMarker(resolvedRoot);
 
   const raw = readFileSync(contractPath, "utf8");
   const parsed = parseAcceptanceRunContract(raw);
@@ -230,7 +247,18 @@ export async function selfHealAcceptanceRed(
   const resolvedCwd = resolve(resolvedRoot, contract.cwd);
   const execResult = await exec(contract.command, { cwd: resolvedCwd });
 
-  writeRedMarkerAtRoot(resolvedRoot, execResult);
+  // `validateAcceptanceRedEvidence` requires `command` and `targetSpecs` on
+  // the marker itself, but the injected `exec` only returns the run's
+  // executed/passed/failed/skipped/errors counters — merge the contract's
+  // command/targetSpecs in so a genuinely successful RED run is never
+  // rejected for a shape gap the exec result was never responsible for.
+  const markerContent = {
+    ...(typeof execResult === 'object' && execResult !== null ? execResult : {}),
+    command: contract.command,
+    targetSpecs: contract.targetSpecs,
+  };
+
+  writeRedMarkerAtRoot(resolvedRoot, markerContent);
 
   const markerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
   const markerRaw = readFileSync(markerPath, "utf8");

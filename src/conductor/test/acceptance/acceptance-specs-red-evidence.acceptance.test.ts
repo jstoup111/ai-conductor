@@ -99,8 +99,17 @@ function trackingRunner(): { runner: StepRunner; log: string[] } {
 async function seedThrough(statePath: string, upToButExcluding: StepName): Promise<void> {
   const res = await readState(statePath);
   const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+  // Mark every step EXCEPT `upToButExcluding` as already 'done' — steps
+  // before it so `Conductor.run` starts exactly at `upToButExcluding`
+  // (via `fromStep`), and steps AFTER it so that once this single step
+  // resolves (self-heal or HALT), `Conductor.run` has nothing further to
+  // execute. Without seeding the trailing steps too, the run would fall
+  // through into e.g. 'build' against this synthetic worktree (no real
+  // plan file) and HALT there for a reason unrelated to acceptance_specs
+  // RED-evidence determinism — these specs only care about the single
+  // step under test.
   for (const s of ALL_STEPS) {
-    if (s.name === upToButExcluding) break;
+    if (s.name === upToButExcluding) continue;
     state[s.name] = 'done';
   }
   state.complexity_tier = 'M';

@@ -2832,6 +2832,14 @@ export class Conductor {
         // distinct, actionable HALT reason instead of the generic
         // "retries exhausted" message.
         let lastBuildStallReason: string | undefined;
+        // Task 12 (acceptance-specs-halts-when-the-red-evidence-marke): when
+        // the acceptance_specs pre-heal attempt below runs but fails to heal
+        // (bad/missing run contract, cross-check mismatch, cwd guard, or a
+        // genuine non-RED result), its own `reason` string is the specific,
+        // actionable diagnostic — consulted at the terminal HALT fallback so
+        // a real #733-shaped failure never gets flattened into the generic
+        // "retries exhausted" message.
+        let acceptanceRedHealFailureReason: string | undefined;
 
         // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
         // spending ANY of this step's retry budget, check whether this is an
@@ -2878,6 +2886,8 @@ export class Conductor {
                 succeeded = true;
                 successOutput = undefined;
                 acceptanceRedPreHealed = true;
+              } else {
+                acceptanceRedHealFailureReason = healResult.reason;
               }
             }
           }
@@ -4883,11 +4893,13 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : lastBuildStallReason
-                  ? lastBuildStallReason
-                  : unchangedInputNote
-                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : acceptanceRedHealFailureReason
+                  ? acceptanceRedHealFailureReason
+                  : lastBuildStallReason
+                    ? lastBuildStallReason
+                    : unchangedInputNote
+                      ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                      : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );
