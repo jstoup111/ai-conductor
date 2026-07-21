@@ -38,6 +38,7 @@ echo "  rm -rf <project>/.serena/            # per-project semantic-index caches
 
 ### Fixed
 
+- conductor: no-verdict backstop HALT now records the last step, last event, and exit index (no more `last step: unknown`), and step-transition rejections HALT with a stack instead of exiting silently (#502)
 - Added the missing `bin/intake-file` repo-root wrapper (the intake skill
   instructs running `bin/intake-file`, but only `src/conductor/bin/intake-file`
   existed; sibling `bin/intake-backfill` had a wrapper). Convention DECIDE
