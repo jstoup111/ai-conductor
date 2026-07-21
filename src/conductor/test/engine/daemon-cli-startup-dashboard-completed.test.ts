@@ -64,6 +64,32 @@ describe('Task 3: startup dashboard PROCESSED gating (console vs persisted log)'
     expect(logContent.includes('PROCESSED')).toBe(false);
   });
 
+  it('showCompleted: true — console DOES write PROCESSED while the log sink stays clean of it (explicit split assertion)', async () => {
+    const repo = await freshDir();
+    await seedProcessed(repo, 'done-feature');
+
+    const consoleLines: string[] = [];
+    const origLog = console.log;
+    console.log = (msg: string) => consoleLines.push(String(msg));
+    try {
+      await runDaemonMode(baseOpts(repo, true));
+    } finally {
+      console.log = origLog;
+    }
+
+    // Positive: console output (rendered with { includeCompleted: true }) DOES
+    // contain the PROCESSED group — proves the flag actually took effect on
+    // the console render path, not merely that both sides omit it.
+    const consoleOutput = consoleLines.join('\n');
+    expect(consoleOutput).toContain('PROCESSED');
+    expect(consoleOutput).toContain('done-feature');
+
+    // Negative: the persisted log sink (rendered without opts, per Task 3's
+    // split) NEVER contains PROCESSED, even though the console flag is set.
+    const logContent = await readFile(daemonLogPath(repo), 'utf-8').catch(() => '');
+    expect(logContent).not.toContain('PROCESSED');
+  });
+
   it('showCompleted unset — neither console nor persisted log shows PROCESSED', async () => {
     const repo = await freshDir();
     await seedProcessed(repo, 'done-feature');
