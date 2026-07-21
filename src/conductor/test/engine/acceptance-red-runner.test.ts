@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseAcceptanceRunContract,
   crossCheckTargetSpecs,
+  checkContractCwd,
 } from "../../src/engine/acceptance-red-runner";
 
 describe("parseAcceptanceRunContract", () => {
@@ -78,6 +79,50 @@ describe("crossCheckTargetSpecs", () => {
     };
 
     const result = crossCheckTargetSpecs(contract, ["a.test.ts"]);
+
+    expect(result).toEqual({ ok: true, contract });
+  });
+});
+
+describe("checkContractCwd", () => {
+  it("returns ok:false when the contract cwd is absent under the worktree", () => {
+    const contract = {
+      command: "npm test",
+      cwd: "does-not-exist",
+      targetSpecs: ["a.test.ts"],
+    };
+
+    const result = checkContractCwd(contract, __dirname);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/contract cwd not found/);
+    }
+  });
+
+  it("returns ok:false when the contract cwd escapes the worktree via ../", () => {
+    const contract = {
+      command: "npm test",
+      cwd: "../../etc",
+      targetSpecs: ["a.test.ts"],
+    };
+
+    const result = checkContractCwd(contract, __dirname);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/contract cwd not found/);
+    }
+  });
+
+  it("returns ok:true when the contract cwd exists under the worktree", () => {
+    const contract = {
+      command: "npm test",
+      cwd: ".",
+      targetSpecs: ["a.test.ts"],
+    };
+
+    const result = checkContractCwd(contract, __dirname);
 
     expect(result).toEqual({ ok: true, contract });
   });

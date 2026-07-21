@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { resolve, sep } from "node:path";
+
 export interface AcceptanceRunContract {
   command: string;
   cwd: string;
@@ -66,6 +69,27 @@ export function crossCheckTargetSpecs(
       ok: false,
       reason: `targetSpecs [${missing.join(", ")}] not among committed specs`,
     };
+  }
+
+  return { ok: true, contract };
+}
+
+export type CheckContractCwdResult =
+  | { ok: true; contract: AcceptanceRunContract }
+  | { ok: false; reason: string };
+
+export function checkContractCwd(
+  contract: AcceptanceRunContract,
+  worktreeRoot: string,
+): CheckContractCwdResult {
+  const resolvedRoot = resolve(worktreeRoot);
+  const resolvedCwd = resolve(resolvedRoot, contract.cwd);
+  const withinRoot =
+    resolvedCwd === resolvedRoot ||
+    resolvedCwd.startsWith(resolvedRoot + sep);
+
+  if (!withinRoot || !existsSync(resolvedCwd)) {
+    return { ok: false, reason: `contract cwd not found: ${contract.cwd}` };
   }
 
   return { ok: true, contract };
