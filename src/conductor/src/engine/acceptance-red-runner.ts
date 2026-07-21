@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import { ACCEPTANCE_SPECS_RED_EVIDENCE } from "./artifacts";
 
 export interface AcceptanceRunContract {
   command: string;
@@ -93,4 +94,20 @@ export function checkContractCwd(
   }
 
   return { ok: true, contract };
+}
+
+/**
+ * Writes the RED evidence marker at the authoritative worktree-root path,
+ * `<worktreeRoot>/.pipeline/acceptance-specs-red.json`, regardless of the
+ * cwd the acceptance run itself executed in. This guarantees the marker
+ * never lands nested under a subdirectory (e.g. `<worktreeRoot>/src/conductor/.pipeline/`),
+ * which is where the daemon's evidence check would fail to find it.
+ */
+export function writeRedMarkerAtRoot(
+  worktreeRoot: string,
+  markerContent: unknown,
+): void {
+  const markerPath = join(resolve(worktreeRoot), ACCEPTANCE_SPECS_RED_EVIDENCE);
+  mkdirSync(dirname(markerPath), { recursive: true });
+  writeFileSync(markerPath, JSON.stringify(markerContent), "utf8");
 }

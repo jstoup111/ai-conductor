@@ -1,8 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   parseAcceptanceRunContract,
   crossCheckTargetSpecs,
   checkContractCwd,
+  writeRedMarkerAtRoot,
 } from "../../src/engine/acceptance-red-runner";
 
 describe("parseAcceptanceRunContract", () => {
@@ -125,5 +129,37 @@ describe("checkContractCwd", () => {
     const result = checkContractCwd(contract, __dirname);
 
     expect(result).toEqual({ ok: true, contract });
+  });
+});
+
+describe("writeRedMarkerAtRoot", () => {
+  let worktreeRoot: string;
+
+  afterEach(() => {
+    if (worktreeRoot) {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("writes the marker at <worktree>/.pipeline/acceptance-specs-red.json, never a nested path", () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const markerContent = {
+      executed: 3,
+      passed: 0,
+      failed: 3,
+      skipped: 0,
+      errors: 0,
+      command: "npm test",
+      targetSpecs: ["a.test.ts"],
+    };
+
+    writeRedMarkerAtRoot(worktreeRoot, markerContent);
+
+    const rootPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
+    const nestedPath = join(worktreeRoot, "src", "conductor", ".pipeline", "acceptance-specs-red.json");
+
+    expect(existsSync(rootPath)).toBe(true);
+    expect(existsSync(nestedPath)).toBe(false);
+    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual(markerContent);
   });
 });
