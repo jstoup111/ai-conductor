@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseAcceptanceRunContract } from "../../src/engine/acceptance-red-runner";
+import {
+  parseAcceptanceRunContract,
+  crossCheckTargetSpecs,
+} from "../../src/engine/acceptance-red-runner";
 
 describe("parseAcceptanceRunContract", () => {
   it("returns ok:true with the parsed contract for valid JSON", () => {
@@ -48,5 +51,34 @@ describe("parseAcceptanceRunContract", () => {
     const result = parseAcceptanceRunContract(raw);
 
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("crossCheckTargetSpecs", () => {
+  it("returns ok:false when targetSpecs are not among committed specs", () => {
+    const contract = {
+      command: "npm test",
+      cwd: "/repo",
+      targetSpecs: ["b.test.ts"],
+    };
+
+    const result = crossCheckTargetSpecs(contract, ["a.test.ts"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/targetSpecs .* not among committed specs/);
+    }
+  });
+
+  it("returns ok:true with the contract when all targetSpecs are committed", () => {
+    const contract = {
+      command: "npm test",
+      cwd: "/repo",
+      targetSpecs: ["a.test.ts"],
+    };
+
+    const result = crossCheckTargetSpecs(contract, ["a.test.ts"]);
+
+    expect(result).toEqual({ ok: true, contract });
   });
 });

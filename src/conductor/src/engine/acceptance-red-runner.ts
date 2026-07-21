@@ -49,3 +49,24 @@ export function parseAcceptanceRunContract(
     },
   };
 }
+
+export type CrossCheckTargetSpecsResult =
+  | { ok: true; contract: AcceptanceRunContract }
+  | { ok: false; reason: string };
+
+export function crossCheckTargetSpecs(
+  contract: AcceptanceRunContract,
+  globbedSpecFiles: string[],
+): CrossCheckTargetSpecsResult {
+  const committed = new Set(globbedSpecFiles);
+  const missing = contract.targetSpecs.filter((spec) => !committed.has(spec));
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      reason: `targetSpecs [${missing.join(", ")}] not among committed specs`,
+    };
+  }
+
+  return { ok: true, contract };
+}
