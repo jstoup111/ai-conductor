@@ -88,13 +88,27 @@ describe('integration/git-hooks-attribution', () => {
       expect(msg).toMatch(/^Task: 7$/m);
     });
 
-    it('does not overwrite an already-present Task: trailer', async () => {
+    it('reconciles a self-stamped Task: trailer to the engine current-task id (engine wins)', async () => {
       await writeCurrentTask('7');
       const res = await commitFile('b.txt', 'b', 'feat: add thing\n\nTask: 9');
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
-      expect(msg).toMatch(/^Task: 9$/m);
-      expect(msg).not.toMatch(/^Task: 7$/m);
+      expect(msg).toMatch(/^Task: 7$/m);
+      expect(msg).not.toMatch(/^Task: 9$/m);
+    });
+
+    it('reconciles to current-task even when the old id also appears in the commit body (not confused by body text)', async () => {
+      await writeCurrentTask('7');
+      const res = await commitFile(
+        'b2.txt',
+        'b2',
+        'feat: add thing\n\nSee also task 9 in the backlog for related work.\n\nTask: 9',
+      );
+      expect(res.code).toBe(0);
+      const msg = await lastCommitMessage();
+      expect(msg).toMatch(/^Task: 7$/m);
+      expect(msg).not.toMatch(/^Task: 9$/m);
+      expect(msg).toContain('See also task 9 in the backlog for related work.');
     });
 
     it('abstains when current-task is absent, even with a sole in_progress row', async () => {
