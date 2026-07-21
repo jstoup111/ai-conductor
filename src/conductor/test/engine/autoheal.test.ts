@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, stat } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -2057,6 +2057,60 @@ A task with no specific files.
 
     expect(result).toHaveProperty('2');
     expect(result['2']).toHaveProperty('completed', true);
+  });
+
+  it('does not write the evidence sidecar when readOnly option is set', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 1: Implementation
+Update the API layer.
+
+- \`src/api.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/api.ts'), 'export function api() {}');
+    await execa('git', ['add', 'src/api.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: api implementation\n\nTask: 1\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+    // Write once up front so the sidecar file exists on disk with known
+    // content/mtime to compare against after the read-only call.
+    await evidence.write();
+
+    const sidecarPath = join(gitDir, '.pipeline/task-evidence.json');
+    const before = await readFile(sidecarPath, 'utf-8');
+    const statBefore = await stat(sidecarPath);
+
+    // Small delay so a wrongful write would produce a detectably different mtime.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const result = await autoheal.deriveCompletion(
+      gitDir,
+      planPath,
+      '',
+      commits,
+      evidence,
+      { readOnly: true },
+    );
+
+    expect(result).toHaveProperty('1');
+    expect(result['1']).toHaveProperty('completed', true);
+
+    const after = await readFile(sidecarPath, 'utf-8');
+    const statAfter = await stat(sidecarPath);
+
+    expect(after).toBe(before);
+    expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
   });
 
   it('does NOT complete task with (# form on non-grandfathered task', async () => {

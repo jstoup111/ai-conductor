@@ -117,6 +117,10 @@ export interface BuildProgressWatcherOptions {
   step: StepName;
   featureSlug?: string;
   config?: Pick<HarnessConfig, 'build_progress'>;
+  /** Absolute path to the active plan file, when known — threaded through so
+   * later derivations can resolve the total task count from the plan
+   * instead of relying solely on task-status.json. */
+  planPath?: string;
 }
 
 /**
@@ -174,6 +178,7 @@ export class BuildProgressWatcher {
   private readonly events: ConductorEventEmitter;
   private readonly step: StepName;
   private readonly featureSlug?: string;
+  private readonly planPath?: string;
   private readonly resolvedConfig: ResolvedBuildProgressConfig;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshot: TickSnapshot | null = null;
@@ -196,6 +201,7 @@ export class BuildProgressWatcher {
     this.events = opts.events;
     this.step = opts.step;
     this.featureSlug = opts.featureSlug;
+    this.planPath = opts.planPath;
     this.resolvedConfig = resolveBuildProgressConfig(opts.config ?? {});
   }
 

@@ -721,6 +721,7 @@ async function deriveCompletionInternal(
   anchor: string,
   commits: CommitWithTrailers[],
   evidence: any, // TaskEvidence type from task-evidence.ts
+  opts?: { readOnly?: boolean },
 ): Promise<DeriveCompletionResult> {
   const result: DeriveCompletionResult = {};
 
@@ -958,8 +959,12 @@ async function deriveCompletionInternal(
     );
   }
 
-  // Write evidence to sidecar
-  await evidence.write();
+  // Write evidence to sidecar (skipped in read-only mode — callers that
+  // only want the derived map without mutating the sidecar, e.g. progress
+  // polling, pass { readOnly: true }).
+  if (!opts?.readOnly) {
+    await evidence.write();
+  }
 
   return result;
 }
@@ -987,6 +992,7 @@ export async function deriveCompletion(
   anchorArg?: string,
   commitsArg?: CommitWithTrailers[],
   evidenceArg?: { evidenceStamps: Map<string, { sha: string; form: string }>; write(): Promise<void> },
+  opts?: { readOnly?: boolean },
 ): Promise<DeriveCompletionResult> {
   // No explicit anchor: pass '' to getEvidenceRange so its resolution ladder
   // (rung 1: explicit anchor, rung 2+: branch base derivation) determines
@@ -1004,7 +1010,7 @@ export async function deriveCompletion(
     evidence = await createTaskEvidence(projectRoot);
   }
 
-  return deriveCompletionInternal(projectRoot, planPath, anchor, commits, evidence);
+  return deriveCompletionInternal(projectRoot, planPath, anchor, commits, evidence, opts);
 }
 
 /**

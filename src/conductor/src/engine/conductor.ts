@@ -2922,6 +2922,10 @@ export class Conductor {
           // no watcher instance is constructed at all (not merely started as
           // a no-op), so operators who disable the feature pay zero overhead
           // and the existing post-hoc stall-breaker (below) is unaffected.
+          const buildWatcherActivePlanPath =
+            step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
+              ? await this.getActivePlanPath()
+              : null;
           const buildWatcher: BuildProgressWatcher | null =
             step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
@@ -2930,6 +2934,9 @@ export class Conductor {
                   step: step.name,
                   featureSlug: state.feature_desc,
                   config: this.config,
+                  planPath: buildWatcherActivePlanPath
+                    ? join(this.projectRoot, buildWatcherActivePlanPath)
+                    : undefined,
                 })
               : null;
           buildWatcher?.start();

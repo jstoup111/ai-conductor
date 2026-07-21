@@ -378,6 +378,20 @@ describe('BuildProgressWatcher lifecycle hardening', () => {
   });
 });
 
+describe('BuildProgressWatcher planPath option', () => {
+  it('retains the planPath passed at construction', () => {
+    const emitter = new ConductorEventEmitter();
+    const watcher = new BuildProgressWatcher({
+      projectRoot: '/x',
+      events: emitter,
+      step: 'build',
+      planPath: '/x/plan.md',
+    });
+
+    expect((watcher as unknown as { planPath?: string }).planPath).toBe('/x/plan.md');
+  });
+});
+
 describe('BuildProgressWatcher heartbeat re-emission', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
