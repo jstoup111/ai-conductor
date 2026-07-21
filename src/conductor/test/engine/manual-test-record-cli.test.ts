@@ -185,4 +185,104 @@ describe('engine/manual-test-record-cli', () => {
       errSpy.mockRestore();
     });
   });
+
+  describe('dispatchManualTestRecord — results mode', () => {
+    const makeFakeFs = (initialContent?: string, extraFiles?: Record<string, string>) => {
+      const files = new Map<string, string>();
+      const dirs = new Set<string>();
+      if (initialContent !== undefined) {
+        files.set('/abs/pipeline/manual-test-results.md', initialContent);
+      }
+      for (const [path, content] of Object.entries(extraFiles ?? {})) {
+        files.set(path, content);
+      }
+      const runners: ManualTestRecordRunners = {
+        readFile: vi.fn(async (path: string) => {
+          if (!files.has(path)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+          return files.get(path)!;
+        }),
+        mkdir: vi.fn(async (path: string) => {
+          dirs.add(path);
+        }),
+        writeFile: vi.fn(async (path: string, contents: string) => {
+          files.set(path, contents);
+        }),
+        rename: vi.fn(async (from: string, to: string) => {
+          const contents = files.get(from);
+          if (contents === undefined) throw new Error(`rename: no such temp file ${from}`);
+          files.delete(from);
+          files.set(to, contents);
+        }),
+        rm: vi.fn(async (path: string) => {
+          files.delete(path);
+        }),
+        readStdin: vi.fn(async () => ''),
+      };
+      return { runners, files };
+    };
+
+    it('reads results content from the given path and writes an Attempt 1 section verbatim', async () => {
+      const { runners, files } = makeFakeFs(undefined, {
+        '/abs/results-input.md': '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n',
+      });
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/results-input.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).toBe(0);
+      const written = files.get('/abs/pipeline/manual-test-results.md');
+      expect(written).toBeDefined();
+      expect(written).toContain('## Attempt 1');
+      expect(written).toContain('| S1 | PASS |');
+    });
+
+    it('reads results content from stdin when resultsPath is "-"', async () => {
+      const { runners, files } = makeFakeFs(undefined);
+      (runners.readStdin as ReturnType<typeof vi.fn>).mockResolvedValue(
+        '| Story | Result |\n| --- | --- |\n| S2 | FAIL |\n',
+      );
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '-', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).toBe(0);
+      expect(runners.readStdin).toHaveBeenCalled();
+      const written = files.get('/abs/pipeline/manual-test-results.md');
+      expect(written).toContain('## Attempt 1');
+      expect(written).toContain('| S2 | FAIL |');
+    });
+
+    it('appends an Attempt 2 section after an existing Attempt 1, preserving prior content', async () => {
+      const priorContent = '## Attempt 1\n\n**Result:** SKIPPED — auto mode\n';
+      const { runners, files } = makeFakeFs(priorContent, {
+        '/abs/results-input.md': '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n',
+      });
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/results-input.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).toBe(0);
+      const written = files.get('/abs/pipeline/manual-test-results.md')!;
+      expect(written).toContain('## Attempt 1');
+      expect(written).toContain('## Attempt 2');
+      expect(written).toContain('SKIPPED — auto mode');
+      expect(written).toContain('| S1 | PASS |');
+    });
+
+    it('fails closed when the results path cannot be read', async () => {
+      const { runners, files } = makeFakeFs(undefined);
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const code = await dispatchManualTestRecord(
+        { kind: 'results', resultsPath: '/abs/missing.md', pipelineDir: '/abs/pipeline' },
+        '/abs',
+        runners,
+      );
+      expect(code).not.toBe(0);
+      expect(files.has('/abs/pipeline/manual-test-results.md')).toBe(false);
+      errSpy.mockRestore();
+    });
+  });
 });

@@ -73,6 +73,8 @@ export interface ManualTestRecordRunners {
   writeFile: (path: string, contents: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   rm: (path: string) => Promise<void>;
+  /** Reads all of stdin as utf-8 text; used when `--results -` is given. */
+  readStdin: () => Promise<string>;
 }
 
 /** Production runners: real fs/promises. */
@@ -83,6 +85,13 @@ export function makeProductionManualTestRecordRunners(): ManualTestRecordRunners
     writeFile: (path: string, contents: string) => writeFile(path, contents, 'utf-8'),
     rename: (from: string, to: string) => rename(from, to),
     rm: (path: string) => rm(path, { force: true }).then(() => undefined),
+    readStdin: async () => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString('utf-8');
+    },
   };
 }
 
@@ -99,41 +108,18 @@ function nextAttemptNumber(content: string): number {
 }
 
 /**
- * Dispatches a `manual-test-record` command.
- *
- * Only `{kind:'skip'}` is implemented here: it appends a new `## Attempt N`
- * section containing MANUAL_TEST_SKIP_SENTINEL and a human-readable
- * `**Result:** SKIPPED — <reason>` line to
- * `<pipelineDir>/manual-test-results.md`, creating the file (and pipeline
- * dir) if absent. The write is atomic — temp file in the same directory,
- * then rename(2) over the target — and fail-closed: any read/write error
- * refuses (non-zero exit) rather than risk a torn/partial results file.
- *
- * `{kind:'results'}` is not yet handled (a later task); `{kind:'guide'}`
- * prints usage and exits 1, matching detectManualTestRecordCommand's
- * contract that a recognized-but-misused subcommand never falls through to
- * the pipeline launcher.
+ * Appends `section` (a fully-formed `## Attempt N` block) to the results
+ * file at `resultsPath`, preserving any prior content above it. The write
+ * is atomic — temp file in the same directory, then rename(2) over the
+ * target — and fail-closed: any read/write error refuses (non-zero exit)
+ * rather than risk a torn/partial results file.
  */
-export async function dispatchManualTestRecord(
-  cmd: ManualTestRecordDispatch,
-  _cwd: string,
-  runners: ManualTestRecordRunners = makeProductionManualTestRecordRunners(),
+async function appendAttemptSection(
+  pipelineDir: string,
+  resultsPath: string,
+  buildSection: (attemptNumber: number) => string,
+  runners: ManualTestRecordRunners,
 ): Promise<number> {
-  if (cmd.kind === 'guide') {
-    console.error(MANUAL_TEST_RECORD_USAGE);
-    return 1;
-  }
-
-  if (cmd.kind === 'results') {
-    console.error(
-      'manual-test-record: --results is not yet implemented — use --skip, or record results manually',
-    );
-    return 1;
-  }
-
-  // cmd.kind === 'skip'
-  const resultsPath = join(cmd.pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
-
   let existing = '';
   try {
     existing = await runners.readFile(resultsPath);
@@ -143,24 +129,21 @@ export async function dispatchManualTestRecord(
   }
 
   const attemptNumber = nextAttemptNumber(existing);
-  const section =
-    `## Attempt ${attemptNumber}\n\n` +
-    `${MANUAL_TEST_SKIP_SENTINEL}\n` +
-    `**Result:** SKIPPED — ${cmd.reason}\n`;
+  const section = buildSection(attemptNumber);
   const separator = existing.trim().length > 0 ? '\n\n' : '';
   const newContent = `${existing}${separator}${section}`;
 
   try {
-    await runners.mkdir(cmd.pipelineDir);
+    await runners.mkdir(pipelineDir);
   } catch (err) {
     console.error(
-      `manual-test-record: failed to create pipeline dir "${cmd.pipelineDir}" (${err instanceof Error ? err.message : String(err)}) — refusing to record`,
+      `manual-test-record: failed to create pipeline dir "${pipelineDir}" (${err instanceof Error ? err.message : String(err)}) — refusing to record`,
     );
     return 1;
   }
 
   const tempPath = join(
-    cmd.pipelineDir,
+    pipelineDir,
     `.${MANUAL_TEST_RESULTS_FILENAME}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
   );
   try {
@@ -175,4 +158,65 @@ export async function dispatchManualTestRecord(
   }
 
   return 0;
+}
+
+/**
+ * Dispatches a `manual-test-record` command.
+ *
+ * `{kind:'skip'}` appends a new `## Attempt N` section containing
+ * MANUAL_TEST_SKIP_SENTINEL and a human-readable `**Result:** SKIPPED —
+ * <reason>` line. `{kind:'results'}` reads results content from
+ * `cmd.resultsPath` (or stdin, when `resultsPath === '-'`) and appends it
+ * verbatim under a new `## Attempt N` heading. Both write to
+ * `<pipelineDir>/manual-test-results.md`, creating the file (and pipeline
+ * dir) if absent. The write is atomic — temp file in the same directory,
+ * then rename(2) over the target — and fail-closed: any read/write error
+ * refuses (non-zero exit) rather than risk a torn/partial results file.
+ *
+ * `{kind:'guide'}` prints usage and exits 1, matching
+ * detectManualTestRecordCommand's contract that a recognized-but-misused
+ * subcommand never falls through to the pipeline launcher.
+ */
+export async function dispatchManualTestRecord(
+  cmd: ManualTestRecordDispatch,
+  _cwd: string,
+  runners: ManualTestRecordRunners = makeProductionManualTestRecordRunners(),
+): Promise<number> {
+  if (cmd.kind === 'guide') {
+    console.error(MANUAL_TEST_RECORD_USAGE);
+    return 1;
+  }
+
+  if (cmd.kind === 'results') {
+    const resultsPath = join(cmd.pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
+
+    let content: string;
+    try {
+      content = cmd.resultsPath === '-' ? await runners.readStdin() : await runners.readFile(cmd.resultsPath);
+    } catch (err) {
+      console.error(
+        `manual-test-record: failed to read results from "${cmd.resultsPath}" (${err instanceof Error ? err.message : String(err)}) — refusing to record`,
+      );
+      return 1;
+    }
+
+    return appendAttemptSection(
+      cmd.pipelineDir,
+      resultsPath,
+      (attemptNumber) => `## Attempt ${attemptNumber}\n\n${content}`,
+      runners,
+    );
+  }
+
+  // cmd.kind === 'skip'
+  const resultsPath = join(cmd.pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
+  return appendAttemptSection(
+    cmd.pipelineDir,
+    resultsPath,
+    (attemptNumber) =>
+      `## Attempt ${attemptNumber}\n\n` +
+      `${MANUAL_TEST_SKIP_SENTINEL}\n` +
+      `**Result:** SKIPPED — ${cmd.reason}\n`,
+    runners,
+  );
 }
