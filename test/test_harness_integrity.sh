@@ -417,6 +417,24 @@ if [ -f "$stories_skill" ]; then
   fi
 fi
 
+# 9f. skills/architecture-review/SKILL.md (Medium/Large tier) must run
+# `conduct-ts overlap-scan` over the `## Wiring Surface` candidate paths
+# before `/plan`, and must state it is advisory. Without this wiring, the
+# Task 7 overlap-scan subcommand exists but is never invoked at DECIDE
+# time, so authors stay blind to unmerged dependent work (the bug this
+# plan fixes). This check ties the skill instruction to the CLI subcommand.
+arch_review_skill="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
+if [ -f "$arch_review_skill" ]; then
+  if grep -q "conduct-ts overlap-scan" "$arch_review_skill" \
+    && grep -q "Wiring Surface" "$arch_review_skill" \
+    && grep -qi "advisory" "$arch_review_skill" \
+    && grep -q "/plan" "$arch_review_skill"; then
+    assert "skills/architecture-review/SKILL.md wires advisory overlap-scan over Wiring Surface before /plan" 0
+  else
+    assert "skills/architecture-review/SKILL.md wires advisory overlap-scan over Wiring Surface before /plan" 1
+  fi
+fi
+
 # 9c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).
@@ -626,6 +644,23 @@ for f in .docs/intake/*.md; do
   grep -qE '^Owner:[[:space:]]*[^[:space:]]+' "$f" || { missing_owner=1; echo "    missing Owner: $f"; }
 done
 assert ".docs/intake/*.md all carry an Owner: marker" "$missing_owner"
+
+# ── 12. /plan wires the overlap-scan subcommand ──────────────────────────────
+# skills/plan/SKILL.md must contain a step invoking `conduct-ts overlap-scan`
+# over the plan's authoritative Files set before the plan is committed, and
+# must state the result is advisory (never blocks).
+echo ""
+echo -e "${BOLD}12. /plan overlap-scan step${NC}"
+plan_skill="${HARNESS_DIR}/skills/plan/SKILL.md"
+if [ -f "$plan_skill" ]; then
+  grep -q "conduct-ts overlap-scan" "$plan_skill"
+  assert "skills/plan/SKILL.md — invokes conduct-ts overlap-scan" $?
+
+  grep -qi "advisory" "$plan_skill"
+  assert "skills/plan/SKILL.md — overlap-scan step states result is advisory" $?
+else
+  assert "skills/plan/SKILL.md exists" 1
+fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

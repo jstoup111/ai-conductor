@@ -10,6 +10,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- `conduct-ts overlap-scan` — an advisory, non-interactive DECIDE-time scan for unmerged
+  sibling `spec/*`/PR branches touching the same candidate files as the feature being
+  authored, plus open blockers on a linked source-ref issue. Never blocks (always exits
+  0). Wired into `/architecture-review`'s Wiring Surface check (Medium/Large tier) and
+  `/plan`'s Step 8a over the authoritative Files set, both before their respective
+  artifacts lock (#523).
+
 ### Removed
 
 - Serena removed from the daemon's install path, bootstrap MCP registration,

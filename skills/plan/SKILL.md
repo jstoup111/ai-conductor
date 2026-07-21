@@ -248,6 +248,17 @@ After generating the plan, cross-reference:
 
 Save the plan to `.docs/plans/YYYY-MM-DD-<feature>.md`
 
+### 8a. Advisory Overlap Scan
+
+Before the plan is committed, run `conduct-ts overlap-scan --files <comma-separated
+Files set>` over the union of every task's `**Files:**` paths (add `--source-ref
+<issue ref>` when the feature's originating issue/intake ref is known). Surface the
+rendered report to the author as-is.
+
+This check is **advisory only — it never blocks plan authoring.** Unmerged overlap
+is a heads-up for sequencing/coordination, not a precondition; proceed to save the
+plan regardless of what the scan reports.
+
 ### 8b. Update Architecture Diagrams
 
 After saving the plan, run `/architecture-diagram` in plan-update mode to update existing

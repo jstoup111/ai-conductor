@@ -407,6 +407,40 @@ the current monitor-log verdicts — so a corrupted ledger never blocks the swee
 loses previously-recorded per-issue progress (already-closed issues are re-detected via
 GitHub issue state, not re-closed).
 
+### `overlap-scan` — advisory unmerged-dependent-work scan (#523)
+
+`conduct-ts overlap-scan` is a standalone, **advisory** DECIDE-time check for unmerged
+sibling `spec/*` (or PR) branches that touch the same candidate files as the feature
+being authored, plus any open blockers on a linked source-ref issue. It never blocks —
+spec authoring used to be blind to work-in-flight on the same files; this surfaces it
+as a heads-up instead of silently colliding at merge time.
+
+```
+conduct-ts overlap-scan [--files <list>] [--source-ref <owner/repo#N>] [--base <ref>] [--cwd <dir>]
+```
+
+**Flags:**
+- `--files <list>` — comma-separated candidate file paths to check for overlap against
+  unmerged sibling branches
+- `--source-ref <owner/repo#N>` — linked issue ref to sweep for open blockers
+- `--base <ref>` — base branch to diff sibling branches against (default: the repo's
+  origin default branch)
+- `--cwd <dir>` — repository directory to run the scan in (default: `process.cwd()`)
+
+**Advisory, always exits 0.** The scan never HALTs and never fails the invoking skill —
+partial failures (e.g. an unresolvable base branch) degrade to a skip note in the
+rendered report rather than an error. Its only effect is the printed report; nothing it
+finds gates plan authoring or the architecture-review verdict.
+
+**When it runs.** Two DECIDE steps invoke it before their respective artifacts lock:
+- `/plan` (Step 8a) runs it over the union of every task's `**Files:**` paths — the
+  authoritative Files set — before the plan is saved.
+- `/architecture-review` (Medium/Large tier) runs it earlier, over the paths named in
+  the review's `## Wiring Surface`, before `/plan` runs at all.
+
+Both invocations surface the rendered report to the author as-is; neither treats the
+report as a precondition to proceed.
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible

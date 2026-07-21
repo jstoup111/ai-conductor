@@ -89,6 +89,10 @@ import {
   detectHaltIssuesSweepCommand,
   dispatchHaltIssuesSweep,
 } from './engine/halt-issues/halt-issues-cli.js';
+import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
+import { createBlockerResolver } from './engine/blocker-resolver.js';
+import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
+import { makeProductionGh } from './engine/pr-labels.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -269,6 +273,92 @@ async function cleanupMergedWorktrees(
   }
 }
 
+// --- Overlap-scan subcommand (#523, Task 7) ---
+
+export interface OverlapScanDispatch {
+  kind: 'overlap-scan';
+  files: string[];
+  sourceRef?: string;
+  base?: string;
+  cwd?: string;
+}
+
+/**
+ * Parse argv for the `overlap-scan` subcommand.
+ *   conduct-ts overlap-scan --files a.ts,b.ts --source-ref owner/repo#5 --base main --cwd <dir>
+ * Mirrors the detectXCommand pattern used by the other non-interactive
+ * subcommands (registry, engineer, evidence, ...): pure argv parsing, no I/O.
+ */
+export function detectOverlapScanCommand(argv: string[]): OverlapScanDispatch | null {
+  if (argv[2] !== 'overlap-scan') return null;
+
+  const rest = argv.slice(3);
+  let filesRaw = '';
+  let sourceRef: string | undefined;
+  let base: string | undefined;
+  let cwd: string | undefined;
+
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--files') {
+      filesRaw = rest[++i] ?? '';
+    } else if (arg === '--source-ref') {
+      sourceRef = rest[++i];
+    } else if (arg === '--base') {
+      base = rest[++i];
+    } else if (arg === '--cwd') {
+      cwd = rest[++i];
+    }
+  }
+
+  const files = filesRaw
+    .split(',')
+    .map((f) => f.trim())
+    .filter((f) => f.length > 0);
+
+  return { kind: 'overlap-scan', files, sourceRef, base, cwd };
+}
+
+/**
+ * Run the overlap scan with real production runners: `makeGitRunner(cwd)` for
+ * git, and `createBlockerResolver({ run: (args) => gh(args, { cwd }) })` for
+ * the blocker sweep — the exact construction `engineer-cli.ts` uses for its
+ * own per-call blocker resolver. Prints `renderReport` and ALWAYS exits 0:
+ * this is an advisory primitive that must never block authoring, even when
+ * the report carries degradation skip-notes.
+ */
+export async function overlapScanCommand(
+  cmd: OverlapScanDispatch,
+  deps: { print?: (msg: string) => void; cwd?: string } = {},
+): Promise<number> {
+  const print = deps.print ?? console.log;
+  const cwd = deps.cwd ?? cmd.cwd ?? process.cwd();
+
+  const git = makeGitRunner(cwd);
+  const gh = makeProductionGh();
+  const resolver = createBlockerResolver({ run: (args) => gh(args, { cwd }) });
+
+  const localBase = cmd.base ?? (await originDefaultBranch(git)) ?? 'main';
+
+  try {
+    const report = await runOverlapScan({
+      candidateFiles: cmd.files,
+      git,
+      resolver,
+      sourceRef: cmd.sourceRef,
+      localBase,
+    });
+    print(renderOverlapReport(report));
+  } catch (err) {
+    // Belt-and-suspenders: runOverlapScan already degrades internally via
+    // skip-notes, but a truly unexpected throw must still not block
+    // authoring — advisory means advisory.
+    print(`overlap-scan: unable to complete scan (${err instanceof Error ? err.message : String(err)})`);
+  }
+
+  return 0;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -390,6 +480,16 @@ async function main(): Promise<void> {
   const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
   if (haltIssuesCmd) {
     const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
+    process.exit(code);
+  }
+
+  // Overlap-scan subcommand (`overlap-scan --files ... --source-ref ...
+  // --base ... --cwd ...`, #523 Task 7) runs NON-INTERACTIVELY and exits —
+  // advisory DECIDE-time scan for unmerged sibling-branch overlap plus open
+  // blockers. Mirrors the evidence/task-cli dispatch pattern; always exits 0.
+  const overlapScanCmd = detectOverlapScanCommand(process.argv);
+  if (overlapScanCmd) {
+    const code = await overlapScanCommand(overlapScanCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 
