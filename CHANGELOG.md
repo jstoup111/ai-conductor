@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Operator config: `harness_self_host.version_freeze` advanced 0.99.19 → 0.99.20
+  to match main's VERSION after #707/#709 — restores the standing no-bump
+  approval so rebased features do not HALT at the self-host version gate.
+
 - `architecture-review` skill: tightened the ADR-naming rule with explicit
   WRONG/RIGHT examples and the heading convention (`# ADR:`, no number), after a
   spec authored `adr-0001-…`/`adr-0002-…` in violation of the existing date-based

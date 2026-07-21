@@ -27,7 +27,7 @@ owner_gate_cutover: "2026-07-02T11:00:00Z"
 # Read at daemon startup; restart the daemon to apply. Update or remove this
 # key when cutting 1.0.
 harness_self_host:
-  version_freeze: "0.99.19"
+  version_freeze: "0.99.20"
 
 # Stale-engine auto-restart (issue #256, PR #307). When the idle daemon detects
 # that dist points at a newer engine than the one it is running (after a local
