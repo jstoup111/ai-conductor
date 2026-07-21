@@ -477,6 +477,37 @@ stop (a hard stop under the daemon, not a logged warning).
 On complete resolution, report the task as PASS with the evidence file written and the verdict
 "Coverage: COMPLETE".
 
+#### Record the run contract (deterministic RED backstop)
+
+**Write `.pipeline/acceptance-specs-run.json` before reporting complete.** The RED evidence in
+`.pipeline/acceptance-specs-red.json` captures the RESULT of one run this skill happened to
+perform. If that run never happened, or the daemon needs to re-establish RED later (e.g. after
+a self-heal), the engine has no deterministic way to know *how* to re-run this feature's specs
+on its own. The run contract fixes that: it is the exact, machine-replayable command the
+engine's self-heal runner uses to redrive RED without guessing a path or invoking an LLM.
+
+Shape — exactly three fields, matching the command actually run in this step:
+
+```json
+{
+  "command": "cd backend && pytest spec/integration/test_017_sec_edgar_acceptance.py",
+  "cwd": "backend",
+  "targetSpecs": ["spec/integration/test_017_sec_edgar_acceptance.py"]
+}
+```
+
+- `command` — the full shell command used to run this feature's own specs (same command as the
+  RED run above).
+- `cwd` — the working directory the command must be run from, relative to the repo root
+  (`"."` if the command is run from the repo root itself).
+- `targetSpecs` — the spec file(s)/path(s) the command targets, matching `targetSpecs` in
+  `acceptance-specs-red.json`.
+
+Write this file **after** the RED run succeeds and **before** this skill reports the step
+complete — it is not optional evidence, it is the deterministic backstop the engine consumes
+when the red-evidence marker is missing or misplaced. This is gitignored run evidence, not a
+committed design artifact, same as `acceptance-specs-red.json`.
+
 ### Stubbing Rules for Pre-Implementation Specs
 
 - Stub at **system boundaries only**: randomness sources, the clock/current time, external API
@@ -498,6 +529,8 @@ Implementation (via `/pipeline` or `/tdd`) makes them pass.
 
 **Verification checklist before completing this skill:**
 - RED evidence written to `.pipeline/acceptance-specs-red.json` (§6)
+- Run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd, targetSpecs) (§6)
+  — BEFORE reporting complete
 - Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
   approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
   FR-coverage gate
@@ -535,3 +568,6 @@ lower level. This skill handles the top layer. TDD handles the bottom two.
 - [ ] Failures are for the RIGHT reason (missing implementation), not
       import/syntax/collection errors
 - [ ] Specs use the project's own test framework and directory conventions
+- [ ] The run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd,
+      targetSpecs) before reporting complete — the deterministic RED backstop the engine's
+      self-heal runner consumes when the RED evidence marker is missing or misplaced
