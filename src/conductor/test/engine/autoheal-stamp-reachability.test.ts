@@ -98,3 +98,39 @@ describe('stampShaReachable', () => {
     expect(result).toBeNull();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 2: gate the empty-matchingCommits pin branch with stampShaReachable.
+// A sidecar stamp citing a sha that is absent from HEAD (no rebase
+// translation) must demote the task instead of pinning it completed forever
+// (issue #766).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion pin-branch reachability gate', () => {
+  it('demotes a task whose sidecar stamp cites an unreachable commit', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    await writeFile(join(gitDir, 'a.txt'), 'a\n');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit A'], { cwd: gitDir });
+
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task T: Demoted task\n\n`a.txt`\n');
+
+    // No commit in the commits list carries a `Task: T` trailer.
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('T', { sha: unreachableSha, form: 'trailer' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['T'].completed).toBe(false);
+    expect(result['T'].status).not.toBe('completed');
+    expect(typeof result['T'].auditEntry).toBe('string');
+    expect(result['T'].auditEntry!.length).toBeGreaterThan(0);
+    expect(result['T'].auditEntry).toContain(unreachableSha.slice(0, 7));
+  });
+});

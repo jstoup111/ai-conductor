@@ -807,14 +807,36 @@ async function deriveCompletionInternal(
     if (matchingCommits.length === 0) {
       // No current evidence found; check if task has a pinned evidence stamp in sidecar
       if (evidence.evidenceStamps.has(taskId)) {
-        // Task was previously completed and evidenced; preserve that status to prevent demotion
-        result[taskId].completed = true;
-        result[taskId].status = 'completed';
         const stamp = evidence.evidenceStamps.get(taskId);
-        result[taskId].evidencedBy = stamp?.sha;
+        const pinRewriteMap = await loadRewriteMap(projectRoot);
+        const reachableSha = stamp
+          ? await stampShaReachable(projectRoot, stamp.sha, pinRewriteMap)
+          : null;
+
+        if (reachableSha) {
+          // Task was previously completed and evidenced, and the cited
+          // commit is still reachable (or was rewrite-translated to a
+          // reachable one): preserve that status to prevent demotion.
+          result[taskId].completed = true;
+          result[taskId].status = 'completed';
+          result[taskId].evidencedBy = reachableSha;
+          warnOnce(
+            `${projectRoot}:demotion:${taskId}:${stamp?.sha ?? ''}`,
+            `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
+          );
+          continue;
+        }
+
+        // Stamp's cited commit is gone and was never rewrite-translated to a
+        // reachable sha — do NOT pin. Demote loudly so the task re-runs
+        // instead of wedging into an uncreditable-undemotable state (#766).
+        const demotionEntry = `Task ${taskId}: sidecar stamp cites unreachable commit ${stamp?.sha.slice(0, 7)} (no rebase translation); demoted`;
+        result[taskId].auditEntry = result[taskId].auditEntry
+          ? `${result[taskId].auditEntry}; ${demotionEntry}`
+          : demotionEntry;
         warnOnce(
-          `${projectRoot}:demotion:${taskId}:${stamp?.sha ?? ''}`,
-          `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
+          `${projectRoot}:unreachable-demotion:${taskId}:${stamp?.sha ?? ''}`,
+          `[autoheal] Task ${taskId}: sidecar evidence stamp cites unreachable commit ${stamp?.sha.slice(0, 7)}; demoting (task will re-run)`,
         );
         continue;
       }
