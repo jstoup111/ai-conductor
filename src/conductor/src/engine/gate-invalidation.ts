@@ -48,3 +48,38 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   prd_audit: 'feature-runtime',
   architecture_review_as_built: 'feature-runtime',
 };
+
+/**
+ * Partition of a post-rebase delta `D` relative to the feature's claimed
+ * surface `F`:
+ * - `test`: paths in `D` that are test paths (per `isTestPath`).
+ * - `featureSrc`: runtime source paths in `D` that are also in `F`.
+ * - `foreignSrc`: runtime source paths in `D` that are NOT in `F`.
+ *
+ * The three groups are disjoint by construction, and
+ * `featureSrc ∪ foreignSrc` equals `D` filtered to runtime source paths.
+ */
+export interface DeltaPartition {
+  test: string[];
+  featureSrc: string[];
+  foreignSrc: string[];
+}
+
+export function partitionDelta(D: string[], F: string[]): DeltaPartition {
+  const featureSet = new Set(F);
+  const result: DeltaPartition = { test: [], featureSrc: [], foreignSrc: [] };
+
+  for (const path of D) {
+    if (isTestPath(path)) {
+      result.test.push(path);
+    } else if (isRuntimeSourcePath(path)) {
+      if (featureSet.has(path)) {
+        result.featureSrc.push(path);
+      } else {
+        result.foreignSrc.push(path);
+      }
+    }
+  }
+
+  return result;
+}

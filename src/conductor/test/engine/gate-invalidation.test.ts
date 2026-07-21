@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { GATE_SURFACE, isRuntimeSourcePath } from '../../src/engine/gate-invalidation.js';
+import {
+  GATE_SURFACE,
+  isRuntimeSourcePath,
+  partitionDelta,
+} from '../../src/engine/gate-invalidation.js';
 
 describe('gate-invalidation path predicates', () => {
   it('classifies a plain src path as runtime source', () => {
@@ -28,5 +32,29 @@ describe('GATE_SURFACE', () => {
       ].sort(),
     );
     expect(GATE_SURFACE).not.toHaveProperty('build');
+  });
+});
+
+describe('partitionDelta', () => {
+  it('splits D into test/featureSrc/foreignSrc groups relative to F', () => {
+    const D = ['src/a.ts', 'x.test.ts', 'src/foreign.ts'];
+    const F = ['src/a.ts', 'x.test.ts'];
+
+    const result = partitionDelta(D, F);
+
+    expect(result).toEqual({
+      test: ['x.test.ts'],
+      featureSrc: ['src/a.ts'],
+      foreignSrc: ['src/foreign.ts'],
+    });
+
+    // The three groups are pairwise disjoint.
+    const all = [...result.test, ...result.featureSrc, ...result.foreignSrc];
+    expect(new Set(all).size).toBe(all.length);
+
+    // The runtime union (featureSrc ∪ foreignSrc) equals D ∩ runtime paths.
+    const runtimeUnion = new Set([...result.featureSrc, ...result.foreignSrc]);
+    const expectedRuntime = new Set(D.filter(isRuntimeSourcePath));
+    expect(runtimeUnion).toEqual(expectedRuntime);
   });
 });
