@@ -1335,6 +1335,12 @@ generated commit-msg hook as an alternative to `Task:` on an intentionally
 empty commit (a non-empty reason is required; bare empty commits are still
 rejected).
 
+**No-diff completion currency (#733):** a `**Type:** verification` plan marker
+is recognized in union with `**Verify-only:** yes` and arms the same judged-closure
+lane; and an `Evidence: skipped <reason>` commit itself mints an `evidenceStamps`
+entry (`form: 'evidence:skipped'`), so a no-diff task can resolve without ever
+reaching the judge.
+
 **Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
 can be triggered by hand for a parked/halted feature:
 

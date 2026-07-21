@@ -953,6 +953,21 @@ the decision outcome; sampled spot-audits additionally append an agreement recor
 time; it never feeds back into gate decisions (audit is read-only, fire-and-forget,
 dispatched only after the build gate verdict is already final).
 
+#### No-diff task completion currency (#733)
+
+A task that legitimately produces no diff (a skip, or a pure verification pass)
+now earns completion currency two ways, closing the gap where such tasks
+starved `noEvidenceAttempts` toward auto-park:
+
+- **`Evidence: skipped <reason>` commit trailer:** mints an `evidenceStamps`
+  entry (`form: 'evidence:skipped'`) in `deriveCompletionInternal`, keyed to
+  that commit, so the task counts as resolved toward the completion gate
+  without needing a code change.
+- **`**Type:** verification` plan marker:** recognized in union with the
+  pre-existing `**Verify-only:** yes` marker by `parsePlanTaskVerifyOnly`,
+  arming the judged-closure lane (see the semantic attribution verification
+  lane above) for that task's residue even under a dark cutover.
+
 
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
