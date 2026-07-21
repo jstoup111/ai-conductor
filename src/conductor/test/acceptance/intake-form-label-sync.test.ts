@@ -91,7 +91,7 @@ function makeFakeGh(opts: { failLabelApply?: boolean } = {}) {
     }
 
     // `gh api --method POST repos/<repo>/issues/<n>/labels -f labels[]=<name>`
-    if (args.includes('labels') && args.some((a) => a.startsWith('labels[]='))) {
+    if (args.some((a) => a.endsWith('/labels')) && args.some((a) => a.startsWith('labels[]='))) {
       if (failLabelApply) throw new Error('simulated label-apply outage');
       const labelArg = args.find((a) => a.startsWith('labels[]='))!;
       appliedLabels.push(labelArg.replace('labels[]=', ''));
