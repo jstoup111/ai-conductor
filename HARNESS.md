@@ -260,11 +260,9 @@ the files independently. This avoids redundant file reads across skill invocatio
 
 ## MCP Servers (When Available)
 
-When context7 and/or serena MCP servers are installed, use them proactively:
+When the context7 MCP server is installed, use it proactively:
 
 - **context7** — Library/framework documentation. Use for API syntax, config, version migration. Skip for business logic, refactoring, and general programming concepts.
-- **serena** — Code navigation and semantic refactoring. Use for finding declarations/usages, renaming safely, tracing calls. Call `initial_instructions` before coding tasks to read capabilities.
-- **Both installed** — understand requirement (context7) → explore codebase (serena) → implement with confidence (serena refactoring + context7 API correctness) → verify (serena traces).
 
 ## Enforcement Levels
 

@@ -290,7 +290,6 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source
 - `.daemon/` — daemon pidfile + activity log (`daemon.log`), not source
 - `.worktrees/` — git worktrees for parallel feature development
-- `.serena/` — Serena MCP semantic index + memories, regenerated locally (not source)
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
 
@@ -339,29 +338,6 @@ Offer MCP server configuration based on project:
 
 **For full-stack projects, GitHub and browser automation MCP are expected** — configure them
 unless the user explicitly declines. For API-only projects, MCP is optional.
-
-### 9a. Serena Semantic Code Toolkit (if installed)
-
-[Serena](https://github.com/oraios/serena) is an optional, opt-in LSP-backed semantic
-code-retrieval and editing toolkit (`./bin/install` offers to install it). When the
-operator has installed it, register it once as a user-scope MCP server so it serves every
-project from the current working directory. Idempotent — skip if already registered:
-
-1. **Detect:** if `serena` is **not** on PATH, skip this step entirely (the operator has
-   not opted in).
-2. **Already set up?** If `claude mcp get serena` exits 0, Serena is already registered —
-   report "Serena MCP already configured — skipping" and stop.
-3. **Register** (user scope, serves all projects via the launch cwd):
-
-   ```bash
-   claude mcp add --scope user serena -- \
-     serena start-mcp-server --context claude-code --project-from-cwd
-   ```
-
-   A non-zero exit means the registration failed — surface it, do not silently continue
-   (mirrors the `conduct register` guidance in §10b).
-4. **Verify (optional):** `serena init` is idempotent and sets up the language-server
-   backend. Note that Claude Code must be restarted to load the newly registered MCP server.
 
 ### 10. Smoke Test
 

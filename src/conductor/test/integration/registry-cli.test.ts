@@ -296,13 +296,13 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(existsSync(join(proj, '.git'))).toBe(true);
     // Bootstrap CLAUDE.md.
     expect(existsSync(join(proj, 'CLAUDE.md'))).toBe(true);
-    // .gitignore seeded with the required ignores (incl. .serena/ — Serena MCP
-    // scaffolding is regenerated locally and must not be committed).
+    // .gitignore seeded with the required ignores; .serena/ is no longer
+    // seeded since the harness dropped its Serena MCP dependency.
     const gitignore = await readFile(join(proj, '.gitignore'), 'utf-8');
     expect(gitignore).toContain('.pipeline/');
     expect(gitignore).toContain('.daemon/');
     expect(gitignore).toContain('.worktrees/');
-    expect(gitignore).toContain('.serena/');
+    expect(gitignore).not.toContain('.serena/');
 
     // A `created` record (status provenance).
     const records = await readRegistryFile(registry);
