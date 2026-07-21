@@ -1,0 +1,64 @@
+name: intake-label-sync
+
+# Stamps priority:/size: labels (and a blocked_by:#N label per dependency) onto
+# intake issues at open/edit time, so intake issues filed via
+# .github/ISSUE_TEMPLATE/intake.yml are "born complete" for daemon backlog
+# scheduling (see src/conductor/src/engine/backlog-priority.ts).
+#
+# Parsing approach: GitHub issue-form submissions render the body as
+# structured markdown — each field's `label` becomes an `### <Label>` heading
+# followed by the submitted value. We parse the section under the Priority,
+# Size, and "Depends on" headings. Vocabulary is closed and case-sensitive,
+# matching parseSizeLabel's exact-match rules (no partial/loose matches).
+# Unparsable/missing fields default to `priority: medium`, `size: M`.
+#
+# Dependency linking approach: rather than a special "blocking" GitHub
+# relationship (which requires GraphQL sub-issue APIs and org-level
+# features), we record each dependency as a `blocked_by:#N` label — a
+# reasonable, testable, REST-only approach. This keeps the workflow
+# labels-only and easy to query/filter on.
+#
+# Isolation: this workflow is entirely separate from ci.yml. It is
+# permissions: issues: write / contents: read only, and the apply script
+# (scripts/intake-label-sync-apply.mts) catches all errors internally and
+# always exits 0 — a label-apply failure (auth, rate limit, network) must
+# never fail this workflow or block any other CI/build workflow.
+#
+# Idempotency: re-editing an issue re-runs this workflow. The apply script
+# diffs the desired label set against the issue's current labels and calls
+# the "set labels" REST endpoint (a full replace) only when they differ, so
+# re-edits never duplicate labels and always reflect the latest field values.
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+
+      - name: Install conductor dependencies
+        working-directory: src/conductor
+        run: npm ci
+
+      - name: Sync intake labels
+        working-directory: src/conductor
+        # continue-on-error keeps a label-sync failure from ever failing this
+        # workflow's overall status, on top of the script's own internal
+        # try/catch (belt-and-suspenders per the labels-only isolation rule).
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx tsx scripts/intake-label-sync-apply.mts
