@@ -317,6 +317,22 @@ describe('engine/resolved-config', () => {
     });
   });
 
+  describe('resolveStepConfig — S-tier review-step disabled invariant (Task: T6)', () => {
+    // Invariant-locking test: build_review and manual_test must remain
+    // enabled (disabled === false) at S tier — they are part of the
+    // evidence-gate core and must never be silently disabled by tier
+    // resolution. No production change expected.
+    it('build_review is not disabled at S tier', () => {
+      const r = resolveStepConfig('build_review', 'BUILD', undefined, { tier: 'S' });
+      expect(r.disabled).toBe(false);
+    });
+
+    it('manual_test is not disabled at S tier', () => {
+      const r = resolveStepConfig('manual_test', 'SHIP', undefined, { tier: 'S' });
+      expect(r.disabled).toBe(false);
+    });
+  });
+
   describe('resolveStepConfig — skill / hooks / disable passthrough', () => {
     it('skill, hooks, disable pass through from step config', () => {
       const config: HarnessConfig = {

@@ -335,6 +335,18 @@ describe('engine/steps', () => {
         expect(shouldSkipForTier('wiring_check', tier)).toBe(false);
       }
     });
+
+    // Invariant-locking test (Task: T6): the BUILD/SHIP evidence-gate core
+    // must never be skippable for S tier, regardless of future edits to
+    // sSkippable above. No production change expected — this pins the set.
+    it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
+      const evidenceGateCore: StepName[] = [
+        'build', 'build_review', 'wiring_check', 'manual_test', 'rebase', 'finish',
+      ];
+      for (const step of evidenceGateCore) {
+        expect(shouldSkipForTier(step, 'S')).toBe(false);
+      }
+    });
   });
 
   // --- shouldSkipForTrack ---
