@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { enumerateUnmergedBranches, intersectFiles, blockerSweep } from '../../src/engine/overlap-scan.js';
+import { enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan } from '../../src/engine/overlap-scan.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 import type { BlockerResolver, BlockerVerdict } from '../../src/engine/blocker-resolver.js';
 
@@ -162,5 +162,68 @@ describe('engine/overlap-scan — blockerSweep (Task 3)', () => {
     expect(result.blockers).toEqual([]);
     expect(result.indeterminate).toEqual([]);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
+  it('combines per-branch seam overlaps and blocker entries into an OverlapReport', async () => {
+    const { git } = fakeGit([
+      // resolveBase: no origin remote → local base 'main'.
+      { match: ['remote'], result: { stdout: '' } },
+      {
+        match: ['for-each-ref'],
+        result: { stdout: 'spec/feature-a\nspec/feature-b\n' },
+      },
+      { match: ['rev-list', '--count', 'main..spec/feature-a'], result: { stdout: '2\n' } },
+      { match: ['rev-list', '--count', 'main..spec/feature-b'], result: { stdout: '1\n' } },
+      {
+        match: ['diff', '--name-only', 'main', 'spec/feature-a'],
+        result: { stdout: 'src/foo.ts\nsrc/bar.ts\n' },
+      },
+      {
+        match: ['diff', '--name-only', 'main', 'spec/feature-b'],
+        result: { stdout: 'src/baz.ts\n' },
+      },
+    ]);
+    const { resolver, calls } = fakeResolver({
+      kind: 'blocked',
+      blockers: [{ repo: 'org/repo', number: 'A' }],
+    });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts', 'src/qux.ts'],
+      sourceRef: 'org/repo#42',
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual(
+      expect.arrayContaining([{ branch: 'spec/feature-a', files: ['src/foo.ts'] }]),
+    );
+    expect(result.seamOverlaps.find((s) => s.branch === 'spec/feature-b')).toBeUndefined();
+    expect(result.blockers).toEqual([{ repo: 'org/repo', number: 'A' }]);
+    expect(result.indeterminate).toEqual([]);
+    expect(calls).toEqual(['org/repo#42']);
+  });
+
+  it('returns empty overlaps and blockers for a clean input', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['for-each-ref'], result: { stdout: '' } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      sourceRef: undefined,
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.indeterminate).toEqual([]);
   });
 });

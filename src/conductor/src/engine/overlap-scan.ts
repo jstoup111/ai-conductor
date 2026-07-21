@@ -6,6 +6,7 @@
 // real implementation, one task at a time, per the plan's TDD cycle.
 
 import type { GitRunner } from './rebase.js';
+import { resolveBase, changedPathsBetween } from './rebase.js';
 import type { BlockerResolver, IssueRef } from './blocker-resolver.js';
 
 export interface SeamOverlap {
@@ -125,8 +126,31 @@ export async function blockerSweep(
   }
 }
 
-export function runOverlapScan(_args: RunOverlapScanArgs): Promise<OverlapReport> {
-  throw new Error('not implemented: runOverlapScan (Task 4/5)');
+/**
+ * Orchestrate the full DECIDE-time unmerged-overlap scan: resolve the base
+ * ref, enumerate unmerged sibling branches, diff each against base and
+ * intersect with this feature's candidate files to find seam overlaps, then
+ * sweep for open blockers on the source ref. Assembles everything into a
+ * single `OverlapReport`.
+ */
+export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapReport> {
+  const { candidateFiles, git, resolver, sourceRef, localBase } = args;
+
+  const base = await resolveBase(git, localBase);
+  const branches = await enumerateUnmergedBranches(git, base.ref);
+
+  const seamOverlaps: SeamOverlap[] = [];
+  for (const branch of branches) {
+    const changed = await changedPathsBetween(git, base.ref, branch);
+    const files = intersectFiles(candidateFiles, changed);
+    if (files.length > 0) {
+      seamOverlaps.push({ branch, files });
+    }
+  }
+
+  const { blockers, indeterminate } = await blockerSweep(sourceRef, resolver);
+
+  return { seamOverlaps, blockers, indeterminate, skipNotes: [] };
 }
 
 export function renderReport(_report: OverlapReport): string {
