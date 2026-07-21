@@ -49,7 +49,7 @@ the completed-excluding render.
 3. Edit `renderDashboard` (`daemon-dashboard.ts:461`) to accept an `includeCompleted` option and wrap the PROCESSED push (lines 552–554) in `if (opts?.includeCompleted) { … }`. Preserve existing call sites (option absent → omit).
 4. Verify GREEN.
 **Files:** `src/conductor/src/engine/daemon-dashboard.ts`
-**Wired-into:** `src/conductor/src/daemon-cli.ts` (startup emit — updated in Task 3)
+**Wired-into:** `src/conductor/src/daemon-cli.ts#runDaemonMode`
 **Dependencies:** none
 
 ### Task 2: Add and parse the `--completed`/`--all` flag
@@ -61,7 +61,7 @@ the completed-excluding render.
 3. Add the boolean field to `DaemonCommandOptions` (`daemon-command.ts:14`) and parse the flag in `detectDaemonCommand` (`daemon-command.ts:164`, mirroring `--continuous`).
 4. Verify GREEN.
 **Files:** `src/conductor/src/engine/daemon-command.ts`
-**Wired-into:** `src/conductor/src/index.ts#buildDaemonModeOptions` (Task 3)
+**Wired-into:** `src/conductor/src/index.ts#buildDaemonModeOptions`
 **Dependencies:** none
 
 ### Task 3: Split the startup emit sink + thread the flag
@@ -83,7 +83,7 @@ the completed-excluding render.
 1. Extend `daemon-dashboard.test.ts` to assert the active groups render identically to before for a fixed state; add an emit-level assertion that the log sink content never contains `PROCESSED` even when the console flag is set.
 2. Verify GREEN against Tasks 1–3.
 **Files:** `src/conductor/test/engine/daemon-dashboard.test.ts`
-**Wired-into:** none
+**Wired-into:** none (no new production surface)
 **Dependencies:** 3
 
 ### Task 5: Docs
@@ -92,7 +92,7 @@ the completed-excluding render.
 **Steps:**
 1. Document the new flag in the inherited-state dashboard sections of `README.md` and `src/conductor/README.md` (default hides completed; flag shows them; daemon.log never shows them).
 **Files:** `README.md`, `src/conductor/README.md`
-**Wired-into:** none
+**Wired-into:** none (no new production surface)
 **Dependencies:** 3
 
 ### Task 6: GREEN + full-suite check
@@ -101,8 +101,8 @@ the completed-excluding render.
 **Steps:**
 1. Run `rtk proxy npx vitest run test/engine/daemon-dashboard.test.ts test/engine/daemon-command.test.ts` in `src/conductor` (each worktree needs its own `npm install`); run the broader daemon suite if quick.
 2. Keep diffs minimal.
-**Files:** `src/conductor/src/engine/daemon-dashboard.ts`
-**Wired-into:** none
+**Files:** none (verification-only, no production code changed)
+**Wired-into:** none (no new production surface)
 **Dependencies:** 4, 5
 
 ## Files likely touched
