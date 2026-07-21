@@ -625,6 +625,57 @@ export interface DeriveCompletionResult {
 }
 
 /**
+ * Resolve a cited evidence-stamp sha through the rewrite map and confirm it
+ * is a reachable ancestor of HEAD.
+ *
+ * Existence alone is too soft: a pruned/dangling sha that happens to still
+ * resolve via a stale ref must not pass. A sha that was never a rewrite-map
+ * key (unrelated/forged) resolves to itself via resolveThroughMap, so this
+ * can never launder an off-branch citation.
+ *
+ * @param projectRoot - Root of the git repository
+ * @param citedSha - The sha text cited in the evidence stamp (pre-rewrite)
+ * @param rewriteMap - Persisted rewrite map (Task 9,
+ *   adr-2026-07-12-rebase-evidence-stamp-translation.md) for translating
+ *   shas moved by a sanctioned engine rebase
+ * @returns The resolved sha if it exists and is an ancestor of HEAD, else null
+ */
+export async function stampShaReachable(
+  projectRoot: string,
+  citedSha: string,
+  rewriteMap: Record<string, string>,
+): Promise<string | null> {
+  const sha = resolveThroughMap(citedSha, rewriteMap);
+
+  const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  });
+
+  let isAncestor = false;
+  if (shaCheck.exitCode === 0) {
+    const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (headCheck.exitCode === 0) {
+      const headSha = headCheck.stdout.trim();
+      const ancestorCheck = await execa('git', ['merge-base', '--is-ancestor', sha, headSha], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      isAncestor = ancestorCheck.exitCode === 0;
+    }
+  }
+
+  if (shaCheck.exitCode === 0 && isAncestor) {
+    return sha;
+  }
+
+  return null;
+}
+
+/**
  * Derive task completion from git trailers.
  * Trailer-first: checks for Task: <id> trailers in commit bodies.
  * Evidence forms: Evidence: satisfied-by <sha> and Evidence: skipped <reason>
@@ -700,34 +751,17 @@ async function deriveCompletionInternal(
         // Validate the (resolved) sha both exists AND is an ancestor of
         // HEAD — existence alone is too soft: a pruned/dangling sha that
         // happens to still resolve via a stale ref must not pass.
-        const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
-          cwd: projectRoot,
-          reject: false,
-        });
+        const reachableSha = await stampShaReachable(projectRoot, citedSha, rewriteMap);
 
-        let isAncestor = false;
-        if (shaCheck.exitCode === 0) {
-          const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
-            cwd: projectRoot,
-            reject: false,
-          });
-          if (headCheck.exitCode === 0) {
-            const headSha = headCheck.stdout.trim();
-            const ancestorCheck = await execa(
-              'git',
-              ['merge-base', '--is-ancestor', sha, headSha],
-              { cwd: projectRoot, reject: false },
-            );
-            isAncestor = ancestorCheck.exitCode === 0;
-          }
-        }
-
-        if (shaCheck.exitCode === 0 && isAncestor) {
+        if (reachableSha) {
           // Valid sha: mark task completed
           result[taskId].completed = true;
-          result[taskId].evidencedBy = sha;
+          result[taskId].evidencedBy = reachableSha;
           result[taskId].status = 'completed';
-          evidence.evidenceStamps.set(taskId, { sha, form: 'evidence:satisfied-by' });
+          evidence.evidenceStamps.set(taskId, {
+            sha: reachableSha,
+            form: 'evidence:satisfied-by',
+          });
           continue;
         }
 
