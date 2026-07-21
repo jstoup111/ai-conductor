@@ -1688,6 +1688,20 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result).toEqual({ done: true });
     });
+
+    it('fails when the latest attempt is a SKIP sentinel but the file is stale (mtime predates sessionStartedAt)', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-20T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, RESULTS), past, past);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: Date.now(),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/stale/i);
+    });
   });
 
   describe('checkStepCompletion: retro predicate', () => {
