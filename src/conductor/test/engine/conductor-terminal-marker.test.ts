@@ -168,6 +168,38 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(typeof breadcrumb?.exitIndex).toBe('number');
   });
 
+  it('daemon: run-scoped breadcrumb records the last emitted event type', async () => {
+    // Task 2: the breadcrumb must also remember the `type` of the last event
+    // the run loop emitted before an early return, so the finally backstop
+    // (Task 4/5) can name what actually happened instead of just the step.
+    // manual_test's prerequisite (build) is unsatisfied → checkGate blocks
+    // and emits `gate_blocked` immediately before the loop's early return, so
+    // that must be the last recorded event type.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'pending',
+    } as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    await conductor.run();
+
+    const breadcrumb = (conductor as unknown as {
+      _breadcrumb?: { lastEventType?: string };
+    })._breadcrumb;
+    expect(breadcrumb?.lastEventType).toBe('gate_blocked');
+  });
+
   it('non-daemon (interactive): a blocked-gate early return writes NO marker', async () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
