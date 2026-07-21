@@ -1172,13 +1172,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const region = latestAttemptRegion(content);
 
+    // FAIL rows in the latest attempt always take precedence over the SKIP
+    // sentinel: an attempt that carries both (e.g. a sentinel left over from
+    // scaffolding alongside a real FAIL table row) must not be treated as
+    // done just because the sentinel is present (Task 9 — sentinel/FAIL
+    // ordering bug). Compute/check FAIL rows BEFORE honoring the sentinel.
+    const failRows = region.split('\n').filter(isManualTestFailRow);
+
     // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
     // skipped (no endpoint/UI stories to exercise) rather than carrying a
     // PASS/FAIL table. Treat it as done once it's fresh for this session —
     // same freshness bar as a real PASS/FAIL attempt — so auto mode does not
     // hang the gate forever waiting for a results table that will never be
-    // written.
-    if (isSkipAttempt(region)) {
+    // written. Only applies when there are no FAIL rows in this attempt.
+    if (failRows.length === 0 && isSkipAttempt(region)) {
       if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
         return {
           done: false,
@@ -1188,7 +1195,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: true };
     }
 
-    const failRows = region.split('\n').filter(isManualTestFailRow);
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.
       // A later FAIL-free file is only accepted once HEAD moves past it.

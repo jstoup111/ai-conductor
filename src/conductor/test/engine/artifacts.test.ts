@@ -1702,6 +1702,17 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/stale/i);
     });
+
+    it('fails when the latest attempt contains both a SKIP sentinel and a FAIL row — FAIL wins', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n\n` +
+          '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
   });
 
   describe('checkStepCompletion: retro predicate', () => {
