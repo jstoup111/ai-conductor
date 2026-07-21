@@ -5079,14 +5079,27 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
-          const advance = await this.advanceTail(
-            step,
-            state,
-            kickbackCounts,
-            stuckGate,
-            steps,
-            indexOf,
-          );
+          let advance: Awaited<ReturnType<typeof this.advanceTail>>;
+          try {
+            advance = await this.advanceTail(
+              step,
+              state,
+              kickbackCounts,
+              stuckGate,
+              steps,
+              indexOf,
+            );
+          } catch (transitionErr) {
+            // Tag the escaped rejection with which step-transition it happened
+            // during, preserving the original stack (never rethrow a bare
+            // re-wrap that loses `instanceof Error` or drops `.stack` — the
+            // outer catch below relies on both to build an actionable HALT
+            // reason).
+            if (transitionErr instanceof Error) {
+              transitionErr.message = `step-transition (${step.name}): ${transitionErr.message}`;
+            }
+            throw transitionErr;
+          }
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
@@ -5138,7 +5151,7 @@ export class Conductor {
       // supervising daemon classifies this as `halted` (worktree kept, parked,
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
-      const reason = `conductor error: ${err instanceof Error ? err.message : String(err)}`;
+      const reason = `conductor error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`;
       await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(

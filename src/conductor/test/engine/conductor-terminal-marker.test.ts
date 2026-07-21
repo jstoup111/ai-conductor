@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, access, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, access, readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -30,6 +30,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor, resolveLastStep } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 // A runner that should never be invoked in these tests (the loop exits before
 // dispatching, or runs nothing). Throws loudly if called so a misfire is caught.
@@ -458,6 +459,80 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
     expect(await exists(join(dir, '.pipeline/DONE'))).toBe(false);
+  });
+
+  it('daemon: an escaped step-transition rejection (advanceTail throw) HALTs with the tagged error AND its stack', async () => {
+    // Task 7: a rejection thrown from the step-transition seam (advanceTail)
+    // used to surface as `conductor error: <message>` only — the stack trace
+    // (which pinpoints which internal call actually failed) was dropped. The
+    // reason written to .pipeline/HALT and emitted on loop_halt must contain
+    // both the error message and its stack.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      feature_desc: 'add foo',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      prd: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'skipped',
+      plan: 'done',
+      architecture_diagram: 'skipped',
+      architecture_review: 'skipped',
+      acceptance_specs: 'skipped',
+      build: 'pending',
+    } as ConductState);
+
+    const okRunner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'build') {
+          const evidence = await createTaskEvidence(dir);
+          evidence.evidenceStamps.set('t1', { sha: '0'.repeat(40), form: 'test-stub' });
+          await evidence.write();
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+        }
+        return { success: true, output: 'ok' };
+      }),
+    };
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: okRunner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'build',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    const forcedError = new Error('advanceTail boom');
+    vi.spyOn(conductor as unknown as { advanceTail: () => Promise<unknown> }, 'advanceTail')
+      .mockRejectedValue(forcedError);
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    expect(await exists(join(dir, '.pipeline/DONE'))).toBe(false);
+
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toContain('advanceTail boom');
+    expect(forcedError.stack).toBeDefined();
+    expect(halt).toContain((forcedError.stack as string).split('\n')[1] ?? forcedError.stack);
+
+    expect(haltEvents.length).toBeGreaterThan(0);
+    expect(haltEvents[0]).toContain('advanceTail boom');
+    expect(haltEvents[0]).toContain((forcedError.stack as string).split('\n')[1] ?? forcedError.stack);
   });
 });
 
