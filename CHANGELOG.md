@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Added the missing `bin/intake-file` repo-root wrapper (the intake skill
+  instructs running `bin/intake-file`, but only `src/conductor/bin/intake-file`
+  existed; sibling `bin/intake-backfill` had a wrapper). Convention DECIDE
+  captured as #742.
 - no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
   `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
   the judged-closure lane (#733)
