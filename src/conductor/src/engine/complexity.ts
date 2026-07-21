@@ -52,3 +52,22 @@ export function assessTier(
 export function hasInsufficientInfo(signalCount: number): boolean {
   return signalCount < 3;
 }
+
+/**
+ * Deterministic label→tier seed (issue #765, T7). Maps a size label of the
+ * `size: <S|M|L>` shape (as produced by intake's `label-sync.ts` GitHub
+ * labeling) to its `ComplexityTier`, so a caller can short-circuit the
+ * full `assessTier` signal-based classification when the label is already
+ * known. Returns `undefined` for anything that doesn't match — callers
+ * fall back to `assessTier`.
+ *
+ * Scope note (T7): this is a narrowly-scoped label-parsing helper only. It
+ * is not yet wired into the `.docs/complexity/<slug>.md` generation path
+ * (parseComplexityTier/assessTier callers) — see commit message for the
+ * scope decision.
+ */
+export function tierFromSizeLabel(label: string): ComplexityTier | undefined {
+  const m = label.match(/\bsize:\s*([SML])\b/i);
+  if (!m) return undefined;
+  return m[1].toUpperCase() as ComplexityTier;
+}
