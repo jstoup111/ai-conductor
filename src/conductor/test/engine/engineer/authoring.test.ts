@@ -595,14 +595,25 @@ async function showOnBranch(
 
 describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => {
   let repoPath: string;
+  let fakeHome: string;
+  let savedHome: string | undefined;
 
   beforeEach(async () => {
     ({ repoPath } = await makeGitRepo());
+    // Isolate $HOME so these gh-fallback/unowned assertions never observe the
+    // real developer machine's ~/.ai-conductor/config.yml spec_owner (Story 1
+    // wired runAuthoring to consult machine identity when ownerConfig is
+    // empty — these tests intentionally exercise the chain PAST that step).
+    fakeHome = await mkdtemp(join(tmpdir(), 'authoring-owner-gate-home-'));
+    savedHome = process.env.HOME;
+    process.env.HOME = fakeHome;
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    process.env.HOME = savedHome;
     await rm(repoPath, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   it('stamps Owner from configured spec_owner (gh not consulted)', async () => {
