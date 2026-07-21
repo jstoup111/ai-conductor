@@ -1,11 +1,13 @@
 #!/usr/bin/env -S npx tsx
-// Applies priority:/size:/blocked_by: labels to an intake issue at open/edit time,
-// per .github/workflows/intake-label-sync.yml.
+// Applies priority:/size:/blocked_by: labels (and dependency links) to an
+// intake issue at open/edit time, per .github/workflows/intake-label-sync.yml.
 //
-// Parsing/diff logic lives in src/engine/intake-label-sync.ts (unit-tested in
-// test/intake-label-sync.test.ts) so the Action's own logic is testable without
-// hitting the GitHub API. This script is the thin, side-effecting shell around it:
-// read the event payload -> parse -> diff against current labels -> PATCH the issue.
+// Delegates to the shared, acceptance-tested seam `syncIssueLabels`
+// (src/engine/engineer/intake/label-sync.ts) — the same module used by
+// bin/intake-file and bin/intake-backfill — so this script is a thin,
+// side-effecting shell: read the event payload -> extract issue-form fields
+// -> hand off to syncIssueLabels, which owns label auto-create/apply and
+// blocked_by dependency linking via the real `gh` CLI.
 //
 // Failure isolation: this script must NEVER fail the workflow/build. Any error
 // (auth, rate limit, malformed payload, network) is caught and logged; the process
@@ -13,7 +15,53 @@
 // (re-edit the issue), but failing CI over it is not acceptable (labels-only, isolated
 // from ci.yml per the task spec).
 import { readFileSync } from 'node:fs';
-import { parseIntakeFormBody, computeLabelsToApply } from '../src/engine/intake-label-sync.js';
+import { makeProductionGh } from '../src/engine/pr-labels.js';
+import { syncIssueLabels } from '../src/engine/engineer/intake/label-sync.js';
+
+/**
+ * Extract the raw value submitted under a given issue-form field heading.
+ *
+ * Issue-form bodies render each field as:
+ *   ### <Label>
+ *
+ *   <value>
+ *
+ * Returns the text of the first non-empty line following the heading, or
+ * undefined if the heading isn't present or has no content (e.g.
+ * "_No response_").
+ */
+function extractField(body: string, heading: string): string | undefined {
+  const headingRegex = new RegExp(`^###\\s+${heading}\\s*$`, 'im');
+  const match = headingRegex.exec(body);
+  if (!match) return undefined;
+
+  const rest = body.slice(match.index + match[0].length);
+  const nextHeadingIdx = rest.search(/^###\s+/m);
+  const section = nextHeadingIdx === -1 ? rest : rest.slice(0, nextHeadingIdx);
+
+  const lines = section
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length === 0) return undefined;
+  const value = lines[0];
+  if (value === '_No response_') return undefined;
+  return value;
+}
+
+/**
+ * Parse the "Depends on" field into fully-qualified `owner/repo#N` refs
+ * (syncIssueLabels expects cross-repo-capable slug refs, not bare numbers).
+ * Accepts "none", empty, or unparsable content as "no dependencies".
+ */
+function parseDependsOnField(body: string, repoSlug: string): string[] {
+  const raw = extractField(body, 'Depends on');
+  if (!raw) return [];
+  const matches = raw.matchAll(/#(\d+)/g);
+  const numbers = [...new Set([...matches].map((m) => m[1]))];
+  return numbers.map((n) => `${repoSlug}#${n}`);
+}
 
 async function main(): Promise<void> {
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -32,65 +80,24 @@ async function main(): Promise<void> {
     return;
   }
 
-  const [owner, repo] = repoSlug.split('/');
   const body: string = issue.body ?? '';
-  const currentLabels: string[] = (issue.labels ?? []).map((l: any) =>
-    typeof l === 'string' ? l : l.name,
+  const priority = extractField(body, 'Priority');
+  const size = extractField(body, 'Size');
+  const dependsOn = parseDependsOnField(body, repoSlug);
+
+  const issueRef = `${repoSlug}#${issue.number}`;
+
+  const result = await syncIssueLabels(
+    { priority, size, dependsOn },
+    issueRef,
+    { gh: makeProductionGh(), cwd: process.cwd(), log: (msg) => console.error(msg) },
   );
 
-  const parsed = parseIntakeFormBody(body);
-  const nextLabels = computeLabelsToApply(parsed, currentLabels);
-
-  // Idempotent no-op: skip the API call entirely if nothing changed.
-  const same =
-    nextLabels.length === currentLabels.length &&
-    [...nextLabels].sort().every((l, i) => l === [...currentLabels].sort()[i]);
-  if (same) {
-    console.log('[intake-label-sync] labels already in sync; no-op');
-    return;
-  }
-
-  // The "set labels" endpoint does not auto-create unknown labels — it 404s.
-  // Explicitly ensure each label exists first (idempotent: creating an
-  // already-existing label 422s, which we swallow).
-  for (const name of nextLabels) {
-    try {
-      const createRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/labels`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github+json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name, color: 'ededed' }),
-      });
-      if (!createRes.ok && createRes.status !== 422) {
-        const text = await createRes.text().catch(() => '');
-        console.error(`[intake-label-sync] label create warning for "${name}": ${createRes.status} ${text}`);
-      }
-    } catch (error) {
-      console.error(`[intake-label-sync] label create error for "${name}" (non-fatal):`, error);
-    }
-  }
-
-  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issue.number}/labels`;
-  const res = await fetch(url, {
-    method: 'PUT', // full replace — labels-only scope, auto-creates missing labels
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ labels: nextLabels }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    console.error(`[intake-label-sync] label PUT failed: ${res.status} ${text}`);
-    return;
-  }
-
-  console.log(`[intake-label-sync] applied labels: ${nextLabels.join(', ')}`);
+  console.log(
+    `[intake-label-sync] applied ${result.priorityLabel}, ${result.sizeLabel}` +
+      (result.linked.length > 0 ? `; linked: ${result.linked.join(', ')}` : '') +
+      (result.badRefs.length > 0 ? `; bad refs: ${result.badRefs.join(', ')}` : ''),
+  );
 }
 
 main().catch((error) => {
