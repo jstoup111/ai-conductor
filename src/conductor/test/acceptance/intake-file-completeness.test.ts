@@ -75,7 +75,7 @@ function makeFakeGh(opts: { failLabelApply?: boolean; failIssueCreate?: boolean 
     if (args[0] === 'label' && args[1] === 'create') {
       return { stdout: '' };
     }
-    if (args.includes('labels') && args.some((a) => a.startsWith('labels[]='))) {
+    if (args.some((a) => a.endsWith('/labels')) && args.some((a) => a.startsWith('labels[]='))) {
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
       const labelArg = args.find((a) => a.startsWith('labels[]='))!;
       appliedLabels.push(labelArg.replace('labels[]=', ''));
