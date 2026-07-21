@@ -271,4 +271,140 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
     },
     30_000,
   );
+
+  it(
+    'a real FAIL row recorded via --results still fires the manual_test→build kickback, then HALTs on the no-op cycle (#367 regression, unchanged by the SKIP sentinel)',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'manual-test-fail-daemon-'));
+      try {
+        const statePath = join(dir, 'conduct-state.json');
+        await seedToManualTest(dir, statePath);
+
+        const calls: StepName[] = [];
+        const kickbacks: Array<{ from: string; to: string }> = [];
+        const events = new ConductorEventEmitter();
+        events.on('kickback', (e) => {
+          if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+        });
+        let halted = false;
+        events.on('loop_halt', () => {
+          halted = true;
+        });
+
+        const runner: StepRunner = {
+          run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+            calls.push(step);
+            if (step === 'build') {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(
+                join(dir, '.pipeline/task-status.json'),
+                JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+              );
+            } else if (step === 'manual_test') {
+              const scratchParent = await mkdtemp(join(tmpdir(), 'manual-test-fail-results-'));
+              const resultsPath = join(scratchParent, 'results.md');
+              const rows = '| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+              await writeFile(resultsPath, rows, 'utf-8');
+              const pipelineDir = join(dir, '.pipeline');
+              const result = await execa(
+                REAL_CONDUCT_TS,
+                ['manual-test-record', '--results', resultsPath, '--pipeline-dir', pipelineDir],
+                { cwd: dir, reject: false },
+              );
+              await rm(scratchParent, { recursive: true, force: true });
+              if (result.exitCode !== 0) {
+                throw new Error(`manual-test-record --results failed: ${result.stderr}`);
+              }
+            }
+            return { success: true };
+          }),
+        };
+
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          mode: 'auto',
+          daemon: true,
+          verifyArtifacts: true,
+          maxRetries: 1,
+          fromStep: 'manual_test',
+        });
+
+        await conductor.run();
+
+        // Same shape as conductor.test.ts's pre-existing #367 regression test:
+        // one kickback to build, one HALT on the first no-op retry cycle — the
+        // FAIL path must be completely unaffected by the new SKIP machinery.
+        expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+        expect(calls.filter((s) => s === 'build').length).toBe(1);
+        expect(halted).toBe(true);
+        const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+        expect(halt).toMatch(/kickback-to-build no-op/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  it(
+    'no results recorded at all (marker file absent) still HALTs — the SKIP acceptance path did not make the predicate permissive on true omission',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'manual-test-omitted-daemon-'));
+      try {
+        const statePath = join(dir, 'conduct-state.json');
+        await seedToManualTest(dir, statePath);
+
+        const calls: StepName[] = [];
+        const kickbacks: string[] = [];
+        const events = new ConductorEventEmitter();
+        events.on('kickback', (e) => {
+          if (e.type === 'kickback') kickbacks.push(e.to);
+        });
+        let halted = false;
+        events.on('loop_halt', () => {
+          halted = true;
+        });
+
+        // Deliberately does NOT call manual-test-record at all — no --skip,
+        // no --results. `.pipeline/manual-test-results.md` never gets
+        // written, so the gate must observe the "missing marker" case, not
+        // the SKIP sentinel.
+        const runner: StepRunner = {
+          run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+            calls.push(step);
+            return { success: true };
+          }),
+        };
+
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          mode: 'auto',
+          daemon: true,
+          verifyArtifacts: true,
+          maxRetries: 1,
+          fromStep: 'manual_test',
+        });
+
+        await conductor.run();
+
+        expect(halted).toBe(true);
+        expect(kickbacks).toHaveLength(0);
+        expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+        await expect(
+          readFile(join(dir, '.pipeline/manual-test-results.md'), 'utf-8'),
+        ).rejects.toThrow();
+        const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+        expect(halt).toMatch(/step 'manual_test' failed/);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
 });
