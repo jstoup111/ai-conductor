@@ -134,6 +134,32 @@ describe('deriveCompletion pin-branch reachability gate', () => {
     expect(result['T'].auditEntry).toContain(unreachableSha.slice(0, 7));
   });
 
+  it('demotes a task whose sidecar stamp is form: semantic-verified but cites an unreachable commit (no form bypasses the gate)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    await writeFile(join(gitDir, 'a.txt'), 'a\n');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'commit A'], { cwd: gitDir });
+
+    const planPath = join(gitDir, 'plan.md');
+    await writeFile(planPath, '### Task T: Demoted semantic-verified task\n\n`a.txt`\n');
+
+    // No commit in the commits list carries a `Task: T` trailer.
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    const unreachableSha = 'facefacefacefacefacefacefacefacefaceface';
+    const evidence = await createTaskEvidence(gitDir);
+    evidence.evidenceStamps.set('T', { sha: unreachableSha, form: 'semantic-verified' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['T'].completed).toBe(false);
+    expect(result['T'].status).not.toBe('completed');
+    expect(typeof result['T'].auditEntry).toBe('string');
+    expect(result['T'].auditEntry!.length).toBeGreaterThan(0);
+  });
+
   it('keeps a task pinned completed when its sidecar stamp cites a reachable commit', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
