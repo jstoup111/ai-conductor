@@ -56,12 +56,14 @@ const KNOWN_BAD_FIXTURES = [
   `await exec('git', ['init', '-q'], { cwd: dir });`, // exec, no -b
   `await git(['init', '-q']);`, // local git() helper array form
   `await git('init', '-q');`, // local git() helper variadic form
+  `await exec('git', ['init', '--bare', '-q'], { cwd: dir });`, // --bare without -b/--initial-branch, no marker
 ];
 
 const KNOWN_GOOD_FIXTURES = [
   `await execa('git', ['init', '-b', 'main', '-q'], { cwd: dir });`, // with -b main
   `await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repoPath });`, // -b in middle
-  `await exec('git', ['init', '--bare', '-q'], { cwd: dir });`, // --bare, no -b needed
+  `await exec('git', ['init', '--bare', '-b', 'main', '-q'], { cwd: dir });`, // --bare, pinned with -b
+  `await exec('git', ['init', '--bare', '-q'], { cwd: dir }); // portability-ok: bare repo has no HEAD to matter`, // --bare, marker exemption
   `await git(['init', '-b', 'main']);`, // git() helper with -b
   `// await execa('git', ['init', '-q'], { cwd: dir });`, // commented out
   `  // await git('init', '-q');`, // commented out with indent
@@ -140,31 +142,31 @@ function extractGitInitPattern(line: string): {
 
   // Pattern 1: execa('git', ['init', ...])
   if (line.includes("execa('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'execa', hasFlag, markerPresent };
   }
 
   // Pattern 2: execFile('git', ['init', ...])
   if (line.includes("execFile('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'execFile', hasFlag, markerPresent };
   }
 
   // Pattern 3: exec('git', ['init', ...])
   if (line.includes("exec('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'exec', hasFlag, markerPresent };
   }
 
   // Pattern 4a: git(['init', ...]) — array form
   if (line.includes("git(['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'git-helper', hasFlag, markerPresent };
   }
 
   // Pattern 4b: git('init', ...) — variadic form (make sure it's not git-daemon or similar)
   if (line.includes("git('init'") && !line.includes('git-daemon')) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'git-helper', hasFlag, markerPresent };
   }
 
@@ -352,7 +354,7 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
       { fixture: `execa('git', ['init', '-q'])`, shouldViolate: true },
       { fixture: `execa('git', ['init', '-b', 'main', '-q'])`, shouldViolate: false },
       { fixture: `execFile('git', ['init', '-q'])`, shouldViolate: true },
-      { fixture: `execFile('git', ['init', '--bare', '-q'])`, shouldViolate: false },
+      { fixture: `execFile('git', ['init', '--bare', '-q'])`, shouldViolate: true },
       { fixture: `exec('git', ['init', '-q'])`, shouldViolate: true },
       { fixture: `exec('git', ['init', '-q', '-b', 'main'])`, shouldViolate: false },
       { fixture: `git(['init', '-q'])`, shouldViolate: true },
