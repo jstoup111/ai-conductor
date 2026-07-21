@@ -1039,3 +1039,115 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
   }, 20000);
 });
+
+describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-f10-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('mergeBase unavailable (merge-base fails but leaks a bogus ref) → featureSurface undefined, fixed-set fallback applied', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Simulate a genuinely uncomputable mergeBase: the underlying `git
+    // merge-base` call fails (no common ancestor / shallow clone) but still
+    // leaks a non-empty, bogus ref on stdout — the case NOT already covered
+    // by the existing `mergeBase || undefined` empty-string check.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'merge-base') {
+        return {
+          exitCode: 1,
+          stdout: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n',
+          stderr: 'fatal: no merge base',
+        };
+      }
+      return real(args, opts);
+    };
+
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind === 'changed') {
+      // Never [] — that would falsely mean "feature touched nothing" and
+      // trigger unsound preservation.
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-f10a-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome, true);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    await rm(pdir, { recursive: true, force: true });
+  }, 20000);
+
+  it('F diff (mergeBase..preTree) throws → featureSurface undefined, performRebase does not throw/reject', async () => {
+    const { performRebase, makeGitRunner, applyRebaseVerdicts } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const real = makeGitRunner(repo);
+    // Only the F diff call (the one addressed by mergeBase) throws — the D
+    // diff call (preTree..HEAD) and everything else runs for real.
+    const git: GitRunner = async (args, opts) => {
+      if (args[0] === 'diff' && args.includes(mergeBase)) {
+        throw new Error('simulated git crash computing F');
+      }
+      return real(args, opts);
+    };
+
+    let outcome: RebaseOutcome | undefined;
+    await expect(
+      (async () => {
+        outcome = await performRebase(git, repo, 'main');
+      })(),
+    ).resolves.not.toThrow();
+
+    expect(outcome?.kind).toBe('changed');
+    if (outcome?.kind === 'changed') {
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-f10b-'));
+    await mkdir(join(pdir, '.pipeline'), { recursive: true });
+    const r = await applyRebaseVerdicts(pdir, outcome as RebaseOutcome, true);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    await rm(pdir, { recursive: true, force: true });
+  }, 20000);
+});

@@ -511,9 +511,21 @@ async function classifyClean(
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
   // outcome for the delta-aware gate-invalidation classifier (Task 6+);
   // this task only computes and carries it through.
-  const featureSurface = mergeBase
-    ? await changedPathsBetween(git, mergeBase, preTree)
-    : undefined;
+  let featureSurface: string[] | undefined;
+  if (mergeBase) {
+    try {
+      const r = await git(['diff', '--name-only', mergeBase, preTree]);
+      featureSurface =
+        r.exitCode !== 0
+          ? undefined
+          : r.stdout
+              .split('\n')
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0);
+    } catch {
+      featureSurface = undefined;
+    }
+  }
   return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
 }
 
