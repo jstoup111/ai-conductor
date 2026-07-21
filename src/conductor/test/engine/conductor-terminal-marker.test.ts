@@ -534,6 +534,80 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(haltEvents[0]).toContain('advanceTail boom');
     expect(haltEvents[0]).toContain((forcedError.stack as string).split('\n')[1] ?? forcedError.stack);
   });
+
+  it('daemon: a non-Error step-transition rejection (advanceTail throws a string) still HALTs safely', async () => {
+    // Task 8: the Task 7 tagging wrap and the outer catch's stack-preserving
+    // reason-builder both dereference `.message`/`.stack`. If either ever did
+    // so unconditionally (without an `instanceof Error` guard), a non-Error
+    // rejection (a bare string, undefined, etc.) would throw a TypeError from
+    // *inside* the error handler itself, escaping the loop with no HALT
+    // marker at all. Assert the non-Error case still produces a well-formed
+    // HALT and loop_halt event, with no throw escaping conductor.run().
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      feature_desc: 'add foo',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      prd: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'skipped',
+      plan: 'done',
+      architecture_diagram: 'skipped',
+      architecture_review: 'skipped',
+      acceptance_specs: 'skipped',
+      build: 'pending',
+    } as ConductState);
+
+    const okRunner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'build') {
+          const evidence = await createTaskEvidence(dir);
+          evidence.evidenceStamps.set('t1', { sha: '0'.repeat(40), form: 'test-stub' });
+          await evidence.write();
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+        }
+        return { success: true, output: 'ok' };
+      }),
+    };
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: okRunner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'build',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    vi.spyOn(conductor as unknown as { advanceTail: () => Promise<unknown> }, 'advanceTail')
+      .mockRejectedValue('transition failed');
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    expect(await exists(join(dir, '.pipeline/DONE'))).toBe(false);
+
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toContain('transition failed');
+    expect(halt).not.toContain('undefined');
+    expect(halt).not.toMatch(/\[object Object\]/);
+
+    expect(haltEvents.length).toBeGreaterThan(0);
+    expect(haltEvents[0]).toContain('transition failed');
+  });
 });
 
 describe('resolveLastStep (Task 3): pure helper, never returns "unknown"', () => {
