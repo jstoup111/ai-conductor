@@ -409,6 +409,71 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.featureSlug).toBe('my-feature');
     expect(last.noEvidenceAttempts).toBe(2);
   });
+
+  it('emits git-derived resolved advancing 0 -> 1 when planPath is set, even though task-status.json never changes', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    // deriveCompletion's default evidence-range resolution requires an
+    // origin remote (fail-closed otherwise) — stand up a bare repo to act
+    // as origin/main, matching readSnapshot's fixture pattern above.
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    // task-status.json reports 0/2 completed and NEVER changes across ticks
+    // — proving the emitted `resolved` advances via the git-derived path,
+    // not reconciliation of task-status.json.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [
+          { id: '1', title: 'First', status: 'pending' },
+          { id: '2', title: 'Second', status: 'pending' },
+        ],
+      }),
+    );
+
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+      planPath,
+    });
+    watcher.start();
+
+    // Baseline tick: task-status.json says 0/2, no commits satisfy Task 1
+    // yet.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // A task completes via a git commit — task-status.json is NOT touched.
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const last = events[events.length - 1];
+    expect(last.resolved).toBe(1);
+    expect(last.total).toBe(2);
+  });
 });
 
 describe('BuildProgressWatcher lifecycle hardening', () => {

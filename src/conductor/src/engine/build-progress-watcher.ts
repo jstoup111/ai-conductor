@@ -304,8 +304,8 @@ export class BuildProgressWatcher {
       return;
     }
 
-    const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
     const total = tasks.length;
+    const resolved = await computeResolved({ projectRoot: this.projectRoot, planPath: this.planPath, tasks, total });
     const current = tasks.find((t) => t.status === 'in_progress');
 
     let head: string | undefined;
