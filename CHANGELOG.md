@@ -54,6 +54,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Committed shipped-records for four phantom features the daemon kept re-parking
+  (background-intake-conduct-loop #382, wiring-reachability-gate #650,
+  autoheal-path-corroboration #709, finish-staleness #596) so backlog dedup
+  drops them permanently.
+
 - Issue #695 — **intake-only criteria enforcement**: priority + size +
   dependency-linking are now stamped at every intake capture surface. Ships a
   `parseSizeLabel` closed-vocabulary parser beside `parsePriorityLabels`
