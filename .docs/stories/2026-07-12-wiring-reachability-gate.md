@@ -159,6 +159,16 @@ unwired feature can never advance to manual_test.
   deleted the verified references (conflict-check finding vs conductor.ts:3454-3463 and the
   #420 pinned enumeration — the #420 and build-review registry tests are amended in the same
   change).
+  **Refined by `adr-2026-07-20-post-rebase-delta-aware-invalidation.md` (#655):** this
+  unconditional membership is narrowed to a delta-aware trigger condition rather than
+  contradicted — `wiring_check` verifies production reachability (runtime paths), so a
+  test-only or docs-only rebase delta cannot move or delete a production reachability
+  target, and preserving `wiring_check` on such a delta does not violate this story's
+  rationale (the references it verified are provably intact). `wiring_check` is invalidated
+  iff the rebase delta contains runtime source (`D_featureSrc ∪ D_foreignSrc ≠ ∅`) and
+  preserved on a test/docs-only delta — a strict narrowing of the trigger condition that
+  keeps the gate's protective intent unchanged (established precedent: this story's own
+  amendment of the #420 pinned enumeration).
 - Given the shipped build-review story's registry test asserting
   `manual_test.prerequisites === ['build_review']`, when this feature repoints the field, then
   that registry test is updated in the same commit to assert `['wiring_check']` AND that

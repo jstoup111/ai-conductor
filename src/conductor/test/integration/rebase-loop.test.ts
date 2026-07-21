@@ -12,6 +12,12 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
+import {
+  performRebase,
+  applyRebaseVerdicts,
+  emitGateInvalidationEvents,
+  makeGitRunner as makeRebaseGitRunner,
+} from '../../src/engine/rebase.js';
 
 // END-TO-END acceptance specs for the Phase 9.0 daemon rebase-on-latest step.
 //
@@ -48,6 +54,28 @@ const FRONT_DONE: ConductState = {
   plan: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
+  acceptance_specs: 'skipped',
+};
+
+// Tier 'M' with `architecture_review: 'done'` (not 'skipped') — needed so
+// `architecture_review_as_built` (skippableForTiers: ['S'], skipWhenSkipped:
+// 'architecture_review') actually dispatches. The #655 delta-aware specs
+// below need BOTH judged audit gates (`prd_audit` and
+// `architecture_review_as_built`) to genuinely run so preservation vs.
+// re-run is observable, which FRONT_DONE's tier 'S' fixture cannot exercise.
+const FRONT_DONE_M: ConductState = {
+  complexity_tier: 'M',
+  feature_desc: 'add foo',
+  worktree: 'done',
+  memory: 'done',
+  explore: 'done',
+  prd: 'done',
+  complexity: 'done',
+  stories: 'done',
+  conflict_check: 'skipped',
+  plan: 'done',
+  architecture_diagram: 'skipped',
+  architecture_review: 'done',
   acceptance_specs: 'skipped',
 };
 
@@ -1316,5 +1344,643 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+  });
+
+  // ── #655: delta-aware post-rebase gate invalidation ─────────────────────
+  //
+  // `D` = rebase delta (`changedCodePaths`, `preTree..HEAD`); `F` = feature
+  // claimed surface (`changedPathsBetween(mergeBase, preTree)`). Per the
+  // APPROVED ADR (adr-2026-07-20-post-rebase-delta-aware-invalidation.md),
+  // `prd_audit`/`architecture_review_as_built` should be PRESERVED (state
+  // stays `done`, never re-dispatched) when `D_featureSrc = ∅`, and
+  // `wiring_check`/`manual_test` preserved when the delta contains no
+  // runtime source at all. None of `classifyGateInvalidation`, `partitionDelta`
+  // (new module `src/conductor/src/engine/gate-invalidation.ts`), or
+  // `RebaseOutcome.changed.featureSurface` exist yet — today's code
+  // invalidates a FIXED set `{build, build_review, wiring_check, +manual_test}`
+  // on ANY `changed` rebase and lets `markDownstreamStale` blanket-cascade the
+  // judged audits, so every spec below fails on its behavioral assertion
+  // (dispatch counts, verdict shape, or the two new audit-trail events), not
+  // on setup — matching this file's existing RED convention (see Task 14
+  // above).
+  describe('delta-aware post-rebase gate invalidation (#655)', () => {
+    // Feature branch owns BOTH a runtime file (`src/feature.ts`, from
+    // initRepoOnFeatureBranch) and a test file (`src/feature.test.ts`) — its
+    // "claimed surface" F includes both paths.
+    async function addFeatureTestFile(): Promise<void> {
+      await writeFile(
+        join(dir, 'src/feature.test.ts'),
+        "it('foo works', () => {});\n",
+      );
+      await git('add', '.');
+      await git('commit', '-m', 'feature test coverage');
+    }
+
+    // Base coincidentally touches the SAME path(s) the feature also touched,
+    // with byte-identical content so the rebase auto-merges cleanly (no
+    // conflict) — generalizes the established
+    // advanceBaseWithCoincidentalTaskTrailer idiom above to arbitrary
+    // paths/content, optionally alongside a genuinely-foreign runtime file.
+    async function advanceBaseCoincidentally(
+      touches: Array<{ path: string; content: string }>,
+      opts: { alsoForeignRuntime?: boolean } = {},
+    ): Promise<void> {
+      await git('checkout', BASE);
+      for (const t of touches) {
+        await mkdir(join(dir, t.path.split('/').slice(0, -1).join('/') || '.'), {
+          recursive: true,
+        }).catch(() => {});
+        await writeFile(join(dir, t.path), t.content);
+      }
+      if (opts.alsoForeignRuntime) {
+        await mkdir(join(dir, 'src'), { recursive: true }).catch(() => {});
+        await writeFile(join(dir, 'src/foreign-sibling.ts'), 'export const foreign = 1;\n');
+      }
+      await git('add', '.');
+      await git('commit', '-m', 'base coincidentally touches feature paths');
+      await git('checkout', 'feature/foo');
+    }
+
+    // A feature branch whose OWN runtime file (`src/feature.ts`) pre-exists on
+    // BASE (shared ancestry) — unlike `initRepoOnFeatureBranch` (which creates
+    // the file fresh only on the feature branch), this gives base and feature
+    // a common blob to 3-way-merge against. This matters because `D` (the
+    // rebase delta) is a tree-to-tree diff of the FEATURE's own pre- and
+    // post-rebase HEAD — a "coincidental" base touch that lands on
+    // byte-identical final content (the `advanceBaseCoincidentally` idiom
+    // above) can NEVER show up in `D`, no matter what commits intervened,
+    // because the final blob is unchanged. To genuinely exercise
+    // "D_featureSrc non-empty at a feature-owned path", base and feature must
+    // each make a real, non-overlapping edit to a file they both descend
+    // from, so the rebase's 3-way merge produces a real content change.
+    async function initRepoOnFeatureBranchWithSharedRuntimeFile(): Promise<void> {
+      await execFileAsync('git', ['init', '-b', BASE, dir]);
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+      await mkdir(join(dir, 'src'), { recursive: true });
+      // Multiple shared lines give the 3-way merge enough context to
+      // auto-resolve a top-insert (base) + bottom-append (feature) cleanly,
+      // rather than conflicting on adjacent-line edits.
+      await writeFile(
+        join(dir, 'src/feature.ts'),
+        'export const foo = 1;\nexport const a = 1;\nexport const b = 1;\n' +
+          'export const c = 1;\nexport const d = 1;\n',
+      );
+      await writeFile(join(dir, 'README.md'), '# base\n');
+      await git('add', '.');
+      await git('commit', '-m', 'initial commit on base (includes feature.ts)');
+
+      await git('checkout', '-b', 'feature/foo');
+      await writeFile(
+        join(dir, 'src/feature.ts'),
+        'export const foo = 1;\nexport const a = 1;\nexport const b = 1;\n' +
+          'export const c = 1;\nexport const d = 1;\nexport const featureOwned = 2;\n',
+      );
+      await git('add', '.');
+      await git('commit', '-m', 'feature work: extend feature.ts (appends at end)');
+    }
+
+    // Base independently makes a real, non-overlapping edit (inserts near the
+    // top) to the SAME shared file the feature also edited (appends at the
+    // end) — a clean, non-conflicting 3-way merge that genuinely changes the
+    // final tree at `src/feature.ts`, so it shows up in `D` as feature-owned
+    // runtime source (`D_featureSrc`). `extraTouches` lets a test also fold
+    // in a byte-identical touch to another feature-owned path in the SAME
+    // base commit (that touch itself never affects `D` — see the comment on
+    // `advanceBaseCoincidentally` — it is included only to mirror this
+    // story's "coincidental multi-path touch" framing).
+    async function advanceBaseWithDivergentEditToSharedFile(
+      extraTouches: Array<{ path: string; content: string }> = [],
+    ): Promise<void> {
+      await git('checkout', BASE);
+      await writeFile(
+        join(dir, 'src/feature.ts'),
+        'export const foo = 1;\nexport const baseOwned = 3;\nexport const a = 1;\n' +
+          'export const b = 1;\nexport const c = 1;\nexport const d = 1;\n',
+      );
+      for (const t of extraTouches) {
+        await mkdir(join(dir, t.path.split('/').slice(0, -1).join('/') || '.'), {
+          recursive: true,
+        }).catch(() => {});
+        await writeFile(join(dir, t.path), t.content);
+      }
+      await git('add', '.');
+      await git(
+        'commit',
+        '-m',
+        'base independently extends feature.ts (non-overlapping insert)',
+      );
+      await git('checkout', 'feature/foo');
+    }
+
+    // Base advances with ONLY a genuinely-foreign runtime file (a path the
+    // feature never touched) — D_foreignSrc != ∅, D_featureSrc == ∅.
+    async function advanceBaseForeignRuntimeOnly(): Promise<void> {
+      await git('checkout', BASE);
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src/foreign-only.ts'), 'export const foreignOnly = 1;\n');
+      await git('add', '.');
+      await git('commit', '-m', 'foreign runtime change merged to base');
+      await git('checkout', 'feature/foo');
+    }
+
+    // Base advances with ONLY a foreign (non-feature-owned) test file — a
+    // pure test-only delta with zero runtime paths.
+    async function advanceBaseForeignTestOnly(): Promise<void> {
+      await git('checkout', BASE);
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/sibling.test.ts'), "it('sibling', () => {});\n");
+      await git('add', '.');
+      await git('commit', '-m', 'foreign test-only change merged to base');
+      await git('checkout', 'feature/foo');
+    }
+
+    // A feature branch with NO common ancestor with BASE (orphan history) —
+    // `git merge-base HEAD base` returns empty/exit-1, so the feature claimed
+    // surface F is uncomputable BEFORE the rebase runs. A single-file orphan
+    // commit still rebases cleanly onto BASE (new, non-overlapping path), so
+    // the rebase itself completes and is classified `changed`.
+    //
+    // BASE's initial commit deliberately includes a real CODE path
+    // (`src/base-only.ts`), not just `README.md` — `README.md` alone is
+    // filtered out by `isCodeOrTestPath` (docs), so `preTree..HEAD` would
+    // show ONLY a docs-path addition after rebasing the orphan branch onto
+    // base, which `classifyClean` correctly classifies `noop` (no code/test
+    // path actually changed) rather than `changed`. Adding a genuine code
+    // path to base's history is what makes `D` non-empty and reachable as
+    // `changed`, independent of the docs-filtering behavior this fixture
+    // must not fight.
+    async function initRepoOrphanFeatureBranch(): Promise<void> {
+      await execFileAsync('git', ['init', '-b', BASE, dir]);
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+      await writeFile(join(dir, 'README.md'), '# base\n');
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src/base-only.ts'), 'export const baseOnly = 1;\n');
+      await git('add', '.');
+      await git('commit', '-m', 'initial commit on base');
+
+      await git('checkout', '--orphan', 'feature/foo');
+      await git('rm', '-rf', '--cached', '.').catch(() => {});
+      await rm(join(dir, 'README.md'), { force: true });
+      await rm(join(dir, 'src/base-only.ts'), { force: true });
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+      await git('add', '.');
+      await git('commit', '-m', 'feature work (disjoint history)');
+    }
+
+    function trackPreservedInvalidated(): {
+      preserved: Array<{ gate: string; surface: string[]; deltaConsidered: string[] }>;
+      invalidated: Array<{ gate: string; matchedPaths: string[] }>;
+    } {
+      const preserved: Array<{ gate: string; surface: string[]; deltaConsidered: string[] }> = [];
+      const invalidated: Array<{ gate: string; matchedPaths: string[] }> = [];
+      // `rebase_gate_preserved`/`rebase_gate_invalidated` are not members of
+      // the ConductorEvent union yet (plan Task 1 adds them) — vitest's
+      // esbuild transform doesn't type-check, so this compiles and runs fine
+      // pre-implementation even though `tsc` would reject the string literal,
+      // exactly like the `rebase_gate_reverified` cast above.
+      (events as any).on('rebase_gate_preserved', (e: any) => {
+        if (e?.type === 'rebase_gate_preserved') {
+          preserved.push({ gate: e.gate, surface: e.surface, deltaConsidered: e.deltaConsidered });
+        }
+      });
+      (events as any).on('rebase_gate_invalidated', (e: any) => {
+        if (e?.type === 'rebase_gate_invalidated') {
+          invalidated.push({ gate: e.gate, matchedPaths: e.matchedPaths });
+        }
+      });
+      return { preserved, invalidated };
+    }
+
+    async function readGateVerdict(step: string): Promise<any> {
+      try {
+        return JSON.parse(await readFile(join(dir, `.pipeline/gates/${step}.json`), 'utf-8'));
+      } catch {
+        return null;
+      }
+    }
+
+    function runCountingRunner(counts: Record<string, number>): StepRunner {
+      return {
+        run: async (step) => {
+          counts[step] = (counts[step] ?? 0) + 1;
+          return satisfy(step);
+        },
+      };
+    }
+
+    // ── Story: Test-only rebase delta preserves prd_audit and
+    // architecture_review_as_built (headline #642 case) ──────────────────────
+    describe('Story: test-only rebase delta preserves the judged audit tail', () => {
+      it('preserves prd_audit and architecture_review_as_built when D_featureSrc is empty (feature test-only + foreign runtime)', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await addFeatureTestFile();
+        // Base coincidentally re-touches the feature's OWN test file (so it
+        // lands in D and is also feature-owned, i.e. D_test) plus a genuinely
+        // foreign runtime file (D_foreignSrc) — D_featureSrc stays empty.
+        await advanceBaseCoincidentally(
+          [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
+          { alsoForeignRuntime: true },
+        );
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        const { preserved } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        // Preserved: each judged audit gate ran exactly ONCE (never
+        // re-dispatched by the rebase) and its verdict stays satisfied with
+        // no rebase-origin kickback provenance.
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+        const prdVerdict = await readGateVerdict('prd_audit');
+        const archVerdict = await readGateVerdict('architecture_review_as_built');
+        expect(prdVerdict?.satisfied).toBe(true);
+        expect(prdVerdict?.kickback).toBeUndefined();
+        expect(archVerdict?.satisfied).toBe(true);
+        expect(archVerdict?.kickback).toBeUndefined();
+
+        // Audit trail: a rebase_gate_preserved event per preserved gate, with
+        // a non-empty declared surface and an EMPTY feature-src delta that
+        // justified the preservation.
+        const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
+        const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
+        expect(prdPreserved).toBeDefined();
+        expect(prdPreserved!.surface.length).toBeGreaterThan(0);
+        expect(prdPreserved!.deltaConsidered).toEqual([]);
+        expect(archPreserved).toBeDefined();
+        expect(archPreserved!.surface.length).toBeGreaterThan(0);
+        expect(archPreserved!.deltaConsidered).toEqual([]);
+      });
+
+      it('does NOT falsely preserve a judged gate that was not already satisfied before the rebase', async () => {
+        // Drives the real call-site pairing (performRebase -> applyRebaseVerdicts)
+        // directly against a real git repo rather than the full daemon loop:
+        // the Conductor tail always re-verifies prd_audit's own completion
+        // predicate before rebase ever runs (rebase sits downstream of
+        // prd_audit in ALL_STEPS), so there is no way to reach the rebase
+        // decision with prd_audit genuinely unsatisfied via the ordinary
+        // linear E2E path. Calling the two real production functions in
+        // sequence against a real repo/verdict-file directory is still an
+        // integration (not unit) exercise of the exact decision under test.
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await addFeatureTestFile();
+        await advanceBaseCoincidentally(
+          [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
+          { alsoForeignRuntime: true },
+        );
+
+        // prd_audit's verdict is unsatisfied BEFORE the rebase runs — it never
+        // actually passed for this feature.
+        await mkdir(join(dir, '.pipeline/gates'), { recursive: true });
+        await writeFile(
+          join(dir, '.pipeline/gates/prd_audit.json'),
+          JSON.stringify({ satisfied: false, reason: 'never ran', checkedAt: 1 }),
+        );
+
+        const git2 = makeRebaseGitRunner(dir);
+        const outcome = await performRebase(git2, dir, BASE);
+        expect(outcome.kind).toBe('changed');
+        await applyRebaseVerdicts(dir, outcome, true);
+
+        // Preservation must never resurrect a gate that was not already
+        // satisfied — the not-yet-passed verdict must still read unsatisfied
+        // (still selected to run), never silently flipped to preserved-done.
+        const prdVerdict = await readGateVerdict('prd_audit');
+        expect(prdVerdict?.satisfied).toBe(false);
+        expect(prdVerdict?.reason).toBe('never ran');
+      });
+
+      it('a single feature-owned runtime path in the delta defeats preservation', async () => {
+        // Uses the shared-ancestry fixture (not `initRepoOnFeatureBranch` +
+        // byte-identical `advanceBaseCoincidentally`, which can never put
+        // `src/feature.ts` in D — see
+        // `initRepoOnFeatureBranchWithSharedRuntimeFile`'s comment): base and
+        // feature each make a real, non-overlapping edit to `src/feature.ts`,
+        // so D_featureSrc is genuinely non-empty at that path, alongside a
+        // byte-identical (inert) touch to the feature's own test file.
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await addFeatureTestFile();
+        await advanceBaseWithDivergentEditToSharedFile([
+          { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
+        ]);
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        // Re-run, NOT preserved: a single feature-owned runtime path in D
+        // defeats preservation — both audits dispatch a second time.
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
+      });
+    });
+
+    // ── Story: A change to the feature's own runtime source re-runs the
+    // judged audit gates ──────────────────────────────────────────────────────
+    describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {
+      it('invalidates and re-selects both judged audits when D_featureSrc is non-empty', async () => {
+        // Shared-ancestry fixture (see comment above) — a byte-identical
+        // "coincidental" touch of a feature-owned path can never register in
+        // D; base and feature must each make a real, non-overlapping edit.
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await advanceBaseWithDivergentEditToSharedFile();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        const { invalidated } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
+        const prdVerdictAtKickback = await readGateVerdict('prd_audit');
+        // The FINAL verdict (post re-dispatch) is satisfied again, but the
+        // decision must have applied a real kickback-shaped invalidation in
+        // between — assert the audit-trail event carries the matched paths.
+        expect(prdVerdictAtKickback?.satisfied).toBe(true);
+        const prdInvalidated = invalidated.find((i) => i.gate === 'prd_audit');
+        const archInvalidated = invalidated.find(
+          (i) => i.gate === 'architecture_review_as_built',
+        );
+        expect(prdInvalidated).toBeDefined();
+        expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
+        expect(archInvalidated).toBeDefined();
+        expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
+      });
+
+      it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await mkdir(join(dir, '.docs'), { recursive: true });
+        await writeFile(join(dir, '.docs/feature-notes.md'), '# notes\n');
+        await git('add', '.');
+        await git('commit', '-m', 'feature docs');
+        // Base coincidentally touches the SAME docs path only — docs are
+        // excluded from D upstream (isCodeOrTestPath), so this can never
+        // force a re-audit on that basis alone.
+        await advanceBaseCoincidentally([
+          { path: '.docs/feature-notes.md', content: '# notes\n' },
+        ]);
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+      });
+    });
+
+    // ── Story: Foreign main-side runtime change re-runs manual_test/
+    // wiring_check but preserves the audits ───────────────────────────────────
+    describe('Story: foreign-only runtime delta re-runs manual_test/wiring_check but preserves the audits', () => {
+      it('invalidates wiring_check and manual_test while preserving prd_audit and architecture_review_as_built', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await advanceBaseForeignRuntimeOnly();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        const { preserved, invalidated } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.wiring_check).toBe(2);
+        expect(counts.manual_test).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+
+        expect(invalidated.find((i) => i.gate === 'wiring_check')).toBeDefined();
+        expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
+        expect(
+          preserved.find((p) => p.gate === 'architecture_review_as_built'),
+        ).toBeDefined();
+      });
+
+      it('does not invalidate manual_test when it never ran for this feature (ranManualTest = false)', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await advanceBaseForeignRuntimeOnly();
+
+        // manual_test pre-seeded 'skipped' for this feature.
+        await writeState(statePath, { ...FRONT_DONE_M, manual_test: 'skipped' });
+        const counts: Record<string, number> = {};
+        const { invalidated } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.manual_test).toBeUndefined();
+        expect(invalidated.find((i) => i.gate === 'manual_test')).toBeUndefined();
+      });
+
+      it('preserves manual_test and wiring_check too when the delta is test-only (no runtime at all)', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await advanceBaseForeignTestOnly();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        const { preserved } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.wiring_check).toBe(1);
+        expect(counts.manual_test).toBe(1);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+        expect(preserved.find((p) => p.gate === 'wiring_check')).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
+      });
+    });
+
+    // ── Story: A preserved judged gate is not swept stale by the downstream
+    // cascade ─────────────────────────────────────────────────────────────────
+    //
+    // Placed here (not gate-loop.test.ts): reaching the delta-gated sweep
+    // requires actually running a real rebase to produce a `changed` outcome
+    // with a real feature-surface/delta partition — gate-loop.test.ts has no
+    // rebase-driving fixture (its one real-git describe block is a narrow
+    // manual_test FAIL-routing scenario with no base/feature divergence at
+    // all), whereas this file's full daemon + real-git harness is purpose
+    // built for exactly this. Reuses the Story 3 (foreign-only) and Story 2
+    // (feature-src) fixtures from the angle of the downstream-stale sweep
+    // specifically: dispatch COUNTS (not final `done` status, which converges
+    // to `done` either way) are what distinguish "preserved, never re-swept"
+    // from "swept stale then re-run back to done".
+    describe('Story: a preserved judged gate is not swept stale by the downstream cascade', () => {
+      it('leaves prd_audit/architecture_review_as_built un-re-dispatched when manual_test is re-opened but the audits are preserved', async () => {
+        await initRepoOnFeatureBranch({
+          path: 'src/feature.ts',
+          content: 'export const foo = 1;\n',
+        });
+        await advanceBaseForeignRuntimeOnly();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        // manual_test WAS re-opened (invalidated, re-dispatched)...
+        expect(counts.manual_test).toBe(2);
+        // ...but the downstream-stale sweep must not have re-swept the
+        // preserved judged gates: each ran exactly once, never re-selected.
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+      });
+
+      it('still marks a genuinely-invalidated judged gate stale/re-run by the sweep', async () => {
+        // Shared-ancestry fixture (see comment above) — a byte-identical
+        // "coincidental" touch of a feature-owned path can never register in
+        // D; base and feature must each make a real, non-overlapping edit.
+        await initRepoOnFeatureBranchWithSharedRuntimeFile();
+        await advanceBaseWithDivergentEditToSharedFile();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        // The delta-gating must not accidentally preserve a gate the
+        // decision genuinely invalidated — it's re-dispatched.
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
+      });
+    });
+
+    // ── Story: Uncomputable delta fails closed to invalidate-all ─────────────
+    describe('Story: uncomputable feature surface fails closed to the legacy invalidate-all', () => {
+      it('invalidates the full legacy set with zero preservations and records a fail-closed reason when F is uncomputable', async () => {
+        // Drives the real call-site pairing (performRebase ->
+        // applyRebaseVerdicts -> emitGateInvalidationEvents) directly against
+        // a real git repo, rather than the full daemon loop: because this
+        // 'changed' outcome invalidates the tail's judged gates, the full
+        // loop kicks back and re-plays the whole tail, reaching the `rebase`
+        // step a SECOND time — which is then correctly `noop` (already
+        // current) and overwrites the `rebase` gate's own verdict file with
+        // that second-pass reason, destroying the first pass's fail-closed
+        // marker before this test can observe it. That replay is real,
+        // correct daemon behavior (every other `changed`-outcome story in
+        // this describe block exhibits it too) — it just means the ONE
+        // assertion that inspects `rebase`'s own on-disk verdict text must
+        // observe it right after the single decision under test, not after
+        // the whole multi-pass loop has run to completion.
+        await initRepoOrphanFeatureBranch();
+        const { preserved } = trackPreservedInvalidated();
+
+        const git2 = makeRebaseGitRunner(dir);
+        const outcome = await performRebase(git2, dir, BASE);
+        expect(outcome.kind).toBe('changed');
+        expect(outcome.featureSurface).toBeUndefined();
+
+        const result = await applyRebaseVerdicts(dir, outcome, true);
+        await emitGateInvalidationEvents(events, outcome, true);
+
+        // Full legacy invalidation set (fail-closed fallback), no preservations.
+        expect(result.kickedBack).toEqual(
+          expect.arrayContaining([
+            'build_review',
+            'wiring_check',
+            'manual_test',
+            'prd_audit',
+            'architecture_review_as_built',
+          ]),
+        );
+        expect(preserved).toEqual([]);
+        // A fail-closed reason recorded in the rebase gate's own verdict —
+        // this is the NEW artifact this story requires; today's verdict
+        // reason never mentions fail-closed (it just says "code changed").
+        const rebaseVerdict = await readGateVerdict('rebase');
+        expect(rebaseVerdict?.reason).toMatch(/fail.?closed/i);
+      });
+
+      it('still re-runs prd_audit and architecture_review_as_built under fail-closed uncertainty (never preserved)', async () => {
+        await initRepoOrphanFeatureBranch();
+
+        await writeState(statePath, { ...FRONT_DONE_M });
+        const counts: Record<string, number> = {};
+        const { preserved } = trackPreservedInvalidated();
+        let completed = false;
+        events.on('feature_complete', () => {
+          completed = true;
+        });
+
+        await conductorWith(runCountingRunner(counts)).run();
+
+        expect(completed).toBe(true);
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
+        expect(
+          preserved.find((p) => p.gate === 'prd_audit' || p.gate === 'architecture_review_as_built'),
+        ).toBeUndefined();
+      });
+    });
   });
 });

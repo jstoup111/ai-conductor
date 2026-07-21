@@ -7,7 +7,12 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
-import { classifyGateInvalidation, partitionDelta, GATE_SURFACE } from './gate-invalidation.js';
+import {
+  classifyGateInvalidation,
+  partitionDelta,
+  GATE_SURFACE,
+  isRuntimeSourcePath,
+} from './gate-invalidation.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -837,7 +842,9 @@ export async function applyRebaseVerdicts(
         ? 'branch already current with base'
         : outcome.kind === 'changelog_resolved'
           ? 'CHANGELOG-only conflict auto-resolved; branch current'
-          : 'rebased onto base (code changed — downstream re-verify)',
+          : outcome.featureSurface === undefined
+            ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
+            : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
   };
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
@@ -899,8 +906,13 @@ export async function applyRebaseVerdicts(
   // architecture_review_as_built) rather than blindly re-opening them.
   //
   // Fallback (Tasks 10-11 harden this further): if `featureSurface` is
-  // missing on the outcome, F is uncomputable — fall back to the old fixed
-  // set (today's blanket invalidation) as a safe default rather than guess.
+  // missing on the outcome, F is uncomputable — fall back to the FULL
+  // legacy invalidate-all set as a safe default rather than guess. Per the
+  // ADR's fail-closed invariant, this must cover every judged gate this
+  // feature's classifier can invalidate — not just the pre-#655 fixed four
+  // — or a gate whose surface can't be proven to miss the delta would be
+  // silently left un-re-verified (prd_audit/architecture_review_as_built
+  // included).
   const targets: StepName[] =
     outcome.featureSurface !== undefined
       ? ([
@@ -909,8 +921,21 @@ export async function applyRebaseVerdicts(
             .invalidated,
         ] as StepName[])
       : ranManualTest
-        ? ['build', 'build_review', 'wiring_check', 'manual_test']
-        : ['build', 'build_review', 'wiring_check'];
+        ? ([
+            'build',
+            'build_review',
+            'wiring_check',
+            'manual_test',
+            'prd_audit',
+            'architecture_review_as_built',
+          ] as StepName[])
+        : ([
+            'build',
+            'build_review',
+            'wiring_check',
+            'prd_audit',
+            'architecture_review_as_built',
+          ] as StepName[]);
   for (const target of targets) {
     // Skip build if it was pre-verified (already wrote verdict above).
     if (target === 'build' && buildReVerified) {
@@ -961,10 +986,17 @@ export async function recordRebaseStepCompletion(
  *     foreignSrc.
  *   - 'any-codetest': the full delta (test ∪ featureSrc ∪ foreignSrc).
  *
- * For preserved gates, `surface` is the same per-kind path set — which is
- * always empty by construction (that emptiness is precisely why the gate
- * was preserved) — and `deltaConsidered` carries the full rebase delta `D`
- * so the event still records what was checked against, for audit purposes.
+ * For preserved gates, `surface` is the gate's DECLARED dependency surface
+ * (non-empty — what the gate depends on, per the ADR decision table), not
+ * the (empty, by construction) intersection with the delta — a preserved
+ * gate still has a real declared surface, it simply wasn't hit. For
+ * 'feature-runtime' kind this is `F ∩ runtime` (the feature's own runtime
+ * paths); for 'all-runtime'/'any-codetest' kind — whose declared surface is
+ * the whole runtime tree and isn't a finite path list derivable from this
+ * rebase's delta — a descriptive sentinel is used instead.
+ * `deltaConsidered` carries the same per-kind matched-path computation as
+ * `matchedPaths` above (empty for a preserved gate, by construction — that
+ * emptiness is precisely why it was preserved).
  *
  * A no-op when the outcome isn't a file-changing rebase, or `featureSurface`
  * is unavailable (classifyGateInvalidation cannot be applied — see the
@@ -996,6 +1028,15 @@ export async function emitGateInvalidationEvents(
         : [...test, ...featureSrc, ...foreignSrc];
   };
 
+  // Declared dependency surface (what the gate depends on) — distinct from
+  // matchedPathsFor's delta-intersection. Non-empty even when the gate is
+  // preserved (it always has real inputs; it just wasn't hit this rebase).
+  const featureRuntimeSurface = outcome.featureSurface.filter(isRuntimeSourcePath);
+  const declaredSurfaceFor = (gate: string): string[] => {
+    const surface = GATE_SURFACE[gate];
+    return surface === 'feature-runtime' ? featureRuntimeSurface : ['<all runtime source>'];
+  };
+
   for (const gate of invalidated) {
     await events.emit({
       type: 'rebase_gate_invalidated',
@@ -1008,8 +1049,8 @@ export async function emitGateInvalidationEvents(
     await events.emit({
       type: 'rebase_gate_preserved',
       gate: gate as StepName,
-      surface: matchedPathsFor(gate),
-      deltaConsidered: outcome.changedCodePaths,
+      surface: declaredSurfaceFor(gate),
+      deltaConsidered: matchedPathsFor(gate),
     });
   }
 }

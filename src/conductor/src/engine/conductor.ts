@@ -5346,7 +5346,25 @@ export class Conductor {
                 ranManualTest,
               ).preserved as StepName[])
             : [];
-        for (const target of ['build', 'build_review', 'wiring_check', 'manual_test'] as StepName[]) {
+        // Task 14 (#655 amendment): the candidate target list must cover
+        // every gate classifyGateInvalidation can invalidate — not just the
+        // legacy fixed four. `applyRebaseVerdicts` already writes a
+        // kickback-shaped verdict to `prd_audit`/`architecture_review_as_built`
+        // when their feature-runtime surface is hit (classifyGateInvalidation's
+        // `invalidated` list), but without also driving `navigateBack` for
+        // them here, their step STATE never flips back to `pending` — the
+        // verdict alone re-opens the gate's own predicate, but the selector
+        // still sees `done` and never re-dispatches. Order matches the
+        // ALL_STEPS tail (wiring_check → manual_test → prd_audit →
+        // architecture_review_as_built).
+        for (const target of [
+          'build',
+          'build_review',
+          'wiring_check',
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+        ] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             await this.events.emit({
