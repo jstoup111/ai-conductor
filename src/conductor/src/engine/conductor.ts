@@ -80,6 +80,7 @@ import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
 import {
   findArtifactFiles as findArtifactFilesForStep,
+  extraArtifactGlobs,
   resolveFeaturePlanPath,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
@@ -100,7 +101,13 @@ import {
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
+  ACCEPTANCE_SPECS_RED_EVIDENCE,
 } from './artifacts.js';
+import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import { currentCommitSha } from './project-prelude.js';
 import type { Track } from '../types/index.js';
 import {
@@ -485,6 +492,16 @@ export interface ConductorOptions {
    * Tests inject a spy to avoid real waits.
    */
   sleepFn?: (ms: number) => Promise<void>;
+  /**
+   * Injected command runner for the acceptance_specs RED-evidence self-heal
+   * (Task 9, acceptance-specs-halts-when-the-red-evidence-marke). Signature
+   * mirrors every other subprocess-boundary injectable in this file (`gh`,
+   * `git`, `runGh`, `escalateBuildFailure`): production wires the real
+   * `execFile`-based runner; tests inject a stub. Defaults to a real
+   * `child_process.execFile` (promisified) invocation of `contract.command`
+   * from `contract.cwd`.
+   */
+  acceptanceRedExec?: (command: string, cwd: string) => Promise<unknown>;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
@@ -790,6 +807,12 @@ export class Conductor {
   private lastRebaseOutcome: RebaseOutcome | null = null;
 
   /**
+   * Injected command runner for the acceptance_specs RED-evidence self-heal
+   * (Task 9). See `ConductorOptions.acceptanceRedExec`.
+   */
+  private acceptanceRedExec: (command: string, cwd: string) => Promise<unknown>;
+
+  /**
    * Epoch ms captured immediately before the current dispatch's generic
    * stepRunner.run() call, cleared in the same `finally` once the dispatch
    * returns. Threaded into `completionCtx` as `attemptStartedAt` so the
@@ -979,6 +1002,12 @@ export class Conductor {
     this.selfHost = opts.selfHost ?? false;
     this.baseBranch = opts.baseBranch;
     this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
+    this.acceptanceRedExec =
+      opts.acceptanceRedExec ??
+      (async (command: string, cwd: string) => {
+        const { stdout } = await execFileAsync(command, { cwd, shell: true } as any);
+        return stdout;
+      });
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -2804,6 +2833,57 @@ export class Conductor {
         // "retries exhausted" message.
         let lastBuildStallReason: string | undefined;
 
+        // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
+        // spending ANY of this step's retry budget, check whether this is an
+        // acceptance_specs completion-gate miss that names the missing/
+        // invalid RED marker WITH committed spec files already present. If
+        // so, invoke `selfHealAcceptanceRed` exactly once — on success the
+        // step advances straight to 'done' without ever dispatching the
+        // writing-system-tests skill (no retry burned, no `step_retry`); on
+        // failure, fall through into the normal retry loop below unchanged,
+        // so the existing dispatch/HALT behavior is untouched.
+        let acceptanceRedPreHealed = false;
+        if (
+          this.verifyArtifacts &&
+          step.name === 'acceptance_specs' &&
+          stepHasCompletionCheck(step.name)
+        ) {
+          const preCheck = await checkStepCompletion(
+            this.projectRoot,
+            step.name,
+            await this.completionCtx(state),
+          );
+          this.currentAttemptStartedAt = undefined;
+          const marker = ACCEPTANCE_SPECS_RED_EVIDENCE;
+          const namesMissingOrInvalidRedMarker =
+            !preCheck.done &&
+            typeof preCheck.reason === 'string' &&
+            (preCheck.reason.includes(`${marker} is missing`) ||
+              preCheck.reason.includes(`invalid JSON in ${marker}`));
+          if (namesMissingOrInvalidRedMarker) {
+            const specFiles = await findArtifactFilesForStep(
+              this.projectRoot,
+              'acceptance_specs',
+              extraArtifactGlobs('acceptance_specs', this.config),
+            );
+            if (specFiles.length > 0) {
+              const exec: AcceptanceRedExec = (command, opts) =>
+                this.acceptanceRedExec(command, opts.cwd);
+              const healResult = await selfHealAcceptanceRed({
+                worktree: this.projectRoot,
+                specFiles: specFiles.map((f) => relative(this.projectRoot, f)),
+                exec,
+              });
+              if (healResult.healed) {
+                succeeded = true;
+                successOutput = undefined;
+                acceptanceRedPreHealed = true;
+              }
+            }
+          }
+        }
+
+        if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
 
