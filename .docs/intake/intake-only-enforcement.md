@@ -1,6 +1,7 @@
 # Intake marker: intake-only criteria enforcement
 
 Source-Ref: jstoup111/ai-conductor#695
+Owner: jstoup111
 
 Routed to `ai-conductor`. Spec authored under the operator directive
 **"No failures — enforce requirements at intake ONLY."**

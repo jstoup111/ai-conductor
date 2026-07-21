@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Owner-gate: added the missing `Owner:` marker to `.docs/intake/intake-only-enforcement.md`
+  (spec #719 merged un-owned, so the daemon skipped it forever), and a new integrity check
+  fails the suite when any intake doc lacks an `Owner:` marker — un-owned specs can no
+  longer merge silently.
+
 - ci-fix resolver no longer invokes the nonexistent `claude --fix-session` flag;
   dispatches a real fix via StepRunner, classifies spawn errors, and validates
   invocation at daemon startup
