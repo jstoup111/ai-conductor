@@ -173,6 +173,67 @@ describe('currentTarget', () => {
   });
 });
 
+describe('computeEngineSourceKey', () => {
+  async function makeFixtureTree(root: string): Promise<void> {
+    await mkdir(join(root, 'src', 'nested'), { recursive: true });
+    await mkdir(join(root, 'scripts'), { recursive: true });
+    await writeFile(join(root, 'src', 'index.ts'), 'export const a = 1;\n');
+    await writeFile(join(root, 'src', 'nested', 'util.ts'), 'export const b = 2;\n');
+    await writeFile(join(root, 'package.json'), '{"name":"x","version":"1.0.0"}\n');
+    await writeFile(join(root, 'package-lock.json'), '{"lockfileVersion":3}\n');
+    await writeFile(join(root, 'tsconfig.json'), '{"compilerOptions":{}}\n');
+    await writeFile(join(root, 'tsup.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'scripts', 'publish-guard.mjs'), 'export const guard = 1;\n');
+    // A file outside the defined input set — must not affect the key.
+    await writeFile(join(root, 'README.md'), '# hello\n');
+  }
+
+  it('is deterministic across two calls on the same fixture tree', async () => {
+    const { computeEngineSourceKey } = await loadEngineStore();
+    await makeFixtureTree(tmpDir);
+
+    const keyA = await computeEngineSourceKey({ conductorRoot: tmpDir });
+    const keyB = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    expect(keyA).toBe(keyB);
+    expect(keyA).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('changes when a src file byte changes', async () => {
+    const { computeEngineSourceKey } = await loadEngineStore();
+    await makeFixtureTree(tmpDir);
+    const before = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    await writeFile(join(tmpDir, 'src', 'index.ts'), 'export const a = 2;\n');
+    const after = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    expect(after).not.toBe(before);
+  });
+
+  it('changes when the lockfile changes', async () => {
+    const { computeEngineSourceKey } = await loadEngineStore();
+    await makeFixtureTree(tmpDir);
+    const before = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    await writeFile(join(tmpDir, 'package-lock.json'), '{"lockfileVersion":4}\n');
+    const after = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    expect(after).not.toBe(before);
+  });
+
+  it('does not change when a file outside the defined input set changes', async () => {
+    const { computeEngineSourceKey } = await loadEngineStore();
+    await makeFixtureTree(tmpDir);
+    const before = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    await writeFile(join(tmpDir, 'README.md'), '# updated\n');
+    await writeFile(join(tmpDir, 'unrelated.txt'), 'irrelevant\n');
+    const after = await computeEngineSourceKey({ conductorRoot: tmpDir });
+
+    expect(after).toBe(before);
+  });
+});
+
 describe('flipCurrent', () => {
   async function makeVersionDir(versionId: string): Promise<string> {
     const versionDir = join(tmpDir, 'dist-versions', versionId);
