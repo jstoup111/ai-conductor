@@ -10,30 +10,26 @@ there is no place a missing label can fail.
 
 ## Capture surfaces (where "born complete" is enforced)
 
-```
-                         INTAKE (capture / file time)                         DOWNSTREAM (unchanged)
-  ┌─────────────────────────────────────────────────────────────┐   ┌──────────────────────────────┐
-  │                                                               │   │                              │
-  │  A. Web/mobile/phone ─▶ intake.yml form                       │   │  poll() capture              │
-  │       (Priority*, Size*, Depends-on required/prompted)        │   │   github-issues.ts           │
-  │            │                                                  │   │     · enqueue Envelope       │
-  │            ▼  issues.opened / edited                          │   │     · NO needs-triage flag   │
-  │     intake-label-sync.yml  ──▶ apply `priority:` / `size:`    │   │     · NO withheld enqueue    │
-  │       (create labels if absent; default on unparsable;        │   │            │                 │
-  │        record blocked_by from Depends-on) ── labels only,     │   │            ▼                 │
-  │        isolated from ci.yml, cannot fail a build              │   │  claimUnblocked()            │
-  │                                                               │   │   dependency-claim.ts        │
-  │  B. Agent / operator ─▶ `gh issue create` via /intake skill   │   │     · ClaimOutcome union:    │
-  │       └─ bin/intake-file (deterministic completeness step):   │   │        claim | empty |       │
-  │            require size+priority (prompt ▸ infer ▸ default),   │   │        all-blocked  (SAME)   │
-  │            apply labels + links atomically at file time       │   │     · NO needs-criteria      │
-  │                                                               │   │     · NO criteria deferral   │
-  │  C. Backfill (one-shot) ─▶ bin/intake-backfill:               │   │            │                 │
-  │       stamp `size:`/`priority:` on the ~100 legacy issues     │   │            ▼                 │
-  │       (infer ▸ default); report for operator adjust; NO HALT  │   │  daemon build / dispatch /   │
-  │                                                               │   │  pipeline gates / ci.yml     │
-  └─────────────────────────────────────────────────────────────┘   │     · zero new checks        │
-        every issue leaves intake WITH priority+size+links           └──────────────────────────────┘
+```mermaid
+flowchart LR
+  subgraph INTAKE["INTAKE — capture / file time (born complete)"]
+    A["A. Web/mobile form<br/>intake.yml<br/>(Priority*, Size*, Depends-on)"]
+    LS["intake-label-sync.yml<br/>apply priority:/size: labels<br/>create-if-absent, default on unparsable,<br/>record blocked_by — labels only,<br/>isolated from ci.yml, cannot fail a build"]
+    B["B. Agent / operator<br/>gh issue create via /intake skill<br/>bin/intake-file: require size+priority<br/>(prompt ▸ infer ▸ default),<br/>labels + links atomic at file time"]
+    C["C. Backfill (one-shot)<br/>bin/intake-backfill: stamp ~100 legacy issues<br/>(infer ▸ default), report only — NO HALT"]
+    A -->|"issues.opened / edited"| LS
+  end
+  BORN(["issue leaves intake WITH<br/>priority + size + links"])
+  LS --> BORN
+  B --> BORN
+  C --> BORN
+  subgraph DOWN["DOWNSTREAM — unchanged"]
+    P["poll() capture — github-issues.ts<br/>enqueue Envelope · NO needs-triage flag ·<br/>NO withheld enqueue"]
+    CL["claimUnblocked() — dependency-claim.ts<br/>ClaimOutcome union: claim | empty | all-blocked (SAME)<br/>NO needs-criteria · NO criteria deferral"]
+    D["daemon build / dispatch /<br/>pipeline gates / ci.yml<br/>zero new checks"]
+    P --> CL --> D
+  end
+  BORN --> P
 ```
 
 `*` required (form) or required-then-defaulted (filing helper). "Default" = a
