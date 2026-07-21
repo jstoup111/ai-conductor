@@ -760,6 +760,8 @@ export class Conductor {
   private activeSandbox: SandboxBuildEnv | null = null;
   /** Guards the one-time skill relink so it runs before the first build only. */
   private relinkDone = false;
+  /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
+  private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -1879,9 +1881,16 @@ export class Conductor {
       return { action: 'return' };
     };
 
+    const breadcrumb = this._breadcrumb;
+    const emitTracked = (ev: Parameters<typeof this.events.emit>[0]) => {
+      breadcrumb.lastEventType = ev.type;
+      return this.events.emit(ev);
+    };
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
+        breadcrumb.lastAdvancedStep = step.name;
+        breadcrumb.exitIndex = i;
 
         // Skip already-completed work. Without this, re-invoking the conductor
         // against a project with existing `done` / `skipped` state (e.g. after
@@ -1908,7 +1917,7 @@ export class Conductor {
         if (step.skippableForTiers.includes(tier)) {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
-          await this.events.emit({ type: 'tier_skip', step: step.name, tier });
+          await emitTracked({ type: 'tier_skip', step: step.name, tier });
           continue;
         }
 
@@ -1922,7 +1931,7 @@ export class Conductor {
           if (step.skippableForTracks.includes(track)) {
             await saveStepStatus(this.stateFilePath, step.name, 'skipped');
             state[step.name] = 'skipped';
-            await this.events.emit({ type: 'config_skip', step: step.name });
+            await emitTracked({ type: 'config_skip', step: step.name });
             continue;
           }
         }
@@ -1935,7 +1944,7 @@ export class Conductor {
         if (this.daemon && step.name === 'retro') {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
-          await this.events.emit({ type: 'config_skip', step: step.name });
+          await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
 
@@ -1947,7 +1956,7 @@ export class Conductor {
         if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
-          await this.events.emit({
+          await emitTracked({
             type: 'mode_skip',
             step: step.name,
             mode: state.bootstrap_mode!,
@@ -1965,7 +1974,7 @@ export class Conductor {
         if (shouldSkipForUpstreamSkip(step, state)) {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
-          await this.events.emit({ type: 'config_skip', step: step.name });
+          await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
 
@@ -1980,7 +1989,7 @@ export class Conductor {
         if (resolved.disabled) {
           await saveStepStatus(this.stateFilePath, step.name, 'skipped');
           state[step.name] = 'skipped';
-          await this.events.emit({ type: 'config_skip', step: step.name });
+          await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
 
@@ -1991,7 +2000,7 @@ export class Conductor {
           if (!whenResult.result) {
             await saveStepStatus(this.stateFilePath, step.name, 'skipped');
             state[step.name] = 'skipped';
-            await this.events.emit({
+            await emitTracked({
               type: 'when_skip',
               step: step.name,
               expression: stepCfg.when,
@@ -2017,7 +2026,7 @@ export class Conductor {
           // The step's own status is set to 'done' or 'failed' inside runParallelGroupViaCore.
           // If it failed (gating branch), we stop here.
           if (state[step.name] === 'failed') {
-            await this.events.emit({
+            await emitTracked({
               type: 'step_failed',
               step: step.name,
               error: `Parallel group "${step.name}" had a gating branch failure`,
@@ -2067,7 +2076,7 @@ export class Conductor {
             for (const member of membership.members) {
               await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
               state[member.name as StepName] = 'skipped';
-              await this.events.emit({ type: 'config_skip', step: member.name as StepName });
+              await emitTracked({ type: 'config_skip', step: member.name as StepName });
             }
             continue;
           }
@@ -2079,7 +2088,7 @@ export class Conductor {
           // byte-for-byte equivalent to the pre-Task-14 serial baseline.
           // Width 2+ still emits `parallel_started` to mark the group path.
           if (membership.dispatchable.length > 1) {
-            await this.events.emit({
+            await emitTracked({
               type: 'parallel_started',
               step: step.name,
               branches: membership.dispatchable.map((m) => m.name),
@@ -2214,8 +2223,8 @@ export class Conductor {
               state[step.name] = 'failed';
               await saveStepStatus(this.stateFilePath, step.name, 'failed');
               await writeState(this.stateFilePath, state);
-              await this.events.emit({ type: 'loop_halt', reason: haltReason });
-              await this.events.emit({
+              await emitTracked({ type: 'loop_halt', reason: haltReason });
+              await emitTracked({
                 type: 'step_failed',
                 step: step.name,
                 error: haltReason,
@@ -2239,7 +2248,7 @@ export class Conductor {
                 await saveStepStatus(this.stateFilePath, memberName, 'done');
               }
               await writeState(this.stateFilePath, state);
-              await this.events.emit({
+              await emitTracked({
                 type: 'parallel_completed',
                 step: step.name,
                 branches: membership.dispatchable.map((m) => m.name),
@@ -2362,7 +2371,7 @@ export class Conductor {
                     `commits, and manual-test re-runs after this build.`;
                   const mergedHint = `${mtHint}\n\n${remediationOutcome.hint}`;
 
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: step.name,
                     to: mergedTarget,
@@ -2406,7 +2415,7 @@ export class Conductor {
                   });
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -2489,7 +2498,7 @@ export class Conductor {
                     });
                     await writeState(this.stateFilePath, state);
                     const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                    await emitTracked({ type: 'loop_halt', reason, prUrl });
                     process.off('SIGINT', sigintHandler);
                     if (!this.daemon) {
                       process.off('SIGTERM', sigterm);
@@ -2516,7 +2525,7 @@ export class Conductor {
                 });
 
                 if (remediationOutcome.kind === 'route') {
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: step.name,
                     to: remediationOutcome.target,
@@ -2565,7 +2574,7 @@ export class Conductor {
                   });
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -2626,7 +2635,7 @@ export class Conductor {
             ).catch(() => {
               /* best-effort marker */
             });
-            await this.events.emit({
+            await emitTracked({
               type: 'step_failed',
               step: step.name,
               // Carry the per-member gate reasons (e.g. the manual_test
@@ -2635,7 +2644,7 @@ export class Conductor {
               error: groupHaltReason,
               retryCount: 0,
             });
-            await this.events.emit({ type: 'loop_halt', reason: groupHaltReason });
+            await emitTracked({ type: 'loop_halt', reason: groupHaltReason });
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
@@ -2647,7 +2656,7 @@ export class Conductor {
         // Check gate: all prerequisites must be satisfied
         const gate = checkGate(step, state);
         if (!gate.passed) {
-          await this.events.emit({ type: 'gate_blocked', step: step.name, reason: gate.reason });
+          await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
           await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
@@ -2665,7 +2674,7 @@ export class Conductor {
           if (!verdict.ok) {
             state[step.name] = 'stale';
             await writeState(this.stateFilePath, state);
-            await this.events.emit({ type: 'loop_halt', reason: verdict.reason });
+            await emitTracked({ type: 'loop_halt', reason: verdict.reason });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -2676,7 +2685,7 @@ export class Conductor {
         await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
         state[step.name] = 'in_progress';
 
-        await this.events.emit({ type: 'step_started', step: step.name, index: i });
+        await emitTracked({ type: 'step_started', step: step.name, index: i });
 
         // #505 TS-4: defensively clear a stale build-step-active marker at
         // EVERY step entry (not just build steps), guarding against a marker
@@ -2921,7 +2930,7 @@ export class Conductor {
             const attribution = await readDispatchAttribution(this.projectRoot);
             const unattributedResult = detectUnattributedDispatch(attribution);
             if (unattributedResult) {
-              await this.events.emit({
+              await emitTracked({
                 type: 'unattributed_dispatch',
                 step: step.name,
                 unattributedCount: unattributedResult.unattributedCount,
@@ -2943,7 +2952,7 @@ export class Conductor {
             }
             const waitSeconds = Math.ceil(waitMs / 1000);
 
-            await this.events.emit({ type: 'rate_limit', waitSeconds });
+            await emitTracked({ type: 'rate_limit', waitSeconds });
 
             // Enter episode with deadline for coordinated backoff
             if (this.rateLimitEpisode) {
@@ -2976,7 +2985,7 @@ export class Conductor {
           // Stale session: reset + retry without burning budget
           // (matches bin/conduct:645–663 stale-session detection).
           if (result.sessionExpired) {
-            await this.events.emit({
+            await emitTracked({
               type: 'session_reset',
               reason: 'session unavailable (expired or in use) — resetting to a fresh session',
             });
@@ -3020,7 +3029,7 @@ export class Conductor {
               });
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -3029,7 +3038,7 @@ export class Conductor {
               const tokenPath = shPark.buildAuthTokenPath;
               const daemonTokenClassifier = createDaemonTokenContentClassifier();
 
-              await this.events.emit({
+              await emitTracked({
                 type: 'credentials_park',
                 reason: 'daemon build token expired or invalid — waiting for refresh',
               });
@@ -3068,7 +3077,7 @@ export class Conductor {
                 Date.now(),
               );
 
-              await this.events.emit({
+              await emitTracked({
                 type: 'credentials_park',
                 reason: 'operator OAuth token expired or invalid — waiting for refresh',
               });
@@ -3113,7 +3122,7 @@ export class Conductor {
               await writeState(this.stateFilePath, state);
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await this.events.emit({ type: 'loop_halt', reason: haltReason, prUrl });
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -3152,7 +3161,7 @@ export class Conductor {
                 attempt + 1,
                 resolved.escalate,
               );
-              await this.events.emit({
+              await emitTracked({
                 type: 'step_retry',
                 step: step.name,
                 attempt: attempt + 1,
@@ -3190,7 +3199,7 @@ export class Conductor {
             // attempt. Emitted once per completion check, on both the pass
             // and stale paths (both populate `verdictFreshness`).
             if (completion.verdictFreshness) {
-              await this.events.emit({
+              await emitTracked({
                 type: 'verdict_freshness',
                 step: step.name,
                 artifact: completion.verdictFreshness.artifact,
@@ -3238,7 +3247,7 @@ export class Conductor {
               const heal = result
                 ? await applyDerivedCompletion(this.projectRoot, result)
                 : { healed: [], skipped: [] };
-              await this.events.emit({
+              await emitTracked({
                 type: 'auto_heal',
                 step: 'build',
                 healed: heal.healed.length,
@@ -3361,7 +3370,7 @@ export class Conductor {
                   // fully-covered build incorrectly falls into the gate-miss
                   // path below even though the judge just cleared the residue.
                   if (laneResult.stampedTaskIds.length > 0) {
-                    await this.events.emit({
+                    await emitTracked({
                       type: 'auto_heal',
                       step: 'build',
                       healed: laneResult.stampedTaskIds.length,
@@ -3453,7 +3462,7 @@ export class Conductor {
                     `since attempt ${attempt - 1}`;
                 }
 
-                await this.events.emit({
+                await emitTracked({
                   type: 'retry_decision',
                   step: step.name,
                   attempt,
@@ -3509,7 +3518,7 @@ export class Conductor {
                   headAfter: headShaAfterBuild,
                 });
                 if (isZeroWork) {
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'zero_work_product',
                     step: step.name,
                     dispatchCount: dispatchCountThisStep,
@@ -3630,7 +3639,7 @@ export class Conductor {
                   ).catch(() => {});
                   state[step.name] = 'failed';
                   await writeState(this.stateFilePath, state);
-                  await this.events.emit({ type: 'loop_halt', reason });
+                  await emitTracked({ type: 'loop_halt', reason });
                   process.off('SIGINT', sigintHandler);
                   return;
                 }
@@ -3675,7 +3684,7 @@ export class Conductor {
                     });
                     if (contradiction) {
                       effectiveEmptyPlan = false;
-                      await this.events.emit({
+                      await emitTracked({
                         type: 'auto_park_contradiction',
                         slug,
                         verdict: 'empty/missing plan',
@@ -3753,14 +3762,14 @@ export class Conductor {
                     ).catch(() => {});
                     state[step.name] = 'failed';
                     await writeState(this.stateFilePath, state);
-                    await this.events.emit({ type: 'loop_halt', reason });
+                    await emitTracked({ type: 'loop_halt', reason });
                     process.off('SIGINT', sigintHandler);
                     return;
                   }
                 }
 
                 if (stalled) {
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'build_stall',
                     step: step.name,
                     reason: stalled,
@@ -3813,7 +3822,7 @@ export class Conductor {
                   const isZeroWorkStall = stalled === 'no_task_progress';
 
                   await clearHaltMarker(this.projectRoot);
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'halt_cleared',
                     step: step.name,
                     cause: 'operator',
@@ -3846,7 +3855,7 @@ export class Conductor {
                       });
                       await writeState(this.stateFilePath, state);
                       const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                       process.off('SIGINT', sigintHandler);
                       process.off('SIGTERM', sigterm);
                       return;
@@ -3893,7 +3902,7 @@ export class Conductor {
                         });
                         await writeState(this.stateFilePath, state);
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -3912,7 +3921,7 @@ export class Conductor {
                       // returns target='build', extract the answer and continue the
                       // build retry loop without burning a retry attempt (attempt--).
                       if (outcome.target === 'build') {
-                        await this.events.emit({
+                        await emitTracked({
                           type: 'kickback',
                           from: step.name,
                           to: outcome.target,
@@ -3948,7 +3957,7 @@ export class Conductor {
                         });
                         await writeState(this.stateFilePath, state);
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -3977,7 +3986,7 @@ export class Conductor {
                         });
                         await writeState(this.stateFilePath, state);
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -4007,7 +4016,7 @@ export class Conductor {
                         });
                         await writeState(this.stateFilePath, state);
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await this.events.emit({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -4071,7 +4080,7 @@ export class Conductor {
                   attempt + 1,
                   resolved.escalate,
                 );
-                await this.events.emit({
+                await emitTracked({
                   type: 'step_retry',
                   step: step.name,
                   attempt: attempt + 1,
@@ -4133,7 +4142,7 @@ export class Conductor {
           // Exhausted retries — route through the recovery menu.
           await saveStepStatus(this.stateFilePath, step.name, 'failed');
           state[step.name] = 'failed';
-          await this.events.emit({
+          await emitTracked({
             type: 'step_failed',
             step: step.name,
             error: lastError,
@@ -4214,7 +4223,7 @@ export class Conductor {
                   });
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -4226,7 +4235,7 @@ export class Conductor {
                     parsed.reasons && parsed.reasons.length > 0
                       ? parsed.reasons.join('\n')
                       : 'grader returned FAIL without reasons';
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: 'build_review',
                     to: 'build',
@@ -4274,7 +4283,7 @@ export class Conductor {
                 });
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
                 return;
               }
@@ -4338,7 +4347,7 @@ export class Conductor {
                 if (count <= MAX_KICKBACKS_PER_GATE) {
                   kickbackCounts.set('wiring_check', count);
                   const evidenceText = gapMessages.join('\n');
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: 'wiring_check',
                     to: 'build',
@@ -4381,7 +4390,7 @@ export class Conductor {
                 });
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
                 return;
               }
@@ -4402,7 +4411,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4421,7 +4430,7 @@ export class Conductor {
 
                 if (outcome.kind === 'route') {
                   remediationRounds++;
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: 'build',
                     to: outcome.target,
@@ -4448,7 +4457,7 @@ export class Conductor {
                   await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail);
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -4460,7 +4469,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4470,7 +4479,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await this.events.emit({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4497,7 +4506,7 @@ export class Conductor {
                 });
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4522,7 +4531,7 @@ export class Conductor {
                 );
                 if (outcome.kind === 'route') {
                   remediationRounds++;
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: 'prd_audit',
                     to: outcome.target,
@@ -4562,7 +4571,7 @@ export class Conductor {
                   });
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -4578,7 +4587,7 @@ export class Conductor {
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < MAX_KICKBACKS_PER_GATE) {
                 prdAuditSelfHeals++;
-                await this.events.emit({
+                await emitTracked({
                   type: 'kickback',
                   from: 'prd_audit',
                   to: 'build',
@@ -4633,7 +4642,7 @@ export class Conductor {
               });
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
-              await this.events.emit({ type: 'loop_halt', reason, prUrl });
+              await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -4672,7 +4681,7 @@ export class Conductor {
                 });
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4697,7 +4706,7 @@ export class Conductor {
               );
               if (outcome.kind === 'route') {
                 remediationRounds++;
-                await this.events.emit({
+                await emitTracked({
                   type: 'kickback',
                   from: step.name,
                   to: outcome.target,
@@ -4743,7 +4752,7 @@ export class Conductor {
                 // distinguishes this from a productive kickback, even though
                 // no route/re-entry into build actually happens.
                 if (outcome.kickbackOutcome) {
-                  await this.events.emit({
+                  await emitTracked({
                     type: 'kickback',
                     from: step.name,
                     to: 'build',
@@ -4764,7 +4773,7 @@ export class Conductor {
                 });
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await this.events.emit({ type: 'loop_halt', reason, prUrl });
+                await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -4815,7 +4824,7 @@ export class Conductor {
             // wraps escalation in try/catch — a throwing escalation must never
             // prevent the HALT path from returning cleanly (C1).
             const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
-            await this.events.emit({ type: 'loop_halt', reason, prUrl });
+            await emitTracked({ type: 'loop_halt', reason, prUrl });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -4853,7 +4862,7 @@ export class Conductor {
               const target = await this.onNavigate(navigable);
               if (target) {
                 const nav = navigateBack(state, target, steps);
-                await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+                await emitTracked({ type: 'navigation_back', from: step.name, to: target });
                 state = nav.state;
                 await writeState(this.stateFilePath, state);
                 i = nav.index - 1;
@@ -5021,7 +5030,7 @@ export class Conductor {
           }
           state[step.name] = 'done';
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
-          await this.events.emit({ type: 'step_completed', step: step.name, status: 'done', tail });
+          await emitTracked({ type: 'step_completed', step: step.name, status: 'done', tail });
 
           // Store PR URL from finish step output. Prefer state-file write
           // (skill-authored, survives recovery/interactive fixes), fall back to
@@ -5042,7 +5051,7 @@ export class Conductor {
 
           // Checkpoint handling
           if (step.isCheckpoint && this.mode !== 'auto') {
-            await this.events.emit({ type: 'checkpoint_reached', step: step.name });
+            await emitTracked({ type: 'checkpoint_reached', step: step.name });
             const response = await this.onCheckpoint(step.name);
             if (response === 'quit') {
               await writeState(this.stateFilePath, state);
@@ -5055,7 +5064,7 @@ export class Conductor {
               const target = await this.onNavigate(navigable);
               if (target) {
                 const nav = navigateBack(state, target, steps);
-                await this.events.emit({ type: 'navigation_back', from: step.name, to: target });
+                await emitTracked({ type: 'navigation_back', from: step.name, to: target });
                 state = nav.state;
                 await writeState(this.stateFilePath, state);
                 i = nav.index - 1; // for loop will i++
@@ -5070,14 +5079,27 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
-          const advance = await this.advanceTail(
-            step,
-            state,
-            kickbackCounts,
-            stuckGate,
-            steps,
-            indexOf,
-          );
+          let advance: Awaited<ReturnType<typeof this.advanceTail>>;
+          try {
+            advance = await this.advanceTail(
+              step,
+              state,
+              kickbackCounts,
+              stuckGate,
+              steps,
+              indexOf,
+            );
+          } catch (transitionErr) {
+            // Tag the escaped rejection with which step-transition it happened
+            // during, preserving the original stack (never rethrow a bare
+            // re-wrap that loses `instanceof Error` or drops `.stack` — the
+            // outer catch below relies on both to build an actionable HALT
+            // reason).
+            if (transitionErr instanceof Error) {
+              transitionErr.message = `step-transition (${step.name}): ${transitionErr.message}`;
+            }
+            throw transitionErr;
+          }
           if (advance === 'halt') {
             await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
@@ -5129,7 +5151,7 @@ export class Conductor {
       // supervising daemon classifies this as `halted` (worktree kept, parked,
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
-      const reason = `conductor error: ${err instanceof Error ? err.message : String(err)}`;
+      const reason = `conductor error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`;
       await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
@@ -5168,9 +5190,22 @@ export class Conductor {
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
       ) {
-        const reason = `loop exited without a terminal verdict (last step: ${
-          state.last_step ?? 'unknown'
-        }) — no DONE/HALT marker was written; parking for inspection`;
+        // Diagnostics assembly must never throw and strand the run without a
+        // marker — a corrupted/inaccessible breadcrumb (or a future throw
+        // inside resolveLastStep) must still produce a classifiable HALT, not
+        // an unhandled exception that skips the marker write below.
+        let reason: string;
+        try {
+          reason = `loop exited without a terminal verdict (last step: ${resolveLastStep(
+            state,
+            this._breadcrumb,
+          )}) — no DONE/HALT marker was written; parking for inspection (last event: ${
+            this._breadcrumb.lastEventType ?? 'none'
+          }, exit index: ${this._breadcrumb.exitIndex ?? 'n/a'})`;
+        } catch {
+          reason =
+            'loop exited without a terminal verdict — diagnostics assembly failed; parking for inspection';
+        }
         await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
         await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
           () => {},
@@ -5902,6 +5937,36 @@ export class Conductor {
     return findResumeIndex(state, steps);
   }
 
+}
+
+/**
+ * Pure helper (no side effects): resolves the "last step" that a run reached,
+ * for use by the finally backstop's diagnostic HALT message so it never
+ * surfaces the literal 'unknown' to operators. Preference order:
+ *   1. state.last_step, if recorded
+ *   2. breadcrumb.lastAdvancedStep, if the run tracked one
+ *   3. the furthest-progressed 'done' step per canonical ALL_STEPS order
+ *   4. the literal 'no step recorded' as a last resort
+ */
+export function resolveLastStep(
+  state: Record<string, unknown> & { last_step?: string },
+  breadcrumb: { lastAdvancedStep?: string },
+): string {
+  if (state?.last_step) return state.last_step;
+  if (breadcrumb?.lastAdvancedStep) return breadcrumb.lastAdvancedStep;
+
+  let furthestIndex = -1;
+  let furthestStep: string | undefined;
+  for (let i = 0; i < ALL_STEPS.length; i++) {
+    const name = ALL_STEPS[i].name;
+    if (state?.[name] === 'done' && i > furthestIndex) {
+      furthestIndex = i;
+      furthestStep = name;
+    }
+  }
+  if (furthestStep) return furthestStep;
+
+  return 'no step recorded';
 }
 
 /**
