@@ -49,6 +49,25 @@ describe('Event types', () => {
     const serialized = JSON.parse(JSON.stringify(event)) as ConductorEvent;
     expect(serialized).toEqual(event);
   });
+
+  it('ConductorEvent rebase_gate_preserved has gate/surface/deltaConsidered', () => {
+    const event: ConductorEvent = {
+      type: 'rebase_gate_preserved',
+      gate: 'build',
+      surface: ['src/foo.ts'],
+      deltaConsidered: ['src/bar.ts'],
+    };
+    expect(event.type).toBe('rebase_gate_preserved');
+  });
+
+  it('ConductorEvent rebase_gate_invalidated has gate/matchedPaths', () => {
+    const event: ConductorEvent = {
+      type: 'rebase_gate_invalidated',
+      gate: 'build',
+      matchedPaths: ['src/bar.ts'],
+    };
+    expect(event.type).toBe('rebase_gate_invalidated');
+  });
 });
 
 describe('Config types', () => {

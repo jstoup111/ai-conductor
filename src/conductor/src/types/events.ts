@@ -241,6 +241,25 @@ export type ConductorEvent =
       reason?: string;
     }
   | {
+      /**
+       * A gate's prior verdict was preserved post-rebase because the
+       * rebase delta did not touch the gate's judged surface.
+       */
+      type: 'rebase_gate_preserved';
+      gate: StepName;
+      surface: string[];
+      deltaConsidered: string[];
+    }
+  | {
+      /**
+       * A gate's prior verdict was invalidated post-rebase because the
+       * rebase delta touched paths within the gate's judged surface.
+       */
+      type: 'rebase_gate_invalidated';
+      gate: StepName;
+      matchedPaths: string[];
+    }
+  | {
       /** A CHANGELOG-only conflict was auto-resolved (FR-7). */
       type: 'rebase_changelog_resolved';
     }
