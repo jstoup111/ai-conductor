@@ -26,7 +26,7 @@ export function parseAcceptanceRunContract(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { ok: false, reason: "invalid JSON" };
+    return { ok: false, reason: "invalid run contract JSON" };
   }
 
   if (typeof parsed !== "object" || parsed === null) {
@@ -197,13 +197,17 @@ export async function selfHealAcceptanceRed(
   const contractPath = join(resolvedRoot, ACCEPTANCE_RUN_CONTRACT_PATH);
 
   if (!existsSync(contractPath)) {
-    return { healed: false, reason: `acceptance run contract not found: ${contractPath}` };
+    return { healed: false, reason: `acceptance run contract missing: ${contractPath}` };
   }
 
   const raw = readFileSync(contractPath, "utf8");
   const parsed = parseAcceptanceRunContract(raw);
   if (!parsed.ok) {
-    return { healed: false, reason: parsed.reason };
+    const reason =
+      parsed.reason === "invalid JSON"
+        ? `invalid run contract JSON at ${contractPath}`
+        : parsed.reason;
+    return { healed: false, reason };
   }
 
   const crossChecked = crossCheckTargetSpecs(parsed.contract, specFiles);

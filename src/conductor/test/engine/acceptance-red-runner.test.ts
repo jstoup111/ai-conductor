@@ -331,6 +331,82 @@ describe("selfHealAcceptanceRed", () => {
     }
   });
 
+  it("returns healed:false without calling exec when no contract file is present", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/run contract missing/);
+    }
+  });
+
+  it("returns healed:false without calling exec when the contract file has malformed JSON", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(join(pipelineDir, "acceptance-specs-run.json"), "{ not valid json", "utf8");
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/invalid run contract JSON/);
+    }
+  });
+
+  it("returns healed:false without calling exec when the contract is missing the command field", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(
+      join(pipelineDir, "acceptance-specs-run.json"),
+      JSON.stringify({ cwd: ".", targetSpecs: ["a.test.ts"] }),
+      "utf8",
+    );
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/missing command/);
+    }
+  });
+
   function writeContract(root: string): void {
     const pipelineDir = join(root, ".pipeline");
     mkdirSync(pipelineDir, { recursive: true });
@@ -450,5 +526,85 @@ describe("selfHealAcceptanceRed", () => {
       healed: false,
       reason: "acceptance-specs RED run executed 0 tests — the command did not select the feature's specs",
     });
+  });
+
+  it("returns healed:false without calling exec when the run contract file is absent", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    // no .pipeline/acceptance-specs-run.json written at all
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/run contract missing/);
+    }
+  });
+
+  it("returns healed:false without calling exec when the run contract file has malformed JSON", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(join(pipelineDir, "acceptance-specs-run.json"), "{ not json", "utf8");
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/invalid run contract JSON/);
+    }
+  });
+
+  it("returns healed:false without calling exec when the run contract is missing the command field", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    const pipelineDir = join(worktreeRoot, ".pipeline");
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(
+      join(pipelineDir, "acceptance-specs-run.json"),
+      JSON.stringify({
+        cwd: ".",
+        targetSpecs: ["a.test.ts"],
+      }),
+      "utf8",
+    );
+
+    let execCalled = false;
+    const exec = async () => {
+      execCalled = true;
+      return {};
+    };
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec,
+    });
+
+    expect(execCalled).toBe(false);
+    expect(result.healed).toBe(false);
+    if (!result.healed) {
+      expect(result.reason).toMatch(/missing command/);
+    }
   });
 });
