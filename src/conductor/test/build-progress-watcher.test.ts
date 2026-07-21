@@ -168,6 +168,95 @@ describe('readSnapshot', () => {
     expect(snapshot.resolved).toBe(1);
     expect(snapshot.total).toBe(2);
   });
+
+  it('counts a git-derived skipped task as resolved via planPath', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    // Task 2 is resolved via the Evidence: skipped no-op form, not a normal
+    // commit. Task/Evidence trailers must be a single trailing paragraph (no
+    // blank line between them) so git's trailer parser recognizes both.
+    await execa(
+      'git',
+      [
+        'commit',
+        '--allow-empty',
+        '-m',
+        'chore(evidence): task deferred\n\nTask: 2\nEvidence: skipped not_applicable',
+      ],
+      { cwd: dir },
+    );
+
+    // task-status.json is stale — still reports 0 completed out of 2.
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'pending' },
+        { id: '2', title: 'Second', status: 'pending' },
+      ],
+    });
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    expect(snapshot.resolved).toBe(1);
+    expect(snapshot.total).toBe(2);
+  });
+
+  it('clamps resolved to total when the git-derived count exceeds the declared total', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    await writeFile(join(dir, 'second.txt'), 'content');
+    await execa('git', ['add', 'second.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: second task\n\nTask: 2\n'], { cwd: dir });
+
+    // Declared total (from task-status.json) is only 1, even though the
+    // git-derived completion count for the plan's 2 tasks is 2 — resolved
+    // must never exceed the declared total.
+    await writeStatus({
+      total: 1,
+      tasks: [{ id: '1', title: 'First', status: 'pending' }],
+    });
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    expect(snapshot.total).toBe(1);
+    expect(snapshot.resolved).toBeLessThanOrEqual(snapshot.total);
+    expect(snapshot.resolved).toBe(1);
+  });
 });
 
 describe('BuildProgressWatcher change-driven emission', () => {

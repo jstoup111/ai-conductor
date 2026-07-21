@@ -56,8 +56,8 @@ async function computeResolved(params: {
   tasks: ReturnType<typeof normalizeTasks>;
   total: number;
 }): Promise<number> {
-  const { projectRoot, planPath, tasks } = params;
-  const fallback = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+  const { projectRoot, planPath, tasks, total } = params;
+  const fallback = Math.min(tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length, total);
 
   if (!planPath) return fallback;
 
@@ -66,7 +66,8 @@ async function computeResolved(params: {
     const result = await deriveCompletion(projectRoot, planPath, undefined, undefined, undefined, {
       readOnly: true,
     });
-    return Object.values(result).filter((entry) => entry.completed || entry.status === 'skipped').length;
+    const derived = Object.values(result).filter((entry) => entry.completed || entry.status === 'skipped').length;
+    return Math.min(derived, total);
   } catch {
     // Git-derived probe failed (not a repo, no commits, plan unparseable,
     // etc) — degrade to the task-status-file count rather than throwing.
