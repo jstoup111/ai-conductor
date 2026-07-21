@@ -139,7 +139,7 @@ describe('readSnapshot', () => {
     // origin remote (fail-closed otherwise) — stand up a bare repo to act
     // as origin/main, matching autoheal.test.ts's fixture pattern.
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -176,7 +176,7 @@ describe('readSnapshot', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -267,7 +267,7 @@ describe('readSnapshot', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -314,7 +314,7 @@ describe('readSnapshot', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -372,7 +372,7 @@ describe('readSnapshot', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -414,7 +414,7 @@ describe('readSnapshot', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -677,7 +677,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
     // origin remote (fail-closed otherwise) — stand up a bare repo to act
     // as origin/main, matching readSnapshot's fixture pattern above.
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
@@ -1211,7 +1211,7 @@ describe('build-progress derivation never mutates disk state', () => {
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
     const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-readonly-origin-'));
-    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['init', '--bare'], { cwd: bareDir }); // portability-ok: bare push/clone remote, never reads HEAD
     await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
 
     const planPath = join(dir, '.docs/plans/test-plan.md');
