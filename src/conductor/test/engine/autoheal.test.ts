@@ -1150,6 +1150,59 @@ describe('parsePlanTaskVerifyOnly', () => {
       expect(trueEntries).toEqual([]);
     });
   });
+
+  // Union semantics (Task 2, no-diff-task-evidence-stamp plan): a `**Type:**`
+  // line whose value contains the exact token `verification` (split on `+`)
+  // is ALSO verify-only-eligible, in addition to `**Verify-only:** yes`.
+  it('marks a task true when its block has `**Type:** verification`', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** verification
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('still marks a task true via `**Verify-only:** yes` (unchanged)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** yes
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it.each([
+    'happy-path',
+    'negative-path',
+    'refactor',
+    'feature',
+    'integration',
+    'infrastructure',
+    'review',
+    'happy-path + negative-path',
+    'verification-only',
+    'preverification',
+  ])('fail-closed: `**Type:** %s` does not match (not exact token verification)', async (value) => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** ${value}
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1') ?? false).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2707,6 +2760,69 @@ A task that will be skipped.
     expect(result).toHaveProperty('8');
     expect(result['8']).toHaveProperty('status', 'skipped');
     expect(result['8']).toHaveProperty('skipReason', 'build unavailable');
+  });
+
+  it('mints an evidenceStamps entry for Evidence: skipped so the gate treats it as resolved (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 14: Skippable task with stamp
+A task that will be skipped and must still mint an evidence stamp.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a no-op commit with the ADR-canonical form: `Task: <id>` PLUS
+    // the Evidence: skipped trailer.
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nTask: 14\nEvidence: skipped no diff for this task\n'], { cwd: gitDir });
+    const skipSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('14');
+    expect(result['14']).toHaveProperty('status', 'skipped');
+    expect(result['14']).toHaveProperty('completed', false);
+
+    expect(evidence.evidenceStamps.has('14')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('14');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(skipSha);
+    expect(stamp!.form).toBe('evidence:skipped');
+  });
+
+  it('leaves evidenceStamps empty for a task with no Evidence: skipped (or any) commit (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with a task that has no matching commit at all.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 15: Untouched task
+No commit will reference this task.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('15');
+    expect(result['15']).toHaveProperty('completed', false);
+    expect(evidence.evidenceStamps.has('15')).toBe(false);
   });
 
   it('does NOT complete task with dangling satisfied-by sha', async () => {
