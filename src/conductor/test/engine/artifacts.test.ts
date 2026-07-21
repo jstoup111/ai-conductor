@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
 import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
@@ -13,8 +16,13 @@ import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/h
 // verification) already failed the gate. Default behavior returns null (fail-open);
 // tests can override via mockImplementation to call the real implementation.
 const readStaleHaltTitleSpy = vi.fn(async () => null);
+// Spy target for the finish predicate's Phase 2 presentation banner check
+// (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
+// null (fail-open); tests override via mockImplementation to call the real logic.
+const readStaleHaltBannerSpy = vi.fn(async () => null);
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
   readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
+  readStaleHaltBanner: (...args: unknown[]) => readStaleHaltBannerSpy(...args),
 }));
 
 import {
@@ -25,6 +33,7 @@ import {
   checkStepCompletion,
   isStoriesApproved,
   classifyPrdAuditGaps,
+  classifyRetryDecision,
   sweepStaleReviewArtifacts,
   FINISH_CHOICE_MARKER,
   HALT_MARKER,
@@ -32,6 +41,7 @@ import {
   planHasDependencyTree,
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
+import type { CompletionResult } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -39,6 +49,7 @@ describe('engine/artifacts', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
     readStaleHaltTitleSpy.mockClear();
+    readStaleHaltBannerSpy.mockClear();
   });
 
   afterEach(async () => {
@@ -598,6 +609,110 @@ describe('engine/artifacts', () => {
       });
       readStaleHaltTitleSpy.mockClear();
       expect(result).toEqual({ done: true });
+    });
+
+    it('Phase 2 presentation: fails when fakeGh returns a PR body containing the halt banner (through-the-gate stale banner check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+          return {
+            stdout: JSON.stringify({
+              body: 'This PR was opened automatically after an irrecoverable daemon HALT.\n\nManual remediation is required to unblock this feature.',
+            }),
+          };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async (gh, cwd, prUrlArg) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrlArg, '--json', 'body'], { cwd });
+          const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+          const sentinel = 'This PR was opened automatically after an irrecoverable daemon HALT.';
+          return body.includes(sentinel) ? sentinel : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(new RegExp(prUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      expect(result.reason).toMatch(/halt banner/i);
+    });
+
+    it('Phase 2 presentation: passes when the banner-check gh read throws (fail-open, Story 2 negative path)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const fakeGh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async () => {
+        throw new Error('gh: network unreachable');
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result).toEqual({ done: true });
+    });
+
+    it('Phase 2 presentation: passes when fakeGh returns a clean body with no halt banner (through-the-gate clean banner check)', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: prUrl }),
+      );
+      const calls: string[][] = [];
+      const fakeGh = async (args: string[]) => {
+        calls.push(args);
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
+          return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+          return { stdout: JSON.stringify({ body: '## Summary\n\nImplemented the thing.' }) };
+        }
+        return { stdout: '{}' };
+      };
+      readStaleHaltBannerSpy.mockImplementation(async (gh, cwd, prUrlArg) => {
+        try {
+          const { stdout } = await gh(['pr', 'view', prUrlArg, '--json', 'body'], { cwd });
+          const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+          const sentinel = 'This PR was opened automatically after an irrecoverable daemon HALT.';
+          return body.includes(sentinel) ? sentinel : null;
+        } catch {
+          return null;
+        }
+      });
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        gh: fakeGh as any,
+      });
+      readStaleHaltBannerSpy.mockClear();
+      expect(result).toEqual({ done: true });
+      expect(calls.every((c) => c[0] === 'pr' && c[1] === 'view')).toBe(true);
     });
 
     it('Story 3: Phase 2 presentation (isDraft): fails when fakeGh returns isDraft=true with clean title (ship-readiness check)', async () => {
@@ -1233,6 +1348,155 @@ describe('engine/artifacts', () => {
           expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
         });
       });
+
+      // Regression (#578 live-fire follow-up, 2026-07-12): a real build
+      // (`2026-07-12-rtk-hook-preservation`) used `### T0 — Title` shorthand
+      // headers (no literal "Task" word, ids start at T0 not T1). The
+      // already-shipped em-dash fix (Task 1/#590) still requires the literal
+      // word "Task" before the id, so this plan parsed to zero task ids and
+      // the daemon auto-parked a fully-completed 5/5 build as "empty/missing
+      // plan". Uses the actual incident plan file as a fixture.
+      describe('regression: bare "T<N>" shorthand headings (### T0 — Title) are not false-positives for empty-plan', () => {
+        it('Story 1: T-prefix plan (headers start at T0, no "Task" word) with evidence is "done", not "empty"', async () => {
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+          const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-tprefix-origin-'));
+          await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+          await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+          await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+          // Mirrors the real incident plan's authoring convention:
+          // `### T0 — Title` (no "Task" word, starts at T0 not T1).
+          await writePlan(
+            '# Implementation Plan: T-prefix Test\n\n' +
+            '### T0 — First T-prefix task\n' +
+            '**Story:** 1\n' +
+            '**Files:** `src/t0.ts`\n\n' +
+            '### T1 — Second T-prefix task\n' +
+            '**Story:** 2\n' +
+            '**Files:** `src/t1.ts`\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add T-prefix plan'], { cwd: dir });
+
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/t0.ts'), 'export const t0 = true;\n');
+          await execa('git', ['add', 'src/t0.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement T0\n\nTask: 0\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/t1.ts'), 'export const t1 = true;\n');
+          await execa('git', ['add', 'src/t1.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: implement T1\n\nTask: 1\n'], { cwd: dir });
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result).toEqual({ done: true });
+
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/empty|no tasks in plan|plan is empty/i);
+          }
+
+          await rm(bareDir, { recursive: true, force: true });
+        });
+
+        it('Story 2: real 2026-07-12-rtk-hook-preservation.md incident fixture is not "no tasks in plan" (presence gate)', async () => {
+          // The presence-check gate (artifacts.ts) must recognize the real
+          // incident plan as non-empty, independent of evidence/completion.
+          const fixturePath = join(
+            __dirname,
+            '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+          );
+          const fixtureText = await readFile(fixturePath, 'utf-8');
+          await writePlan(fixtureText);
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          // Must not be the empty/missing-plan false-positive (may still be
+          // "pending" since there's no evidence in this test — that's fine).
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+        });
+      });
+
+      // Regression (#620): #615's widened presence-gate regex
+      // (`Task\s+[A-Za-z0-9._-]+`) accepts any word as an "id" with no
+      // terminator requirement, so a structural heading like `## Task Graph`
+      // or `## Task Dependency Graph` — present in many committed plans,
+      // e.g. .docs/plans/2026-06-30-engineer-worktree-isolation.md — is
+      // misread as evidence the plan has a real task. Downstream, the same
+      // over-wide id grammar in parsePlanTaskPaths/parsePlanTasks seeds a
+      // phantom task ("Graph"/"Dependency") that can never be completed,
+      // making build completion permanently unsatisfiable.
+      describe('regression #620: structural "## Task Graph" / "## Task Dependency Graph" headings are not real task presence', () => {
+        it('a plan with ONLY a "## Task Graph" heading (no real ### Task N) is still "empty"', async () => {
+          await writePlan(
+            '# Implementation Plan: Graph-only\n\n' +
+            '## Task Graph\n\n' +
+            'Task 1 -> Task 2\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+
+        it('a plan with ONLY a "## Task Dependency Graph" heading (no real ### Task N) is still "empty"', async () => {
+          await writePlan(
+            '# Implementation Plan: Dependency-graph-only\n\n' +
+            '## Task Dependency Graph\n\n' +
+            'Task 1 -> Task 2\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/empty|no tasks in plan|plan is empty/i);
+        });
+
+        it('a plan with real ### Task N headings PLUS a "## Task Dependency Graph" section still recognizes real task presence', async () => {
+          await writePlan(
+            '# Implementation Plan: Real-plus-graph\n\n' +
+            '### Task 1: Real work\n' +
+            '**Files:** `src/real.ts`\n\n' +
+            '## Task Dependency Graph\n\n' +
+            'Task 1 -> done\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          // Not the empty/missing-plan false-negative; may still be
+          // "pending" for lack of git evidence in this test.
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+        });
+
+        it('#620 guard: bare title-less headers with a digit in the id ("### Task 1", "### Task t1") still count as task presence', async () => {
+          // The #620 tightening must only reject DIGITLESS bare ids
+          // (Graph/Breakdown/Dependency), never the widely-used bare
+          // title-less shapes whose ids contain a digit.
+          await writePlan(
+            '# Implementation Plan: Bare digit headers\n\n' +
+            '### Task 1\n' +
+            '**Files:** `src/a.ts`\n\n' +
+            '### Task t2\n' +
+            '**Files:** `src/b.ts`\n',
+          );
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+        });
+      });
     });
   });
 
@@ -1573,6 +1837,165 @@ describe('engine/artifacts', () => {
       // Session started "now" → the 2000 file is stale and ignored.
       const c = await classifyPrdAuditGaps(dir, Date.now());
       expect(c.kind).toBe('clean');
+    });
+  });
+
+  describe('classifyRetryDecision', () => {
+    function completion(routeClass?: 'named-route' | 'absent', reason = 'r'): CompletionResult {
+      return { done: false, reason, routeClass };
+    }
+
+    describe('truth table over architecture_review_as_built / build_review', () => {
+      for (const step of ['architecture_review_as_built', 'build_review'] as const) {
+        describe(step, () => {
+          it('named-route, attempt 1 → route named-route (regardless of reason/inputsUnchanged)', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('named-route'),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+          });
+
+          it('named-route, attempt 2, same reason, inputsUnchanged → route named-route (signal a wins)', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('named-route', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+          });
+
+          it('absent, attempt 1 → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent'),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('absent, attempt 2, diff reason, inputsUnchanged → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'new'),
+              attempt: 2,
+              priorReason: 'old',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('absent, attempt 2, same reason, inputsUnchanged → route identical-repeat', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: true,
+            });
+            expect(r).toEqual({ decision: 'route', signal: 'identical-repeat' });
+          });
+
+          it('absent, attempt 2, same reason, inputsUnchanged:false → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion('absent', 'same'),
+              attempt: 2,
+              priorReason: 'same',
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+
+          it('undefined routeClass, attempt 1 → rerun', () => {
+            const r = classifyRetryDecision({
+              step,
+              completion: completion(undefined),
+              attempt: 1,
+              priorReason: undefined,
+              inputsUnchanged: false,
+            });
+            expect(r).toEqual({ decision: 'rerun' });
+          });
+        });
+      }
+    });
+
+    it('build step always reruns (scope guard), even with named-route-like inputs', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: completion('named-route', 'same'),
+        attempt: 2,
+        priorReason: 'same',
+        inputsUnchanged: true,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    it('prd_audit with prdAuditNonClean:true routes named-route on attempt 1', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'gap' },
+        attempt: 1,
+        priorReason: undefined,
+        inputsUnchanged: false,
+        prdAuditNonClean: true,
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'named-route' });
+    });
+
+    it('prd_audit without prdAuditNonClean does not route on named-route signal', () => {
+      const r = classifyRetryDecision({
+        step: 'prd_audit',
+        completion: { done: false, reason: 'gap' },
+        attempt: 1,
+        priorReason: undefined,
+        inputsUnchanged: false,
+        prdAuditNonClean: false,
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
+    describe('identical-repeat requires all three conditions', () => {
+      it('flips attempt < 2 → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 1,
+          priorReason: 'same',
+          inputsUnchanged: true,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
+
+      it('flips priorReason undefined → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 2,
+          priorReason: undefined,
+          inputsUnchanged: true,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
+
+      it('flips inputsUnchanged false → rerun', () => {
+        const r = classifyRetryDecision({
+          step: 'build_review',
+          completion: completion('absent', 'same'),
+          attempt: 2,
+          priorReason: 'same',
+          inputsUnchanged: false,
+        });
+        expect(r).toEqual({ decision: 'rerun' });
+      });
     });
   });
 

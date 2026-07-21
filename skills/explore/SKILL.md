@@ -62,7 +62,13 @@ Present 2-3 approaches with clear trade-offs and a recommendation; the user deci
 ### Approach A: [Name]
 **Idea:** [Brief description — behavior/strategy, not mechanism]
 **Pros:** … **Cons:** … **Best when:** …
+**Est. effort:** [very rough implementation time — e.g. "~1-2h", "~half day", or S/M/L tier]
+**Impact:** [one line — value added / what it unblocks]
 ```
+
+**Est. effort** and **Impact** are REQUIRED on every proposed approach. Keep them rough and
+one-line each — they inform the operator's pick, they are not commitments and need no analysis
+artifact.
 
 **Embedded Design Divergence Rule:** When the incoming idea carries an embedded solution design
 (identified as a filer hypothesis from the engineer step):
@@ -114,6 +120,7 @@ Track: product   # or: technical
 - [ ] Project context explored before asking questions
 - [ ] Questions asked one at a time (not batched)
 - [ ] 2-3 approaches presented with trade-offs + a recommendation
+- [ ] Every approach carries **Est. effort** and **Impact** lines
 - [ ] Track decided AND operator-confirmed; `.docs/track/<slug>.md` written
 - [ ] **No `.docs/` design artifact written (specs/stories/plans); notes kept in `.pipeline/`**
 - [ ] Selected approach + rejected alternatives persisted to `.memory/decisions/` (if non-obvious)

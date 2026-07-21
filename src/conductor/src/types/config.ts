@@ -74,6 +74,13 @@ export interface StepConfig {
   /** Skip this step entirely. Built-in gating/structural steps cannot be disabled. */
   disable?: boolean;
 
+  /**
+   * Retry-as-escalation opt-out (#188). Default true: on retry the step climbs
+   * the escalation ladder (effort, then model tier). Set false to pin the base
+   * model/effort across every retry (identical-retry, pre-#188 behavior).
+   */
+  escalate?: boolean;
+
   /** Replace the default SKILL.md file with this path. */
   skill?: string;
 
@@ -141,6 +148,8 @@ export interface PhaseConfig {
   model?: string;
   effort?: EffortLevel;
   max_retries?: number;
+  /** Retry-as-escalation opt-out for every step in the phase (#188). Default true. */
+  escalate?: boolean;
   by_tier?: Partial<Record<ComplexityTier, TierOverride>>;
 }
 
@@ -151,6 +160,8 @@ export interface DefaultsConfig {
   model?: string;
   effort?: EffortLevel;
   max_retries?: number;
+  /** Retry-as-escalation opt-out for every step (#188). Default true. */
+  escalate?: boolean;
 }
 
 /**
@@ -233,6 +244,48 @@ export interface BuildProgressConfig {
   /** Minutes between heartbeat events while a step is running. Defaults to 5. */
   heartbeat_minutes?: number;
   /** Master on/off switch for build progress events. Defaults to true. */
+  enabled?: boolean;
+}
+
+/**
+ * Progress-aware build halt/park config (build_progress_halt): raises the
+ * retry ceiling while a build keeps resolving tasks, so a build resolving
+ * >=1 additional task per attempt/dispatch keeps re-dispatching instead of
+ * halting when the fixed retry budget is exhausted. All fields optional —
+ * absent block resolves to documented defaults (owned by runtime default
+ * resolution/validation, not this type).
+ */
+export interface BuildProgressHaltConfig {
+  /** Master on/off switch for progress-aware halt. */
+  enabled?: boolean;
+  /** Ceiling on retry attempts before halting, when progress is being made. */
+  attempt_ceiling?: number;
+  /** Ceiling on dispatches before halting, when progress is being made. */
+  dispatch_ceiling?: number;
+}
+
+/**
+ * Kickback→build no-op escalation config (adr-2026-07-13-kickback-build-no-op-escalation,
+ * D2/Story 4): when a kickback→build re-entry ends with zero net progress
+ * AND the gate's verdict is unchanged, the loop HALTs instead of re-kicking
+ * toward `MAX_KICKBACKS_PER_GATE`. All fields optional — absent block
+ * resolves to `{ enabled: true }`. `enabled: false` reverts to the prior
+ * re-kick-until-cap behavior; D1 (the `planRemediation` route-into-no-op
+ * guard) is fail-closed correctness and is NOT gated by this flag.
+ */
+export interface KickbackEscalationConfig {
+  /** Master on/off switch for the D2 zero-progress/unchanged-verdict escalation. Omitted → true. */
+  enabled?: boolean;
+}
+
+/**
+ * Retry-routing config kill-switch (retry_routing): master on/off switch for
+ * classifying a retry as "rerun" vs "route" (rather than always re-dispatching
+ * the same step). Absent block resolves to the documented default (owned by
+ * runtime default resolution/validation, not this type).
+ */
+export interface RetryRoutingConfig {
+  /** Master on/off switch for retry classify rerun-vs-route. Defaults to true. */
   enabled?: boolean;
 }
 
@@ -339,6 +392,21 @@ export interface HarnessConfig {
    */
   build_progress?: BuildProgressConfig;
   /**
+   * Progress-aware build halt/park config. Absent block resolves to defaults
+   * owned by runtime resolution (not this type). See `BuildProgressHaltConfig`.
+   */
+  build_progress_halt?: BuildProgressHaltConfig;
+  /**
+   * Kickback→build no-op escalation (D2). Absent block resolves to
+   * `{ enabled: true }`. See `KickbackEscalationConfig`.
+   */
+  kickback_escalation?: KickbackEscalationConfig;
+  /**
+   * Retry-routing kill-switch. Absent block resolves to defaults owned by
+   * runtime resolution (not this type). See `RetryRoutingConfig`.
+   */
+  retry_routing?: RetryRoutingConfig;
+  /**
    * Owner-gate (adr-2026-06-30-owner-gate-identity-resolution / FR-1): the
    * configured operator identity the daemon builds specs for. Wins over the
    * gh-login fallback. Absent/blank → fall through the resolution chain.
@@ -386,6 +454,12 @@ export interface HarnessConfig {
    */
   rebase_resolution_attempts?: number;
   /**
+   * Maximum number of validation-phase tasks the engine fans out
+   * concurrently. Absent → engine default. Non-numeric values are rejected
+   * at validation time (see validateConfig).
+   */
+  validation_concurrency?: number;
+  /**
    * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
    * activation override + per-gate toggles. Absent → auto-detect, all gates on
    * (the safe default). Scoped to harness self-builds; no effect on other repos.
@@ -431,6 +505,26 @@ export interface HarnessConfig {
    * Malformed values also resolve to enabled without throwing.
    */
   ci_watch?: CiWatchConfig;
+  /**
+   * Wiring-reachability gate configuration (Layer 2: TS import-graph
+   * reachability). Absent → Layer 2 degrades: skipped (with reason) for TS
+   * projects, not-applicable for non-TS projects. See `resolveLayer2Applicability`
+   * in engine/wiring-probe.ts.
+   */
+  wiring?: WiringConfig;
+}
+
+/**
+ * Wiring-reachability gate configuration.
+ */
+export interface WiringConfig {
+  /**
+   * Repo-relative paths to TS import-graph entry points (e.g. CLI/bin
+   * scripts, package `main`/`index.ts`). Layer 2 walks the import graph from
+   * each root to check that changed files are reachable. Absent/missing →
+   * Layer 2 skipped for TS projects (see `resolveLayer2Applicability`).
+   */
+  entry_points?: string[];
 }
 
 /**

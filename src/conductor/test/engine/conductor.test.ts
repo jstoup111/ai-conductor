@@ -28,10 +28,17 @@ vi.mock('../../src/engine/rebase.js', async () => {
 });
 import { execa } from 'execa';
 import type { ConductState } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import {
+  ALL_STEPS,
+  STEP_GROUPS,
+  VALIDATION_GROUP,
+  getGroupForStep,
+  tryGetStepIndex,
+} from '../../src/engine/steps.js';
 import {
   Conductor,
   getNavigableSteps,
@@ -42,8 +49,10 @@ import {
   buildRetryHint,
   appendRemediationTasks,
   findResumeIndex,
+  resolveGroupMembership,
 } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { GroupMember } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
@@ -402,6 +411,155 @@ describe('engine/conductor', () => {
     // It HALTed, so it did not also mark the feature complete.
     const result = await readState(statePath);
     expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  describe('verdict freshness wiring (Task 2, session-fresh-verdict-artifacts)', () => {
+    async function seedToBuildReview(): Promise<void> {
+      const seed = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      (seed as Record<string, unknown>).complexity_tier = 'M';
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build_review') break;
+        (seed as Record<string, unknown>)[s.name] = 'done';
+      }
+      await writeState(statePath, seed as ConductState);
+    }
+
+    async function writeBuildReviewVerdict(mtimeMs?: number): Promise<string> {
+      const full = join(dir, '.pipeline', 'build-review.json');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        full,
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: { tautology: false, scope: false, rootCause: false },
+        }),
+      );
+      if (mtimeMs !== undefined) {
+        const { utimes } = await import('fs/promises');
+        await utimes(full, new Date(mtimeMs), new Date(mtimeMs));
+      }
+      return full;
+    }
+
+    it('completionCtx carries attemptStartedAt only during a dispatched attempt', async () => {
+      await seedToBuildReview();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      // Before any dispatch has occurred, no attempt is in flight.
+      const state = (await readState(statePath)).ok
+        ? (await readState(statePath)).value
+        : ({} as ConductState);
+      const idleCtx = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptStartedAt?: number }>;
+      }).completionCtx(state);
+      expect(idleCtx.attemptStartedAt).toBeUndefined();
+
+      // Confirm the ctx captured DURING the retry loop carries a fresh
+      // attemptStartedAt via the emitted verdict_freshness event's floorSource.
+      const freshnessEvents: Array<{ floorSource: 'attempt' | 'session'; fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+      await writeBuildReviewVerdict(Date.now() + 5000);
+      await conductor.run();
+
+      expect(freshnessEvents[0]?.floorSource).toBe('attempt');
+
+      // And it goes back to undefined once the dispatch attempt is over.
+      const idleCtxAfter = await (conductor as unknown as {
+        completionCtx: (s: ConductState) => Promise<{ attemptStartedAt?: number }>;
+      }).completionCtx(state);
+      expect(idleCtxAfter.attemptStartedAt).toBeUndefined();
+    });
+
+    it('a review retry whose session does not rewrite the verdict does not pass the gate', async () => {
+      await seedToBuildReview();
+      // Stale verdict, written well before this run starts; the stub
+      // stepRunner never rewrites it on either attempt.
+      await writeBuildReviewVerdict(Date.now() - 60_000);
+
+      const freshnessEvents: Array<{ fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true }),
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok && result.value.build_review).toBe('failed');
+
+      expect(freshnessEvents.length).toBeGreaterThanOrEqual(1);
+      for (const e of freshnessEvents) {
+        expect(e.fresh).toBe(false);
+      }
+    });
+
+    it('verdict_freshness event is emitted with fresh:false on stale reuse and fresh:true on rewrite', async () => {
+      await seedToBuildReview();
+      await writeBuildReviewVerdict(Date.now() - 60_000);
+
+      let attempts = 0;
+      const runner: StepRunner = {
+        run: async () => {
+          attempts++;
+          if (attempts === 2) {
+            // Second attempt rewrites the verdict fresh. A generous forward
+            // buffer avoids flakiness from coarse filesystem mtime
+            // resolution (some filesystems truncate to whole seconds),
+            // which could otherwise floor this write's mtime to equal or
+            // below the attempt's start timestamp.
+            await writeBuildReviewVerdict(Date.now() + 5000);
+          }
+          return { success: true };
+        },
+      };
+
+      const freshnessEvents: Array<{ fresh: boolean }> = [];
+      events.on('verdict_freshness', (e) => {
+        freshnessEvents.push(e as never);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'build_review',
+        verifyArtifacts: true,
+        mode: 'auto',
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(freshnessEvents.length).toBe(2);
+      expect(freshnessEvents[0].fresh).toBe(false);
+      expect(freshnessEvents[1].fresh).toBe(true);
+
+      const result = await readState(statePath);
+      expect(result.ok && result.value.build_review).toBe('done');
+    });
   });
 
   describe('fresh session per step (unconditional)', () => {
@@ -792,10 +950,13 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('self-heals an impl-gap audit back to BUILD, then HALTs at the cap', async () => {
+    it('self-heals an impl-gap audit back to BUILD, then HALTs on the first no-op cycle (D2)', async () => {
       await seedToPrdAudit();
-      // Perpetual impl-gap: every audit reports the same un-closed impl-gap, so
-      // the daemon routes back to BUILD until the self-heal cap, then HALTs.
+      // Perpetual impl-gap: every audit reports the same un-closed impl-gap,
+      // and the fake BUILD makes zero net progress (task-status.json is
+      // byte-identical each call, no repo to move HEAD) — D2 (#647) now
+      // HALTs on the first no-op kickback cycle instead of spending the
+      // self-heal budget re-kicking a build that provably isn't helping.
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
       const kickbacks: Array<{ from: string; to: string }> = [];
       events.on('kickback', (e) => {
@@ -818,13 +979,15 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Routed back to BUILD (kickback prd_audit→build) and rebuilt.
-      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(2);
-      expect(calls.filter((s) => s === 'build').length).toBe(2);
-      // Exhausted the self-heal budget → HALT (not an opaque crash).
+      // Routed back to BUILD (kickback prd_audit→build) exactly once, then
+      // the re-entered prd_audit's zero-progress + unchanged-verdict re-fail
+      // escalates to HALT (D2) instead of a second self-heal round.
+      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(1);
+      expect(calls.filter((s) => s === 'build').length).toBe(1);
+      // Exhausted budget → HALT (not an opaque crash).
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/impl-gap unresolved after 2 build attempt/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
@@ -976,6 +1139,171 @@ describe('engine/conductor', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 
+    it('/remediate: daemon HALTs on a DECIDE-phase target (architecture_review) instead of rewinding (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-1 | DIVERGED | intended-drift | y | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-1',
+            disposition: 'architecture_review',
+            category: null,
+            rationale: 'design drifted from ADR',
+            tasks: [],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // HALT with the gap ledger + the DECIDE target it would have rewound to.
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/DECIDE step 'architecture_review'/);
+      expect(halt).toMatch(/FR-1→architecture_review/);
+      // No rewind: no kickback into the DECIDE tail, DECIDE steps never re-ran.
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(calls.filter((s) => s === 'stories')).toHaveLength(0);
+      expect(calls.filter((s) => s === 'plan')).toHaveLength(0);
+    });
+
+    it('/remediate: daemon HALTs on a DECIDE-phase target (plan) instead of rewinding (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-9 | MISSING | intended-drift | z | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-9',
+            disposition: 'plan',
+            category: null,
+            rationale: 'plan missing the FR entirely',
+            tasks: [],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/DECIDE step 'plan'/);
+      expect(halt).toMatch(/FR-9→plan/);
+      expect(kickbacks).toHaveLength(0);
+      expect(calls.filter((s) => s === 'plan')).toHaveLength(0);
+    });
+
+    it('/remediate: daemon still routes BUILD-phase targets (acceptance_specs) — no over-halt (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner } = remediateRunner('| FR-2 | MISSING | impl-gap | x | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-2',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'missing spec for FR-2',
+            tasks: [{ id: 'r1', title: 'add FR-2 acceptance spec' }],
+          },
+        ],
+      });
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+      });
+
+      await conductor.run();
+
+      // BUILD-phase target keeps routing (re-audit-after-gap-close preserved).
+      expect(
+        kickbacks.some((k) => k.from === 'prd_audit' && k.to === 'acceptance_specs'),
+      ).toBe(true);
+    });
+
+    it('/remediate: interactive (non-daemon) mode is untouched by the DECIDE guard (#644)', async () => {
+      await seedToPrdAudit();
+      const { runner, calls } = remediateRunner('| FR-1 | DIVERGED | intended-drift | y | no |\n', {
+        dispositions: [
+          {
+            id: 'FR-1',
+            disposition: 'architecture_review',
+            category: null,
+            rationale: 'design drifted from ADR',
+            tasks: [],
+          },
+        ],
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const onRecovery = vi
+        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .mockResolvedValue('quit');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'default', // interactive — a human is present
+        daemon: false,
+        verifyArtifacts: true,
+        fromStep: 'prd_audit',
+        maxRetries: 1,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Human-driven path: recovery menu fires; no daemon HALT was written.
+      expect(onRecovery).toHaveBeenCalledWith('prd_audit', true, expect.anything());
+      expect(halted).toBe(false);
+      expect(calls.filter((s) => s === 'architecture_review')).toHaveLength(0);
+    });
+
     it('does NOT auto-route in interactive (non-daemon) mode — uses the recovery menu', async () => {
       await seedToPrdAudit();
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
@@ -1055,7 +1383,7 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it('routes a FAILing manual_test back to build with the FAIL rows, then HALTs at the cap', async () => {
+    it('routes a FAILing manual_test back to build with the FAIL rows, then HALTs on the first no-op cycle (D2)', async () => {
       await seedToManualTest();
       const { runner, calls } = failingManualTestRunner();
       const kickbacks: Array<{ from: string; to: string }> = [];
@@ -1080,14 +1408,15 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Kicked back to build twice (the cap), rebuilt each time, then HALTed
-      // with a reason naming the exhausted budget and the surviving FAIL row.
-      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(2);
-      expect(calls.filter((s) => s === 'build').length).toBe(2);
+      // Kicked back to build once; the fake BUILD makes zero net progress
+      // (identical task-status.json, no repo to move HEAD) and manual_test
+      // FAILs with the same rows again — D2 (#647) HALTs on this first
+      // no-op cycle instead of spending a second kickback toward the cap.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+      expect(calls.filter((s) => s === 'build').length).toBe(1);
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/manual-test FAIL unresolved after 2 build kickback/);
-      expect(halt).toMatch(/s1/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
@@ -1270,6 +1599,92 @@ describe('engine/conductor', () => {
       expect(calls[0][0]).toBe('build');
     });
 
+    it('T6: zero-progress path still accrues noEvidenceAttempts naturally and auto-parks at the pre-existing threshold, unaffected by T4/T5 progress-bypass logic', async () => {
+      // Regression lock for T4 (progressAttempts/progressBypassed bypass) and
+      // T5 (absolute attempt-ceiling backstop): when resolvedTasksAfter never
+      // exceeds resolvedTasksBefore (a fake runner that resolves ZERO new
+      // tasks per attempt), T4's bypass condition
+      // (`resolvedTasksAfter > resolvedTasksBefore`) never fires, so this
+      // path must behave exactly as it did before T4/T5 landed — the durable
+      // noEvidenceAttempts counter increments on every gate miss and
+      // checkAndAutoPark parks at DAEMON_NO_EVIDENCE_THRESHOLD (N=3), the
+      // same threshold asserted by the pre-existing seeded-counter test
+      // above ('daemon: N consecutive no-evidence gate misses...').
+      //
+      // Unlike that pre-existing test, this one does NOT pre-seed the
+      // counter — it drives the counter to threshold purely through natural
+      // per-attempt accrual across two conductor.run() invocations
+      // (simulating a daemon re-kick, per Task 12's "accrues ACROSS
+      // attempts, runs, and re-kicks" durability guarantee), proving the
+      // increment-and-park mechanics themselves (not just the park trigger
+      // at a hand-set value) are unchanged by T4/T5.
+      const N = 3; // DAEMON_NO_EVIDENCE_THRESHOLD (src/engine/conductor.ts)
+      await seedToBuildGate(0, true); // fresh counter, parseable plan present
+
+      // Fake runner: always "succeeds" but never produces completion
+      // evidence or advances task-status — so countResolvedTasks() returns 0
+      // before and after every attempt (zero forward progress), and the
+      // build completion gate misses every time.
+      const runner = createMockStepRunner();
+
+      const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
+      });
+
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Re-kick #1: a bounded retry loop (maxRetries: 2) with zero progress
+      // hits the pre-existing `no_task_progress` stall verdict at attempt 2
+      // and breaks out of the retry loop without reaching the auto-park
+      // threshold yet — counter accrues to 2, feature not parked.
+      const conductor1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'feat')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+
+      // Re-kick #2 (simulating the daemon re-dispatching the still-failed
+      // build step): the durable counter (Task 12: accrues ACROSS attempts,
+      // runs, and re-kicks) carries over from re-kick #1. The very first
+      // attempt of this run is still zero-progress, pushing the counter to
+      // N=3 and crossing the auto-park threshold — proving the natural
+      // increment-and-park mechanics (not just a hand-set counter value)
+      // are unaffected by T4/T5's progress-bypass logic, which never
+      // engages because resolvedTasksAfter never exceeds resolvedTasksBefore.
+      const conductor2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await conductor2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(N);
+      expect(await getProvenanceType(dir, 'feat')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(
+        new RegExp(`no completion evidence after ${N} attempts`),
+      );
+    });
+
     it('daemon: empty plan at seed auto-parks with "empty plan" reason', async () => {
       await seedToBuildGate(0);
       // Don't create a plan file — empty/missing plan condition
@@ -1307,6 +1722,90 @@ describe('engine/conductor', () => {
       const calls = (runner.run as ReturnType<typeof vi.fn>).mock.calls;
       expect(calls).toHaveLength(1);
       expect(calls[0][0]).toBe('build');
+    });
+
+    it('daemon: empty-plan gate miss with contradicting completion evidence refuses immediate park and emits auto_park_contradiction (#612)', async () => {
+      await seedToBuildGate(0);
+      // Don't create a plan file — empty/missing plan condition per the gate,
+      // but seed run evidence that contradicts it: summary.json records
+      // completed work.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'summary.json'),
+        JSON.stringify({ tasks_completed: 5 }),
+      );
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      const contradictionEvents: unknown[] = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+      events.on('auto_park_contradiction', (e) => {
+        contradictionEvents.push(e);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      // No immediate empty-plan park — the contradiction guard stripped the reason.
+      expect(parkEvents.find((e) => e.reason === 'empty/missing plan')).toBeUndefined();
+
+      // The refusal was logged loudly.
+      expect(contradictionEvents).toHaveLength(1);
+      const contradiction = contradictionEvents[0] as Record<string, unknown>;
+      expect(contradiction).toMatchObject({
+        type: 'auto_park_contradiction',
+        slug: 'feat',
+        verdict: 'empty/missing plan',
+        evidence: {
+          summaryTasksCompleted: 5,
+        },
+      });
+    });
+
+    it('daemon: genuine empty plan (all signals zero) still parks with "empty/missing plan" and emits NO contradiction event (#612)', async () => {
+      await seedToBuildGate(0);
+      // Don't create a plan file, and don't seed any completion evidence.
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      const contradictionEvents: unknown[] = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+      events.on('auto_park_contradiction', (e) => {
+        contradictionEvents.push(e);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toBe('empty/missing plan');
+      expect(contradictionEvents).toHaveLength(0);
     });
 
     it('daemon: auto-park event is emitted to logging/telemetry', async () => {
@@ -1591,6 +2090,170 @@ describe('engine/conductor', () => {
     });
   });
 
+  describe('T7: lastResolvedCount recorded at build-step dispatch exit', () => {
+    // Seed state up through (but not including) build, without writing a
+    // plan/task-status.json — the runner or the test body supplies those,
+    // per exit path under test.
+    async function seedToBuild(): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'L';
+      state.feature_desc = 'feat';
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+    }
+
+    // Writes a plan with `total` "### Task N: Step N" headers and a matching
+    // task-status.json with `completed` of them marked completed, each
+    // backed by an evidence stamp (H6: an unstamped 'completed' row is
+    // demoted at every gate evaluation, so stamps are required for the
+    // count to stick).
+    async function writePlanAndStatus(completed: number, total: number): Promise<void> {
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      const planLines: string[] = ['# Plan', ''];
+      for (let i = 1; i <= total; i++) planLines.push(`### Task ${i}: Step ${i}`, '');
+      await writeFile(join(dir, '.docs/plans/plan.md'), planLines.join('\n'));
+
+      const tasks: Array<{ id: number; status: string }> = [];
+      const stamps: Record<string, { sha: string; form: string }> = {};
+      for (let i = 1; i <= total; i++) {
+        const done = i <= completed;
+        tasks.push({ id: i, status: done ? 'completed' : 'pending' });
+        if (done) {
+          stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
+        }
+      }
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+      await writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+      );
+    }
+
+    it('records lastResolvedCount in the sidecar on a successful/completing build exit', async () => {
+      await seedToBuild();
+      const TOTAL = 3;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writePlanAndStatus(TOTAL, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(TOTAL);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (daemon auto-park)', async () => {
+      await seedToBuild();
+      // A parseable plan that never gets any resolved tasks, but no
+      // task-status.json is ever written by the runner — every gate
+      // evaluation misses with zero resolved tasks, and the durable
+      // no-evidence counter (seeded one below threshold) crosses the
+      // auto-park threshold on the first attempt.
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'plan.md'),
+        '# Plan\n\n### Task 1: First\n\n### Task 2: Second\n',
+      );
+      const evidenceSeed = await createTaskEvidence(dir);
+      evidenceSeed.noEvidenceAttempts = 2; // DAEMON_NO_EVIDENCE_THRESHOLD (3) - 1
+      await evidenceSeed.write();
+
+      const runner = createMockStepRunner();
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => {
+        parkEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'build',
+      });
+
+      await conductor.run();
+
+      expect(parkEvents).toHaveLength(1);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(0);
+    });
+
+    it('records lastResolvedCount in the sidecar on a park exit (T5 absolute attempt-ceiling backstop)', async () => {
+      await seedToBuild();
+      const TOTAL = 5;
+      const CEILING = 2;
+      let progress = 0;
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            progress++;
+            await writePlanAndStatus(progress, TOTAL);
+          }
+          return { success: true };
+        }),
+      };
+
+      const loopHaltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') loopHaltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // far above the ceiling — proves the ceiling bounds this run
+        fromStep: 'build',
+        config: {
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(loopHaltEvents).toHaveLength(1);
+      expect(loopHaltEvents[0].reason).toMatch(/attempt ceiling/i);
+
+      const evidence = await createTaskEvidence(dir);
+      expect(evidence.lastResolvedCount).toBe(CEILING);
+    });
+  });
+
   describe('daemon build stall remediation dispatch (Task 4)', () => {
     const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
     const REMEDIATION_ANSWER = 'Use Auth0 — matches the existing SSO integration.';
@@ -1617,6 +2280,20 @@ describe('engine/conductor', () => {
 
     it('daemon mode: dispatches /remediate on build stall with stall question in context', async () => {
       await seedToBuildStep();
+      // The validation group now converges cleanly past its own members
+      // (Task 21 routes mixed gaps rather than failing loudly) once this
+      // test's runner passes prd_audit/architecture_review_as_built/
+      // manual_test cleanly (below) — but the downstream `finish` gate's
+      // own convergence machinery (push evidence, PR presentation) is out
+      // of scope for a build-stall test. Mark it already `done` so the
+      // loop never re-dispatches or gates on it, keeping this test scoped
+      // to the build-stall remediation dispatch it actually covers.
+      {
+        const res = await readState(statePath);
+        const seeded = (res.ok ? res.value : {}) as Record<string, unknown>;
+        seeded.finish = 'done';
+        await writeState(statePath, seeded as unknown as ConductState);
+      }
 
       const calls: Array<{ step: StepName; retryReason?: string }> = [];
       const runner: StepRunner = {
@@ -1669,6 +2346,25 @@ describe('engine/conductor', () => {
                   },
                 ],
               }),
+            );
+          } else if (step === 'manual_test') {
+            // Downstream validation group: this test is about the build
+            // stall's own remediation dispatch, not the group — pass its
+            // members cleanly so the group's join never fires a SECOND
+            // (Task 21 mixed-failure) remediate dispatch.
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'prd_audit') {
+            await writeFile(
+              join(dir, '.pipeline/prd-audit.md'),
+              '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
             );
           }
           return { success: true } as StepRunResult;
@@ -1768,6 +2464,101 @@ describe('engine/conductor', () => {
 
       // Verify remediate was called at most MAX_KICKBACKS_PER_GATE (2) times
       expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+    });
+
+    // REGRESSION PIN (#569): once remediationRounds reaches
+    // MAX_KICKBACKS_PER_GATE for a halt_marker build stall, the run must
+    // write the "Remediation budget exhausted" HALT marker and return —
+    // no further /remediate dispatch. Locks conductor.ts:3657-3677 so a
+    // later change (adding no_task_progress dispatch) can't accidentally
+    // let a budget-exhausted halt_marker stall fall through to a 3rd
+    // dispatch or lose the budget-exhausted HALT content.
+    it('halt_marker stall at remediation budget exhaustion writes "Remediation budget exhausted" HALT and dispatches no further /remediate', async () => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const remediateCallCount: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          if (step === 'build') {
+            buildAttemptCount++;
+            // Always write a stall marker to trigger remediation dispatch
+            // on every attempt, exhausting the budget. The halt_marker
+            // check takes precedence over the resolved-task-count
+            // comparison, so the resolved count is bumped each attempt
+            // (task ids grow) purely to keep the durable no-evidence
+            // auto-park counter (a DIFFERENT mechanism, gated on lack of
+            // resolved-task progress) from firing first and masking the
+            // budget-exhaustion HALT this test is pinning.
+            await writeFile(
+              join(dir, '.pipeline/halt-user-input-required'),
+              `Stall ${buildAttemptCount}`,
+            );
+            const tasks = Array.from({ length: buildAttemptCount }, (_, i) => ({
+              id: i + 1,
+              status: 'completed',
+            }));
+            tasks.push({ id: buildAttemptCount + 100, status: 'pending' });
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks }),
+            );
+          } else if (step === 'remediate') {
+            remediateCallCount.push(buildAttemptCount);
+            // Route back to build every time — the stall never actually
+            // resolves, forcing the budget to exhaust.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `stall:${buildAttemptCount}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: `Answer ${buildAttemptCount}`,
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 10, // High retry count so the budget (not retries) is what stops the loop
+      });
+
+      await conductor.run();
+
+      // Never more than MAX_KICKBACKS_PER_GATE (2) dispatches for this
+      // persistent halt_marker stall.
+      expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+      expect(remediateCallCount.length).toBeGreaterThan(0);
+
+      // The run HALTs rather than looping forever or falling through to a
+      // silent non-green failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+
+      // The HALT marker on disk carries the fail-safe budget-exhausted
+      // message pinned at conductor.ts:3657-3677.
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('Remediation budget exhausted');
+      expect(haltContent).toContain('max 2 kickbacks per gate');
     });
   });
 
@@ -2266,9 +3057,10 @@ describe('engine/conductor', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
     });
 
-    it('as-built review failure routes via /remediate and HALTs at the remediation cap', async () => {
-      // A perpetually-BLOCKED as-built review: routed to build twice (the
-      // remediation budget), then the generic HALT — never an unbounded loop.
+    it('as-built review failure routes via /remediate and HALTs on the first no-op kickback cycle (D2)', async () => {
+      // A perpetually-BLOCKED as-built review whose remediation build makes
+      // zero net progress each time — D2 (#647) HALTs on the first no-op
+      // kickback cycle instead of spending the full remediation budget.
       await seedShipTail({ architecture_review_as_built: 'pending' });
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
@@ -2322,10 +3114,10 @@ describe('engine/conductor', () => {
       expect(
         kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build')
           .length,
-      ).toBe(2);
+      ).toBe(1);
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/failed in auto mode \(retries exhausted\)/);
+      expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
     it('non-daemon auto mode does NOT dispatch /remediate on a finish failure', async () => {
@@ -3543,6 +4335,7 @@ describe('engine/conductor', () => {
       acceptance_specs: 'done',
       build: 'done',
       build_review: 'done',
+      wiring_check: 'done',
     } as ConductState);
 
     const runner = createMockStepRunner();
@@ -3639,6 +4432,1803 @@ describe('engine/conductor', () => {
     expect(checkpointEvents).toHaveLength(0);
     // onCheckpoint should never be called
     expect(onCheckpoint).not.toHaveBeenCalled();
+  });
+
+  describe('built-in validation group engagement (auto-mode-only)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+    } as ConductState;
+
+    it('mode=auto reaching the validation group entry point takes the group path', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: VALIDATION_GROUP.members,
+      });
+      // The group path is marked, but member dispatch itself (fan-out/join) is
+      // wired in a later task — manual_test still dispatches through the
+      // ordinary per-step machinery so its FAIL-routing/HALT semantics are
+      // unaffected by this task's guard.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+
+    it('width 2 with one skip: parallel_started lists only the dispatchable members, not the skipped phantom', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'L',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const parallelStarted: Array<{ step: string; branches: string[] }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') {
+          parallelStarted.push({ step: e.step, branches: e.branches });
+        }
+      });
+
+      await conductor.run();
+
+      // Technical track skips prd_audit (no PRD to audit), leaving
+      // manual_test + architecture_review_as_built dispatchable at width 2.
+      // The event's member list must reflect ONLY the dispatched members —
+      // prd_audit must never appear, even though it's a static member of
+      // VALIDATION_GROUP.
+      expect(parallelStarted).toHaveLength(1);
+      expect(parallelStarted[0]).toEqual({
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(parallelStarted[0].branches).not.toContain('prd_audit');
+    });
+
+    it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (s) => {
+          stepsRun.push(s);
+          return { success: true };
+        },
+      };
+      const onCheckpoint = vi.fn().mockResolvedValue('continue' as const);
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        // Interactive/default mode — NOT 'auto'.
+        onCheckpoint,
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('checkpoint_reached', (e) => {
+        if (e.type === 'checkpoint_reached') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // No group-path event ever fires in interactive mode.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+
+      // The three group members still dispatch one at a time, in order —
+      // the pre-existing serial walk, untouched.
+      expect(stepsRun.slice(0, 3)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+
+      // checkpoint_reached still fires after manual_test, with no
+      // group-related events interleaved before it.
+      const checkpointIndex = observedEvents.findIndex(
+        (e) => e.type === 'checkpoint_reached' && e.step === 'manual_test',
+      );
+      expect(checkpointIndex).toBeGreaterThanOrEqual(0);
+      const manualTestStartIndex = observedEvents.findIndex(
+        (e) => e.type === 'step_started' && e.step === 'manual_test',
+      );
+      expect(manualTestStartIndex).toBeGreaterThanOrEqual(0);
+      expect(checkpointIndex).toBeGreaterThan(manualTestStartIndex);
+      expect(
+        observedEvents
+          .slice(manualTestStartIndex, checkpointIndex + 1)
+          .some((e) => e.type === 'parallel_started'),
+      ).toBe(false);
+      expect(onCheckpoint).toHaveBeenCalledWith('manual_test');
+    });
+  });
+
+  describe('width-1 group degrades to serial semantics (Task 16)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+    } as ConductState;
+
+    it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
+      await writeState(statePath, {
+        ...VALIDATION_GROUP_PREREQS,
+        complexity_tier: 'S',
+        track: 'technical',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      const observedEvents: Array<{ type: string; step?: string }> = [];
+      events.on('parallel_started', (e) => {
+        if (e.type === 'parallel_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') observedEvents.push({ type: e.type, step: e.step });
+      });
+
+      await conductor.run();
+
+      // S tier + technical track resolve to width 1 (only manual_test
+      // dispatchable — prd_audit and architecture_review_as_built both
+      // skip). No fan-out ceremony event should fire: the event stream for
+      // manual_test must be byte-for-byte equivalent to the pre-Task-14
+      // serial baseline for that single member.
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
+      expect(observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test')).toBe(
+        true,
+      );
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).toContain('manual_test');
+    });
+  });
+
+  describe('single-writer join state + gate verdicts — all-green (Task 17)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    function joinRunner(delays: Partial<Record<StepName, number>>): StepRunner {
+      return {
+        run: vi.fn(async (step: StepName) => {
+          const delay = delays[step];
+          if (delay) await new Promise((r) => setTimeout(r, delay));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+    }
+
+    it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // manual_test is the slowest branch — prd_audit and
+      // architecture_review_as_built resolve first, exercising mixed
+      // completion order at the semaphore.
+      const runner = joinRunner({ manual_test: 30 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+
+      // Every member's own step-status key is 'done'.
+      expect(state.manual_test).toBe('done');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
+
+      // Every member's synthetic «group»__«member» key is also 'done' —
+      // matching the DSL parallel group's key format (Task 10).
+      expect(state['validation__manual_test']).toBe('done');
+      expect(state['validation__prd_audit']).toBe('done');
+      expect(state['validation__architecture_review_as_built']).toBe('done');
+    });
+
+    it('writes .pipeline/gates/«member».json for every member at join, serially, from the core', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner = joinRunner({ prd_audit: 20 });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      for (const member of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+        const raw = await readFile(join(dir, `.pipeline/gates/${member}.json`), 'utf-8');
+        const verdict = JSON.parse(raw);
+        expect(verdict.satisfied).toBe(true);
+      }
+    });
+
+    it('write-spy: zero state writes originate inside branch execution — only the join (core, post-fan-out) writes conduct-state.json', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      // While manual_test is still in flight (its own branch has not yet
+      // resolved), prd_audit's branch reads conduct-state.json directly off
+      // disk from INSIDE its own dispatch. If a branch — or the core, before
+      // every branch has settled — ever wrote a member's completion key
+      // early, this would observe it. The single-writer invariant requires
+      // it stays absent until every branch (including the still-in-flight
+      // manual_test) has resolved.
+      let sawPrematureWrite: unknown = 'not-checked';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await new Promise((r) => setTimeout(r, 30));
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            const mid = await readState(statePath);
+            sawPrematureWrite = mid.ok ? (mid.value as Record<string, unknown>)['validation__prd_audit'] : 'unreadable';
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // prd_audit resolved while manual_test was still in flight; at that
+      // moment no synthetic key had been written yet — proving the branch
+      // itself never wrote state, and the core had not joined early either.
+      expect(sawPrematureWrite).not.toBe('done');
+
+      // After the full run, the join has since written it.
+      const finalState = await readState(statePath);
+      expect(finalState.ok && (finalState.value as Record<string, unknown>)['validation__prd_audit']).toBe(
+        'done',
+      );
+    });
+  });
+
+  describe('SIGINT persistence across the group + resume skips completed members (Task 27)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+
+    it('abort mid-group with one member done persists that member as done; a resumed run re-dispatches only the unfinished members', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      let sigintHandler: (() => void) | undefined;
+      const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+        event: string,
+        handler: (...args: unknown[]) => void,
+      ) => {
+        if (event === 'SIGINT') {
+          sigintHandler = handler as () => void;
+        }
+        return process;
+      }) as typeof process.on);
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+      // manual_test and architecture_review_as_built block forever (never
+      // resolve) — simulating a group still mid-flight when SIGINT lands.
+      // prd_audit resolves quickly; a flag (not a synchronous in-runner
+      // SIGINT call) marks its completion so the test can wait for the
+      // engine's OWN post-dispatch bookkeeping (the per-branch completion
+      // event) to finish before firing SIGINT — otherwise SIGINT could win
+      // a race against that bookkeeping and observe a state snapshot from
+      // before it ran.
+      let prdAuditDone = false;
+      const neverResolve = new Promise<void>(() => {});
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            prdAuditDone = true;
+            return { success: true };
+          }
+          await neverResolve;
+          return { success: true };
+        }),
+      };
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      // Not awaited to completion: manual_test/architecture_review_as_built
+      // never resolve, so the group promise never settles.
+      void conductor.run();
+      while (!prdAuditDone) {
+        await new Promise((r) => setTimeout(r, 1));
+      }
+      // Let the engine's own per-branch completion bookkeeping (which runs
+      // in a promise continuation immediately after prd_audit's dispatch
+      // resolves) actually settle before firing SIGINT.
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      // The engine's registered handler is `() => signalHandlerBase('SIGINT')`,
+      // which returns the handler's own promise — awaiting it (instead of a
+      // fixed sleep) makes the state-file write deterministically complete
+      // before the read below. A fixed sleep raced fs.writeFile's truncate
+      // window and produced an intermittently-empty file.
+      expect(sigintHandler).toBeDefined();
+      await (sigintHandler as unknown as () => Promise<void>)();
+
+      const midAbortState = await readState(statePath);
+      expect(midAbortState.ok).toBe(true);
+      const midValue = midAbortState.ok ? (midAbortState.value as Record<string, unknown>) : {};
+      expect(midValue.prd_audit).toBe('done');
+      expect(midValue.manual_test).not.toBe('done');
+      expect(midValue.architecture_review_as_built).not.toBe('done');
+
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+
+      // Resumed run: prd_audit already 'done' must not be re-dispatched;
+      // manual_test and architecture_review_as_built (still unfinished) must be.
+      const dispatched: StepName[] = [];
+      const resumedRunner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const resumedConductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: resumedRunner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+      await resumedConductor.run();
+
+      expect(dispatched).not.toContain('prd_audit');
+      expect(dispatched).toContain('manual_test');
+      expect(dispatched).toContain('architecture_review_as_built');
+    });
+  });
+
+  describe('no-verdict branch fails the group (Task 18)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Crashes: never produces a completion marker, never succeeds.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(haltCount).toBeGreaterThan(0);
+      expect(kickbacks.length).toBe(0);
+
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      // No member — including the ones that themselves passed — gets marked
+      // done: no partial join on a no-verdict outcome.
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+
+    it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Dispatch itself "succeeds" but the content is a FAIL row.
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+            return { success: true };
+          } else if (step === 'prd_audit') {
+            // Crashes: never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: string[] = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push(e.to);
+      });
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      const haltRaw = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltRaw).toMatch(/no-verdict|no verdict/i);
+
+      expect(kickbacks.length).toBe(0);
+      expect(haltCount).toBeGreaterThan(0);
+    });
+  });
+
+  describe('MT-only failure — deterministic kickback parity (Task 20)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    // manual_test always FAILs (perpetual bug); build re-satisfies its own
+    // gate but never actually fixes anything — every sibling PASSes cleanly.
+    function mtOnlyFailingRunner(): { runner: StepRunner; calls: StepName[] } {
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          // Small margin against the freshness check (artifact mtime must
+          // postdate session_started_at) — matches the defensive delay
+          // pattern used elsewhere in this file (Task 19's sibling tests).
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, calls };
+    }
+
+    it('manual_test FAIL alone (siblings PASS) at the group join produces the same navigateBack/retry-hint shape as the serial baseline — zero remediate dispatch', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      // Pre-seed task-status.json exactly like the serial baseline's
+      // seedToManualTest() does — otherwise the FIRST kickback's progress
+      // snapshot reads "no file" (0 resolved) instead of the true
+      // steady-state count, misclassifying the very first repeat as
+      // "did-work" and masking D2's no-op escalation.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one kickback, manual_test -> build, matching the serial
+      // baseline's deterministic FAIL-row routing.
+      expect(kickbacks.filter((k) => k.from === 'manual_test' && k.to === 'build').length).toBe(1);
+      expect(kickbacks[0]?.evidence).toContain('| s1 | FAIL |');
+
+      // The retry hint handed to BUILD carries the FAIL rows + the
+      // no-whitewash contract — same shape as the pre-parallel serial walk.
+      const buildReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'build')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(buildReasons.length).toBeGreaterThan(0);
+      for (const r of buildReasons) {
+        expect(r).toContain('| s1 | FAIL |');
+        expect(r).toMatch(/COMMIT/i);
+      }
+
+      // Zero remediate dispatches for this failure shape.
+      await expect(
+        readFile(join(dir, '.pipeline/remediation.json'), 'utf-8'),
+      ).rejects.toThrow();
+    });
+
+    it('exhausted manualTestSelfHeals halts with the serial baseline reason wording, no partial join', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner } = mtOnlyFailingRunner();
+
+      let haltReason = '';
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltReason = e.reason;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // D2's no-op re-entry guard fires on the first repeat cycle (build
+      // makes zero net progress against the perpetual FAIL) — same wording
+      // family as the serial baseline's kickback-to-build no-op halt.
+      expect(haltReason).toMatch(/manual_test kickback-to-build no-op|manual-test FAIL unresolved/);
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      const state = result.ok ? (result.value as Record<string, unknown>) : {};
+      expect(state.manual_test).not.toBe('done');
+      expect(state.prd_audit).not.toBe('done');
+      expect(state.architecture_review_as_built).not.toBe('done');
+    });
+  });
+
+  describe('Mixed failure — single remediate dispatch over the gap union (Task 21)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_GAPS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n' +
+      '| FR-2 | GAP | missing | evidence.ts:2 | no |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    function mixedFailingRunner(): {
+      runner: StepRunner;
+      remediateCalls: Array<{ retryReason?: string }>;
+    } {
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                  {
+                    id: 'FR-2',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-2',
+                    tasks: [{ id: 'rem-fr-2', title: 'Implement FR-2' }],
+                  },
+                  {
+                    id: 'ADR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, remediateCalls };
+    }
+
+    it('prd-audit gaps + as-built BLOCKED at the join dispatch remediate exactly once, over the union of both evidence files, consuming all 3 heterogeneous dispositions', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner, remediateCalls } = mixedFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one /remediate dispatch for the whole mixed-failure join.
+      expect(remediateCalls).toHaveLength(1);
+
+      // Its dispatch context enumerates BOTH evidence file paths...
+      expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
+      expect(remediateCalls[0].retryReason).toContain(
+        '.pipeline/architecture-review-as-built.md',
+      );
+      // ...and NOT the manual-test results path (manual_test passed cleanly).
+      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
+
+      // The single remediate session's disposition set (all 3 heterogeneous
+      // gaps) was consumed — a kickback fires, routing to build.
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(true);
+    });
+  });
+
+  describe('Merged work order — earliest target + both evidence streams (Task 22)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    // manual_test FAILs deterministically AND architecture_review_as_built
+    // is BLOCKED (its own gate unsatisfied) in the SAME join round — the
+    // merged-work-order shape this task covers. The remediate plan routes
+    // ADR-1 to 'acceptance_specs' (a BUILD-phase step earlier than 'build')
+    // so the earliest-target merge is exercised non-trivially: manual_test's
+    // forced target is 'build', but the merged navigateBack must land on
+    // the earlier 'acceptance_specs'.
+    function mergedFailingRunner(): {
+      runner: StepRunner;
+      remediateCalls: Array<{ retryReason?: string }>;
+    } {
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build' || step === 'acceptance_specs') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'ADR-1',
+                    disposition: 'acceptance_specs',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: 'rem-adr-1', title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      return { runner, remediateCalls };
+    }
+
+    it('MT FAIL + plan-routed disposition in the same join round produce ONE navigateBack to the earlier target, with a retry hint carrying both evidence streams', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+      const { runner, remediateCalls } = mergedFailingRunner();
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // Exactly one /remediate dispatch and exactly one kickback for the
+      // whole merged join round — never two separate navigateBacks.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks.filter((k) => k.from === 'manual_test' || k.from === 'validation_group' || k.to === 'acceptance_specs').length).toBeGreaterThanOrEqual(1);
+
+      // The merged target is the EARLIER of MT's forced 'build' and the
+      // routed disposition's 'acceptance_specs' — i.e. 'acceptance_specs',
+      // never 'build'.
+      const mergedKickback = kickbacks.find((k) => k.to === 'acceptance_specs');
+      expect(mergedKickback).toBeDefined();
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
+
+      // The retry hint at the merged target carries BOTH the deterministic
+      // MT FAIL rows AND the remediation guidance for ADR-1.
+      const acceptanceSpecsReasons = vi
+        .mocked(runner.run)
+        .mock.calls.filter((c) => c[0] === 'acceptance_specs')
+        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
+      expect(acceptanceSpecsReasons.length).toBeGreaterThan(0);
+      const mergedHint = acceptanceSpecsReasons[0]!;
+      expect(mergedHint).toContain('| s1 | FAIL |');
+      expect(mergedHint).toMatch(/COMMIT/i);
+      expect(mergedHint).toContain('ADR-1');
+      expect(mergedHint).toContain('Fix ADR-1 violation');
+
+      // The dispatch context to /remediate never carries the manual_test
+      // FAIL rows — those stay deterministic-only (Task 20), never handed
+      // to the LLM planner for re-classification.
+      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+    });
+  });
+
+  describe('Halt dispositions and partial plans (Task 23)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+    const PRD_AUDIT_GAPS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+      '| FR-1 | GAP | missing | evidence.ts:1 | no |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('a halt disposition halts the group even when other gaps in the SAME plan are routable fixes', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                  {
+                    id: 'ADR-1',
+                    disposition: 'halt',
+                    category: 'architectural-clarity',
+                    rationale: 'ADR-1 requires a human architectural decision',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+      const kickbacks: Array<{ to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ to: e.to });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The mixed plan (one routable fix + one halt) must HALT, never
+      // silently route around the halt gap — despite manual_test and (were
+      // it not for the halt) the fix-only path both looking "green enough"
+      // to proceed.
+      expect(remediateCalls).toHaveLength(1);
+      expect(kickbacks).toHaveLength(0);
+      expect(haltEvents).toHaveLength(1);
+      expect(haltEvents[0]?.reason).toContain('ADR-1');
+      expect(haltEvents[0]?.reason).toContain('architectural-clarity');
+    });
+
+    it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const doneEvents: Array<{ step: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            // Always still shows the SAME blocking gap — the underlying
+            // code was never actually fixed (build's mock does not touch
+            // it), so re-verifying prd_audit each round is the ONLY thing
+            // standing between this test and a false "gate satisfied".
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_GAPS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Subset plan: only ever addresses prd_audit's FR-1 — the
+            // architecture_review_as_built ADR-1 gap is never named by any
+            // disposition, in any round.
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-1',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Implement FR-1',
+                    tasks: [{ id: 'rem-fr-1', title: 'Implement FR-1' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      events.on('parallel_completed', (e) => {
+        if (e.type === 'parallel_completed') {
+          for (const b of e.branches) doneEvents.push({ step: b });
+        }
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The subset plan (FR-1 only) still enumerates BOTH failing evidence
+      // files in the /remediate dispatch context — architecture_review_as_
+      // built's ADR-1 gap was never dropped from consideration just because
+      // no disposition named it.
+      expect(remediateCalls).toHaveLength(1);
+      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+
+      // The group never reached a "parallel_completed" (all-green) join —
+      // architecture_review_as_built's gate was never green-lit despite the
+      // plan only covering prd_audit's gap.
+      expect(doneEvents).toHaveLength(0);
+
+      // The unaddressed member is restaged (not marked satisfied/'done') so
+      // the NEXT tail pass re-verifies it from disk rather than trusting the
+      // stale pre-remediation verdict.
+      const persisted = await readState(statePath);
+      expect(persisted.ok).toBe(true);
+      const persistedState = (persisted as { ok: true; value: ConductState }).value;
+      expect(persistedState.architecture_review_as_built).not.toBe('done');
+      expect(persistedState.architecture_review_as_built).toBe('stale');
+    });
+  });
+
+  describe('Remediation fallback + budget parity (Task 24)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'skipped',
+      wiring_check: 'skipped',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
+    const AS_BUILT_BLOCKED = '# As-Built Architecture Review\n\nVerdict: BLOCKED\n\nADR-1 violated.\n';
+
+    it('readRemediationPlan → null (unreadable /remediate plan) still lets the deterministic manual_test kickback proceed — LLM stream independence', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            // Deliberately write no (or unreadable) remediation.json — the
+            // planner produced no usable plan. readRemediationPlan returns
+            // null → planRemediation resolves 'none'.
+          }
+          return { success: true };
+        }),
+      };
+
+      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // /remediate was dispatched for the non-MT gap, but never produced a
+      // usable plan (no remediation.json written) — bounded by the shared
+      // remediation budget.
+      expect(remediateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Despite the unusable LLM plan, the deterministic manual_test
+      // kickback still fires — it does not depend on /remediate at all.
+      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(true);
+      const mtKickback = kickbacks.find((k) => k.from === 'manual_test' && k.to === 'build');
+      expect(mtKickback?.evidence).toContain('| s1 | FAIL |');
+    });
+
+    it('remediationRounds at MAX_KICKBACKS_PER_GATE halts exactly like the serial gate loop, never a silent non-green failure', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+      );
+
+      let remediateRound = 0;
+      const remediateCalls: Array<{ retryReason?: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state: ConductState, opts?: { retryReason?: string }) => {
+          await new Promise((r) => setTimeout(r, 5));
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
+            );
+          } else if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'architecture_review_as_built') {
+            // Perpetually BLOCKED — build's mock never actually fixes it.
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_BLOCKED,
+            );
+          } else if (step === 'remediate') {
+            remediateRound++;
+            remediateCalls.push({ retryReason: opts?.retryReason });
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: `ADR-1-round-${remediateRound}`,
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'Fix ADR-1 violation',
+                    tasks: [{ id: `rem-adr-1-${remediateRound}`, title: 'Fix ADR-1 violation' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      // The shared remediation budget (MAX_KICKBACKS_PER_GATE = 2) is
+      // respected at the join exactly like the serial gate loop — never
+      // more than 2 /remediate dispatches for this persistent gap.
+      expect(remediateCalls.length).toBeLessThanOrEqual(2);
+
+      // Once the budget is exhausted, the join HALTs (loop_halt with a
+      // budget-parity reason) — it never falls through to a silent
+      // generic "non-green branch" step failure.
+      expect(haltEvents.length).toBeGreaterThan(0);
+      expect(haltEvents[haltEvents.length - 1]?.reason).toMatch(
+        /manual_test kickback-to-build no-op|manual-test FAIL unresolved|remediation budget exhausted/,
+      );
+    });
+  });
+
+  describe('FAIL verdict waits for siblings (Task 19)', () => {
+    const VALIDATION_GROUP_PREREQS = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState;
+
+    const PRD_AUDIT_PASS =
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+    const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    it('manual_test crashes fast while prd_audit and architecture_review_as_built are still in flight — both siblings run to completion (their markers land on disk) before the group halts, not cancelled mid-flight', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          if (step === 'manual_test') {
+            // Fails fast: no delay, never produces a completion marker.
+            return { success: false, output: 'agent process crashed' };
+          } else if (step === 'prd_audit') {
+            // Slow sibling — must be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 50));
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+            return { success: true };
+          } else if (step === 'architecture_review_as_built') {
+            // Slower sibling — must also be allowed to run to completion.
+            await new Promise((r) => setTimeout(r, 80));
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+            return { success: true };
+          }
+          return { success: true };
+        }),
+      };
+
+      let haltCount = 0;
+      events.on('loop_halt', () => {
+        haltCount += 1;
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+      });
+
+      await conductor.run();
+
+      // The group ultimately halts (manual_test never produced a verdict) —
+      // but only AFTER both slower siblings ran to completion, not before.
+      expect(haltCount).toBeGreaterThan(0);
+
+      // Proof the slow siblings were never aborted/cancelled when the fast
+      // branch failed: their own completion markers exist on disk by the
+      // time conductor.run() resolves. If the executor had cancelled
+      // in-flight branches on the fast failure, these setTimeout-guarded
+      // writes would not have happened yet.
+      const prdAuditMarker = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
+      expect(prdAuditMarker).toBe(PRD_AUDIT_PASS);
+      const asBuiltMarker = await readFile(
+        join(dir, '.pipeline/architecture-review-as-built.md'),
+        'utf-8',
+      );
+      expect(asBuiltMarker).toBe(AS_BUILT_APPROVED);
+
+      // All three members were in fact dispatched — none were skipped or
+      // starved by the fast failure.
+      expect(runner.run).toHaveBeenCalledWith(
+        'manual_test',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(runner.run).toHaveBeenCalledWith('prd_audit', expect.anything(), expect.anything());
+      expect(runner.run).toHaveBeenCalledWith(
+        'architecture_review_as_built',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('validation group membership resolution (Task 15)', () => {
+    it('width 3: no skip conditions active — all three members are dispatchable', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+      expect(result.members.every((m) => m.outcome.kind !== 'skipped')).toBe(true);
+    });
+
+    it('width 2: technical track skips prd_audit (no PRD to audit)', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: S tier + technical track skip both prd_audit and architecture_review_as_built', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+    });
+
+    it('width 1: architecture_review itself skipped upstream cascades to architecture_review_as_built', () => {
+      const state = {
+        complexity_tier: 'M',
+        architecture_review: 'skipped',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+    });
+
+    it('width 0: manual_test disabled by config plus S tier + technical track — the group itself is skipped, nothing dispatchable', () => {
+      const state = { complexity_tier: 'S' } as ConductState;
+      const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
+        typeof resolveGroupMembership
+      >[3];
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', config);
+
+      expect(result.allSkipped).toBe(true);
+      expect(result.dispatchable).toHaveLength(0);
+      expect(result.members).toHaveLength(3);
+      // Every member — including manual_test — still gets a SkippedOutcome,
+      // never a silently-omitted entry.
+      for (const m of result.members) {
+        expect(m.outcome).toEqual({ kind: 'skipped' });
+      }
+    });
+
+    it('a skipped member never contributes a verdict and can never fail the group', () => {
+      const state = { complexity_tier: 'L' } as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      // Must be the dedicated SkippedOutcome variant — never a VerdictOutcome
+      // (e.g. a placeholder "pass") and never a NoVerdictOutcome (which fails
+      // the group through the normal step-failure path).
+      expect(prdAudit.outcome.kind).toBe('skipped');
+      expect(prdAudit.outcome.kind).not.toBe('verdict');
+      expect(prdAudit.outcome.kind).not.toBe('no-verdict');
+      // Skipped members are excluded from the dispatchable set entirely, so
+      // downstream join logic (Task 17+) can never observe them as failing.
+      expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+    });
+
+    it('Task 27: a member already marked done in state (resumed after a mid-group abort) is excluded from dispatchable, not re-dispatched', () => {
+      const state = {
+        complexity_tier: 'L',
+        prd_audit: 'done',
+      } as unknown as ConductState;
+      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'architecture_review_as_built',
+      ]);
+      const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
+      expect(prdAudit.outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
+    });
+
+    it('Task 25: parallel_started lists only dispatched members, never a phantom skipped one', async () => {
+      const { buildParallelStartedEvent } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'architecture_review_as_built', skill: 'architecture_review_as_built', outcome: { kind: 'verdict', verdict: 'pass' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const event = buildParallelStartedEvent('manual_test', members);
+      expect(event).toEqual({
+        type: 'parallel_started',
+        step: 'manual_test',
+        branches: ['manual_test', 'architecture_review_as_built'],
+      });
+      expect(event.branches).not.toContain('prd_audit');
+    });
+
+    it('Task 25: mixed outcome produces one parallel_failure event naming the failing member, not the whole group', async () => {
+      const { buildParallelFailureEvents } = await import('../../src/engine/group-core.js');
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'verdict', verdict: 'pass' } },
+        {
+          name: 'architecture_review_as_built',
+          skill: 'architecture_review_as_built',
+          outcome: { kind: 'no-verdict', reason: 'exhausted retries' },
+        },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      const events = buildParallelFailureEvents('manual_test', members);
+
+      // Exactly one failure event, attributed to the member that actually
+      // failed — the passing member and the skipped phantom member never
+      // produce a parallel_failure of their own.
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({
+        type: 'parallel_failure',
+        step: 'manual_test',
+        branch: 'architecture_review_as_built',
+        error: 'exhausted retries',
+      });
+    });
+
+    it('Task 25: skipped members never appear in either event stream (parallel_started or parallel_failure)', async () => {
+      const { buildParallelStartedEvent, buildParallelFailureEvents } = await import(
+        '../../src/engine/group-core.js'
+      );
+      const members: GroupMember[] = [
+        { name: 'manual_test', skill: 'manual_test', outcome: { kind: 'skipped' } },
+        { name: 'prd_audit', skill: 'prd_audit', outcome: { kind: 'skipped' } },
+      ];
+      expect(buildParallelStartedEvent('manual_test', members).branches).toEqual([]);
+      expect(buildParallelFailureEvents('manual_test', members)).toEqual([]);
+    });
+
+    it('Task 25: runGroupBranch emits member-attributed dispatch and result events via onMemberEvent', async () => {
+      const { runGroupBranch, makeNoVerdictOutcome } = await import('../../src/engine/group-core.js');
+      const member: GroupMember = {
+        name: 'architecture_review_as_built',
+        skill: 'architecture_review_as_built',
+        outcome: makeNoVerdictOutcome('not-run'),
+      };
+      const events: Array<{ type: string; member: string; skill: string; phase: string; outcome?: string }> = [];
+      const stepRunner = {
+        run: vi.fn().mockResolvedValue({ success: true } as StepRunResult),
+      };
+      const outcome = await runGroupBranch(
+        member,
+        {} as ConductState,
+        {
+          stepRunner,
+          onMemberEvent: (e) => {
+            events.push(e as unknown as (typeof events)[number]);
+          },
+        },
+        1,
+      );
+
+      expect(outcome).toEqual({ kind: 'verdict', verdict: 'pass' });
+      // Every event is attributed to THIS member, never the group name.
+      expect(events.every((e) => e.member === 'architecture_review_as_built')).toBe(true);
+      expect(events.map((e) => e.phase)).toEqual(['dispatch', 'result']);
+      expect(events[1]?.outcome).toBe('verdict:pass');
+    });
+
+    it('width 0 at the conductor.run() level: the group entry point (manual_test) is never dispatched and every member is marked skipped in state', async () => {
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'S',
+        track: 'technical',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'done',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        acceptance_specs: 'done',
+        build: 'done',
+        build_review: 'done',
+      } as ConductState);
+
+      const runner = createMockStepRunner();
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: { steps: { manual_test: { disable: true } } } as unknown as ConstructorParameters<
+          typeof Conductor
+        >[0]['config'],
+      });
+
+      await conductor.run();
+
+      // No branch executor call for ANY validation-group member.
+      const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
+      expect(calledSteps).not.toContain('manual_test');
+      expect(calledSteps).not.toContain('prd_audit');
+      expect(calledSteps).not.toContain('architecture_review_as_built');
+
+      const finalState = await readState(statePath);
+      expect(finalState.ok && finalState.value.manual_test).toBe('skipped');
+      expect(finalState.ok && finalState.value.prd_audit).toBe('skipped');
+      expect(finalState.ok && finalState.value.architecture_review_as_built).toBe('skipped');
+    });
   });
 
   it('advances when checkpoint response is continue', async () => {
@@ -4301,6 +6891,7 @@ describe('engine/conductor', () => {
         acceptance_specs: 'done',
         build: 'done',
         build_review: 'done',
+        wiring_check: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -5854,8 +8445,10 @@ describe('engine/conductor', () => {
       expect(hintedRuns.length).toBeGreaterThan(0);
     });
 
-    it('honors per-step default retries (e.g. explore → 5)', async () => {
-      // Pre-populate state so we start at explore (DEFAULT_STEP_RETRIES.explore=5).
+    it('honors per-step default retries (e.g. explore → 3)', async () => {
+      // Pre-populate state so we start at explore. #188 retry-as-escalation
+      // dropped DEFAULT_STEP_RETRIES.explore from 5 → 3 (a retry now escalates
+      // effort/model instead of repeating an identical attempt).
       await writeState(statePath, {
         bootstrap: 'done',
         memory: 'done',
@@ -5880,8 +8473,8 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // explore default is 5 retries
-      expect(attempts).toBe(5);
+      // explore default is now 3 retries (#188)
+      expect(attempts).toBe(3);
     });
   });
 
@@ -7897,6 +10490,19 @@ describe('durable no-evidence counter', () => {
       verifyArtifacts: true,
       maxRetries: 3,
       onRecovery,
+      // T4: this fixture's build gate can never genuinely complete (its local
+      // writeTaskStatus helper never writes the plan file or evidence
+      // stamps) — it was always relying on the fixed retry budget being
+      // exhausted at the exact moment the last progress-driven reset fired.
+      // The progress-bypass gate (T4) correctly keeps re-dispatching through
+      // that budget as long as forward progress continues, which changes the
+      // timing this test coincidentally depended on. Disabling
+      // build_progress_halt restores the pre-T4 fixed-budget timing this
+      // counter-reset invariant test actually exercises — it isn't testing
+      // T4's bypass semantics.
+      config: {
+        build_progress_halt: { enabled: false, attempt_ceiling: 30, dispatch_ceiling: 20 },
+      } as HarnessConfig,
     });
 
     await conductor.run();
@@ -8624,7 +11230,13 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     expect(buildCalls).toBe(1);
   });
 
-  it('no_task_progress stall (not halt_marker) → remediate NOT dispatched', async () => {
+  it('no_task_progress stall (not halt_marker) in interactive mode → remediate NOT dispatched', async () => {
+    // #569: the daemon+auto dispatch of /remediate for no_task_progress
+    // stalls (see the test immediately below) is gated to daemon+auto mode
+    // only, same as halt_marker. This test now covers the interactive
+    // (non-daemon) case, which must still skip dispatch and fall through
+    // to the REPL hand-off — the same guard (`this.daemon && this.mode ===
+    // 'auto'`) that already applied to halt_marker.
     await seedToBuildStep();
 
     const dispatchedSteps: StepName[] = [];
@@ -8648,17 +11260,424 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       stepRunner: runner,
       events,
       projectRoot: dir,
-      mode: 'auto',
-      daemon: true,
+      mode: 'interactive',
+      daemon: false,
       verifyArtifacts: true,
       maxRetries: 3, // Allow retries
     });
 
     await conductor.run();
 
-    // When stall is 'no_task_progress' (not 'halt_marker'), remediate is NOT dispatched
-    // This is because the guard checks: if (stalled === 'halt_marker')
+    // Not daemon+auto → remediate is NOT dispatched.
     expect(dispatchedSteps).not.toContain('remediate');
+  });
+
+  it('no_task_progress stall (not halt_marker) → remediate IS dispatched with synthesized prompt (#569)', async () => {
+    // #569: no_task_progress stalls should get the same auto-remediation
+    // dispatch that halt_marker stalls already receive. Unlike halt_marker
+    // (where the agent itself writes the question), no_task_progress has no
+    // question authored by the agent — the conductor must synthesize one
+    // from the completion-gate signals (pending tasks, resolved-count
+    // stagnation, lack of evidence) and hand that to /remediate.
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          // On every attempt, resolved task count never advances (stays at 0
+          // resolved out of 1 task) — this forces 'no_task_progress' since
+          // resolvedTasksAfter <= resolvedTasksBefore across attempts.
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Route back to build so the dispatch resolves cleanly.
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Retry build with synthesized guidance.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    // remediate must be dispatched for no_task_progress, same as halt_marker.
+    const remediateCalls = dispatchedSteps.filter((s) => s === 'remediate').length;
+    expect(remediateCalls).toBeGreaterThanOrEqual(1);
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A synthesized prompt must be written for /remediate to consume,
+    // capturing the signals that produced the no_task_progress verdict.
+    const evidenceContent = await readFile(
+      join(dir, '.pipeline/build-stall-question.md'),
+      'utf-8',
+    );
+    expect(evidenceContent).toContain('pending');
+    expect(evidenceContent).toContain('0');
+    expect(evidenceContent).toContain('zero_work_product');
+  });
+
+  // RED (#569, Task 3): un-remediable no_task_progress stalls must NOT
+  // terminal-HALT the way halt_marker does. Once Task 4 wires the
+  // no_task_progress dispatch, /remediate should still get dispatched (up
+  // to the shared MAX_KICKBACKS_PER_GATE budget) but every non-recovering
+  // outcome — budget exhaustion, disposition='halt', no valid dispositions,
+  // or a dispatch throw — must fall through to the existing retry/durable
+  // no-evidence-counter/auto-park path (conductor.ts:3539-3620) instead of
+  // writing a terminal HALT from the stall block itself (contrast
+  // conductor.ts:3680-3811, which DOES terminal-HALT halt_marker on these
+  // same outcomes). On current code, no_task_progress never dispatches
+  // /remediate at all (effectiveQuestion stays null for anything but
+  // 'halt_marker'), so these tests are RED because remediateCallCount stays
+  // 0 instead of reaching the shared budget.
+  it('no_task_progress persistent stall at remediation budget exhaustion falls through to retry/auto-park, never terminal-HALTs on budget (#569)', async () => {
+    await seedToBuildStep();
+
+    let buildAttemptCount = 0;
+    const remediateCallCount: number[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          buildAttemptCount++;
+          // Resolved task count never advances -> persistent
+          // 'no_task_progress' verdict on every attempt.
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          remediateCallCount.push(buildAttemptCount);
+          // Route back to build every time — the stall never actually
+          // resolves, forcing the shared budget to exhaust.
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: `stall:${buildAttemptCount}`,
+                  disposition: 'build',
+                  category: null,
+                  rationale: `Answer ${buildAttemptCount}`,
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 10, // generous so budget (not retries) governs dispatch
+    });
+
+    await conductor.run();
+
+    // Once Task 4 lands, no_task_progress gets the same dispatch-up-to-
+    // budget treatment as halt_marker: dispatched at least once, never more
+    // than MAX_KICKBACKS_PER_GATE (2) times for a persistent stall.
+    // RED today: remediateCallCount stays [] because no_task_progress never
+    // dispatches /remediate at all yet.
+    expect(remediateCallCount.length).toBeGreaterThanOrEqual(1);
+    expect(remediateCallCount.length).toBeLessThanOrEqual(2);
+
+    // Unlike halt_marker, budget exhaustion on a no_task_progress stall
+    // must NOT terminal-HALT the run from the stall block — no loop_halt
+    // reason (nor the on-disk HALT marker, if any is written by a LATER,
+    // unrelated mechanism such as auto-park) may carry the halt_marker
+    // budget-exhausted fail-safe message.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('Remediation budget exhausted');
+    }
+    try {
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).not.toContain('Remediation budget exhausted');
+    } catch {
+      // No HALT marker at all is also an acceptable outcome here.
+    }
+  });
+
+  it.each([
+    [
+      'halt',
+      async (dirPath: string, attempt: number) => {
+        await writeFile(
+          join(dirPath, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: `stall:${attempt}`,
+                disposition: 'halt',
+                category: 'product_scope',
+                rationale: 'needs a human decision',
+                tasks: [],
+              },
+            ],
+          }),
+        );
+      },
+    ],
+    [
+      'none',
+      async (dirPath: string) => {
+        // Malformed JSON -> readRemediationPlan returns null -> outcome 'none'.
+        await writeFile(join(dirPath, '.pipeline/remediation.json'), '{not valid json');
+      },
+    ],
+  ] as const)(
+    "no_task_progress stall with planRemediation outcome '%s' falls through to retry/auto-park, no terminal HALT from the stall block (#569)",
+    async (_label, stubRemediation) => {
+      await seedToBuildStep();
+
+      let buildAttemptCount = 0;
+      const dispatchedSteps: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatchedSteps.push(step);
+          if (step === 'build') {
+            buildAttemptCount++;
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline/task-evidence.json'),
+              JSON.stringify({
+                evidenceStamps: {},
+                noEvidenceAttempts: 0,
+                migrationGrandfather: [],
+                noEvidenceReasons: ['zero_work_product'],
+              }),
+            );
+          } else if (step === 'remediate') {
+            await stubRemediation(dir, buildAttemptCount);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const haltEvents: Array<{ reason: string }> = [];
+      events.on('loop_halt', (e) => {
+        if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 5,
+      });
+
+      await conductor.run();
+
+      // /remediate must actually get dispatched for this to be a meaningful
+      // exercise of the halt/none disposition path.
+      // RED today: dispatchedSteps never contains 'remediate' because
+      // no_task_progress doesn't dispatch at all yet.
+      expect(dispatchedSteps).toContain('remediate');
+
+      // Regardless of the disposition kind, a no_task_progress stall must
+      // never write the halt_marker-style terminal HALT (question + halt
+      // detail, or "no valid dispositions") from the stall block itself —
+      // that would short-circuit the retry/auto-park fallthrough this task
+      // exists to protect.
+      for (const h of haltEvents) {
+        expect(h.reason).not.toContain('remediation produced no valid dispositions');
+      }
+    },
+  );
+
+  it('no_task_progress stall with planRemediation outcome route misrouted to a non-build target falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          // Write remediation that misroutes to 'plan' (non-build target).
+          await writeFile(
+            join(dir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'stall:no-task-progress',
+                  disposition: 'plan',
+                  category: null,
+                  rationale: 'Needs a re-plan, not a build answer.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 5,
+    });
+
+    await conductor.run();
+
+    // /remediate must actually get dispatched for this to be a meaningful
+    // exercise of the route-misroute path.
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A no_task_progress stall whose remediation outcome misroutes to a
+    // non-build target must not write the halt_marker-style "misrouted to"
+    // terminal HALT from the stall block — it must fall through to
+    // retry/auto-park instead, same as the halt/none/throw outcomes.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('misrouted to');
+    }
+  });
+
+  it('no_task_progress stall where planRemediation dispatch throws falls through to retry/auto-park, no terminal HALT from the stall block (#569)', async () => {
+    await seedToBuildStep();
+
+    const dispatchedSteps: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatchedSteps.push(step);
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+          await writeFile(
+            join(dir, '.pipeline/task-evidence.json'),
+            JSON.stringify({
+              evidenceStamps: {},
+              noEvidenceAttempts: 0,
+              migrationGrandfather: [],
+              noEvidenceReasons: ['zero_work_product'],
+            }),
+          );
+        } else if (step === 'remediate') {
+          throw new Error('remediate dispatch crashed');
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+
+    const haltEvents: Array<{ reason: string }> = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push({ reason: e.reason });
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 5,
+    });
+
+    await conductor.run();
+
+    // RED today: dispatchedSteps never contains 'remediate' because
+    // no_task_progress doesn't dispatch at all yet, so the throw is never
+    // exercised.
+    expect(dispatchedSteps).toContain('remediate');
+
+    // A dispatch crash on a no_task_progress stall must not write the
+    // halt_marker-style "remediation dispatch failed" terminal HALT — it
+    // must fall through to retry/auto-park instead.
+    for (const h of haltEvents) {
+      expect(h.reason).not.toContain('remediation dispatch failed');
+    }
   });
 
   it('auto-park condition met → park HALT wins, stall branch never runs', async () => {
@@ -8720,6 +11739,313 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
 
     // Auto-park should have fired, causing an early exit
     expect(parked).toBe(true);
+  });
+
+  describe('distinct terminal HALT reason for no_task_progress exhaustion (#569 Task 5)', () => {
+    async function seedToBuildStep(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('build exhausts retries after a no_task_progress stall history → HALT names no-task-progress, not the generic "retries exhausted" message', async () => {
+      await seedToBuildStep('no-task-progress-exhaustion-test');
+
+      // Non-daemon auto mode: checkAndAutoPark is daemon-gated (see
+      // conductor.ts ~3559 `if (this.daemon)`), so with daemon:false the
+      // no_task_progress stall never gets diverted into an auto-park HALT
+      // — it falls straight through the retry loop to the terminal
+      // "retries exhausted" fallback once maxRetries is exhausted, which
+      // is exactly the generic-fallback path this task makes more specific.
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Resolved task count never advances -> persistent
+            // 'no_task_progress' verdict on every attempt (attempt >= 2).
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3, // must be >= 2 so the attempt >= 2 stall check fires
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toContain('no task progress');
+      expect(haltContent).not.toMatch(/retries exhausted/);
+    });
+
+    it('preserves an existing, more-specific HALT marker verbatim (existingHalt still wins over no_task_progress)', async () => {
+      await seedToBuildStep('existing-halt-precedence-test');
+
+      const SPECIFIC_HALT = 'auto-park: durable no-evidence threshold reached';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Write a specific HALT marker directly, simulating a HALT
+            // already written by an earlier, more-specific mechanism
+            // (e.g. auto-park or budget exhaustion) before the terminal
+            // fallback is ever reached.
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/HALT'), SPECIFIC_HALT);
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent.trim()).toBe(SPECIFIC_HALT);
+    });
+
+    it('non-no_task_progress terminal exhaustion keeps the pre-existing generic fallback string (lastBuildStallReason never set)', async () => {
+      await seedToBuildStep('generic-fallback-unchanged-test');
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            // Never write task-status.json / never advance -> completion
+            // check fails, but the build never reaches attempt >= 2 with
+            // resolvedTasksAfter <= resolvedTasksBefore in a way that sets
+            // 'no_task_progress' via a *stall*, because we cap maxRetries
+            // at 1 (single attempt, so attempt never reaches 2 -> `stalled`
+            // stays null). This exercises the plain "retries exhausted"
+            // terminal fallback with no stall diagnosis at all.
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1, // single attempt: never reaches attempt >= 2 stall check
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(haltContent).toMatch(/retries exhausted/);
+      expect(haltContent).not.toContain('no task progress');
+    });
+  });
+
+  describe('fix is surgical — auto-park counter + interactive REPL unchanged (#569 Task 6)', () => {
+    // Task 6 is a pure guard: the #569 fix (Tasks 4/5) adds a /remediate
+    // dispatch + a distinct terminal reason for no_task_progress stalls, and
+    // must NOT alter the two adjacent mechanisms it sits between — the durable
+    // no-evidence counter / checkAndAutoPark terminal owner (conductor.ts
+    // ~:3539-3620) and the interactive REPL stall handoff (~:3833). These
+    // tests prove both remain behaviorally unchanged even with the new
+    // dispatch active. No production change lands here.
+    async function seedToBuildGate(featureDesc: string): Promise<void> {
+      const res = await readState(statePath);
+      const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      for (const s of ALL_STEPS) {
+        if (s.name === 'build') break;
+        state[s.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = featureDesc;
+      state.track = 'technical';
+      await writeState(statePath, state as unknown as ConductState);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(
+        join(dir, `.docs/plans/${featureDesc}.md`),
+        '# Plan\n\n### Task 1: Step 1\n',
+      );
+    }
+
+    it('durable no-evidence counter still accrues across re-kicks and auto-parks at DAEMON_NO_EVIDENCE_THRESHOLD with the pre-existing reason, even though /remediate now dispatches for no_task_progress (#569)', async () => {
+      await seedToBuildGate('surgical-counter-test');
+      const { readNoEvidenceAttempts } = await import('../../src/engine/task-evidence.js');
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+
+      // Zero-progress runner: task-status stays at 0/1 resolved on every
+      // attempt (forcing 'no_task_progress'); a /remediate dispatch returns no
+      // remediation plan (non-recovering), so it falls through to the
+      // retry/durable-counter path. Crucially it does NOT write
+      // task-evidence.json — the conductor owns the durable counter, exactly
+      // as in the pre-fix path.
+      const dispatched: StepName[] = [];
+      const makeRunner = (): StepRunner => ({
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      });
+
+      const parkEvents: Array<{ reason?: string }> = [];
+      events.on('auto_park', (e) => parkEvents.push({ reason: e.reason }));
+
+      // Re-kick #1 (maxRetries: 2): the durable counter accrues to 2 and the
+      // stall verdict at attempt 2 dispatches /remediate (the NEW #569
+      // behavior), which falls through — the feature is NOT parked yet.
+      const c1 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c1.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(2);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+      // The new dispatch coexists with the unchanged counter accrual.
+      expect(dispatched).toContain('remediate');
+
+      // Re-kick #2: the durable counter carries over (accrues ACROSS runs),
+      // the first zero-progress miss pushes it to N=3 and checkAndAutoPark
+      // parks with the pre-existing reason — the terminal decision still
+      // belongs to the durable counter, not the stall block.
+      const c2 = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: makeRunner(),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'build',
+      });
+      await c2.run();
+
+      expect(await readNoEvidenceAttempts(dir)).toBe(3);
+      expect(await getProvenanceType(dir, 'surgical-counter-test')).toBe('auto');
+      expect(parkEvents).toHaveLength(1);
+      expect(parkEvents[0].reason).toMatch(/no completion evidence after 3 attempts/);
+    });
+
+    it('interactive mode still reaches the REPL stall handoff on a no_task_progress stall — no /remediate dispatch and no auto-park (#569)', async () => {
+      await seedToBuildGate('surgical-interactive-test');
+
+      const dispatched: StepName[] = [];
+      const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+        // The operator drops into the REPL and /quits without finishing the
+        // work — the completion gate still misses afterwards.
+        runInteractive: vi.fn(async () => {}),
+      };
+
+      const parkEvents: unknown[] = [];
+      events.on('auto_park', (e) => parkEvents.push(e));
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'interactive',
+        daemon: false,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // The interactive stall handoff still fires — unchanged by the fix.
+      expect(runner.runInteractive).toHaveBeenCalledWith('build');
+      // The daemon+auto-only /remediate dispatch never fires in interactive.
+      expect(dispatched).not.toContain('remediate');
+      // Auto-park is daemon-gated → interactive mode never parks.
+      const { getProvenanceType } = await import('../../src/engine/park-marker.js');
+      expect(await getProvenanceType(dir, 'surgical-interactive-test')).toBeNull();
+      expect(parkEvents).toHaveLength(0);
+    });
   });
 });
 
@@ -8990,5 +12316,83 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     // The first line should contain the question (emoji should survive UTF-8)
     const firstLine = haltContent.split('\n')[0];
     expect(firstLine).toContain('🚀');
+  });
+});
+
+// adr-2026-07-10-validation-group-join.md, Decision-1: the SHIP sequence
+// gains a built-in validation group entry describing the three validators
+// as a group, without disturbing their existing standalone StepDefinitions
+// or index-based lookups.
+describe('built-in SHIP validation group entry (Decision-1)', () => {
+  it('exposes VALIDATION_GROUP with the three members in ADR order', () => {
+    expect(VALIDATION_GROUP.members).toEqual([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+  });
+
+  it('positions the group immediately after the build gates (build_review → wiring_check) in ALL_STEPS ordering', () => {
+    // wiring_check (3110f9fd, from main) sits between build_review and the
+    // group's first member — the group entry follows the LAST build gate.
+    const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
+    const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'wiring_check');
+    expect(wiringCheckIdx).toBe(buildReviewIdx + 1);
+    const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
+    expect(firstMemberIdx).toBe(wiringCheckIdx + 1);
+
+    // Members remain contiguous and in order in the underlying linear list.
+    const memberIndices = VALIDATION_GROUP.members.map(
+      (name) => ALL_STEPS.findIndex((s) => s.name === name),
+    );
+    expect(memberIndices).toEqual([...memberIndices].sort((a, b) => a - b));
+    expect(memberIndices[memberIndices.length - 1] - memberIndices[0]).toBe(
+      VALIDATION_GROUP.members.length - 1,
+    );
+  });
+
+  it('registers VALIDATION_GROUP in STEP_GROUPS keyed by its name', () => {
+    expect(STEP_GROUPS[VALIDATION_GROUP.name]).toBe(VALIDATION_GROUP);
+  });
+
+  it('resolves each member to its own group via getGroupForStep', () => {
+    for (const member of VALIDATION_GROUP.members) {
+      expect(getGroupForStep(member as StepName)?.name).toBe(VALIDATION_GROUP.name);
+    }
+  });
+
+  it('reports undefined group for ordinary serial steps', () => {
+    expect(getGroupForStep('build')).toBeUndefined();
+    expect(getGroupForStep('build_review')).toBeUndefined();
+    expect(getGroupForStep('retro')).toBeUndefined();
+  });
+
+  it('leaves each member with its own full StepDefinition (skill/gate config unchanged)', () => {
+    const manualTest = ALL_STEPS.find((s) => s.name === 'manual_test');
+    const prdAudit = ALL_STEPS.find((s) => s.name === 'prd_audit');
+    const asBuilt = ALL_STEPS.find((s) => s.name === 'architecture_review_as_built');
+
+    expect(manualTest?.skillName).toBe('manual-test');
+    expect(manualTest?.enforcement).toBe('gating');
+    expect(prdAudit?.skillName).toBe('prd-audit');
+    expect(prdAudit?.skippableForTracks).toEqual(['technical']);
+    expect(asBuilt?.skillName).toBe('architecture-review');
+    expect(asBuilt?.skipWhenSkipped).toBe('architecture_review');
+  });
+
+  it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
+    // Each member still resolves to its OWN linear-list index, not a
+    // group-collapsed position.
+    const wiringCheckIdx = tryGetStepIndex('wiring_check');
+    expect(wiringCheckIdx).not.toBeNull();
+    for (let i = 0; i < VALIDATION_GROUP.members.length; i += 1) {
+      const idx = tryGetStepIndex(VALIDATION_GROUP.members[i] as StepName);
+      expect(idx).toBe((wiringCheckIdx as number) + 1 + i);
+    }
+
+    // Ordinary serial steps are completely unaffected.
+    expect(tryGetStepIndex('build')).not.toBeNull();
+    expect(tryGetStepIndex('retro')).not.toBeNull();
+    expect(tryGetStepIndex('remediate')).toBeNull();
   });
 });

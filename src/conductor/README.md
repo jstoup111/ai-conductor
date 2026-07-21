@@ -129,6 +129,18 @@ by **gate verdicts** instead of a fixed order:
   step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
   with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
   exit markerless and the daemon never reads their markers.
+- **Retry-as-escalation** (`engine/escalation.ts`, #188) — a step's retry is not an
+  identical re-run: it escalates from the resolved base `(model, effort)`, indexed by the
+  1-based attempt. Attempt 1 = base; attempt 2 bumps effort one level
+  (`low→medium→high→xhigh→max`); attempt 3+ holds that effort and bumps the model one tier
+  (`haiku→sonnet→opus→fable`), capped at each ladder's top (a no-op rung, not an error).
+  The bumped model still flows through the #186 availability ladder, so a dead escalated
+  tier is substituted with a live one. Escalation derives purely from `attempt`, so the
+  non-consuming `attempt--; continue` paths (rate-limit, stale session, auth park) re-run
+  at the same rung. Deep-step budgets (`explore`/`prd`/`plan`/`build`) are **3** (floor
+  that still reaches the attempt-3 model bump). Opt out per step with
+  `steps.<step>.escalate: false` to pin the base config across retries. Each `step_retry`
+  event carries the upcoming attempt's `escalatedModel`/`escalatedEffort` for retro Part C.
 - **Fresh session per step** — unconditionally, in all modes and all phases (interactive
   `/conduct` included; each step reads its inputs from committed `.docs/` artifacts, not
   conversational memory), the LLM session is reset before **every** executed step
@@ -153,7 +165,11 @@ satisfied only by an explicit clean `Verdict:` of `APPROVED` or `APPROVED WITH D
 stays unsatisfied for `BLOCKED`, a missing `Verdict:` line, or any unrecognized verdict (so a
 no-ADR / garbled review can't slip through marked `done`). An unsatisfied gate keeps the selector
 from reaching `finish`; the skill guidance drives where the rework lands (BUILD vs DECIDE for
-prd-audit; human fix vs superseding ADR for as-built).
+prd-audit; human fix vs superseding ADR for as-built). Both verdict artifacts are also gated by
+the per-attempt verdict-freshness floor described under `build_review` below — a re-dispatched
+judging attempt that fails to rewrite `.pipeline/prd-audit.md` or
+`.pipeline/architecture-review-as-built.md` scores "no fresh verdict" rather than reusing the
+prior attempt's verdict.
 
 `architecture_review_as_built` also **skips when `architecture_review` was skipped** — for the
 Small tier (both share `skippableForTiers: ['S']`) and, via `skipWhenSkipped: 'architecture_review'`,
@@ -181,10 +197,23 @@ The finish/as-built hooks matter most on the **technical track**, which skips `p
 entirely — before them, those gates dead-ended in a `failed in auto mode` HALT even when the
 gap was routable.
 
-**Daemon build-stall remediation (ADR-2026-07-10).** When the build step writes
+At the **parallel validation group's join** (see "Parallel validation phase" below), the
+same planner is dispatched **once per join round over the union** of every gap-carrying
+member's evidence file (`prd_audit` + `architecture_review_as_built` in one dispatch
+context) — never one dispatch per member — drawing from the same shared
+`MAX_KICKBACKS_PER_GATE` budget.
+
+**Daemon build-stall remediation (ADR-2026-07-10, #569).** When the build step writes
 `.pipeline/halt-user-input-required` (a question the agent could not resolve autonomously),
 `Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
-and routes through `/remediate` before halting:
+and routes through `/remediate` before halting. Zero-work stalls (`stalled ===
+'no_task_progress'`) are also routed through the same `/remediate` dispatch and share the
+`MAX_KICKBACKS_PER_GATE` budget below, but differ on the terminal decision: the durable
+no-evidence counter (not the remediation outcome) still owns HALT/park, so a non-recovering
+`/remediate` outcome for a `no_task_progress` stall falls through to retry/auto-park instead of
+an immediate terminal HALT, and an exhausted `no_task_progress` build halts with a distinct,
+specific reason (`build stalled: no task progress (...)`) rather than the generic "retries
+exhausted" message. The `halt_marker` flow below is unchanged:
 
 - **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
   reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
@@ -259,6 +288,51 @@ because a manual FAIL is an implementation gap by definition — bounded by
 (`manual-test FAIL unresolved after N build kickback(s)`). A non-FAIL gate miss (missing or
 stale results — the skill never recorded properly) carries no bug evidence and HALTs
 directly.
+
+### Parallel validation phase (#469, auto mode only)
+
+In an **auto-mode** run (`mode: 'auto'` — inline or daemon), the three SHIP validators run
+as a built-in **concurrent group** instead of the serial walk. Interactive runs are
+untouched: the members execute one at a time via the pre-existing serial walk, and
+manual_test's post-step checkpoint pauses for the operator exactly as before.
+
+- **Group entry (Decision-1)** — `VALIDATION_GROUP` (`engine/steps.ts`, registered in
+  `STEP_GROUPS`) names `manual_test → prd_audit → architecture_review_as_built`. The
+  members keep their own contiguous `ALL_STEPS` entries (immediately after the last build
+  gate, `build_review → wiring_check`), their own `StepDefinition`s, and their own linear
+  indices — the group is an execution overlay, not a topology change. The loop engages the
+  group path whenever it lands on any member in auto mode.
+- **Fan-out** (`engine/group-core.ts`, shared with the config-DSL `parallel` executor) —
+  membership is resolved against state/track/tier first (`resolveGroupMembership`): skipped
+  members are excluded, already-`done` members (e.g. after a mid-group SIGINT) carry their
+  pass verdict and are **not re-dispatched**. Dispatchable members run under a semaphore
+  capped by `validation_concurrency` (default **2**; `≤ 0`/non-numeric → default; always
+  additionally capped at the member count). Each branch mints its **own fresh session**,
+  dispatches its member's own step/skill name, and retries resume that same session. A
+  width-1 group degrades to exact serial semantics (no `parallel_started` event).
+- **Single-writer join** — branches never write `conduct-state.json` or
+  `.pipeline/gates/*`. After **all** branches settle (a fast failure never cancels
+  in-flight siblings), the join recomputes each member's objective gate verdict from
+  on-disk evidence and writes state + one `.pipeline/gates/«member».json` per member, on
+  the loop's own thread of control. All-green marks each member and its synthetic
+  `«group»__«member»` key `done` and advances with zero rewinds.
+- **Join classification (serial-parity guarantees)** — a branch that exhausts retries with
+  **no verdict** fails the group loudly and fast (HALT marker + `loop_halt`, no remediation
+  synthesized, no partial join). An **MT-only FAIL** routes through the same deterministic
+  `manual_test → build` kickback as the serial walk (#367; `manualTestSelfHeals` budget, D2
+  no-op guard). **Mixed/audit gaps** dispatch `/remediate` **exactly once per round over
+  the union** of failing members' evidence files; an MT FAIL in the same round merges into
+  one work order (earliest target, both evidence streams concatenated in the retry hint).
+  Rounds share the serial `MAX_KICKBACKS_PER_GATE` budget, and a gap member re-failing
+  after a kickback-to-build cycle with zero net progress HALTs
+  (`«member» kickback-to-build no-op`, D2/#647 parity). Any non-green shape with no route
+  left HALTs naming each member that missed its gate — never a silent exit.
+- **Signals** — SIGINT/SIGTERM/SIGHUP mid-group persist `done` (member + synthetic key)
+  for every branch that already settled, so a resumed run re-dispatches only unfinished
+  members.
+- **Events** — `parallel_started` (dispatched members only), per-branch
+  `group_member_step` events attributed to the member (never the group), and
+  `parallel_completed` at an all-green join.
 
 ### Mermaid diagram rendering (approval gates)
 
@@ -379,6 +453,51 @@ rebase_resolution_attempts: 3   # default; 0 = disable (immediate HALT on any co
 no-op (branch now current), and converges to the PR. If you clear HALT without finishing the
 rebase, the daemon detects the still-stale/in-progress state and re-parks rather than shipping
 a half-rebased branch.
+
+#### Evidence citation translation across rebases (#535)
+
+Both engine-owned rebases (`performRebase`, the underlying function used by both
+the rebase-on-latest step above and `resumeRebaseFirst`'s re-kick play-forward
+rebase) rewrite commit SHAs when the rebase actually changes commits. Previously
+this orphaned every sha-anchored evidence citation that pointed at a pre-rebase
+commit — the `task-evidence.json` sidecar (`sha`, `citedShas[]`, `verdictAnchor`),
+the `task-status.json` `commit` field, and the `attribution-memo.json` judged-stamp
+memo (keyed by the old HEAD) all kept referencing shas that no longer existed on
+the branch, and satisfied-by trailer citations dangled or failed ancestry checks
+that had lingering pre-rebase objects to fall back on.
+
+`performRebase` now translates these stores automatically whenever a rebase
+changes commits — no new CLI flag or config, and no action required at either
+call site:
+
+- **`.pipeline/rebase-rewrites.json`** — the persisted old-sha → new-sha map,
+  built by matching pre- and post-rebase commits via `git patch-id --stable`
+  (both full and 7-char short-sha forms are indexed). The map is transitive
+  across repeated rebases, so a chain of rebases still resolves back to the
+  current HEAD. `task-evidence.json`, `task-status.json`, and
+  `attribution-memo.json` (including its `verdictAnchor` and its
+  `${headSha}:${residueIds}` memo key) are rewritten in place through this map
+  immediately after the rebase. Satisfied-by trailer text in commit messages is
+  never rewritten (that would require re-rewriting commits); instead, citation
+  consumers (`validateCitations` in `attribution-validate.ts`, and the autoheal
+  satisfied-by resolver) resolve every cited sha through the persisted map
+  before doing ancestry checks.
+- **`.pipeline/rebase-residue.json`** — commits from the pre-rebase history that
+  couldn't be matched by patch-id (dropped during the rebase, or conflict-
+  modified so their diff changed) are written here with the citing task ids and
+  a reason, paired with a `rebase_citation_residue` event. Residue is not a
+  failure to be silently swallowed — a conflict-modified commit landing in
+  residue is the correct outcome, since its diff changed and the citation
+  genuinely needs re-verification.
+- **No-laundering guarantee:** a citation's sha is only ever resolved through
+  the map if it is a real key in git's own pre-image → post-image
+  correspondence for that rebase. A forged or unrelated sha, or one that was
+  never part of the branch before the rebase, is left unchanged and then still
+  fails the existing `merge-base --is-ancestor` ancestry check — it is refused,
+  never silently repointed onto a live commit.
+
+See `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md` and
+`src/engine/rebase-translate.ts`.
 
 ### Rate-Limit Episode Coordinator
 
@@ -578,23 +697,39 @@ lives behind the `resolveDaemonOwner` seam (`owner-gate/identity.ts`); a future
   unresolved `daemonOwner` short-circuits discovery: the daemon builds **nothing** and emits a
   single loud, deduped "identity unresolved" notice (reversing the prior fail-open build-all).
   An **absent** `daemonOwner` (gate unwired) still runs legacy discovery unchanged.
-- **Loud un-owned skips (D5).** An un-owned merged spec is skipped with a distinct, deduped
-  line (`.daemon/warned/<slug>`) that states it is un-owned **and** how to fix it — add an
-  `Owner:` marker on the default branch, or grandfather via `owner_gate_cutover`.
+- **Loud un-owned default-build (D5, superseded — see below).** An un-owned merged spec is
+  **no longer skipped**. `decideSpecGate` returns `{ build: true, reason: 'unowned-defaulted' }`
+  for a post-cutover or indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts`
+  builds it into the buildable `items` set, attributed to the daemon's own resolved owner. It
+  still emits a distinct, deduped line (`.daemon/warned/<slug>`) — but now as an actionable
+  escalation naming the slug and the defaulted owner and telling you to add an explicit
+  `Owner:` marker on the default branch to make ownership unambiguous, not as a skip notice.
+  `other-owner` (stamped with a **different** operator's identity) is the only remaining
+  skip reason; that case is unchanged.
 - **Grandfather cutover (D6).** `owner_gate_cutover` (project config) builds un-owned specs
-  merged before the instant. It is a per-repo policy for repos with an unbuilt backlog and
-  **must not** be set on the harness self-host repo (all plans there are already merged, so the
-  window would rebuild everything). See the main README → "Operator identity & owner gate".
+  merged before the instant — this remains one path to `build: true`, now alongside the
+  broader `unowned-defaulted` default-build. It is a per-repo policy for repos with an unbuilt
+  backlog and **must not** be set on the harness self-host repo (all plans there are already
+  merged, so the window would rebuild everything). See the main README → "Operator identity &
+  owner gate".
+- **Born owned at authoring time.** `runAuthoring` (`owner-gate/authoring.ts`) now falls back
+  to machine identity (`readMachineOwnerConfig()`) whenever no `ownerConfig` is injected, so
+  every DECIDE-phase write path stamps an `Owner:` marker at authoring time by default —
+  intake markers are born owned rather than landing un-owned and relying on the gate to
+  compensate later. The `unowned-defaulted` gate path above now only fires for specs that
+  predate this stamping (pre-cutover history) or hit an indeterminate merge time.
 
-> The **authoring** side (universal `Owner:` stamping across every DECIDE path and refusing to
-> land un-owned specs) is sequenced separately (gated on the engineer-worktree-isolation work);
-> this section documents the identity/config/daemon partition only.
+> The authoring-side born-owned stamping and the gate-side no-silent-skip default-build are
+> both implemented (see D5 and "Born owned at authoring time" above); this section documents
+> the full identity/config/daemon partition, authoring included.
 
 #### Gate write-back: owner-gated PR/issue announcement (Tasks 17-21)
 
-An owner-gate skip (D5 above) is loud in the daemon log and the GATED dashboard group, but
-neither surfaces on GitHub itself — an operator (or the reporter of an intake issue) who only
-watches the PR/issue never learns their spec is gated. `gate-writeback.ts` closes that gap:
+An owner-gate skip (`other-owner` — the only remaining skip reason since D5's
+`unowned-defaulted` default-builds instead) is loud in the daemon log and the GATED dashboard
+group, but neither surfaces on GitHub itself — an operator (or the reporter of an intake
+issue) who only watches the PR/issue never learns their spec is gated. `gate-writeback.ts`
+closes that gap:
 every `discover()` pass, for each `kind: 'spec'` `GatedItem`, the daemon (via the single
 `onGatedDiscovered` call site in `daemon-cli.ts`) attempts two independent, best-effort
 announcements:
@@ -605,9 +740,8 @@ announcements:
   (creating it repo-wide on first use) and upserts a single marker comment carrying the
   reason, remedy, and other-owner name (when known). The marker comment is located purely by
   the stable `OWNER_GATED_MARKER` string (never by body content), so repeated passes PATCH the
-  same comment in place — including across reason transitions (e.g.
-  `unowned-indeterminate` → `other-owner`) — rather than ever posting a duplicate. A terminal
-  PR state (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
+  same comment in place rather than ever posting a duplicate. A terminal PR state
+  (`MERGED`/`CLOSED`/not found) skips the write-back entirely.
 - **`announceGatedIssue(spec, sourceRef, deps)`** — when the spec carries a
   `Source-Ref: owner/repo#N` intake marker, applies the same `owner-gated` label + upserted
   marker comment to the **originating issue**, independent of the PR path (a failure/success
@@ -669,6 +803,31 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 
 **Evidence as source of truth:** The `evidenceStamps` in `.pipeline/task-evidence.json` are the single source of truth for task completion. On every stamp write and at the end of each derived-completion pass, `.pipeline/task-status.json` rows are automatically reconciled from stamps, ensuring rows never lag behind evidence.
 
+#### Build dispatches must not run attribution-blind (#671)
+
+Before this hardening, a build step whose attribution machinery was silently
+broken (e.g. `task-status.json` missing, session hooks not installed, the
+stamp path unwritable) could still dispatch — every sub-dispatch would land
+as `Task: none`, and the gap was only visible later, at the evidence gate.
+Two engine-side safeguards close that gap at the build seam itself:
+
+- **`readDispatchAttribution(root)`** (`src/engine/attribution-enforcement.ts`)
+  parses `.pipeline/dispatch-count` and splits it into `{ attributed,
+  unattributed, taskIds }`, rather than a single opaque count.
+- **`detectUnattributedDispatch(attribution, threshold)`** flags when a
+  dispatch cycle's unattributed count crosses the threshold; the conductor
+  emits a loud `unattributed_dispatch` event during/right after dispatch,
+  instead of deferring discovery to the evidence gate.
+- **`checkAttributionMachineryIntact()`** (`src/engine/conductor.ts`) is a
+  pre-dispatch guard: when attribution enforcement is configured
+  (`isEnforcementConfigured`) and the build step's attribution machinery is
+  broken, the build dispatch is skipped/fails loudly rather than proceeding
+  attribution-blind, and `.pipeline/HALT` is written after 2 failed attempts.
+
+Hook-lane contracts (`git-hook-assets.ts`, `session-hook-assets.ts`) are
+unchanged by this — abstention still exits 0 with no trailer, and no code
+path guesses a task id on the agent's behalf.
+
 #### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
 
 The deterministic evidence gate (trailers, path corroboration) is the sole
@@ -681,6 +840,19 @@ verification lane runs an engine-embedded judge to validate unresolved residue:
   tasks remain (the "residue"), the cutover flag is active (`attribution_judge_cutover`),
   and the residue is new (not memoized), the engine dispatches the attribution
   verifier.
+
+- **Class-scoped verify-only dispatch (#677):** a plan task marked
+  `**Verify-only:** yes` (a prove-closed task that legitimately produces no
+  commit — e.g. re-running an existing test suite to confirm coverage) arms
+  the judged lane for its own residue even when `attribution_judge_cutover` is
+  dark. When the gate-miss residue contains a mix of marked and unmarked ids,
+  only the marked subset is dispatched under a dark cutover; an armed cutover
+  is unaffected and keeps dispatching the full residue as before. Residue with
+  no marked ids is byte-identical to pre-#677 behavior (lane not dispatched
+  without the cutover). This closes the #677 evidence-stranding gap where a
+  verify-only task's lack of a commit burned `noEvidenceAttempts` and could
+  auto-park an otherwise evaluator-APPROVED build. See the `verifyOnlyResidue`
+  predicate in `engine/conductor.ts`.
 
 - **Memoization:** verdict requests are keyed by `(HEAD sha, sorted residue ids)`.
   An unchanged key never re-dispatches; a retry without new commits reuses the
@@ -713,6 +885,15 @@ verification lane runs an engine-embedded judge to validate unresolved residue:
   evidence stamps. The gate re-evaluates; judged tasks count as `resolvedTasksAfter`,
   resetting the `noEvidenceAttempts` counter via the existing progress branch
   (conductor.ts Task-12 block).
+
+- **In-cycle advancement (#581):** a satisfied verdict — one that passes engine-side
+  validation (valid citations + passing test evidence) — persists its evidence stamp
+  and re-checks the completion gate immediately, in the same build cycle, rather than
+  waiting for a subsequent loop iteration. This fixes prior behavior where a fully
+  judged-covered build would still HALT because the gate had already evaluated before
+  the stamp landed; only the following loop pass would pick it up. `no-verdict` and
+  `fail` outcomes are unaffected — no-whitewash still applies, and the build halts
+  exactly as before for those cases.
 
 - **Split attribution:** the verdict is per-task; multiple tasks may cite the same
   SHA (bundled commit case). The validator accepts overlapping citations.
@@ -787,6 +968,21 @@ the decision outcome; sampled spot-audits additionally append an agreement recor
 time; it never feeds back into gate decisions (audit is read-only, fire-and-forget,
 dispatched only after the build gate verdict is already final).
 
+#### No-diff task completion currency (#733)
+
+A task that legitimately produces no diff (a skip, or a pure verification pass)
+now earns completion currency two ways, closing the gap where such tasks
+starved `noEvidenceAttempts` toward auto-park:
+
+- **`Evidence: skipped <reason>` commit trailer:** mints an `evidenceStamps`
+  entry (`form: 'evidence:skipped'`) in `deriveCompletionInternal`, keyed to
+  that commit, so the task counts as resolved toward the completion gate
+  without needing a code change.
+- **`**Type:** verification` plan marker:** recognized in union with the
+  pre-existing `**Verify-only:** yes` marker by `parsePlanTaskVerifyOnly`,
+  arming the judged-closure lane (see the semantic attribution verification
+  lane above) for that task's residue even under a dark cutover.
+
 
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
 
@@ -800,6 +996,11 @@ things on top of that, without a parallel dispatch path:
   `daemon.log` — five groups with precedence
   **HALTED > PROCESSED > IN-PROGRESS > WAITING > ELIGIBLE** (WAITING lists build-ready specs
   held back by an unresolved dependency — see "Dependency-ordered intake and dispatch" below).
+  **By default the PROCESSED group is hidden from both the console and `daemon.log`.**
+  `conduct-ts daemon --completed` (or the `--all` alias) shows the PROCESSED group on
+  the **console only**; `.daemon/daemon.log` never includes it, regardless of the flag.
+  `conduct-ts daemon-status` (`daemon-observe-cli.ts`) is unaffected — it already never
+  rendered PROCESSED.
   Each row carries the bits an operator triages on, mined best-effort from the worktree's
   `conduct-state.json` (and the ledger): HALTED (slug + complexity tier + the step it reached
   + first line of the HALT reason + any open PR link), IN-PROGRESS (slug + tier + last
@@ -836,6 +1037,81 @@ things on top of that, without a parallel dispatch path:
   `recordRebaseStepCompletion` helper on a satisfied rebase, so `state.rebase` is stamped
   consistently regardless of which path ran — a satisfied pre-loop rebase can never leave
   the rebase step silently unmarked.
+
+#### `halt-issues sweep` — filed halt-monitor issue lifecycle (#355)
+
+`monitor.sh` — the halt-monitor daemon that watches the fleet and auto-files a GitHub
+issue when a feature halts — lives **out-of-repo** (#355); this repo owns only the
+reconciliation side: `conduct-ts halt-issues sweep` (CLI wiring in
+`src/engine/halt-issues/halt-issues-cli.ts`, pure orchestrator in
+`src/engine/halt-issues/sweep.ts`).
+
+**Pipeline (`sweep.ts`):**
+1. Parse `--monitor-log` → extract verdicts (which halted feature/slug maps to which
+   filed issue).
+2. Load the `--ledger` JSON file, rebuilding it from the parsed verdicts if it's
+   missing or corrupt (`ledger.ts`).
+3. For each verdict entry: stamp the issue body with a Halt-Slug marker
+   (`closer.ts::stampIssue`, idempotent — re-stamping a already-stamped body is a
+   no-op), check whether the halt condition has since shipped
+   (`resolution.ts::resolveEntry`, ship-evidence + recurrence guard), and if resolvable,
+   close the issue (`closer.ts::closeIssue`).
+4. Write the ledger back atomically (write-to-temp + rename).
+5. Print a summary; exit 0 even when individual entries recorded errors (`lastError` on
+   the ledger entry) — the sweep is designed to be re-run every monitor cycle and
+   self-heal, not to hard-fail the daemon.
+
+Per-entry try/catch isolates one bad entry from blocking the rest of the batch; nothing
+in the sweep body throws past its own boundary.
+
+**CLI:** `conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]`
+
+| Flag | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `--repo-dir <dir>` | yes | — | Repo to search for shipping evidence |
+| `--gh-repo <owner/name>` | yes | — | GitHub repo the filed issues live in |
+| `--dry-run` | no | off | Run the pipeline read-only; no ledger or GitHub writes |
+| `--monitor-log <path>` | no | `~/.ai-conductor/halt-monitor/monitor.log` | Halt-monitor's log |
+| `--ledger <path>` | no | `~/.ai-conductor/halt-issues/ledger.json` | Sweep's state file |
+
+An unknown `--flag` or a missing required flag returns the `guide` (help text) path with
+exit 1 rather than silently falling through — see `detectHaltIssuesSweepCommand` in
+`halt-issues-cli.ts`.
+
+**Monitor hook line.** `monitor.sh` (out-of-repo) should invoke the sweep once per cycle:
+
+```bash
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
+```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`halt-issues-cli.ts:85-87`) return a usage guide instead of running the sweep.
+
+`|| true` prevents a sweep failure from killing the monitor loop; the sweep is idempotent
+(already-stamped/closed issues are skipped) so the next cycle retries cleanly.
+
+**`halt-sweep:keep-open` label contract.** `closer.ts::closeIssue` checks
+`gh.getIssueLabels` for `halt-sweep:keep-open` before every close attempt. If present, it
+returns `closedBy: 'kept-open'`, `lastError: 'kept-open (label)'`, and makes **no writes**
+— the issue stays open indefinitely regardless of shipping evidence. This is the escape
+hatch for a known-false-positive or deliberately-unfixed halt that an operator wants
+tracked but never auto-closed. Removing the label lets the next sweep close it normally.
+
+Beyond the label, `closeIssue` also treats a `null` (404) or already-`closed` issue state
+as `closedBy: 'external'` (no writes) — someone closed it by hand, the sweep doesn't
+re-touch it.
+
+**Ledger rebuild semantics (`ledger.ts`).** The ledger is a JSON file keyed by issue. On
+load:
+- Missing file → start from an empty schema (first run).
+- Present but fails `JSON.parse` (corruption) → the file is renamed to
+  `ledger.json.corrupt-<timestamp>` (quarantined, not deleted) with a stderr warning, and
+  the sweep proceeds with an empty schema.
+- `rebuild()` repopulates the empty/quarantined ledger from the current monitor-log
+  verdicts. This loses previously-recorded per-issue progress (stamps, resolution
+  status) but never loses correctness: already-closed issues are re-detected via live
+  GitHub issue state on the next `closeIssue` call, not blindly re-closed or
+  re-commented.
 
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
@@ -1090,9 +1366,14 @@ turned on.
 diff since the merge-base and the plan being graded against (`build-review-inputs.ts`,
 `build-review-prompt.ts`) — no chat history, no prior reasoning to rubber-stamp. It records a
 PASS/FAIL verdict to `.pipeline/build-review.json` (`artifacts.ts` →
-`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale (mtime predates the session),
-malformed JSON, or a non-exact-shape verdict are all treated as "gate not satisfied, must
-re-run."
+`BUILD_REVIEW_VERDICT`), validated fail-closed: missing, stale, malformed JSON, or a
+non-exact-shape verdict are all treated as "gate not satisfied, must re-run." "Stale" is
+judged per attempt, not just per conductor run: `verdictFreshnessFloor` (`engine/artifacts.ts`)
+requires the verdict artifact's mtime to be at or after this dispatch's `attemptStartedAt` when
+one is present, falling back to the run's `sessionStartedAt` otherwise. Without the per-attempt
+floor, a judging session that fails to rewrite its verdict file would silently re-score a prior
+attempt's verdict forever instead of being scored "no fresh verdict"; the same floor gates
+`prd_audit` and `architecture_review_as_built` (below).
 
 **Cap / HALT behavior.** A FAIL verdict kicks back to `build` with the FAIL reasons as evidence
 (daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. Kickbacks are
@@ -1107,6 +1388,72 @@ grading its own work, `build_review` always dispatches on the Opus model tier (s
 selection table in `HARNESS.md`) in a fresh session — it is deliberately not cheap, and enabling
 it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
 cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
+
+#### Wiring reachability gate (`wiring_check`)
+
+`wiring_check` is a **gating**, always-on built-in that sits strictly between `build_review`
+and `manual_test` in the SHIP-phase gate loop (`build → build_review → wiring_check →
+manual_test → retro → rebase → finish`), present at every complexity tier (`skippableForTiers:
+[]`). It exists to catch the class of bug where a build produces new code that is never
+actually called — a feature that compiles and even passes tests but is orphaned, so a
+manual-test pass would exercise nothing new.
+
+**The `Wired-into:` contract.** At plan time, each task that adds production surface declares
+a `**Wired-into:** ` line naming where it's called from — one of four forms (declared call
+site(s), `same as Task N` inheritance, `none (no new production surface)`, or a waiver `none
+(inert until <ref>)`). Full grammar and derivation rules live in `skills/plan/SKILL.md` §5c;
+this gate is the build-time enforcement of that contract.
+
+**What it checks (`engine/wiring-probe.ts`).**
+
+- **Layer 1 (universal, all languages).** Extracts new exports from the feature diff, verifies
+  each declared call site actually references the symbol, and runs an "orphan backstop" that
+  flags any new export with zero non-test external references even when no `Wired-into:` line
+  declared it. Contradiction checks catch a task that declares `none` but whose diff adds
+  exports, or declares `inert` but whose diff adds a real (non-waived) reference. If the diff
+  base can't be derived, the gate fails closed with `wiring scope undeterminable` rather than
+  silently passing.
+- **Layer 2 (TypeScript projects only, opt-in).** When `wiring.entry_points` is configured
+  (below), builds a real import graph via the TypeScript compiler API rooted at those entry
+  points and checks that new exports are transitively reachable from them — catching orphan
+  islands and test-only import edges that Layer 1's reference scan alone would miss. Degrades
+  explicitly rather than silently: `Layer 2 skipped: wiring.entry_points not configured` (TS
+  project, no config), `Layer 2 not applicable` (non-TS project), or a named bad-root gap when
+  a configured entry point doesn't resolve.
+
+**Legacy advisory disposition.** A plan with **zero** `Wired-into:` lines anywhere predates the
+convention; the gate treats it as legacy and any findings are **advisory-only** — they surface
+but never block. The moment a plan carries even one `Wired-into:` line it's contract-bearing
+and the gate is fully blocking for that plan.
+
+**Waiver resolution (`inert` refs).** A `none (inert until <ref>)` waiver resolves two ways: a
+path-form ref (e.g. `until src/foo.ts exists`) is checked for on-disk existence, no network
+call; an issue-form ref (e.g. `until #123`) resolves via `gh issue view` — open means still
+waived, closed means the waiver has expired (gap), and a `gh` error fails closed as a gap.
+`gh` is never invoked for path-form refs.
+
+**Evidence.** The probe's findings are written to `.pipeline/wiring-evidence.json`
+(`WiringEvidence` schema) with a freshness check — a stale HEAD sha invalidates the evidence
+and forces a re-check. `CompletionContext.wiringProbe` is the injection seam the completion
+predicate uses to invoke the probe live and durably write evidence.
+
+**Config.**
+
+```yaml
+# .ai-conductor/config.yml
+wiring:
+  entry_points:
+    - src/index.ts   # TS import-graph roots for Layer 2; omit to leave Layer 2 skipped
+```
+
+**Post-rebase invalidation.** `wiring_check` joins `build`, `build_review`, and `manual_test`
+in the unconditionally-invalidated set after a file-changing rebase (see "Rebase-on-latest"
+above) — a rebase that touches code always forces re-verification of wiring, never carries
+forward a stale verdict.
+
+**Backward compatibility.** A state dir whose `manual_test` verdict predates `wiring_check`
+being added to the step topology re-derives the topology on resume rather than crashing or
+skipping the new gate outright — a pre-existing in-flight run upgrades cleanly.
 
 #### PR labeling (`needs-remediation` + `mergeable`, daemon-only)
 
@@ -1285,11 +1632,25 @@ still counts as a consumed attempt, never an unbounded retry loop).
 PR branch, creates an isolated worktree at the branch tip (never touches the primary checkout),
 builds a RETRY hint from the failing check names plus a bounded `gh run view --log-failed`
 excerpt (degrades gracefully to names+links if log fetch fails), and runs an injected fix-runner
-seam inside the worktree. If the fix-runner reports a change, the same acceptance guards and
-suite gate used by `mergeable_autoresolve` run before a lease-protected
-`git push --force-with-lease` — any guard or gate failure skips the push and logs an escalated
-outcome without throwing. The resolver never merges a PR and never touches the shipped-work
-ledger; it only ever pushes a refresh to the PR's existing branch.
+seam inside the worktree. The production fix-runner (`productionCiFixRunner`, wired in
+`daemon-cli.ts`) no longer shells out to a `claude --fix-session` flag — that flag never
+existed, so every real invocation used to crash. It now dispatches through a
+StepRunner-backed one-shot session (`DefaultStepRunner.resolveCiFailure`, `engine/
+step-runners.ts`, constructed per-dispatch in `daemon-cli.ts`), mirroring the existing
+`resolveSetupFailure` seam used by setup-failure triage. If the fix-runner reports a change,
+the same acceptance guards and suite gate used by `mergeable_autoresolve` run before a
+lease-protected `git push --force-with-lease` — any guard or gate failure skips the push and
+logs an escalated outcome without throwing. The resolver never merges a PR and never touches
+the shipped-work ledger; it only ever pushes a refresh to the PR's existing branch.
+
+**Error classification and startup preflight.** Resolver/dispatch errors are no longer logged
+as a bare stringified error: `classifyFixError` (`engine/ci-fix.ts`) tags each failure as
+`flag-invalid`, `auth`, `spawn-env`, or `unknown`, and the daemon log records the tag alongside
+the underlying message so a broken invocation surface is diagnosable instead of a generic
+crash trace. Separately, `preflightCiFixInvocation` (`engine/ci-fix.ts`) runs once at daemon
+startup — not per-PR — as a cheap dry probe of the `claude` fix-invocation surface. If the
+probe fails, ci-fix is disabled for that daemon run (logged once) rather than crashing the
+daemon or silently failing on the first real PR.
 
 **Escalation (exhaustion).** Once `ciFixAttempts` reaches 2 and checks are still `failed`, the
 sweep escalates instead of dispatching a third attempt: it ensures+adds the sticky
@@ -1559,6 +1920,15 @@ current, and garbage collection (four-condition fail-closed: not current ∧ no 
 referencing it ∧ older than min-age ∧ outside keep-last-K, and any registry error stops **all**
 deletion). The status surface shows which version each daemon is running.
 
+**Self-update check at startup (`engine/auto-update-check.ts`)** — before the pipeline boots,
+`index.ts` spawns `bin/update --auto`, resolved relative to the harness root. `bin/update` owns
+all self-update logic (channel resolution, version check, changelog rendering, migration,
+rollback — see `HARNESS.md` → "Update flow"); this module's only job is spawning it and
+respecting `autoCheck`. It is advisory-only: a missing harness root, a missing `bin/update`, a
+spawn failure, or a non-zero exit are all logged and swallowed — they never fail conduct-ts
+startup. `autoCheck=false` is enforced inside `bin/update` itself (its own silent no-op), not by
+this wiring.
+
 **Build flow change** — `npm run build` now uses a wrapper (`scripts/publish-engine.mjs`)
 instead of raw `tsup`. The wrapper stages the build, finalizes to the store, atomically flips
 the `dist` symlink, and runs GC. Raw `tsup` invocations are guarded and refused (caught in the
@@ -1599,9 +1969,25 @@ already-parked slug reports "already parked" and leaves the marker untouched); u
 it. Both verbs act directly on the filesystem before the pipeline/daemon boots, mirroring
 `daemon-observe-cli.ts`'s detect/dispatch pattern.
 
+**Park marker main-root resolution (#486):** Both `daemon park` and `daemon unpark` resolve
+the main repository root via `git rev-parse --git-common-dir`, so they work correctly when
+invoked from any directory — main checkout or linked worktree. The marker is always written to
+`.daemon/parked/<slug>` under the main repository root, ensuring visibility to the daemon's
+sweep gate regardless of cwd. If not in a git repository, the cwd is used as fallback. This
+fixes the #486 regression where auto-park markers written from build agents in worktrees were
+invisible to the daemon's sweep gate.
+
+**Marker reconciliation at sweep start (#486):** At the top of every daemon sweep,
+`reconcileStrandedParkMarkers()` scans `.worktrees/*/‌.daemon/parked/` for markers left by
+pre-#486 builds and moves them to the main repository root. Per-marker failures (permission
+denied, I/O errors) are logged and skipped; the function does not throw. This enables seamless
+transition when the #486 fix is deployed to a repo with existing stranded worktree markers.
+Idempotent: a second run finds no markers left to move (no-op).
+
 `daemon park <slug>` validates the slug against known units of work first: it requires either
 `.docs/plans/<slug>.md` or `.worktrees/<slug>` to exist, so a typo'd or stale slug fails loudly
 (`error: slug '<slug>' not found in plans/ or worktrees/`) instead of silently parking nothing.
+On successful park, it echoes the absolute marker path to stdout: `Marked for park: <absolute-path>`.
 
 **Operator-parked vs. HALTed — these are different states.** A HALT (`.pipeline/HALT`) is written
 by the pipeline itself on a kickback cap, an unresolvable gate, or an unexpected throw — it's a
@@ -1611,6 +1997,23 @@ pipeline or by resolving a HALT: clearing a HALT does not unpark a slug, and par
 not touch its HALT marker. While parked, the daemon treats the slug as ineligible for both
 **dispatch** (no new BUILD/SHIP work starts) and **re-kick** (a parked slug's REKICK sentinel is
 preserved untouched, so unparking resumes re-dispatch exactly where re-kick would have left it).
+The park predicate is checked at `pickEligible` selection *and again, immediately before dispatch*
+via `guardedDispatch`/`guardedDispatchWith` (`engine/daemon.ts`) — closing a race where a marker
+written in the window between selection and dispatch (e.g. during
+`rebuildAndMaybeRestartForStaleEngine`) would otherwise be dispatched anyway. A grep-enumeration
+regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
+guarded this way.
+
+**Unpark counter reset (#486, #667):** `daemon unpark` resets the no-evidence attempt counter
+(`noEvidenceAttempts`/`noEvidenceReasons`) in the feature's `.worktrees/<slug>/` (or the main
+root if the worktree is absent) regardless of the marker's provenance — both an auto-parked
+feature (provenance: `auto`) and an operator-parked feature (provenance: `operator`) get a
+fresh no-evidence budget on unpark, so re-dispatch resumes normal re-kick flow without being
+immediately re-parked on stale counts. Because the counter can now carry over from a prior
+park/unpark cycle, the auto-park halt message distinguishes a budget **inherited** from an
+earlier cycle from **fresh** failures accumulated since the last unpark, so an operator reading
+the halt reason can tell whether the trigger reflects new evidence misses or leftover count from
+before the last unpark.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,
@@ -1848,8 +2251,188 @@ SIGINT/SIGTERM handlers trigger a best-effort flush within this bound.
 | `engine/otel/transport.ts` | OTLP HTTP, gRPC, and file exporters |
 | `engine/otel/resource.ts` | OTel Resource with conductor attributes |
 
+### Progress-aware build halt (`build_progress_halt`, #280)
+
+Previously the build retry loop halted a step purely on a fixed attempt budget
+(`stepMaxRetries`), even when each attempt was resolving additional tasks — a build making
+real forward progress could be marked `failed`/parked at the same threshold as a build that
+was completely wedged. The retry loop now treats the forward-progress delta as the primary
+continue/halt signal, with the attempt ceiling kept as an absolute backstop.
+
+**Ground truth.** Per-attempt progress is read from `task-status.json` (via the existing
+`countResolvedTasks` / `task-progress.ts countFromParsed` helpers) and persisted across
+dispatches as `lastResolvedCount` on the `TaskEvidence` sidecar (`task-evidence.ts`),
+stamped at every build-step exit path (success, park, ceiling) so a later dispatch or daemon
+tick can tell whether the run advanced since it last looked. Both reads degrade tolerantly —
+a missing/corrupt `task-status.json` or sidecar (`readLastResolvedCount`) is treated as zero
+progress / no change rather than throwing, so a bad artifact routes to the existing
+zero-progress path instead of crashing the loop or the daemon tick.
+
+**Within-dispatch progress-bypass gate** (`conductor.ts`, build branch of the retry loop).
+When an attempt's completion-gate miss coincides with `resolvedTasksAfter >
+resolvedTasksBefore`, the loop re-dispatches without counting the attempt toward
+`stepMaxRetries` halt/park, and resets `noEvidenceAttempts` as it already did. A separate
+bounded progress-attempt counter (distinct from `stepMaxRetries`) tracks these attempts; once
+it reaches `attempt_ceiling` the run parks with an explicit reason ("build progressing but
+hit absolute attempt ceiling N") rather than the misleading zero-progress "tasks not
+completed" wording. The zero-progress branch (`resolvedTasksAfter <= resolvedTasksBefore`) is
+untouched — `noEvidenceAttempts` still increments and `checkAndAutoPark` still parks at the
+same threshold as before this change.
+
+**Cross-dispatch progress-gated re-kick** (`daemon.ts` idle/poll tick). A parked/halted build
+whose sidecar shows the last dispatch ended with a higher resolved count than it started
+(`lastResolvedCount` progress) becomes re-kick-eligible even without a base-sha advance,
+dispatched through the same idle-loop path — no parallel wake mechanism. This is bounded per
+spec by `dispatch_ceiling`; once a spec's progress-gated re-kick count reaches the ceiling,
+re-kicking stops with a distinct logged reason, but the spec is left otherwise untouched —
+it's still eligible for the normal base-advance `rekickSweep` or a manual operator unpark. The
+re-kick path is routed through the existing `started`/`parked`/`isParked`/`isHalted` guards
+(`daemon.ts`), so a slug already live in the `started` set is never double-dispatched.
+
+**Config (`pipeline.yml` / `harness-config.ts` `build_progress_halt:` key):**
+
+```yaml
+build_progress_halt:
+  enabled: true        # default true; false is an exact revert to the pre-#280 fixed-budget halt
+  attempt_ceiling: 30   # default 30; must be >= the resolved max_retries (validated)
+  dispatch_ceiling: 20  # default 20; per-spec cap on cross-dispatch progress-gated re-kicks
+```
+
+Validation (`engine/config.ts validateConfig` / `validateBuildProgressHaltBlock`): unknown
+keys are rejected; `enabled` must be boolean; `attempt_ceiling`/`dispatch_ceiling` must be
+positive integers; `attempt_ceiling` below the resolved `max_retries` is rejected (an
+attempt-ceiling that undercuts a step's own retry budget could fire the halt/park decision
+before a single step exhausted its retries). Defaults live in
+`BUILD_PROGRESS_HALT_DEFAULTS` (`engine/config.ts`).
+
+**Kill switch.** `build_progress_halt.enabled: false` makes the progress-bypass gate and the
+progress-gated re-kick fully inert — behavior is exactly today's fixed-budget halt, with no
+other code path change.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `BuildProgressHaltConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `build_progress_halt:` block, `BUILD_PROGRESS_HALT_DEFAULTS` |
+| `engine/task-evidence.ts` | `lastResolvedCount` sidecar field, tolerant `readLastResolvedCount` accessor |
+| `engine/conductor.ts` | Within-dispatch progress-bypass gate + attempt-ceiling backstop; stamps `lastResolvedCount` at every build-step exit path |
+| `engine/daemon.ts` | Cross-dispatch progress-gated re-kick eligibility, per-spec `dispatch_ceiling` bound, double-dispatch guard integration |
+
+Tests: `test/acceptance/daemon-halts-a-build-that-is-making-forward-progre.acceptance.test.ts`
+(S1–S8), plus the unit-level config validation and sidecar round-trip tests exercised by T1–T12.
+
+### Kickback→build no-op escalation (`kickback_escalation`, #647)
+
+Previously a kickback→build re-entry (e.g. from `as-built` architecture review or
+`prd-audit`) could loop silently: `planRemediation` routed back to BUILD whenever the gate had
+fixes to make, even when the target task's evidence was already stamped and there was no
+dispatchable work — and a build cycle that made zero net progress against an unchanged gate
+verdict would keep re-kicking toward `MAX_KICKBACKS_PER_GATE` instead of surfacing the stall.
+
+**D1 — route-into-no-op guard (`planRemediation`, fail-closed, not gated by config).**
+`planRemediation` recomputes build completion after append+re-seed and HALTs with the gap
+ledger when there is no dispatchable build work, instead of unconditionally routing.
+
+**D2 — zero-progress/unchanged-verdict escalation (kickback→build re-entry).** The daemon
+captures a pre-kickback baseline (HEAD sha, resolved-task count) keyed by the source gate
+immediately before a `navigateBack(..., 'build', ...)`. The next time that same gate fails
+again, `shouldEscalateKickback` (`engine/kickback-escalation.ts`) compares the baseline
+against the post-build state: if the build produced no HEAD movement and no resolved-count
+increase (`classifyBuildProgress` returns `'no-work'`) AND the gate's verdict is unchanged, the
+loop HALTs on the first such cycle with a reason naming the unchanged input, instead of
+re-kicking toward the cap.
+
+**D3 — audit-trail discriminator.** The kickback audit event carries a `kickback_outcome` of
+`'did-work'` or `'derived-already-complete'` so the trail distinguishes a genuine self-heal
+cycle from a kickback resolved without a build ever running.
+
+**Config (`pipeline.yml` / `harness-config.ts` `kickback_escalation:` key):**
+
+```yaml
+kickback_escalation:
+  enabled: true   # default true; false reverts D2 to the pre-#647 re-kick-until-cap behavior
+```
+
+Validation (`engine/config.ts validateConfig`): total, fail-safe resolution mirroring
+`ci_watch` — absent, malformed, non-object, or unknown-key input all resolve to
+`{ enabled: true }` without a warning; only `{ enabled: true|false }` is passed through as
+given.
+
+**Kill switch.** `kickback_escalation.enabled: false` makes the D2 zero-progress escalation
+check in `conductor.ts` (`kickbackEscalationEnabled`) fully inert, reverting to the prior
+re-kick-until-`MAX_KICKBACKS_PER_GATE` behavior. D1 is fail-closed correctness and is never
+gated by this flag — it stays active regardless.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `KickbackEscalationConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `kickback_escalation:` block (total, fail-safe) |
+| `engine/kickback-escalation.ts` | Pure `classifyBuildProgress` / `shouldEscalateKickback` helpers |
+| `engine/conductor.ts` | D1 route-into-no-op guard in `planRemediation`; D2 escalation wiring at kickback→build re-entry; D3 `kickback_outcome` audit-trail discriminator |
+
+Tests: `test/acceptance/kickback-build-noop-escalation.acceptance.test.ts`,
+`test/engine/kickback-escalation.test.ts`, `test/kickback-escalation-config.test.ts`.
+
 Tests: `test/engine/otel/`, `test/integration/otel-observability.test.ts`,
 `test/integration/otel-exporter.test.ts`, `test/integration/otel-disabled-noop.test.ts`.
+
+### Rerun-vs-route retry classifier (`retry_routing`, #646)
+
+The SHIP-tail verdict steps (`architecture_review_as_built`, `build_review`, `prd_audit`) used to
+have only one short-circuit: a blocking `prd_audit` verdict routed into `/remediate` on the very
+first attempt, while the other two verdict steps burned their full `stepMaxRetries` budget on a
+rerun even when the artifact evidence made it obvious a rerun could never change the outcome
+(e.g. a fresh `BLOCKED` as-built verdict, or a `build_review` `FAIL` that's byte-identical to the
+prior attempt with nothing in the tree having changed). `classifyRetryDecision` (`engine/
+artifacts.ts` facet + `engine/conductor.ts` seam) generalizes that short-circuit to all three
+verdict steps in daemon mode.
+
+**The rerun-vs-route rule.** On a completion-check miss for a verdict step, the classifier routes
+immediately instead of rerunning when either signal fires:
+
+- **(a) named-route** — the completion predicate itself names a fresh, parsed adverse verdict
+  (`routeClass: 'named-route'` on `CompletionResult`, e.g. a fresh as-built `BLOCKED` or a fresh
+  `build_review` `FAIL`; equivalently a non-clean `classifyPrdAuditGaps` result for `prd_audit`).
+  This is a fixable-signal reason to route on attempt 1 — the verdict already told us what's
+  wrong and rerunning the grader with nothing changed won't tell us anything new.
+- **(b) identical-repeat** — attempt ≥ 2, the completion-check `reason` is byte-identical to the
+  prior attempt's, *and* both the HEAD commit sha and the verdict artifact's mtime are unchanged
+  since the prior attempt. This catches the case where the predicate didn't name a route (e.g. an
+  absent/malformed verdict) but the grader is provably re-reporting the exact same failure against
+  unchanged inputs — rerunning again would just burn the retry budget for the same result.
+
+Anything else (an absent/malformed verdict on attempt 1, or a same-reason repeat where the inputs
+actually changed) still reruns, matching pre-#646 behavior. Routing reuses the existing
+`planRemediation`/kickback path (and its `MAX_KICKBACKS_PER_GATE` budget) unchanged — the
+classifier only decides *when* to hand off to that path, not how it routes.
+
+**Config (`pipeline.yml` / `harness-config.ts` `retry_routing:` key):**
+
+```yaml
+retry_routing:
+  enabled: true   # default true
+```
+
+**Kill switch.** `retry_routing.enabled: false` is an *exact revert* to the pre-#646 behavior: only
+the original `prd_audit`-only short-circuit runs (a blocking `prd_audit` verdict still routes on
+attempt 1), and `architecture_review_as_built`/`build_review` burn their full retry budget before
+routing at `step_failed`, exactly as before this feature. No `retry_decision` telemetry is emitted
+while disabled.
+
+#### Implementation files
+
+| File | Responsibility |
+|---|---|
+| `types/config.ts` | `RetryRoutingConfig` type on `HarnessConfig` |
+| `engine/config.ts` | Validate + resolve `retry_routing:` block, `RETRY_ROUTING_DEFAULTS` |
+| `engine/artifacts.ts` | `routeClass` facet on `CompletionResult` for the as-built/build_review verdict predicates; `classifyRetryDecision` pure helper (rerun vs. route + signal) |
+| `engine/conductor.ts` | Retry-loop seam: computes `inputsUnchanged`/`prdAuditNonClean`, calls the classifier, emits `retry_decision`, threads the unchanged-input note into a routed HALT reason |
+
+Tests: `test/integration/retry-classify.test.ts`, plus unit coverage in `test/engine/artifacts.test.ts`
+and `test/engine/config*.test.ts`.
 
 ### Bootstrap-mode skip
 
@@ -2212,9 +2795,27 @@ places a different provenance marker and serves a different purpose (manual hold
 are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
 (machine-triggered after N attempts) while operator park is human-triggered.
 
+**Verify-only naming in the reason (#677):** when the unresolved residue at
+park time is (or includes) tasks marked `**Verify-only:** yes`, the auto-park
+reason is enriched with an ` — unresolved verify-only tasks: <ids>` suffix
+naming those specific task ids, instead of leaving the operator to guess which
+task stranded the build from the generic "no evidence after N attempts"
+message. Mixed residue keeps the generic reason and lists the verify-only ids
+alongside it; a park with no marked tasks in the unresolved set is
+byte-identical to today. See `daemon-auto-park.ts` (reason assembly) and
+`engine/conductor.ts` (unresolved-id collection).
+
+**Contradiction guard (#612):** Before honoring an `'empty plan'` trigger, the daemon
+cross-checks the run's own completion evidence — `summary.json` `tasks_completed`,
+task-evidence stamps, or resolved tasks. If that evidence is non-zero, the empty/missing
+plan reading contradicts what the run itself already recorded, so the daemon refuses the
+immediate empty-plan park, emits a `ConductorEvent` of type `auto_park_contradiction`
+(with a loud log line), and falls back to the durable no-evidence-attempts counter instead
+of trusting the potentially-stale plan-emptiness signal.
+
 Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
-trigger check), `engine/daemon-park-cli.ts` (unpark subcommand), `daemon-dashboard.ts`
-(provenance display).
+trigger check + contradiction guard), `engine/daemon-park-cli.ts` (unpark subcommand),
+`daemon-dashboard.ts` (provenance display).
 
 ### Remediation (agentic gap routing)
 
@@ -2326,6 +2927,13 @@ the Phase 9.3b github-issues intake — see below). `land`/`handoff` accept an o
 <owner/repo#N>` so an intake-originated idea reports back to its issue. The bare launcher also
 accepts an idea directly: `conduct-ts engineer "<idea>"` (or `--idea "<idea>"`) drives one specific
 idea and skips the intake poll.
+
+**Subcommand `--help`/`-h` and unknown-flag rejection.** Every `conduct-ts engineer <subcommand>`
+(including `resolve` and `migrate-issue-deps`) short-circuits on `--help`/`-h`: it prints usage text
+for that subcommand and exits **with zero side effects** — no registry read, no worktree/ledger
+mutation, no `gh` call — instead of executing the subcommand. An unrecognized flag passed to any
+`engineer` subcommand is now **rejected** (exit 1, clear stderr, zero state mutation) rather than
+being silently ignored, matching the top-level unknown-option guard described below.
 
 **Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
 dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
@@ -2692,6 +3300,68 @@ work it depends on.
   WAITING (daemon) or deferred (intake claim), not dispatched or built; a malformed or
   unreadable dependency marker can only make a spec wait longer, never jump the queue or build
   early.
+
+#### Intake-only criteria enforcement (priority + size + dependency-linking)
+
+Priority and size are the two labels the daemon backlog needs to schedule a spec (see
+`PRIORITY_BAND_RANK` above and `parsePriorityLabels`/`parseSizeLabel` in
+`engine/backlog-priority.ts`); dependency-linking is what the blocker resolver above walks.
+This feature (#695) stamps all three **at intake capture time only** — the daemon build
+gate, `dependency-claim.ts`, and `github-issues.ts`'s `poll()` are untouched, so a
+missing/malformed label can only ever cause an intake-time default, never a downstream
+build failure or HALT.
+
+- **`parseSizeLabel` (`engine/backlog-priority.ts`).** Closed-vocabulary parser beside
+  `parsePriorityLabels`: matches exactly `^size: (S|M|L)$` (case-sensitive, no partial
+  matches), and when an issue carries more than one `size:` label, largest wins (`L` > `M` >
+  `S`).
+- **Required form fields (`.github/ISSUE_TEMPLATE/intake.yml`).** `Priority`
+  (`critical`/`high`/`medium`/`low`) and `Size` (`S`/`M`/`L`) are now required dropdowns; an
+  optional free-text `Depends on` field accepts issue numbers or "none".
+- **`intake-label-sync` Action (`.github/workflows/intake-label-sync.yml`, triggered on
+  `issues: [opened, edited]`).** Parses the submitted form body (issue-form submissions
+  render each field's label as an `### <Label>` heading) and stamps the matching
+  `priority:`/`size:` labels plus one `blocked_by:#N` label per declared dependency,
+  defaulting to `priority: medium` / `size: M` on unparsable or missing input. Backed by
+  `syncIssueLabels()` (`engine/engineer/intake/label-sync.ts`), wired to the live workflow
+  via `scripts/intake-label-sync-apply.mts`. **Isolation:** `issues: write` / `contents:
+  read` permissions only, `continue-on-error: true` at the workflow level, and
+  `syncIssueLabels()` catches all errors internally and always resolves — a label-sync
+  failure can never fail this workflow or block `ci.yml` (they are entirely separate
+  workflows; this one never touches `ci.yml`). **Idempotent:** diffs the desired label set
+  against the issue's current labels and only calls the "set labels" REST endpoint when they
+  differ, so re-edits never duplicate labels.
+- **`bin/intake-file` (`src/intake-file` wraps `fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`).** Files an issue with priority/size/dependency
+  linking applied in one atomic operation, for filing from the CLI instead of the web form:
+  ```
+  bin/intake-file --title "..." --body "..." [--size S|M|L]
+    [--priority critical|high|medium|low] [--depends-on owner/repo#N] [--repo owner/repo]
+  ```
+  Resolution order for size/priority: explicit flag ▸ interactive prompt (only when stdin
+  and stdout are both a TTY) ▸ inferred from the body ▸ defaulted. `--depends-on` may be
+  passed multiple times; omitting it in an interactive session prompts for and records an
+  explicit "no dependencies" acknowledgement rather than leaving the field silently blank.
+  Exit code is 0 once the issue itself is created — a label-apply or dependency-link failure
+  after that point is reported as a warning on stdout/stderr, never turned into a non-zero
+  exit or a failed filing.
+- **`bin/intake-backfill` (`src/intake-backfill-cli.ts` wraps `backfillIntakeLabels()` in
+  `engine/engineer/intake/backfill.ts`).** One-shot, non-interactive sweep for issues filed
+  before this feature existed or filed by hand (`gh issue create`, bypassing
+  `bin/intake-file`):
+  ```
+  bin/intake-backfill --repo owner/repo
+  ```
+  Lists open issues assigned to the authenticated `gh` user (`gh issue list --assignee @me
+  --state open --json number,body,labels -R <repo>`, matching the idiom `github-issues.ts`'s
+  `poll()` already uses), backfills any missing `size:`/`priority:` label (infer from body ▸
+  default) via `backfillIntakeLabels()`, and prints an operator report via
+  `renderBackfillReport()` (labelled/skipped/failed breakdown). A per-issue failure is
+  isolated inside `backfillIntakeLabels()` and never aborts the sweep or the process; only a
+  top-level failure (e.g. the initial issue-list call itself) sets a non-zero exit code. Idempotent
+  and safe to re-run; an operator runs it once when adopting this feature to catch up the
+  pre-existing backlog, and again any time issues accumulate outside `bin/intake-file`/the web
+  form.
 
 #### Daemon liveness (pidfile-lock)
 

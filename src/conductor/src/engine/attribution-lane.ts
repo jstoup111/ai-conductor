@@ -27,7 +27,7 @@ import { makeGitRunner, type GitRunner } from './rebase.js';
 import { createTaskEvidence, writeJudgedStamps } from './task-evidence.js';
 import { parseAttributionVerdict } from './attribution-verdict.js';
 import { validateCitations } from './attribution-validate.js';
-import { parsePlanTaskPaths } from './autoheal.js';
+import { parsePlanTaskPaths, parsePlanTaskVerifyOnly } from './autoheal.js';
 
 /**
  * Verifier dispatch options.
@@ -82,7 +82,7 @@ interface AttributionMemo {
  * @param residueIds - Task IDs to sort and join
  * @returns Memoization key
  */
-function computeMemoKey(headSha: string, residueIds: string[]): string {
+export function computeMemoKey(headSha: string, residueIds: string[]): string {
   const sorted = [...residueIds].sort();
   return `${headSha}:${sorted.join(',')}`;
 }
@@ -109,7 +109,7 @@ async function getCurrentHeadSha(git: GitRunner): Promise<string> {
  * @param expectedKey - Expected memoization key
  * @returns Memoized result or undefined
  */
-async function readMemo(memoPath: string, expectedKey: string): Promise<string | undefined> {
+export async function readMemo(memoPath: string, expectedKey: string): Promise<string | undefined> {
   try {
     const content = await readFile(memoPath, 'utf-8');
     const memo: AttributionMemo = JSON.parse(content);
@@ -130,7 +130,7 @@ async function readMemo(memoPath: string, expectedKey: string): Promise<string |
  * @param key - Memoization key
  * @param result - Verifier output
  */
-async function writeMemo(memoPath: string, key: string, result: string): Promise<void> {
+export async function writeMemo(memoPath: string, key: string, result: string): Promise<void> {
   const pipelineDir = dirname(memoPath);
   try {
     await mkdir(pipelineDir, { recursive: true });
@@ -139,6 +139,71 @@ async function writeMemo(memoPath: string, key: string, result: string): Promise
   } catch {
     // Memo write failure is not critical; silently continue
   }
+}
+
+/**
+ * Re-key an existing memo entry after a rebase translates commit SHAs.
+ *
+ * If the memo's cached verdict is still valid under the new HEAD — i.e. none
+ * of the judged commits it cites fell into the rebase's sha-residue/unmapped
+ * set — translate the `anchor.head` field to the new HEAD and rewrite the
+ * memo under the recomputed key (`computeMemoKey(newHead, residueIds)`) so a
+ * subsequent `readMemo` hits without forcing an unnecessary re-judge.
+ *
+ * If any judged commit referenced by the memo entry IS in `shaResidue`, the
+ * memo is left untouched — it will miss on next read (old key no longer
+ * matches new HEAD) and be re-judged.
+ *
+ * @param projectRoot - Project root directory (memo lives at
+ *   `<projectRoot>/.pipeline/attribution-memo.json`)
+ * @param map - Rewrite map from old SHAs (commits and HEAD) to new SHAs
+ * @param oldHead - Pre-rebase HEAD SHA
+ * @param newHead - Post-rebase HEAD SHA
+ * @param residueIds - Pending task IDs used for the #520 memo-key convention
+ *   (`computeMemoKey`) — NOT commit SHAs.
+ * @param shaResidue - Commit SHAs dropped/unmapped by the rebase (the real
+ *   sha-residue set). Used only for the safety guard below: if a judged
+ *   commit cited by the cached memo is in this set, the memo is left alone
+ *   rather than re-keyed onto the new HEAD.
+ */
+export async function rekeyMemoAfterRebase(
+  projectRoot: string,
+  map: Record<string, string>,
+  oldHead: string,
+  newHead: string,
+  residueIds: string[],
+  shaResidue: string[],
+): Promise<void> {
+  const memoPath = join(projectRoot, '.pipeline', 'attribution-memo.json');
+  const oldKey = computeMemoKey(oldHead, residueIds);
+  const cached = await readMemo(memoPath, oldKey);
+  if (cached === undefined) {
+    return;
+  }
+
+  let parsed: { anchor?: { head?: string }; results?: Array<{ citations?: Array<{ sha?: string }> }> };
+  try {
+    parsed = JSON.parse(cached);
+  } catch {
+    return;
+  }
+
+  // If any judged commit cited in the memo is itself part of the sha
+  // residue set, leave the memo alone so it misses and gets re-judged.
+  const residueSet = new Set(shaResidue);
+  const citedShas = (parsed.results ?? []).flatMap((r) =>
+    (r.citations ?? []).map((c) => c.sha).filter((sha): sha is string => Boolean(sha)),
+  );
+  if (citedShas.some((sha) => residueSet.has(sha))) {
+    return;
+  }
+
+  if (parsed.anchor) {
+    parsed.anchor.head = newHead;
+  }
+
+  const newKey = computeMemoKey(newHead, residueIds);
+  await writeMemo(memoPath, newKey, JSON.stringify(parsed));
 }
 
 /**
@@ -431,6 +496,19 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     // Load the plan to extract task paths for citation validation
     const planText = await readFile(planPath, 'utf-8');
     const planTaskPaths = parsePlanTaskPaths(planText);
+    // Task 4 (verify-only-prove-closed-task-evidence): a verify-only task
+    // legitimately has no dedicated commit of its own — its citation proves
+    // closure via evidence that lives on a DIFFERENT task's files (that's
+    // the entire point of "prove closed"). Requiring the citation to
+    // overlap this task's own declared `Files:` lines would defeat the
+    // feature, so the path-overlap check (attribution-validate.ts Check 5)
+    // is relaxed ONLY for verify-only tasks by passing an empty paths set.
+    // Existence, ancestry, non-empty, and not-bookkeeping stay fully
+    // enforced (adr-2026-07-17-verify-only-judged-closure.md Decision 2:
+    // "existing + ancestry, reusing the lane's validation") — forged and
+    // non-ancestor citations are still refused (Task 5's adversarial scope
+    // is untouched).
+    const verifyOnlyMap = parsePlanTaskVerifyOnly(planText);
 
     // Extract unsatisfied verdicts and their reasons
     const unsatisfied = new Map<string, string>();
@@ -453,7 +531,10 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
 
         // Validate citations against the task's declared paths
         if (Array.isArray(citations) && citations.length > 0 && testEvidence) {
-          const taskPaths = planTaskPaths.get(taskId) ?? new Set<string>();
+          const taskPaths =
+            verifyOnlyMap.get(taskId) === true
+              ? new Set<string>()
+              : planTaskPaths.get(taskId) ?? new Set<string>();
           const normalizedCitations = citations.map((c: unknown) => {
             const cObj = c as Record<string, unknown>;
             return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };

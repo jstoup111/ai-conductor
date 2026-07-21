@@ -33,6 +33,26 @@ export type ConductorEvent =
       reason: string;
       resolvedBefore?: number;
       resolvedAfter?: number;
+      /**
+       * #188 retry-as-escalation: the (model, effort) the UPCOMING attempt
+       * (`attempt` above) will dispatch at, per the escalation ladder. Absent
+       * on a `escalate:false` step (identical retry — no movement to record) and
+       * on pre-#188 event logs (backward-compatible; `aggregateRetryHotspots`
+       * tolerates their absence).
+       */
+      escalatedModel?: string;
+      escalatedEffort?: string;
+    }
+  | {
+      // #646: rerun-vs-route classification, emitted on every classifier-
+      // covered completion-gate miss (verdict steps only) so the audit log
+      // can pair a decision with the outcome event that follows it.
+      type: 'retry_decision';
+      step: StepName;
+      attempt: number;
+      decision: 'rerun' | 'route';
+      signal?: 'named-route' | 'identical-repeat';
+      unchangedInput?: string;
     }
   | { type: 'checkpoint_reached'; step: StepName }
   | { type: 'recovery_needed'; step: StepName; options: RecoveryOption[] }
@@ -46,6 +66,22 @@ export type ConductorEvent =
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
+  | {
+      /**
+       * Emitted after a verdict-consuming completion check
+       * (architecture_review_as_built, prd_audit, build_review) runs, so the
+       * audit trail records whether the verdict artifact was actually
+       * (re)written by the current attempt/session (Task 2,
+       * session-fresh-verdict-artifacts).
+       */
+      type: 'verdict_freshness';
+      step: StepName;
+      artifact: string;
+      fresh: boolean;
+      floorSource: 'attempt' | 'session';
+      mtimeMs?: number;
+      floorMs?: number;
+    }
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';
@@ -120,6 +156,29 @@ export type ConductorEvent =
       branch: string;
       error: string;
     }
+  | {
+      /**
+       * Task 25 (attribution and phantom-member absence): a single group
+       * member's own step dispatch/outcome, emitted from the group-core
+       * branch executor (group-core.ts:runGroupBranch) rather than the
+       * conductor's per-step machinery — so an observer can tell WHICH
+       * validator branch a given dispatch/outcome belongs to, without
+       * relying on step-name-only events that a group's members would
+       * otherwise share ambiguously with a serial dispatch of the same
+       * step name. Never emitted for a member that was never dispatched
+       * (a `SkippedOutcome` member) — only members that actually reached
+       * `runGroupBranch` produce this event.
+       */
+      type: 'group_member_step';
+      /** The member (branch) name this event is attributed to. */
+      member: string;
+      /** The skill dispatched for this member. */
+      skill: string;
+      /** 'dispatch' when the branch is about to call the step runner; 'result' once its outcome is known. */
+      phase: 'dispatch' | 'result';
+      /** Present when phase === 'result': the classified outcome (see classifyOutcome in group-core.ts). */
+      outcome?: string;
+    }
   // ── Gate-driven loop (Phase 5 observability) ──
   | {
       /** A gate's objective verdict was (re)computed by the loop. */
@@ -138,6 +197,15 @@ export type ConductorEvent =
       evidence?: string;
       /** How many times this gate has been re-opened this feature. */
       count: number;
+      /**
+       * #647 D3 (adr-2026-07-13-kickback-build-no-op-escalation): audit
+       * discriminator distinguishing a kickback that produced real build
+       * progress (`'did-work (commits N..M / resolved +K)'`, derived from
+       * `classifyBuildProgress`) from one whose target was already
+       * evidence-complete before build ever ran (`'derived-already-complete'`).
+       * Absent when neither classification has been computed for this event.
+       */
+      kickback_outcome?: string;
     }
   | {
       /** The gate loop stopped without converging (kickback/stuck cap). */
@@ -182,6 +250,15 @@ export type ConductorEvent =
       reason: string;
       conflicts: string[];
     }
+  | {
+      /**
+       * Residue: pre-image shas cited by evidence but with no patch-id
+       * match post-rebase (dropped or content-changed). Surfaced instead of
+       * silently repointed — see `writeResidue` in engine/rebase-translate.ts.
+       */
+      type: 'rebase_citation_residue';
+      residue: Array<{ sha: string; citingTaskIds: string[]; reason: string }>;
+    }
   // ── Rebase auto-resolution lifecycle (Phase 9 / rebase-resolution) ──
   | {
       /** One attempt at auto-resolving a conflict; index is 1-based, cap is the total budget. */
@@ -208,6 +285,22 @@ export type ConductorEvent =
       slug: string;
       reason: string;
     }
+  | {
+      /**
+       * The daemon REFUSED an `empty/missing plan` auto-park because the
+       * run's own completion evidence contradicts it (#612 contradiction
+       * guard). Named loudly so the refusal is impossible to miss in the
+       * daemon log.
+       */
+      type: 'auto_park_contradiction';
+      slug: string;
+      verdict: 'empty/missing plan';
+      evidence: {
+        summaryTasksCompleted: number;
+        evidenceStamps: number;
+        resolvedTasks: number;
+      };
+    }
   // ── #505 TS-15: zero-work-product detection ──
   | {
       /**
@@ -220,6 +313,18 @@ export type ConductorEvent =
       step: StepName;
       dispatchCount: number;
       headSha: string | null;
+    }
+  // ── Task 3 (#671): unattributed-dispatch loud signal ──
+  | {
+      /**
+       * A build dispatch cycle's `.pipeline/dispatch-count` crossed the
+       * unattributed-dispatch threshold — distinct from and earlier than
+       * `zero_work_product`. Emitted at the build seam itself, not deferred
+       * to the evidence gate.
+       */
+      type: 'unattributed_dispatch';
+      step: StepName;
+      unattributedCount: number;
     }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {

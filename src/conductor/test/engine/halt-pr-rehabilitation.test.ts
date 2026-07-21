@@ -9,8 +9,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { retitleFloor, ensureShipReady } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  retitleFloor,
+  ensureShipReady,
+  rehabilitateHaltPr,
+  bodyFloor,
+  readStaleHaltBanner,
+} from '../../src/engine/halt-pr-rehabilitation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 
 function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -171,5 +178,184 @@ describe('ensureShipReady (Task 7)', () => {
     const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
 
     expect(result).toBe('partial');
+  });
+});
+
+describe('rehabilitateHaltPr — banner is a third stateless halt signal (Task 1)', () => {
+  it('treats a clean-titled, unlabeled PR whose body carries the halt banner as a halt PR (#610 shape)', async () => {
+    const bannerBody = [
+      'This PR was opened automatically after an irrecoverable daemon HALT.',
+      '',
+      'Manual remediation is required to unblock this feature.',
+      'See the comment below for the failure reason.',
+    ].join('\n');
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
+      { stdout: '' }, // cleanupHaltPresentation reads/edits
+      { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
+      { stdout: '' },
+    ]);
+
+    const result = await rehabilitateHaltPr({ gh, cwd: CWD, prUrl: PR_URL, sourceRef: null });
+
+    expect(result).not.toBe('not-halt-pr');
+    expect(bannerBody).toContain(HALT_PR_BANNER_SENTINEL);
+  });
+
+  it('returns not-halt-pr with zero mutation calls when there is no halt signal at all', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          title: 'feat: widget import flow',
+          isDraft: false,
+          labels: [],
+          body: '## Summary\n\nSome clean implementation PR body.\n\nCloses #7',
+        }),
+      },
+    ]);
+
+    const result = await rehabilitateHaltPr({ gh, cwd: CWD, prUrl: PR_URL, sourceRef: null });
+
+    expect(result).toBe('not-halt-pr');
+    // Only the initial gh pr view read — no label/title/body/comment mutation calls.
+    expect(calls.length).toBe(1);
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(calls.some((c) => c.includes('--add-label') || c.includes('--remove-label'))).toBe(false);
+    expect(calls.some((c) => c[0] === 'api')).toBe(false);
+  });
+});
+
+describe('bodyFloor (Task 2)', () => {
+  const BANNER_BODY = [
+    'This PR was opened automatically after an irrecoverable daemon HALT.',
+    '',
+    'Manual remediation is required to unblock this feature.',
+    'See the comment below for the failure reason.',
+  ].join('\n');
+
+  it('floors a banner-only body: adds Summary + feature desc + test evidence, removes sentinel', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // initial read
+      { stdout: '' }, // pr edit
+      { stdout: JSON.stringify({ body: '## Summary\n\nwidget import flow\n\n_Rehabilitated from a reused needs-remediation halt PR; halt history is preserved in the PR comments._\n\n## Test evidence\n\n- [x] 3/3 plan tasks completed with evidence-gated commits' }) }, // verify re-read
+    ]);
+
+    const result = await bodyFloor(gh, CWD, PR_URL, {
+      featureDesc: 'widget import flow',
+      testEvidenceLine: '3/3 plan tasks completed with evidence-gated commits',
+    });
+
+    expect(result).toBe('floored');
+    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
+    expect(editCall).toBeDefined();
+    const bodyArgIdx = editCall!.indexOf('--body');
+    expect(bodyArgIdx).toBeGreaterThanOrEqual(0);
+    const newBody = editCall![bodyArgIdx + 1];
+    expect(newBody).toContain('## Summary');
+    expect(newBody).toContain('widget import flow');
+    expect(newBody).toContain('## Test evidence');
+    expect(newBody).toContain('3/3 plan tasks completed with evidence-gated commits');
+    expect(newBody).not.toContain('This PR was opened automatically after an irrecoverable daemon HALT.');
+  });
+
+  it('removes only banner lines from a residue body, preserving skill-authored Summary and Closes', async () => {
+    const residueBody = [
+      '## Summary',
+      '',
+      'Existing skill-authored summary text.',
+      '',
+      BANNER_BODY,
+      '',
+      'Closes #7',
+    ].join('\n');
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: residueBody }) }, // initial read
+      { stdout: '' }, // pr edit
+      { stdout: JSON.stringify({ body: 'placeholder-without-sentinel' }) }, // verify re-read
+    ]);
+
+    const result = await bodyFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+
+    expect(result).toBe('floored');
+    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
+    const bodyArgIdx = editCall!.indexOf('--body');
+    const newBody = editCall![bodyArgIdx + 1];
+    expect(newBody).toContain('Existing skill-authored summary text.');
+    expect(newBody).toContain('Closes #7');
+    expect(newBody).not.toContain('This PR was opened automatically after an irrecoverable daemon HALT.');
+    expect(newBody).not.toContain('Manual remediation is required to unblock this feature.');
+    expect(newBody).not.toContain('See the comment below for the failure reason.');
+    // Only one Summary heading — the pre-existing one, not a duplicate.
+    const summaryOccurrences = (newBody.match(/## Summary/g) || []).length;
+    expect(summaryOccurrences).toBe(1);
+  });
+
+  it('returns not-halt-body and issues zero pr edit calls for a fresh (non-halt) body', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: '## Summary\n\nClean implementation body.\n\nCloses #7' }) },
+    ]);
+
+    const result = await bodyFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+
+    expect(result).toBe('not-halt-body');
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(calls.length).toBe(1);
+  });
+
+  it('returns partial after bounded retries when gh pr edit always fails, and never throws', async () => {
+    const logs: string[] = [];
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // initial read
+      { stdout: '' }, // attempt 1: edit
+      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 1: verify (still has sentinel)
+      { stdout: '' }, // attempt 2: edit
+      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 2: verify (still has sentinel)
+      { stdout: '' }, // attempt 3: edit
+      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 3: verify (still has sentinel)
+    ]);
+
+    const result = await bodyFloor(
+      gh,
+      CWD,
+      PR_URL,
+      { featureDesc: 'widget import flow' },
+      (msg) => logs.push(msg),
+      async () => {},
+    );
+
+    expect(result).toBe('partial');
+    const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
+    expect(editCalls.length).toBe(3);
+    expect(logs.length).toBeGreaterThan(0);
+  });
+});
+
+describe('readStaleHaltBanner (Task 2)', () => {
+  it('returns the sentinel when the body contains the halt banner', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: 'This PR was opened automatically after an irrecoverable daemon HALT.\n\nMore text.' }) },
+    ]);
+
+    const result = await readStaleHaltBanner(gh, CWD, PR_URL);
+
+    expect(result).toBe(HALT_PR_BANNER_SENTINEL);
+  });
+
+  it('returns null for a clean body', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: '## Summary\n\nClean body.' }) },
+    ]);
+
+    const result = await readStaleHaltBanner(gh, CWD, PR_URL);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null (fail-open) when gh errors', async () => {
+    const { gh } = fakeGh([new Error('gh: network error')]);
+
+    const result = await readStaleHaltBanner(gh, CWD, PR_URL);
+
+    expect(result).toBeNull();
   });
 });

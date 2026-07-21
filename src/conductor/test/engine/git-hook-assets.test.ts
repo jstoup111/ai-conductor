@@ -61,6 +61,27 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(/conduct-ts/);
     });
+
+    it('reconciles a self-stamped Task: trailer unconditionally, rather than early-exiting when one is already present (#reconciliation)', () => {
+      // Regression lock for the fix: the hook used to bail out early via
+      // `git interpret-trailers --parse ... | grep -q '^Task:' ... exit 0`
+      // as soon as ANY Task: trailer already existed in the message — even
+      // a stale/self-stamped one that no longer matched .pipeline/current-task.
+      // That old early-exit pattern must not reappear.
+      expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(
+        /grep -q '\^Task:'[^\n]*\n[^\n]*exit 0/
+      );
+
+      // The replacement behavior: unconditionally reconcile via
+      // `--if-exists replace` whenever TASK_ID is non-empty, so the
+      // engine's current-task id always wins over any prior trailer.
+      expect(PREPARE_COMMIT_MSG_HOOK).toMatch(
+        /git interpret-trailers --in-place --if-exists replace --trailer "Task: \$TASK_ID"/
+      );
+
+      // The guard must be scoped to "we have a task id", not "no trailer yet".
+      expect(PREPARE_COMMIT_MSG_HOOK).toMatch(/if \[\[ -n "\$TASK_ID" \]\]; then/);
+    });
   });
 
   describe('COMMIT_MSG_HOOK', () => {
@@ -216,6 +237,32 @@ describe('git-hook-assets — embedding hook scripts', () => {
     it('passes a trailer-less commit when the marker is absent (marker gates the check)', async () => {
       const res = await commitFile('c.txt', 'c', 'feat: pre-cutover behavior unchanged');
       expect(res.code).toBe(0);
+    });
+
+    it('does not stamp a guessed Task: trailer when .pipeline/current-task is absent (Story 3 abstention)', async () => {
+      // Regression for #671 Tasks 4/6: PREPARE_COMMIT_MSG_HOOK must abstain
+      // (add no trailer at all) when it has no unambiguous task id to work
+      // from, rather than guessing one. Assert on the full commit body, not
+      // just exit code, so a stray/guessed trailer would be caught.
+      const res = await commitFile('c2.txt', 'c2', 'feat: no stamp present, no trailer expected');
+      expect(res.code).toBe(0);
+      const body = await git('log', '-1', '--format=%B');
+      expect(body.stdout).not.toMatch(/^Task:/m);
+    });
+
+    it('reconciles a stale self-stamped Task: trailer to match .pipeline/current-task rather than leaving it as-is', async () => {
+      // Regression for Task 1: the old hook early-exited as soon as any
+      // Task: trailer was present, so a stale/self-stamped id (e.g. from a
+      // copy-pasted commit template) would survive unreconciled. The
+      // reconciled hook must always replace it with the engine's
+      // current-task id when one is set.
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'current-task'), '1\n', 'utf-8');
+      const res = await commitFile('f.txt', 'f', 'feat: reconcile stale trailer\n\nTask: 999');
+      expect(res.code).toBe(0);
+      const body = await git('log', '-1', '--format=%B');
+      expect(body.stdout).toMatch(/^Task: 1$/m);
+      expect(body.stdout).not.toMatch(/^Task: 999$/m);
     });
 
     it('rejects an unattributed commit made with git commit -m (direct form)', async () => {
@@ -385,6 +432,50 @@ describe('git-hook-assets — embedding hook scripts', () => {
     it('rejects an empty commit with the marker present, no Task: trailer, and no Evidence: satisfied-by trailer', async () => {
       await writeMarker();
       const res = await git('commit', '--allow-empty', '-m', 'feat: empty and unattributed');
+      expect(res.code).not.toBe(0);
+    });
+
+    it('lands an empty commit with a Task: trailer plus Evidence: skipped <reason> and no Evidence: satisfied-by', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped evidence with task trailer\n\nTask: 1\nEvidence: skipped covered by task 2 (a2cde88)',
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('rejects an empty commit with Evidence: skipped and an empty/whitespace-only reason', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped with blank reason\n\nTask: 1\nEvidence: skipped    ',
+      );
+      expect(res.code).not.toBe(0);
+    });
+
+    it('lands an empty commit with Evidence: skipped <reason> and no Task: trailer', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: skipped evidence, no task trailer\n\nEvidence: skipped covered by task 2 (a2cde88)',
+      );
+      expect(res.code).toBe(0);
+    });
+
+    it('still rejects an empty commit with an unresolvable Evidence: satisfied-by sha (unchanged behavior)', async () => {
+      await writeMarker();
+      const res = await git(
+        'commit',
+        '--allow-empty',
+        '-m',
+        'feat: unresolvable satisfied-by\n\nEvidence: satisfied-by 0000000000000000000000000000000000000000',
+      );
       expect(res.code).not.toBe(0);
     });
 

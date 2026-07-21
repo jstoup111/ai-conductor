@@ -24,12 +24,12 @@ hand — this skill is how.
 
 ## The Intake Shape
 
-Four sections. Two are required.
+Four sections. Three are required.
 
 | Section | Required | Contents |
 |---------|----------|----------|
 | **Observed** | yes | Evidence of the problem — verbatim artifacts, not narrative |
-| **Impact** | no (push for it) | Who or what hurts, how often, what it costs |
+| **Impact** | yes | One line minimum: who or what hurts, how often, what it costs / unblocks |
 | **Desired outcome** | yes | Observable behavior that must hold afterward |
 | **Hypotheses** | no | The filer's guesses about HOW — explicitly labeled as guesses |
 
@@ -94,10 +94,11 @@ Rules of thumb:
 - Long evidence (full logs, big diffs) goes in a `<details>` block or a gist link,
   with the load-bearing lines quoted inline.
 
-### 3. Write **Impact** — Who Hurts, How Often
+### 3. Write **Impact** — Who Hurts, How Often (REQUIRED)
 
-One short paragraph quantifying why this matters. This is what lets the operator
-assign a priority band honestly:
+**Required on every intake — one line minimum.** State the value of fixing it: who or
+what hurts, how often, and/or what it unblocks. This is what lets the operator assign
+a priority band honestly:
 
 ```markdown
 ## Impact
@@ -108,6 +109,10 @@ PR the operator must triage and close. Happened twice this week (#124, #131).
 
 If the honest answer is "minor annoyance, no data loss" — write that. Overstated
 impact erodes the priority bands for everything else.
+
+**Sizing is NOT prose — it's a label.** Do not write effort estimates into the body;
+apply exactly one `size: S` / `size: M` / `size: L` label instead (see §8). A very
+rough tier is all DECIDE needs: S ≈ ~1-2h, M ≈ ~half day to a day, L ≈ multi-day.
 
 ### 4. Write **Desired outcome** — Observable, Not Implementational
 
@@ -180,14 +185,26 @@ Keep it specific and under ~72 characters.
 3. **No HOW outside Hypotheses** — sweep for the leak signals in §5.
 4. **Claims are calibrated** — inferences and guesses are labeled as such, not stated
    as fact.
-5. **Impact is stated honestly** (or consciously omitted for trivial ideas).
+5. **Impact is stated honestly** — required, one line minimum; never omitted.
+6. **Size/priority are ready to hand to the filer**: either you've picked
+   `S`/`M`/`L` and (optionally) a priority tier to pass as flags in §8, or you're
+   content to let `bin/intake-file` infer/prompt/default them. Never hand-write a
+   size or priority as prose in the body — that discipline is now enforced by the
+   script, not the checklist.
 
 ### 8. File It
 
+Filing is not prose discipline — it is one atomic, deterministic operation run by
+`bin/intake-file` (`src/conductor/bin/intake-file`, backed by `fileIntakeIssue()`
+in `src/engine/engineer/intake/file-issue.ts`). It creates the issue, applies the
+`priority:`/`size:` labels, and records a `--depends-on` link — or an explicit
+"no dependencies" decision when `--depends-on` is omitted — in one call, so there
+is never a window where an issue exists unlabeled or with a silently-skipped
+dependency check.
+
 ```bash
-gh issue create \
+bin/intake-file \
   --title "<symptom-or-outcome title>" \
-  --assignee @me \
   --body "$(cat <<'EOF'
 ## Observed
 
@@ -195,7 +212,7 @@ gh issue create \
 
 ## Impact
 
-<who/what hurts, how often>
+<one line minimum: who/what hurts, how often, what fixing it unblocks>
 
 ## Desired outcome
 
@@ -208,19 +225,33 @@ Filer's guesses — DECIDE weighs alternatives and may discard these:
 
 - <guess>
 EOF
-)"
+)" \
+  --size M \
+  --priority high \
+  --depends-on owner/repo#123
 ```
 
-- **`--assignee @me` matters**: the engineer's intake poll only captures issues
-  assigned to the operator. An unassigned intake is invisible to the queue.
-- **Priority label** (optional, exact names): `priority: critical`, `priority: high`,
-  `priority: medium`, `priority: low`. Apply at create time with `--label`. If a label
-  must be changed later, note that `gh issue edit --add-label` is unreliable on repos
-  with classic Projects — use the REST endpoint instead:
-  `gh api repos/{owner}/{repo}/issues/<n>/labels -f "labels[]=priority: high"`.
-- Omitted sections (Impact/Hypotheses with nothing to say) are dropped entirely, not
-  left as empty headings.
-- After creating, output the issue URL.
+- **`--title` and `--body` are required**; the script exits non-zero without them.
+- **`--size S|M|L`** (optional): if omitted, the script prompts interactively when
+  attached to a TTY, otherwise infers from body wording, otherwise defaults to `M`
+  — always reported back as `size=<value> (<source>)` so the filer sees which path
+  was taken. Never write the size as prose in the body; let the flag/inference own it.
+- **`--priority critical|high|medium|low`** (optional): same prompt ▸ infer ▸
+  default resolution as size, reported as `priority=<value> (<source>)`.
+- **`--depends-on owner/repo#N`** (repeatable, optional): links a blocking issue.
+  Omitting it entirely is fine — the script records an explicit
+  `dependencies: none` rather than silently skipping the question, so "no
+  dependencies" is always a decision, never an omission.
+- **`--repo owner/repo`** (optional): target a repo other than the current one.
+- The script assigns the filer via the normal `gh issue create` invocation it
+  wraps; a label-apply or `--depends-on` link failure after successful issue
+  creation surfaces as a `[intake-file] warning: ...` line and does **not** fail
+  the filing (exit 0) — only a failure to create the issue itself is a hard error
+  (non-zero exit).
+- Impact is never omitted from the body. A Hypotheses section with nothing to say
+  is dropped entirely, not left as an empty heading.
+- After running, report the printed `[intake-file] filed: <url>` line (and any
+  warnings) to the operator.
 
 ## Worked Example — Bad vs Good
 
@@ -250,11 +281,11 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 
 ## Verify
 
-- [ ] Issue has Observed and Desired outcome sections; Impact/Hypotheses only if non-empty
+- [ ] Issue has Observed, Impact (one line minimum), and Desired outcome sections; Hypotheses only if non-empty
 - [ ] Observed leads with verbatim artifacts, each naming its source
 - [ ] Inferences and guesses are labeled, not stated as fact
 - [ ] Every outcome is observable without knowledge of the implementation
 - [ ] No fix directions, design sketches, or prescribed seams outside Hypotheses
 - [ ] Title states the symptom or outcome, not a solution
-- [ ] Filed with `--assignee @me`; priority label applied if warranted
+- [ ] Filed via `bin/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
 - [ ] Issue URL reported to the operator

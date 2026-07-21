@@ -20,7 +20,7 @@
 // `--out-dir <stagingDir>` and must exit 0 on success.
 
 import { execa } from 'execa';
-import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -40,6 +40,15 @@ const DEFAULT_TSUP_COMMAND = ['tsup'];
 // for and removes any directory still carrying this sentinel before doing
 // anything else. Best-effort/non-fatal — see `cleanupOrphanedStaging`.
 const INCOMPLETE_SENTINEL = '.publish-incomplete';
+
+// Sidecar file recording the source key (see `computeEngineSourceKey` in
+// engine-store.ts) a version was built from. Written only after finalize +
+// flip complete, in the same region that removes `INCOMPLETE_SENTINEL` —
+// mirroring that sentinel's "present only on a fully-published version"
+// precedent. Read by the pre-build skip check on the *next* publish to
+// decide whether the tsup build can be skipped entirely. Plan ref:
+// .docs/plans/engine-rebuild-content-cache.md, Design "Sidecar record".
+const SOURCE_KEY_SIDECAR = '.engine-source-key';
 
 // Re-exported so existing imports of `assertPublishWrapperEnv` from this
 // module (e.g. tests) keep working; the canonical implementation lives in
@@ -171,6 +180,11 @@ async function cleanupOrphanedStaging(opts) {
  * @property {Date} [now] - injectable build timestamp for `computeVersionId`.
  * @property {(cmd: string[], opts: { cwd: string }) => Promise<unknown>} [runCommand]
  *   - test seam replacing the underlying `execa` call entirely.
+ * @property {(o: { conductorRoot: string }) => Promise<string>} [computeSourceKey]
+ *   - test seam overriding the real `computeEngineSourceKey` helper from
+ *   engine-store.ts, parallel to `runCommand`/`tsupCommand`. Used both by the
+ *   pre-build skip check and to stamp the `.engine-source-key` sidecar on a
+ *   fresh publish.
  * @property {() => Promise<void>} [simulateCrashAfterFinalize] - test seam
  *   only. If provided, is awaited immediately after the staging dir has been
  *   finalized (renamed into `dist-versions/<id>/`, sentinel written) but
@@ -212,9 +226,16 @@ function resolveTsupCommand(opts) {
 export async function publish(opts) {
   const env = opts.env ?? process.env;
   const conductorRoot = resolve(opts.conductorRoot);
-  const { resolveEngineStoreRoot, computeVersionId, flipCurrent, gcVersions, currentTarget } =
-    await loadEngineStore();
+  const {
+    resolveEngineStoreRoot,
+    computeVersionId,
+    flipCurrent,
+    gcVersions,
+    currentTarget,
+    computeEngineSourceKey,
+  } = await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
+  const computeSourceKey = opts.computeSourceKey ?? computeEngineSourceKey;
 
   await migrateLegacyDistIfNeeded({
     conductorRoot,
@@ -227,6 +248,57 @@ export async function publish(opts) {
   // Recover from any previous publish that was killed between finalize and
   // flip before doing anything else (Task 9, FR-13 neg).
   await cleanupOrphanedStaging({ storeRoot });
+
+  // Pre-build source-cache skip (Design "Pre-build skip"): compare a hash of
+  // the engine build *inputs* against the key recorded for the current
+  // version, before ever invoking the (expensive) tsup build. Fail open on
+  // any doubt — missing/corrupt sidecar, no current version, or a throwing
+  // computeSourceKey all fall through to a normal build.
+  let precomputedSourceKey;
+  {
+    const current = await currentTarget(conductorRoot);
+    if (current) {
+      const currentDir = join(storeRoot, current);
+      let recordedKey;
+      try {
+        const raw = await readFile(join(currentDir, SOURCE_KEY_SIDECAR), 'utf-8');
+        recordedKey = raw.trim();
+      } catch {
+        recordedKey = undefined;
+      }
+
+      if (recordedKey) {
+        let computedKey;
+        try {
+          computedKey = await computeSourceKey({ conductorRoot });
+        } catch (err) {
+          console.error(
+            `[publish-engine] source-key computation failed (fail open, building): ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          computedKey = undefined;
+        }
+
+        if (computedKey && computedKey === recordedKey) {
+          const intact = await lstat(currentDir).then(
+            (s) => s.isDirectory(),
+            () => false,
+          );
+          if (intact) {
+            console.error(
+              `[publish-engine] engine source unchanged (${computedKey}) — build skipped, dist stays at ${current}`,
+            );
+            return { versionId: current, dir: currentDir };
+          }
+        } else if (computedKey) {
+          // Source changed; reuse the freshly-computed key below instead of
+          // recomputing it for the sidecar write after this build finishes.
+          precomputedSourceKey = computedKey;
+        }
+      }
+    }
+  }
 
   const stagingParent = conductorRoot;
   const stagingDir = await mkdtemp(join(stagingParent, '.engine-staging-'));
@@ -284,6 +356,25 @@ export async function publish(opts) {
     await flipCurrent({ conductorRoot, versionId, env });
     await rm(join(finalDir, INCOMPLETE_SENTINEL), { force: true });
 
+    // Stamp the source-key sidecar (Design "Sidecar record") only once the
+    // version is fully published (finalized + flipped) — same precedent as
+    // the sentinel removal just above. Reuse the key computed by the
+    // pre-build skip check above when available; otherwise (e.g. first-ever
+    // publish, no prior current version) compute it fresh here. Best-effort:
+    // a failure to compute/write the sidecar must never fail an otherwise
+    // successful publish — it just means the next publish's skip check fails
+    // open and rebuilds.
+    try {
+      const sourceKey = precomputedSourceKey ?? (await computeSourceKey({ conductorRoot }));
+      await writeFile(join(finalDir, SOURCE_KEY_SIDECAR), sourceKey, 'utf-8');
+    } catch (err) {
+      console.error(
+        `[publish-engine] failed to write ${SOURCE_KEY_SIDECAR} sidecar (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
     // GC old versions (Task 7, FR-15). Safety-critical + fail-closed by
     // design: `gcVersions` itself never deletes on an erroring read (registry
     // enumeration failure, an unreadable fleet pidfile) — it warns and
@@ -291,9 +382,28 @@ export async function publish(opts) {
     // throw out of `gcVersions` is also caught here so a GC hiccup never
     // turns a successful publish into a failed one (exit 0 either way).
     try {
-      const { deletedCount } = await gcVersions({ conductorRoot, currentVersionId: versionId, env });
-      if (deletedCount > 0) {
-        console.error(`[publish-engine] gc: deleted ${deletedCount} old version(s)`);
+      // Self-eviction guard (Task 3): when the calling daemon has stamped
+      // its own running version into the env (Task 4), never let this GC
+      // pass delete that version out from under it. `CONDUCT_ENGINE_SELF_GUARD`
+      // is set unconditionally by a guarded daemon before it can resolve its
+      // own version id, so an empty `CONDUCT_ENGINE_SELF_VERSION` alongside
+      // it means "guard active but self version unresolved" — fail closed by
+      // skipping the entire GC pass rather than risk deleting the running
+      // dist. Guard unset entirely -> unguarded caller (e.g. a bare CLI
+      // publish) -> GC runs exactly as before.
+      const selfGuard = env.CONDUCT_ENGINE_SELF_GUARD;
+      const selfVersion = env.CONDUCT_ENGINE_SELF_VERSION;
+      if (selfGuard && !selfVersion) {
+        console.error('[publish-engine] gc: skipped (self-guard, unresolved self version)');
+      } else {
+        const gcOpts = { conductorRoot, currentVersionId: versionId, env };
+        if (selfGuard && selfVersion) {
+          gcOpts.protectVersionIds = [selfVersion];
+        }
+        const { deletedCount } = await gcVersions(gcOpts);
+        if (deletedCount > 0) {
+          console.error(`[publish-engine] gc: deleted ${deletedCount} old version(s)`);
+        }
       }
     } catch (err) {
       console.error(

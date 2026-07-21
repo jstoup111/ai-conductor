@@ -12,10 +12,12 @@
 //   stamped & matches daemon owner        → build
 //   stamped & different owner             → skip (other-owner)
 //   un-owned, merged strictly BEFORE cutover → build (grandfathered)
-//   un-owned, merged ON/AFTER cutover     → skip (unowned-post-cutover)
-//   un-owned, merge time indeterminate    → skip (unowned-indeterminate)
+//   un-owned, merged ON/AFTER cutover     → build (unowned-defaulted)
+//   un-owned, merge time indeterminate    → build (unowned-defaulted)
 // A stamped-and-matching spec builds regardless of merge time — the cutover is
-// never consulted for stamped specs (ADR-3).
+// never consulted for stamped specs (ADR-3). Un-owned specs always build: the
+// cutover only decides the reason (grandfathered vs. unowned-defaulted), never
+// whether to build.
 
 import type { OwnerStamp } from './provenance.js';
 
@@ -36,22 +38,24 @@ export type GateReason =
   | 'grandfathered'
   | 'other-owner'
   | 'unowned-post-cutover'
-  | 'unowned-indeterminate';
+  | 'unowned-indeterminate'
+  | 'unowned-defaulted';
 
 /** The gate outcome. On other-owner skips, `other` names the mismatched owner. */
 export type GateDecision =
   | { build: true; reason?: 'grandfathered' }
   | { build: false; reason: 'other-owner'; other: string }
-  | { build: false; reason: 'unowned-post-cutover' | 'unowned-indeterminate' };
+  | { build: true; reason: 'unowned-defaulted' };
 
 /**
  * Decide whether to build a content-eligible spec under owner-gating.
  *
  * Stamped specs are decided purely by owner match (the cutover is never
- * consulted). Un-owned specs fall to the grandfather cutover: strictly before →
- * grandfathered build; on/after (or an indeterminate merge time) → skip. The
- * boundary is inclusive of the cutover instant (== cutover counts as on/after),
- * and an indeterminate merge time is a stable skip (same input → same decision).
+ * consulted). Un-owned specs always build: the grandfather cutover only
+ * selects the reason — strictly before cutover → grandfathered; on/after (or
+ * an indeterminate merge time) → unowned-defaulted. The boundary is inclusive
+ * of the cutover instant (== cutover counts as on/after), and an indeterminate
+ * merge time is a stable unowned-defaulted result (same input → same decision).
  */
 export function decideSpecGate(input: GateInput): GateDecision {
   const { daemonOwner, stamp, mergeTime, cutover } = input;
@@ -66,11 +70,11 @@ export function decideSpecGate(input: GateInput): GateDecision {
   const mergeMs = parseTime(mergeTime);
   const cutoverMs = parseTime(cutover);
   if (mergeMs === null || cutoverMs === null) {
-    return { build: false, reason: 'unowned-indeterminate' };
+    return { build: true, reason: 'unowned-defaulted' };
   }
   return mergeMs < cutoverMs
     ? { build: true, reason: 'grandfathered' }
-    : { build: false, reason: 'unowned-post-cutover' };
+    : { build: true, reason: 'unowned-defaulted' };
 }
 
 /** Parse an ISO-8601 instant to epoch ms, or null if absent/unparseable. */

@@ -10,10 +10,573 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
+  `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
+  the judged-closure lane (#733)
+
+- Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
+  diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
+  without a mermaid fence; enforcement gap captured as #729).
+
+- Owner-gate: added the missing `Owner:` marker to `.docs/intake/intake-only-enforcement.md`
+  (spec #719 merged un-owned, so the daemon skipped it forever), and a new integrity check
+  fails the suite when any intake doc lacks an `Owner:` marker — un-owned specs can no
+  longer merge silently.
+
+- ci-fix resolver no longer invokes the nonexistent `claude --fix-session` flag;
+  dispatches a real fix via StepRunner, classifies spawn errors, and validates
+  invocation at daemon startup
+
+- CI: `conductor` job now checks out with `fetch-depth: 0` so `origin/main` is
+  resolvable — the intake-only-enforcement acceptance spec's `git diff
+  origin/main` regression guard was crashing with `fatal: bad revision 'main'`
+  under GitHub Actions' default shallow (depth-1) checkout instead of running
+  its intended diff assertion.
+
+### Changed
+
+- Operator config: `harness_self_host.version_freeze` advanced 0.99.19 → 0.99.20
+  to match main's VERSION after #707/#709 — restores the standing no-bump
+  approval so rebased features do not HALT at the self-host version gate.
+
+- `architecture-review` skill: tightened the ADR-naming rule with explicit
+  WRONG/RIGHT examples and the heading convention (`# ADR:`, no number), after a
+  spec authored `adr-0001-…`/`adr-0002-…` in violation of the existing date-based
+  convention. A deterministic gate to reject number-named ADRs is captured in
+  intake #705.
+
+### Fixed
+
+- conduct-ts autoheal: path-corroboration now credits a `Task:`-trailered
+  commit whose files land in the same immediate directory as a plan-declared
+  path (bounded `trailer-dirname` corroboration), eliminating a
+  `no_task_progress` 0/N stall class where valid subsystem-local work was
+  rejected. Judge lane unchanged; #445 inheritance guard preserved by the
+  immediate-parent-dir bound. (#707)
+
+### Added
+
+- README: "How the Pieces Fit Together" section with a mermaid component diagram
+  of the engineer / daemon / operator roles and how a feature flows from intake
+  issue to merged implementation PR.
+
+- Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
+  enforcement**: priority + size + dependency-linking are stamped at every intake
+  capture surface (a required-fields intake form + an isolated `intake-label-sync`
+  Action, a `bin/intake-file` filing helper, and a one-shot `bin/intake-backfill`)
+  so every issue is born complete, and the ~100-issue unsized backlog is completed
+  in one default-and-report pass. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", the spec adds **zero** downstream failure modes: the
+  claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon dispatch/build, pipeline
+  gates, and CI stay byte-identical and add no criteria check (a negative-path story
+  asserts this). Supersedes PR #696 (which enforced at claim time via a
+  `needs-criteria` deferral). Artifacts under
+- Committed shipped-records for four phantom features the daemon kept re-parking
+  (background-intake-conduct-loop #382, wiring-reachability-gate #650,
+  autoheal-path-corroboration #709, finish-staleness #596) so backlog dedup
+  drops them permanently.
+
+- Issue #695 — **intake-only criteria enforcement**: priority + size +
+  dependency-linking are now stamped at every intake capture surface. Ships a
+  `parseSizeLabel` closed-vocabulary parser beside `parsePriorityLabels`
+  (`engine/backlog-priority.ts`); required `Priority`/`Size` dropdowns + an
+  optional `Depends on` field on `.github/ISSUE_TEMPLATE/intake.yml`; an
+  isolated `intake-label-sync` GitHub Action (`syncIssueLabels()` in
+  `engine/engineer/intake/label-sync.ts`) that stamps `priority:`/`size:`/
+  `blocked_by:` labels on `issues: [opened, edited]`, defaulting on
+  unparsable input, entirely separate from and unable to fail `ci.yml`; a
+  `bin/intake-file` filing helper (`fileIntakeIssue()` in
+  `engine/engineer/intake/file-issue.ts`) that files a criteria-complete issue
+  in one atomic operation; and a one-shot, idempotent `bin/intake-backfill`
+  sweep (`backfillIntakeLabels()` in `engine/engineer/intake/backfill.ts`)
+  that stamps missing labels on the existing backlog and emits an operator
+  report, never HALTing. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", this adds **zero** downstream failure modes:
+  the claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon
+  dispatch/build, pipeline gates, and CI stay byte-identical and add no
+  criteria check (a negative-path acceptance spec asserts this). Supersedes
+  PR #696 (which enforced at claim time via a `needs-criteria` deferral).
+  Artifacts under
+  `.docs/{plans,stories,complexity,conflicts,architecture,decisions,intake}/intake-only-enforcement*`;
+  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`.
+- Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
+  of repeating an identical attempt. A new pure `escalateAttempt` (with
+  `EFFORT_ORDER`, `MODEL_TIER_ORDER`, `bumpEffort`, `bumpModel` in
+  `engine/escalation.ts`) transforms the resolved base `(model, effort)` by the
+  1-based attempt: attempt 2 bumps effort one level, attempt 3+ bumps the model
+  one tier (both capped at the top rung). The bumped model still routes through
+  the #186 availability ladder (`ModelAvailability.effectiveModel`), so a dead
+  escalated tier is substituted with a live one. A new per-step
+  `escalate?: boolean` config knob (default true; also valid at `phases`/
+  `defaults`) opts out to pin the base config across retries. The `step_retry`
+  event gains optional `escalatedModel`/`escalatedEffort` (the upcoming
+  attempt's rung) and `aggregateRetryHotspots` surfaces the terminal rung for
+  retro Part C (`.docs/plans/retry-as-escalation.md`).
+- Plan tasks can now be marked `**Verify-only:** yes` (documented in the
+  `/plan` and `/tdd` skill contracts) for prove-closed work that legitimately
+  produces no commit; the generated commit-msg hook accepts an
+  `Evidence: skipped <reason>` trailer as an alternative to `Task:` on an
+  otherwise-empty commit (a non-empty reason is required; a bare empty commit
+  or an unresolvable `satisfied-by` sha are still rejected); and an exhausted
+  auto-park reason now names the specific unresolved verify-only task ids
+  instead of only a generic "no task progress" message (#677).
+- Spec for issue #677 — verify-only (prove-closed) plan tasks get a
+  deterministic `**Verify-only:** yes` plan marker, class-scoped dispatch of
+  the judged attribution lane for marked residue tasks (dark-cutover-safe),
+  `Evidence: skipped <reason>` parity in the generated commit-msg hook, and
+  park reasons that name stranded verify-only task ids — so an
+  evaluator-APPROVED build no longer auto-parks solely because one task
+  legitimately produced no commit
+  (`.docs/plans/verify-only-prove-closed-task-evidence.md`; partial #678 —
+  removes the completed-build re-dispatch trigger for this class, general
+  outcomes deferred to #678/PR #679).
+- Committed shipped-records for two manually-shipped features —
+  `2026-07-20-engine-gc-self-eviction-guard` (#673, PR #703) and
+  `build-stall-remediation-skips-no-task-progress` (#701, PR #701) — so
+  `daemon-backlog.ts` dedups them instead of re-dispatching work that already
+  shipped (#438 stopgap). Plus a **Daemon Operations Safety** section in
+  `CLAUDE.md`: never bulk-delete worktrees/branches, park before touching a
+  feature's git state, a worktree checkout is disposable but the branch is the
+  source of truth, and a manual PR is not a harness finish (run
+  `conduct-ts shipped-record`).
+- Spec for issue #569 — build-stall auto-remediation now also fires for
+  `no_task_progress` (zero-work) stalls, not only `halt_marker` stalls: a
+  synthesized remediation prompt (from the completion-gate reason, the stall
+  transition, and the `zero_work_product` no-evidence tag) is routed through the
+  same `/remediate` dispatch, bounded by the shared `MAX_KICKBACKS_PER_GATE`
+  budget, with the durable no-evidence counter still owning the terminal
+  HALT/park decision; also a distinct terminal HALT reason for a stalled build
+  instead of the misleading generic "retries exhausted"
+  (`.docs/plans/build-stall-remediation-skips-no-task-progress.md`).
+- Spec for issue #671 — build dispatches must not run attribution-blind: a
+  deterministic pre-dispatch invariant on the attribution machinery, a loud
+  unattributed-dispatch signal when `Task: none` sub-dispatches accumulate,
+  and attribution-aware dispatch-count telemetry
+  (`.docs/plans/build-dispatch-can-start-with-current-task-none-so.md`).
+- Spec for issue #667 — operator `unpark` grants a fresh no-evidence budget
+  (resets `noEvidenceAttempts`/`noEvidenceReasons` regardless of park
+  provenance) and the auto-park halt message distinguishes an inherited
+  budget from fresh failures
+  (`.docs/plans/noevidenceattempts-persists-across-unpark-so-re-di.md`).
+
+### Changed
+
+- Issue #188 — deep-step retry budgets reduced from 5 to 3 for `explore`, `prd`,
+  `plan`, and `build` (`DEFAULT_STEP_RETRIES`). Because a retry now escalates
+  (effort, then model tier) rather than repeating an identical attempt, five
+  identical retries were wasteful; 3 is the floor that still reaches the
+  attempt-3 model-bump rung. `architecture_review` is out of scope and stays 5.
+- Owner-gate: an un-owned merged spec is **no longer silently skipped**. `decideSpecGate`
+  now returns `{ build: true, reason: 'unowned-defaulted' }` for a post-cutover or
+  indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts` default-builds it
+  attributed to the daemon's own resolved owner, emitting a loud, actionable log line naming
+  the slug and defaulted owner and pointing at the remedy (add an explicit `Owner:` marker on
+  the default branch). `other-owner` (stamped with a different operator's identity) remains
+  the only skip reason; grandfathering via `owner_gate_cutover` is unchanged.
+- Owner-gate: intake markers are now **born owned**. `runAuthoring` falls back to machine
+  identity (`readMachineOwnerConfig()`, `spec_owner` → `gh` login) whenever no `ownerConfig`
+  is injected, so every DECIDE-phase write path stamps an `Owner:` marker at authoring time
+  by default instead of relying on the gate to compensate for un-owned arrivals later.
+
+## Migration
+
+Retry-as-escalation (#188) is **on by default** — existing pipelines begin
+escalating `(model, effort)` on retry and deep-step retry budgets drop 5 → 3.
+This is a behavior change, not a schema break: `escalate` is a new **optional**
+`HarnessConfig` field (in `.ai-conductor/config.yml`, not `settings.json`), fully
+back-compatible, so no `bin/migrate` step is required. To preserve the exact
+pre-#188 identical-retry behavior for a step, pin it off:
+
+```yaml
+# .ai-conductor/config.yml
+steps:
+  build:
+    escalate: false   # every retry reuses the base (model, effort)
+```
+
+`escalate: false` is also accepted at `phases.<PHASE>` and `defaults` to opt a
+whole phase or the entire pipeline out. Restoring the old budgets is independent:
+set `steps.<step>.max_retries: 5` where desired.
+
+### Fixed
+
+- Verify-only (prove-closed) tasks no longer strand the build gate (#677): a
+  gate-miss residue containing only `**Verify-only:** yes`-marked task ids now
+  arms the judged-attribution lane class-scoped — even when the global
+  `attribution_judge_cutover` flag is dark — so an evaluator-APPROVED,
+  legitimately-commit-less task is resolved in-loop instead of burning the
+  `noEvidenceAttempts` counter and auto-parking the build. Mixed residue (some
+  marked, some not) still arms only the marked subset under a dark cutover; an
+  armed cutover keeps today's full-residue dispatch unchanged; residue with no
+  marked ids is byte-identical to today (lane not dispatched).
+- The attribution judge lane now dispatches on inherited build-gate residue on
+  resumed/stalled runs — dropped the attempt-scoped `!isZeroWork` guard that
+  previously suppressed dispatch whenever `headShaBeforeBuild === headShaAfterBuild`
+  (i.e. no new commits landed this attempt), which meant residue carried over from
+  a prior attempt was silently never judged. The two other no-op paths are
+  preserved: the lane still no-ops when the cutover flag is disabled/absent, and
+  when the residue set is empty. The separate kickback/no-evidence zero-work retry
+  path is unrelated code and is unchanged (#570).
+- `no_task_progress` (zero-work) build stalls now route through the same `/remediate`
+  auto-remediation dispatch as `halt_marker` stalls (a synthesized prompt built from the run's
+  own context), bounded by the shared remediation budget, with the durable no-evidence counter
+  still owning the terminal HALT/park decision. Exhausted `no_task_progress` builds now halt
+  with a distinct, specific reason instead of the generic "retries exhausted" message (#569).
+- Build dispatches can no longer run attribution-blind — a pre-dispatch invariant
+  now fails loudly (skips/fails the dispatch, writing `.pipeline/HALT` after 2
+  attempts) when attribution machinery is broken (missing `task-status.json`,
+  uninstalled session hooks, unwritable stamp path), and a loud
+  `unattributed_dispatch` event surfaces unattributed-dispatch streaks at the
+  build seam via `readDispatchAttribution`/`detectUnattributedDispatch`, instead
+  of silently deferring to the evidence gate. `Task: none` is now treated as an
+  error signal to watch for, not silently tolerated (#671).
+- `conduct daemon unpark` now resets the no-evidence budget
+  (`noEvidenceAttempts`/`noEvidenceReasons`) for both operator- and auto-parked features
+  instead of only auto-parked ones, so an operator-unparked feature also gets a fresh
+  budget rather than carrying over stale counts into re-dispatch. The auto-park halt
+  message now distinguishes a budget inherited from a prior park/unpark cycle from
+  fresh no-evidence failures accumulated since the last unpark, so operators can tell
+  whether a halt reflects new misses or leftover count (#667).
+- `bin/install` no longer redirects `rtk init`'s stderr to `/dev/null`, which
+  silently swallowed rtk's interactive prompt and made the installer appear to
+  hang with no visible output. The prompt (and any error) now reaches the
+  terminal so the user can respond.
+- Stamped the missing `Owner:` intake marker for the
+  `finish-staleness-grep-never-matches-rebase-finish` spec
+  (`.docs/intake/finish-staleness-grep-never-matches-rebase-finish.md`,
+  Source-Ref jstoup111/ai-conductor#587), ungating it from the owner gate's
+  `unowned-post-cutover` hold.
+- `conduct daemon park`/`unpark` no longer fail with a misleading "not found" error when invoked from a subdirectory or a linked worktree: both subcommands now resolve the main repo root (`resolveMainRepoRoot`) before locating the park marker, so the marker path is computed relative to the actual main repo regardless of the operator's current working directory. Running either subcommand outside any git repo now reports a clear outside-repo error instead of a confusing not-found message.
+- Fresh build dispatch no longer false-halts with "Attribution machinery broken:
+  .pipeline/task-status.json is missing" — the pre-dispatch attribution-machinery
+  guard now seeds `task-status.json` from the committed plan
+  (`seedAndCheckAttributionMachinery`) before evaluating, instead of tripping on a
+  fresh/legitimate dispatch where the plan exists and machinery is otherwise intact
+  (#692).
+
 ### Added
 - Spec landed for a config-driven custom-step framework + build-start base-refresh instance (`.docs/{track,complexity,stories,plans}/daemon-build-start-base-refresh.md`): generalises the conductor so a repo may declare extra pipeline steps under `.ai-conductor/config.yml` `steps:` — each with an `after:` insertion point and EXACTLY ONE body: a `skill:` (SKILL.md), an engine-native `action:` (deterministic in-process action), or a hook-only `hooks.before` script — spliced into the sequence for THAT repo only (daemon-gated, empty/no-op for all consumers). Extends the pre-existing partial mechanism (`StepConfig` `after`/`skill`/`enforcement`/`hooks`, `buildStepRegistry`, `runWithHooks`) by making `skill:` OPTIONAL, adding the engine-action registry, wiring the currently-unwired hook/action dispatch, and rejecting `after:` cycles. The build-start base-refresh is wired as one instance (`after: plan`, `action: base-refresh`): it runs `git fetch origin` + rebase onto `origin/<default>` before the first BUILD-phase step, so evidence anchors sit on the already-rebased base (reduces the #535/PR-593 `anchor is unreachable` window). Load-bearing reconciliation: base-refresh is an engine `action`, not a bash hook, because a detached shell hook cannot reuse the in-process `resolveBase`/`performRebase`/`runGatedRebaseResolution` (would lose the gated `/rebase` resolver + CHANGELOG auto-resolve + fail-closed HALT). Daemon-only; conflict → `/rebase` HALT; no-origin/non-daemon → no-op. Sibling of #598 (stale engine binary) — kept separate. Tier M. Implementation tracked separately; this entry documents the queued spec.
+- Parallel SHIP validation phase (#469): in auto-mode runs (inline or daemon) the three
+  SHIP validators (`manual_test`, `prd_audit`, `architecture_review_as_built`) fan out as
+  a built-in concurrent validation group (`VALIDATION_GROUP`/`STEP_GROUPS`,
+  `engine/group-core.ts`) instead of the serial walk — per-branch fresh sessions,
+  single-writer join that recomputes every member's objective gate verdict from on-disk
+  evidence, branch-attributed `parallel_started`/`group_member_step`/`parallel_completed`
+  events, SIGINT-safe mid-group persistence (a resumed run re-dispatches only unfinished
+  members), and join classification with full serial parity (#367 manual-test kickback,
+  one `/remediate` per round over the union of gap members' evidence, shared
+  `MAX_KICKBACKS_PER_GATE` budget, D2/#647 kickback-to-build no-op HALT, loud non-green
+  HALT naming each failing member). Interactive runs keep the serial walk and
+  checkpoints. See `src/conductor/README.md` → "Parallel validation phase".
+- New `validation_concurrency` config key (`.ai-conductor/config.yml`) bounding the
+  validation-group fan-out. Default 2; zero/negative/non-numeric fall back to the
+  default; effective width additionally capped at the number of dispatchable members
+  (width 1 degrades to exact serial semantics). Additive and optional — absent config
+  keeps the default.
+
+### Changed
+- The config-DSL `parallel:` step executor now runs through the same shared GroupCore as
+  the built-in validation group (`runParallelGroupViaCore`): each branch dispatches its
+  OWN step/skill name on its own fresh session (previously branches could dispatch under
+  the group's name), with a single-writer join for state keys.
+
+### Removed
+- Internal `runParallelGroup` helper (replaced by `runParallelGroupViaCore` over the
+  shared GroupCore). Engine-internal only — no consumer-visible CLI/hook/schema change,
+  no migration block required.
+
+### Added
+- Implemented #646's rerun-vs-route retry classifier (queued entry below): `classifyRetryDecision`
+  (`src/conductor/src/engine/artifacts.ts`) is a pure helper that, on a completion-gate miss for a
+  SHIP-tail verdict step (`architecture_review_as_built`, `build_review`, `prd_audit`), decides
+  `rerun` vs. `route` from a `routeClass` facet (`'named-route' | 'absent'`) now carried on
+  `CompletionResult` for the as-built/build_review predicates, plus a byte-identical-reason +
+  unchanged-HEAD/artifact-mtime "identical-repeat" signal. The conductor retry loop
+  (`src/conductor/src/engine/conductor.ts`) calls the classifier in daemon mode, emits a
+  `retry_decision` event per attempt, and — for an identical-repeat route — prepends an
+  "unchanged input" note to the routed HALT reason instead of the generic "retries exhausted"
+  text. A new `retry_routing:` config block (`types/config.ts` / `engine/config.ts`,
+  `RETRY_ROUTING_DEFAULTS = { enabled: true }`) is the kill-switch: `enabled: false` reverts
+  exactly to the pre-#646 behaviour (only `prd_audit`'s original try-1 short-circuit runs; the
+  other two verdict steps burn their full retry budget before routing at `step_failed`). Routing
+  reuses the existing `planRemediation`/kickback path unchanged, so `MAX_KICKBACKS_PER_GATE` and
+  the #644 DECIDE-target HALT are unaffected; non-daemon (interactive) retry behavior is
+  untouched (the classifier seam is daemon-gated). Documented next to `build_progress_halt` in
+  `README.md` and `src/conductor/README.md`.
+- Per-step config-disable opt-in for gating steps: `StepDefinition.configDisableAllowed`
+  lets a specific gating built-in accept `steps.<name>.disable: true` in a project's
+  `.ai-conductor/config.yml`; `validateConfig()` still rejects disabling every other
+  gating step and all structural steps (fail-closed default unchanged). `manual_test`
+  is the only step that opts in. This repo's self-host config now sets
+  `steps.manual_test.disable: true` — harness features are engine/CLI changes covered
+  by vitest + the integrity suite, so a dispatched manual-test session adds cost
+  without signal. A disabled step is marked `skipped`, which satisfies downstream
+  prerequisites (prd_audit, rebase) and the SHIP-tail selector, so the pipeline chain
+  is unaffected.
+- Spec landed for #646 (`.docs/{track,complexity,intake,stories,plans}/retry-classify-rerun-vs-route.md`
+  + `.docs/decisions/adr-2026-07-13-retry-classify-rerun-vs-route.md`): a deterministic rerun-vs-route
+  classifier will decide, BEFORE burning a retry, whether a SHIP-tail verdict step's completion-gate
+  miss (`architecture_review_as_built`, `prd_audit`, `build_review`) is route-class — a fresh adverse
+  verdict that names a route (route on try 1), or a byte-identical failure on unchanged inputs (HEAD sha
+  + verdict-artifact mtimes unchanged; route on try 2) — and engage the existing `planRemediation`/
+  kickback path immediately instead of exhausting the per-step retry budget. Missing/stale/changed-input
+  failures still rerun. A per-retry `retry_decision` audit event records rerun-vs-route + signal for
+  success-% comparison; routed halts name the unchanged input rather than "retries exhausted". New
+  optional `retry_routing:` config block (`enabled`, default true); `enabled: false` is an exact revert
+  to the pre-#646 behaviour (prd_audit's existing try-1 short-circuit preserved; as-built/build_review
+  burn retries then route at step_failed as before). Composes with #644 (DECIDE-target routes still
+  HALT), #648 (kickback re-entry escalation engages sooner through the same path), #649/#652 (fresh-
+  verdict floor feeds the route-vs-rerun signal), and leaves #280's build budgets untouched (the `build`
+  step is out of scope). Implementation tracked separately; this entry documents the queued fix.
+- Progress-aware build halt (#280): the build retry loop no longer halts/parks a step at a
+  fixed attempt budget while it's still resolving additional tasks each attempt — a
+  within-dispatch progress-bypass gate re-dispatches on positive resolved-task delta, bounded
+  by a new `build_progress_halt.attempt_ceiling` backstop with a distinct "progressing but hit
+  ceiling" park reason. Parked/halted builds that made progress on their last dispatch are now
+  also re-kick-eligible on the daemon's idle tick even without a base-sha advance, bounded per
+  spec by `build_progress_halt.dispatch_ceiling`. New optional `build_progress_halt:` config
+  block (`enabled`, `attempt_ceiling`, `dispatch_ceiling`); `enabled: false` is an exact revert
+  to the previous fixed-budget halt. The true zero-progress park path is unchanged. See
+  `README.md` and `src/conductor/README.md` for config details.
+- New `wiring_check` gate (gating, always-on, all complexity tiers) sits between
+  `build_review` and `manual_test` in the SHIP-phase gate loop, verifying that new
+  production surface declared via a plan task's `**Wired-into:** ` line is actually
+  reachable — catching orphaned code that compiles and passes tests but is never called.
+  Two verification layers: a universal diff/reference-scan Layer 1 (declared-call-site
+  verification, an orphan backstop, and contradiction checks for `none`/`inert`
+  declarations), and an opt-in TypeScript import-graph reachability Layer 2 (rooted at
+  configured `wiring.entry_points`). Plans predating the `Wired-into:` convention (zero
+  such lines) get advisory-only findings; contract-bearing plans are fully blocking.
+  `inert` waivers resolve on-disk (path form, no network) or via `gh issue view` (issue
+  form, fail-closed on error). Evidence is written to `.pipeline/wiring-evidence.json`
+  with HEAD-sha freshness invalidation, and `wiring_check` joins the post-rebase
+  invalidation set alongside `build`/`build_review`/`manual_test`. This repo's own
+  `.ai-conductor/config.yml` now sets `wiring.entry_points: [src/conductor/src/index.ts]`
+  to enable Layer 2 on self-host builds. See `src/conductor/README.md` → "Wiring
+  reachability gate" and `skills/plan/SKILL.md` §5c for the full grammar.
 - Armed `attribution_judge_cutover` (2026-07-11T18:30Z) + explicit `attribution_audit_sample_pct: 10` in the committed project config — the #520 semantic attribution judgment gate and its spot-audit measurement are live for all subsequent builds.
 - Spec landed for #524 (`.docs/{track,complexity,stories,conflicts,plans}/engineer-cli-subcommand-help-executes-the-command.md`): `engineer <subcommand> --help`/`-h` will short-circuit to usage text with zero side effects instead of executing the subcommand, unrecognized flags on a subcommand will be rejected (exit 1, no state change) instead of silently ignored, and `conduct-ts --help` will document every engineer subcommand/flag and name both loops (build/ship daemon vs. engineer/brain). Implementation tracked separately; this entry documents the queued fix.
+- New optional `kickback_escalation:` config block (`enabled`, default `true`) — a master
+  on/off switch for the #647 kickback→build no-op escalation (D2, "zero net progress and
+  unchanged gate verdict"). `enabled: false` reverts D2 to the prior re-kick-until-
+  `MAX_KICKBACKS_PER_GATE` behavior. The D1 route-into-no-op guard in `planRemediation` is
+  fail-closed correctness and stays active regardless of this flag. See `README.md` and
+  `src/conductor/README.md` for config details.
+
+### Changed
+
+- `/explore` (DECIDE) approach proposals now require an **Est. effort** line (very rough
+  implementation time, e.g. "~1-2h", "~half day", S/M/L) and an **Impact** line (one line on
+  value added / what it unblocks) on every proposed approach — required line-items on the
+  option template so the operator can weigh cost vs. value when picking; no new gate or
+  artifact.
+- `/intake` now requires the same cost/value pair on every filed issue, split as: sizing
+  as exactly one `size: S` / `size: M` / `size: L` label (S ≈ ~1-2h, M ≈ ~half day to a
+  day, L ≈ multi-day; labels created in the repo), applied via REST
+  (`gh api -X POST repos/{owner}/{repo}/issues/<n>/labels`) because `gh issue edit
+  --add-label` is broken on classic-Projects repos; and **Impact** promoted from
+  optional to a required one-line-minimum section in the issue body (the
+  `.github/ISSUE_TEMPLATE/intake.yml` web form now marks Impact required to match).
+
+### Fixed
+
+- SHIP-tail verdict checks (`build_review`, `prd_audit`, `architecture_review_as_built`) now
+  require the verdict artifact to be fresh relative to the **per-attempt** judging session
+  (`attemptStartedAt`), not just the conductor-run start (`sessionStartedAt`)
+  (`.docs/decisions/adr-2026-07-13-session-fresh-verdict-artifacts.md`). Previously a
+  judging session that failed to rewrite its verdict file on a re-dispatched attempt could
+  silently reuse a prior attempt's verdict forever (incident
+  2026-07-12-wiring-reachability-gate); the new `verdictFreshnessFloor` makes that loud
+  instead, scoring "no fresh verdict" when the artifact's mtime predates this attempt's
+  start. Falls back to the pre-existing session-level freshness check when no per-attempt
+  floor is available (legacy state, or both timestamps absent) — fail-open on presence
+  preserved. The per-attempt comparison applies a small filesystem-timestamp tolerance
+  (`VERDICT_FRESHNESS_FS_TOLERANCE_MS`) so a verdict written *during* the current dispatch
+  is never scored a false "no fresh verdict" when the coarse filesystem clock records an
+  mtime a few ms behind the captured floor; a genuinely stale prior-attempt verdict is
+  separated by a full re-dispatch and stays loud.
+- Kickback→build no longer loops silently when the target task's evidence is already
+  stamped (#647, `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`).
+  `planRemediation` now recomputes build completion after append+re-seed and HALTs with the
+  gap ledger when there is no dispatchable build work (D1), instead of unconditionally
+  routing back to BUILD. And a kickback→build re-entry that ends with zero net progress (no
+  HEAD movement, no resolved-task increase) AND an unchanged gate verdict now HALTs on the
+  first such cycle with a reason naming the unchanged input, instead of silently re-kicking
+  toward `MAX_KICKBACKS_PER_GATE` (D2). The kickback audit trail now distinguishes a
+  genuine self-heal (`kickback_outcome: 'did-work'`) from a kickback resolved without a
+  build ever running (`'derived-already-complete'`) (D3).
+- Owner: markers added to the four 2026-07-13 spec-wave intake docs (session-fresh-verdict-artifacts, park-all-dispatch-paths, kickback-to-build no-op, retry-classify) so the daemon owner-gate can dispatch their builds (#649/#651/#647/#646).
+- Spec landed for #651 (`.docs/{track,complexity,intake,stories,plans}/park-all-dispatch-paths.md`
+  + `.docs/decisions/adr-2026-07-13-park-all-dispatch-paths.md`): the daemon pool's fresh-dispatch path
+  will consult the operator-park predicate **immediately before dispatch** (a new `guardedDispatch`
+  wrapper around `deps.runFeature`), not only at `pickEligible` selection time — closing the
+  selection→dispatch race where a slug parked during the `rebuildAndMaybeRestartForStaleEngine` await was
+  started anyway (2026-07-13 20:43Z incident). A park-skipped dispatch will log one line naming the marker
+  path; a grep-derived regression test will enumerate every build-start call site so a future entry point
+  cannot silently skip the check. Store location (main-repo `.daemon/parked/`) is unchanged — the fix is
+  consumer-side, distinct from #534/#486's marker-store cwd work. No kill-switch (park is a safety
+  invariant). Implementation tracked separately; this entry documents the queued fix.
+- Spec landed for #649 (`.docs/{track,complexity,intake,stories,plans}/session-fresh-verdict-artifacts.md`
+  + `.docs/decisions/adr-2026-07-13-session-fresh-verdict-artifacts.md`): the three SHIP-tail verdict
+  completion checks (`architecture_review_as_built`, `prd_audit`, `build_review`) will require their
+  session-produced verdict artifact to be fresh relative to the **per-attempt judging session** rather
+  than the conductor-run start. Today the freshness guard uses `sessionStartedAt`, stamped once per
+  `run()` and shared by every in-loop retry, so a verdict written by an early retry stays "fresh"
+  forever and a review session that fails to rewrite its verdict re-scores the stale verdict against
+  code that no longer exists (incident `2026-07-12-wiring-reachability-gate`, 2026-07-13: an
+  as-built BLOCKED verdict from 19:56Z looped three retries after the code was fixed at 20:22Z). The
+  fix threads an `attemptStartedAt` floor captured before each review dispatch onto `CompletionContext`
+  and scores a loud, distinct "no fresh verdict" (never reusing a prior session's verdict) when the
+  artifact predates it; a `verdict_freshness` audit event records fresh-vs-stale-reused per evaluation.
+  Falls back to the current `sessionStartedAt` floor when no per-attempt floor is present (legacy/
+  resume). `manual_test` (already covered by the #367 whitewash guard), `acceptance_specs` RED
+  evidence, and `retro` are enumerated and deferred; orthogonal to the unmerged #642 (touches the
+  verdict predicates + retry-loop seam, not `autoheal.ts`/`deriveCompletion`). Implementation tracked
+  separately; this entry documents the queued fix.
+- Spec landed for #647 (`.docs/{track,complexity,intake,stories,plans}/kickback-to-build-no-op-when-target-evidence-stamped.md`
+  + `.docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md`): a remediation kickback→build
+  that cannot produce real rework will fail loud and fast instead of looping silently. When
+  `planRemediation` resolves a build route but build completion recomputed from disk is already
+  satisfied (empty tasks, or an idempotent upsert onto an already-complete `rem-*` task), the engine
+  will HALT with the gap ledger rather than route into a 23s no-op; and when a build entered via a
+  kickback ends with zero net progress (unchanged head sha AND unchanged `lastResolvedCount`) while the
+  reviewer verdict is unchanged, the engine will HALT with both artifacts instead of re-kicking —
+  capping the legitimate reviewer-wrong case on the first cycle. An optional `kickback_escalation.enabled`
+  toggle (default true) reverts the escalation. Fixes the identical-BLOCKED no-op loop observed on
+  `adr-2026-07-12-wiring-check-gate→build` (2026-07-13). Non-goal: literal per-task stamp invalidation
+  (kickbacks carry FR/ADR ids, not plan-task ids; completion is trailer-authoritative). Implementation
+  tracked separately; this entry documents the queued fix.
+- Daemon no longer autonomously rewinds to DECIDE-phase steps on remediation routing (#644):
+  `planRemediation()` in `src/conductor/src/engine/conductor.ts` now guards the single
+  `earliestRemediationTarget` choke point — in daemon mode, a remediation target whose step
+  phase is `DECIDE` (e.g. `architecture_review`, `plan`, derived from the step definitions,
+  not a hardcoded list) converts the route into a `halt` with a gap ledger naming the DECIDE
+  target, writing `LOOP_HALT` for the operator instead of `navigateBack`-rewinding the whole
+  DECIDE tail unattended. BUILD-phase targets (`build`, `acceptance_specs`) still route, the
+  deterministic `classifyPrdAuditGaps` fallback is untouched, and interactive mode is
+  unchanged. Pure engine logic — no migration needed.
+- Evidence-gate path corroboration now checks the SET of `Task: <id>`-trailered commits
+  per task instead of only the newest one (#548): a follow-up commit (e.g. a test-fix)
+  reusing a task's trailer no longer shadows an earlier feature commit that overlaps the
+  plan's declared paths — a task is corroborated if ANY reachable trailered commit
+  overlaps. Stale/unreachable candidate SHAs (including a dangling `Evidence:
+  satisfied-by` pointer) are skipped as candidates rather than terminally rejecting the
+  task when another satisfying candidate exists. (`src/conductor/src/engine/autoheal.ts`,
+  `deriveCompletionInternal`)
+- finish GATE 0 no longer instructs a false-positive rebase check (#634): the skill
+  prose implied that output from `git rev-parse --git-path rebase-merge` indicates a
+  rebase in progress, but `--git-path` prints the path unconditionally — finish
+  sessions bailed at GATE 0 on clean trees, never wrote `.pipeline/finish-choice`,
+  and burned finish retries into a halt. GATE 0 now mandates directory-existence
+  checks (`test -d "$(git rev-parse --git-path rebase-merge)"`), with an explicit
+  warning that `rev-parse` output alone is not evidence. The `/rebase` skill's
+  detection was updated to the same `test -d` form (its old `ls .git/rebase-merge/`
+  probe always failed in linked worktrees, where `.git` is a file). Engine
+  TypeScript (`rebaseStateActive`, git hook assets) already checked existence
+  correctly and is unchanged.
+  the bare `### T<N>` header shorthand (ai-conductor#636, the #417 id-grammar
+  drift class resurfacing via #615). #615 widened the header regex to accept
+  `### T<N> — Title` but normalized the id to a *bare* number (`T3` → `3`),
+  while the pre-existing machinery — `.pipeline/task-status.json` rows, commit
+  `Task: T<N>` trailers, and `.pipeline/task-evidence.json` stamps — used the
+  T-prefixed grammar. The build-completion gate then UPSERTed a second, all-
+  pending set of bare-id rows next to the orphaned T-rows (e.g. 18 rows for a
+  9-task plan), making completion unsatisfiable and orphaning all real
+  progress. Fixes: (1) `parsePlanTasks`/`parsePlanTaskPaths` now emit the id
+  **as written** including the `T` prefix, so it matches the rows/trailers/
+  stamps verbatim; (2) a new `canonicalTaskId` fold (`T<N>` ↔ `<N>`) is applied
+  at every comparison seam — trailer→task matching (`taskTrailerMatches`),
+  evidence-stamp lookup/reconcile (`reconcileStatusFromStamps`), subject
+  matching, and the seed upsert key — so a commit trailer in *either* grammar
+  resolves the same task; (3) `seedTaskStatus` keys rows by the canonical id
+  and merges duplicate `T<N>`/`<N>` rows (keeping the more-advanced row),
+  deterministically repairing any task-status.json that #615 already split.
+  Files: `src/engine/autoheal.ts`, `src/engine/task-seed.ts`.
+- Path corroboration in the build-completion gate no longer rejects valid task
+  evidence when a plan task declares its file paths only *inline in prose*
+  rather than in a `**Files:**` line or a dedicated `- \`path\`` bullet. The
+  legacy per-task backtick scan (`parsePlanTaskPaths` in
+  `src/engine/autoheal.ts`) previously harvested *every* backtick token in a
+  section that had no `**Files:**` line — including incidental references like a
+  runtime artifact the task guards (`task-status.json`) or a line-annotated
+  citation (`bin/install:494–506`) — and made them the task's *required*
+  corroboration paths. A real single-file commit whose trailer named the task
+  then "had no overlap with plan paths" and was rejected, zeroing the attempt's
+  progress and cascading into `no_task_progress` stall halts (ai-conductor#548;
+  overnight 2026-07-13: #280 plan T11 / commit `b4ce60a`, and
+  `2026-07-12-rtk-hook-preservation` T1/T3/T5). The scan is now restricted to
+  dedicated file-list bullet items; a backtick token embedded in a prose
+  sentence is treated as an incidental reference, not a declaration. With no
+  declared path, corroboration **abstains** and the engine-stamped `Task:`
+  trailer stands on its own (abstain-or-loud, #519/#530) — while a genuinely
+  *declared* path (a `**Files:**` line or a `- \`path\`` bullet) that is disjoint
+  from the commit still rejects, and segment-anchored suffix matching (#424/#425)
+  is unchanged.
+- Spec landed for #625 (`.docs/{track,complexity,stories,conflicts,plans,intake}/rekick-resume-republish-stale-worktree-engine.md` + `.docs/architecture/2026-07-13-rekick-resume-republish-review.md`): on a self-host re-kick resume, after `resumeRebaseFirst`'s rebase replays commits touching `src/conductor`, the worktree engine will be republished (reusing the existing content-addressed `npm run build` → `publish-engine.mjs`) BEFORE `conductor.run()` runs the gate — closing the worktree-engine variant of the stale-engine class (sibling of #598) where setup builds the `dist` from pre-rebase source and the rebase then delivers the fix into source only, so the gate mis-parses the plan (`▶ build 0/0`) and halts on the already-fixed defect. A failed republish will fail closed (HALT, worktree kept), never gate on the stale `dist`. Implementation tracked separately; this entry documents the queued fix.
+- Updated `resolved-config.test.ts` expectations for `explore`/`prd` reasoning effort (`xhigh` → `medium`), which had drifted from #607's re-scope of those defaults on cost-per-outcome grounds — restores CI green on `main` (2 failing tests fixed). No production defaults changed.
+- Daemon's halt-PR reconciliation sweep (`runDaemonMode` in `src/daemon-cli.ts`)
+  now owns a single `PrSweepOutcome` cache for the lifetime of each daemon run
+  and passes it into every startup + idle-poll `reconcileHaltPrs` call, instead
+  of calling with no cache. `reconcileHaltPrs` already gated its per-PR and
+  summary log lines on cache state deltas; without the cache wired in,
+  production sweeps recomputed a fresh cache every tick and re-logged the full
+  baseline every time. Idle steady-state ticks are now silent for unchanged
+  conforming PRs, reducing daemon log volume (#521).
+- Daemon build-completion gate no longer false-parks a fully-completed build as
+  "empty/missing plan" when the plan's task headings use the bare `### T<N> —
+  Title` shorthand (no "Task" word, ids starting at `T0`) — the form used by
+  the real `2026-07-12-rtk-hook-preservation` plan that fired this live: the
+  presence-check gate (`checkStepCompletion` in `src/engine/artifacts.ts`) and
+  `parsePlanTaskPaths`/`parsePlanTasks` (`src/engine/autoheal.ts`) now accept a
+  `T<digits>` header as an alias for `Task <id>`, alongside the existing
+  colon/em-dash/en-dash forms, so `T<N>` plans parse their task ids, evidence
+  is stamped, and the build passes the gate instead of auto-parking
+  (ai-conductor#578).
+- Corrected a Fable-pricing doc error and re-reviewed model selection on the
+  right economics. Fable 5 is the **premium** tier ($10/$50 per 1M — ~2x Opus
+  4.8's $5/$25, 3-5x Sonnet), not "cheaper generation" as the `explore`, `prd`,
+  and `engineer` rationales claimed. Rewrote those rationales (source of truth:
+  `model-table-metadata.ts`) to justify each pick on cost-per-outcome (price ×
+  tokens-at-effort) rather than a false per-token price advantage, and dropped
+  two front-of-funnel Fable steps off max depth so they stop paying the premium
+  at high token counts: `explore` effort `xhigh`→`medium` (divergent discovery,
+  localized mistake cost, 5-retry budget — conservative setting per operator
+  decision, vs the more aggressive low-effort thesis) and `prd` effort
+  `xhigh`→`medium`
+  (its own rationale prioritises speed over depth). Both keep Fable but embody
+  the operator directive that a premium model at low effort can beat a cheaper
+  model at high effort on cost *and* outcome. `engineer` stays on Fable
+  (operator-driven interactive quality) with its inverted "without the cost of
+  opus" rationale corrected to name the choice as capability/preference, not
+  cost. Opus-tier assignments (`build_review`, `prd_audit`, `attribution_verify`,
+  code-review, cto-security/architecture) are reaffirmed: Opus is now the
+  value-premium tier at half Fable's price, and these are deep adversarial full-
+  artifact roles that genuinely need sustained high reasoning. Fable's other
+  capability-justified steps (`rebase`, `remediate`, `architecture_review`,
+  `conflict_check` L, `plan` L, `debugging`) are unchanged. No model *tier*
+  moved, so SKILL.md `model:` pins are untouched; regenerated the HARNESS.md
+  table via `bin/generate-model-table`. No config-schema, hook, symlink, or
+  `bin/conduct` CLI change — no migration block required.
+- Fixed a regression of the above #578 fix (#620): the widened task-header
+  id grammar (`Task\s+[A-Za-z0-9._-]+` / `T\d[A-Za-z0-9._-]*`) matched any
+  word as an id, so structural headings like `## Task Graph` and `## Task
+  Dependency Graph` — present in many committed plans — parsed as a
+  phantom task (e.g. id `Graph`) that can never be completed, making a
+  fully-completed build's completion gate permanently unsatisfiable
+  (`N/N+1 tasks pending`). Tightened the presence-check gate
+  (`src/engine/artifacts.ts`) and `parsePlanTaskPaths`
+  (`src/engine/autoheal.ts`): a pure-alpha id now requires an explicit
+  colon/em-dash/en-dash separator immediately after it; only an id
+  containing a digit (`Task 2`, `Task t1`, `T0`) may stand bare at
+  end-of-line. `parsePlanTasks` already required a separator and was
+  unaffected. All legitimate shapes keep parsing: `### Task 3 — Title`,
+  `### T0 — Title`, `### Task rem-adr-001: x`, `### Task A8: x`, and
+  title-less bare headers (`### Task 2`, `### Task t1`, `### T3`);
+  prose/structural headings (`## Task Graph`, `## Task Dependency Graph`,
+  `## Task Breakdown`, `## Tasks`, `### Testing`, `### Team sync`) never
+  parse as tasks.
 
 ### Changed
 
@@ -64,6 +627,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 
 ### Fixed
+
+- **Spec: mechanical `Evidence: satisfied-by <sha>` citations validated for
+  provenance, not just object existence (#533).** The build evidence gate's
+  mechanical lane (`deriveCompletionInternal` in
+  `src/conductor/src/engine/autoheal.ts`) previously stamped a task complete
+  whenever the cited sha merely existed in the git object database
+  (`git rev-parse --verify`), so an empty commit citing a dangling pre-rebase
+  object — not an ancestor of HEAD, with an unrelated diff — could forge
+  completion (observed on the #520 build, task 24). This lands the DECIDE-phase
+  spec (`.docs/{track,complexity,stories,conflicts,plans}/satisfied-by-forged-citation-validation.md`)
+  to extend the judged lane's already-approved citation-validation rule
+  (reachability → ancestry → non-empty → declared-Files overlap) to the
+  mechanical `satisfied-by` form. Deterministic, git-derived; no operator-marker
+  escape hatch introduced. Implementation follows in a separate build PR.
+- **`getEvidenceRange` logged a spurious `anchor  is unreachable` warning for
+  absent/whitespace-only evidence anchors (#510).** The gate/engine no-anchor
+  form of `deriveCompletion(root, planPath)` — used by `conductor.ts`,
+  `artifacts.ts`, and `evidence-cli.ts` — previously routed the empty anchor
+  through the same reachability probe as a real, unreachable anchor,
+  producing a misleading "unreachable" warning on every ordinary gate
+  evaluation. An absent anchor now skips the reachability probe entirely and
+  emits a distinct `console.info` "no recorded anchor" line instead; fallback
+  merge-base-ladder results are unchanged. Verified end-to-end against the
+  production `deriveCompletion` entry point (not just the `getEvidenceRange`
+  unit seam).
 
 - **Finish/pr skills' staleness-proof fallback never matched git's actual reflog wording
   (#587).** `skills/finish/SKILL.md` and `skills/pr/SKILL.md` both ran `git reflog | grep
@@ -249,6 +837,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `no-issue` items still lead, unchanged). Parser accepts the exact label
   `priority: critical`; band ladder is now no-issue → critical → high →
   medium → low → unlabeled. READMEs document the new vocabulary.
+- `daemon park` now echoes the absolute marker path to stdout on successful
+  park, aiding operator scripting and audit trails (#486).
+- `reconcileStrandedParkMarkers()` function heals pre-#486 park markers left
+  in worktrees by moving them to the main repository root, enabling seamless
+  transition when the fix is deployed (#486).
 
 ### Added
 
@@ -414,6 +1007,15 @@ their skill symlinks refreshed or `/intake` resolves as an unknown command:
   anchor → `merge-base --fork-point origin/<default> HEAD` → plain
   `merge-base origin/<default> HEAD` → fail-closed zero commits + anomaly)
   instead of falling back to `root-commit..HEAD` or a hardcoded `origin/main`
+- Park markers now anchor to the main repository root instead of relative to
+  worktree cwd, fixing #486 regression where auto-park markers written from
+  build agents in worktrees were invisible to the daemon's sweep gate.
+  `daemon park` and `daemon unpark` from any directory (including worktree cwd)
+  now correctly resolve to the main root, and worktree-written auto-park
+  markers are automatically reconciled at sweep start.
+- `daemon unpark` now resets the no-evidence counter in the feature's worktree
+  (if present) when unparking an auto-parked feature, enabling normal re-kick
+  flow on resume (#486).
   (#456).
 - Build gate now accepts evidence stamps only; first-seed grandfather
   stamping retired. `engine/artifacts.ts`'s H6/H7/H8 completion check no
@@ -1580,6 +2182,72 @@ no action needed — the token requirement is skipped.
   play-forward path (`resumeRebaseFirst`) now calls `recordRebaseStepCompletion`,
   the same helper the in-loop `runRebaseStep` uses, so a satisfied pre-loop
   rebase stamps `state.rebase` instead of leaving it silently unmarked.
+- Judged attribution verdicts now advance the build gate in-cycle, not requiring a second loop iteration (#581).
+- Harness install/update was dropping the operator's RTK Claude Code hook: `rtk init
+  -g --auto-patch` only ran during first-time dependency bootstrap in `install_dependencies`,
+  a step `bin/install --update` skips entirely, so any operator running `--update` would lose
+  their RTK hook entry (and never regain it, since the stale `--check` "hook initialized"
+  sub-check only inspected a deprecated `~/.claude/hooks/rtk-rewrite.sh` script file rather
+  than the actual settings entry, so `--check` reported health even after the entry was
+  lost). `rtk init -g --auto-patch` now runs on every install *and* update path (idempotent,
+  guarded by `command -v rtk`), and the misleading `--check` sub-check was removed. Existing
+  installs self-heal automatically the next time they run `bin/install` or `bin/install
+  --update` — see `.docs/release-waivers/2026-07-12-rtk-hook-preservation.md` for why no
+  separate migration step is required.
+- Auto-park decisions are contradiction-checked against completion evidence; a
+  build with completed-task evidence is never parked as `empty/missing plan`
+  (#612).
+- Engine-owned rebases (`performRebase`, used by both the finish-time
+  rebase-on-latest step and the daemon re-kick's play-forward rebase) no
+  longer orphan sha-anchored evidence citations. Previously, any rebase that
+  rewrote commits left `task-evidence.json` (`sha`, `citedShas[]`,
+  `verdictAnchor`), `task-status.json` (`commit`), and the
+  `attribution-memo.json` judged-stamp memo pointing at pre-rebase shas that
+  no longer existed on the branch, silently dangling verified work.
+  `performRebase` now builds a `git patch-id --stable` old-sha→new-sha map on
+  any commit-changing rebase, persists it to `.pipeline/rebase-rewrites.json`
+  (transitive across repeated rebases), rewrites the three file-backed stores
+  in place, and resolves satisfied-by trailer citations through the map at
+  read time (`validateCitations`, autoheal's satisfied-by resolver) without
+  ever rewriting commit message text. Pre-rebase commits that can't be
+  matched by patch-id (dropped, or conflict-modified) are surfaced to
+  `.pipeline/rebase-residue.json` with a `rebase_citation_residue` event
+  instead of dangling silently. No-laundering is preserved: a citation is
+  only ever resolved through a sha that was a genuine key in git's own
+  pre-image→post-image map for that rebase; forged or unrelated shas still
+  fail the existing ancestry check. No new CLI flag, config, or consumer
+  action is required — this activates automatically at both call sites. See
+  `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
+- Finish no longer ships a reused needs-remediation halt PR with the halt boilerplate body: the engine-authored banner is now a stateless halt signal, a deterministic `bodyFloor` (mirroring the retitle floor) replaces it with an implementation-PR body (summary, test-evidence line, halt history preserved in comments), the finish completion gate fails while the banner remains (fail-open on gh errors), and repair outcomes are logged (`[halt-pr-rehab]`) instead of silent (ai-conductor#632; specimen PR #610).
+- Closed the daemon pool's selection→dispatch operator-park race (#651): a new `guardedDispatch`/
+  `guardedDispatchWith` wrapper in `src/conductor/src/engine/daemon.ts` re-checks the operator-park
+  predicate **immediately before every dispatch**, not only at `pickEligible` selection time, so a park
+  marker written during the `rebuildAndMaybeRestartForStaleEngine` await between selection and dispatch is
+  now honored instead of being dispatched anyway (2026-07-13 20:43Z incident). A grep-enumeration
+  regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is guarded,
+  so a future bypassing entry point fails loudly. No CLI/schema/hook-wiring change, so no Migration block.
+- daemon park/unpark now resolve the main repo root from any cwd (repo root, a
+  linked worktree, or a nested subdirectory) before scanning plans/worktrees,
+  so an emergency-stop `daemon park <slug>` no longer fails with a misleading
+  "slug not found" when run from inside the affected worktree; outside any
+  repo it now errors with the expected usage instead (ai-conductor#534).
+- Daemon setup-failure triage now distinguishes a setup-success-with-dirty-tree
+  (accurate "dirty tree could not be cleaned" park that quarantines all
+  residual uncommitted paths) from a genuine setup failure, and no longer
+  reports "setup failed" when `bin/setup` succeeded (#582).
+- `bin/update`, a standalone self-update/channel CLI extracted from `bin/conduct`: `bin/update` (no args) forces an update check now, `bin/update --auto` checks only if `autoCheck` config is not `false`, `bin/update --set-channel <tagged|main>` sets the update channel (exit 2 on invalid), and `bin/update -h|--help` prints usage.
+- The auto-update check is now re-homed onto `conduct-ts` startup, which spawns `bin/update --auto` as a one-shot subprocess, instead of running inline as bash functions in `bin/conduct`.
+- `conduct-ts halt-issues sweep` subcommand: reconciles GitHub issues auto-filed by the
+  out-of-repo halt-monitor daemon (`monitor.sh`, #355) against shipped fixes — stamps
+  filed issues with a Halt-Slug marker, detects shipping evidence, and closes resolved
+  issues (respecting the `halt-sweep:keep-open` label escape hatch). Additive
+  subcommand, not a breaking surface — no migration block needed. See `README.md` and
+  `src/conductor/README.md` for flags and the `monitor.sh` hook line
+  (`conduct-ts halt-issues sweep || true`).
+- Authored-keys write now rejects a non-absolute/`undefined` base with a clear
+  error instead of writing `undefined/authored-keys.json` under cwd; the
+  acceptance test no longer poisons `$AI_CONDUCTOR_ENGINEER_DIR`
+  (ai-conductor#574).
 
 ## Migration
 

@@ -39,6 +39,7 @@
 
 import type { GitRunner } from './rebase.js';
 import { fileMatchesPlanPath } from './autoheal.js';
+import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
 
 /**
  * A verdict result entry with citations to validate.
@@ -128,9 +129,20 @@ export async function validateCitations(
 
   const reasons: string[] = [];
 
+  // Resolve rebased citations through the persisted rewrite map (Task 9,
+  // adr-2026-07-12-rebase-evidence-stamp-translation.md). A citation may
+  // name a pre-rebase sha that the engine's own sanctioned rebase rewrote;
+  // resolving here — in memory only, never mutating the citation text —
+  // lets the existence/ancestry checks below run against the new sha. A
+  // sha that was never a rewrite-map key (unrelated/forged) resolves to
+  // itself, so this can never launder an off-branch citation.
+  const toplevel = await git(['rev-parse', '--show-toplevel']);
+  const projectRoot = toplevel.exitCode === 0 ? toplevel.stdout.trim() : undefined;
+  const rewriteMap = projectRoot ? await loadRewriteMap(projectRoot) : {};
+
   // Validate each citation
   for (const citation of verdictEntry.citations) {
-    const sha = citation.sha;
+    const sha = resolveThroughMap(citation.sha, rewriteMap);
 
     // Check 1: SHA is reachable
     const reachabilityCheck = await git(['cat-file', '-e', `${sha}^{commit}`]);

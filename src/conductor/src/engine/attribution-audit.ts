@@ -252,6 +252,7 @@ export function selectAuditSampleFromStamps(
       noEvidenceAttempts: 0,
       noEvidenceReasons: [],
       migrationGrandfather: new Set(),
+      lastResolvedCount: 0,
       async write() {
         // No-op for this internal helper
       },

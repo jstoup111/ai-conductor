@@ -442,6 +442,57 @@ fi
   // it independently would duplicate Task 13's per-rotation dispatch-count
   // coverage rather than exercise new acceptance-visible behavior.
 
+  // ── #582: setup-success-with-dirty-tree quarantine+surface (integration of
+  //    fixSession's dirty-tree-uncleaned park + daemon-runner's cause-agnostic
+  //    reason fallback) ──
+
+  it('#582: fix-session repairs bin/setup but leaves the tree dirty ⇒ dirty-tree-uncleaned park quarantines the residual paths, the working tree ends clean, and the surfaced reason never says "setup failed"', async () => {
+    await initRepo();
+    await writeSetupAlwaysFails('SETUP_BROKEN_MARKER');
+    await commitAll('add broken bin/setup (clean HEAD, committed breakage)');
+
+    // The fix-session repairs bin/setup (so runPrepare's retry passes) but
+    // also leaves a tracked file modified without committing it — bin/setup
+    // itself did NOT fail; the tree is just left dirty.
+    const fixSession = vi.fn(async () => {
+      await writeSetupScript('#!/usr/bin/env bash\necho "fixed"\nexit 0\n');
+      await commitAll('fix-session: repair bin/setup');
+      await writeFile(join(dir, 'README.md'), '# base\nresidual uncommitted edit\n');
+      return { attempted: true };
+    });
+
+    const log: string[] = [];
+    const run = makeRunFeature(baseDeps({ dispatchFixSession: fixSession, log: (m) => log.push(m) }));
+    const out = await run({ slug: 'feat-dirty-after-fix' } as BacklogItem);
+
+    expect(fixSession).toHaveBeenCalledTimes(1);
+    expect(out.status).toBe('error');
+
+    // A real quarantine ref exists, and its tip commit contains the
+    // residual, modified tracked file.
+    const quarantineTip = await gitOrNull(
+      'rev-parse',
+      '--verify',
+      'refs/heads/wip/setup-quarantine-feat-dirty-after-fix',
+    );
+    expect(quarantineTip).not.toBeNull();
+    expect(
+      await gitOrNull('show', 'wip/setup-quarantine-feat-dirty-after-fix:README.md'),
+    ).toBe('# base\nresidual uncommitted edit');
+
+    // The working tree is clean after triage settles.
+    expect(await git('status', '--porcelain')).toBe('');
+
+    // The surfaced reason/HALT names the quarantine and never claims "setup failed".
+    expect(out.reason).toBeDefined();
+    expect(out.reason).not.toMatch(/setup failed/i);
+
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).not.toMatch(/setup failed/i);
+    expect(halt).toContain('wip/setup-quarantine-feat-dirty-after-fix');
+    expect(halt).toMatch(/dirty-tree-uncleaned/);
+  });
+
   // ── TS-4: triage failure HALTs with full evidence, never a silent discard ──
 
   it('TS-4 happy: triage exhausted (quarantine + retry, then fix-session contract failure) ⇒ HALT names the setup output tail, the quarantine ref, and the contract outcome; park semantics unchanged', async () => {

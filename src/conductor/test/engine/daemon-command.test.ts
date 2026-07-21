@@ -29,6 +29,7 @@ describe('detectDaemonCommand', () => {
       maxRuntimeSeconds: undefined,
       idlePollSeconds: 60,
       maxIdlePolls: undefined,
+      showCompleted: false,
     });
   });
 
@@ -79,5 +80,21 @@ describe('detectDaemonCommand', () => {
   it('watch defaults to true when --no-watch is not present', () => {
     expect(detectDaemonCommand(argv('daemon'))).toMatchObject({ watch: true });
     expect(detectDaemonCommand(argv('daemon', '--continuous'))).toMatchObject({ watch: true });
+  });
+
+  it('parses --completed flag to show completed features', () => {
+    expect(detectDaemonCommand(argv('daemon', '--completed'))).toMatchObject({
+      showCompleted: true,
+    });
+  });
+
+  it('parses --all flag as an alias for --completed', () => {
+    expect(detectDaemonCommand(argv('daemon', '--all'))).toMatchObject({
+      showCompleted: true,
+    });
+  });
+
+  it('showCompleted is falsy on a bare `daemon` invocation', () => {
+    expect(detectDaemonCommand(argv('daemon'))?.showCompleted).toBeFalsy();
   });
 });

@@ -13,10 +13,10 @@ body:
     id: impact
     attributes:
       label: Impact
-      description: Who or what is hurting, and how often?
-      placeholder: (optional)
+      description: One line minimum — who or what is hurting, how often, what fixing it unblocks
+      placeholder: Who hurts, how often, what it unblocks
     validations:
-      required: false
+      required: true
   - type: textarea
     id: desired-outcome
     attributes:
@@ -31,5 +31,36 @@ body:
       label: Hypotheses
       description: "Optional: These are your guesses about HOW to solve this. DECIDE weighs alternatives and may discard them."
       placeholder: (optional)
+    validations:
+      required: false
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this?
+      options:
+        - critical
+        - high
+        - medium
+        - low
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      description: Rough size estimate
+      options:
+        - S
+        - M
+        - L
+    validations:
+      required: true
+  - type: textarea
+    id: depends-on
+    attributes:
+      label: Depends on
+      description: Issue numbers this depends on, or "none"
+      placeholder: "none, or #123, #456"
     validations:
       required: false

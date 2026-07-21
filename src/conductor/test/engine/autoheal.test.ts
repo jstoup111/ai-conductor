@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unit tests for taskTrailerMatches (Task 1, alias helper with ambiguity guard).
@@ -782,6 +785,424 @@ Setup with en-dash separator.
     expect(result.has('1')).toBe(true);
     expect(result.get('1')!.name).toBe('Initialize with en-dash');
   });
+
+  // Regression (#578 live-fire follow-up, 2026-07-12): the already-shipped
+  // em-dash fix requires the literal word "Task" before the id. A real build
+  // (`2026-07-12-rtk-hook-preservation`) used the shorthand `### T0 — Title`
+  // heading form (no "Task" word, starts at T0 not T1) — those headers parsed
+  // to zero ids under the old regex, so the build-completion gate reported
+  // "no tasks in plan" and the daemon auto-parked a fully-completed 5/5 build.
+  describe('bare "T<N>" shorthand headers (### T0 — Title, no "Task" word)', () => {
+    it('parsePlanTasks: parses bare T-prefixed headers starting at T0', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### T0 — Confirm edit sites
+Re-read the install script.
+
+### T1 — Mocked rtk test fixture
+Add a reusable test helper.
+`;
+      const result = mod.parsePlanTasks(planText);
+
+      // #636: the id is emitted AS WRITTEN (T-prefix kept), so a `### T0`
+      // header yields `T0`, matching the plan's `Task: T0` trailers and its
+      // pre-existing T-prefixed task-status rows. Cross-grammar matching
+      // (`Task: 0` ↔ `T0`) is handled at the comparison seams.
+      expect(result.has('T0')).toBe(true);
+      expect(result.get('T0')!.name).toBe('Confirm edit sites');
+
+      expect(result.has('T1')).toBe(true);
+      expect(result.get('T1')!.name).toBe('Mocked rtk test fixture');
+    });
+
+    it('parsePlanTaskPaths: parses bare T-prefixed headers and their paths', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### T0 — Confirm edit sites
+**Files:** \`bin/install\`
+
+### T1 — Mocked rtk test fixture
+**Files:** \`test/test_rtk_hook_reinit.sh\`
+`;
+      const result = mod.parsePlanTaskPaths(planText);
+
+      // #636: T-prefix kept as written.
+      expect(result.has('T0')).toBe(true);
+      expect(result.get('T0')!.has('bin/install')).toBe(true);
+
+      expect(result.has('T1')).toBe(true);
+      expect(result.get('T1')!.has('test/test_rtk_hook_reinit.sh')).toBe(true);
+    });
+
+    it('parsePlanTaskPaths: extracts the real 2026-07-12-rtk-hook-preservation.md fixture tasks (T0-T5)', async () => {
+      const mod = await loadAutoheal();
+      const fixturePath = join(
+        __dirname,
+        '../../../../.docs/plans/2026-07-12-rtk-hook-preservation.md',
+      );
+      const planText = await readFile(fixturePath, 'utf-8');
+
+      const result = mod.parsePlanTaskPaths(planText);
+
+      // #636: T-prefixed headers keep the T (T0..T5), matching the plan's
+      // trailers and rows.
+      for (const id of ['T0', 'T1', 'T2', 'T3', 'T4', 'T5']) {
+        expect(result.has(id)).toBe(true);
+      }
+    });
+
+    it('over-capture guard: does not treat "T" in ordinary words (Testing, Team) as a task header', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Testing infrastructure notes
+Prose that starts with a capital T word but is not a task header.
+
+### Team sync
+More prose.
+`;
+      const result = mod.parsePlanTasks(planText);
+      expect(result.size).toBe(0);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.size).toBe(0);
+    });
+
+    // Regression (#620): #615 widened the header regexes to accept bare
+    // `T<digits>` headers, but parsePlanTaskPaths's terminator also accepted
+    // a bare end-of-line (no colon, no dash) as a valid header close. A
+    // structural heading like `## Task Graph` or `## Task Dependency Graph`
+    // (present in many committed plans, e.g.
+    // .docs/plans/2026-07-12-rtk-hook-preservation.md) then parsed as a
+    // phantom task with id "Graph"/"Dependency" — a task that can never be
+    // completed, making the build-completion gate permanently unsatisfiable.
+    it('regression #620: does not treat "## Task Graph" heading as a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Tasks
+
+### Task 1: Real work
+**Files:** \`src/real.ts\`
+
+## Task Graph
+
+Task 1 → done
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Graph')).toBe(false);
+      expect(tasksResult.size).toBe(1);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Graph')).toBe(false);
+      expect(pathsResult.size).toBe(1);
+    });
+
+    it('regression #620: does not treat "## Task Dependency Graph" heading as a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Tasks
+
+### Task 1: Foundation
+**Files:** \`src/foundation.ts\`
+
+### Task 2: Build on it
+**Files:** \`src/build.ts\`
+
+## Task Dependency Graph
+
+Task 1 → Task 2
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Dependency')).toBe(false);
+      expect(tasksResult.size).toBe(2);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Dependency')).toBe(false);
+      expect(pathsResult.size).toBe(2);
+    });
+
+    it('regression #620: "## Task Breakdown" prose heading is never a phantom task', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+## Task Breakdown
+
+### Task 1: Real work
+**Files:** \`src/real.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('Breakdown')).toBe(false);
+      expect(tasksResult.size).toBe(1);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('Breakdown')).toBe(false);
+      expect(pathsResult.size).toBe(1);
+    });
+
+    it('#578/#615 shapes still parse: "### Task 3 — Title" (em-dash) and "### T0 — Title" (bare T)', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 3 — Em-dash title
+**Files:** \`src/em.ts\`
+
+### T0 — Bare T shorthand
+**Files:** \`src/bare.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      // `### Task 3` (the "Task" word) → bare `3`; `### T0` (bare T shorthand)
+      // → `T0` as written (#636).
+      expect(tasksResult.has('3')).toBe(true);
+      expect(tasksResult.get('3')!.name).toBe('Em-dash title');
+      expect(tasksResult.has('T0')).toBe(true);
+      expect(tasksResult.get('T0')!.name).toBe('Bare T shorthand');
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('3')).toBe(true);
+      expect(pathsResult.has('T0')).toBe(true);
+    });
+
+    it('#620 guard: bare title-less headers with a digit in the id ("### Task 2", "### Task t1", "### T3") still parse in parsePlanTaskPaths', async () => {
+      // Widely used fixture/plan shape (e.g. task-status-gate-recompute and
+      // gate-loop integration tests): a task header that is just
+      // `### Task <id>` with no colon, dash, or title. The #620 tightening
+      // must only reject DIGITLESS bare ids (Graph/Breakdown/Dependency),
+      // never ids containing a digit.
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 1
+**Files:** \`src/a.ts\`
+
+### Task 2
+**Files:** \`src/b.ts\`
+
+### T3
+**Files:** \`src/c.ts\`
+
+### Task t4
+**Files:** \`src/d.ts\`
+`;
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('1')).toBe(true);
+      expect(pathsResult.get('1')!.has('src/a.ts')).toBe(true);
+      expect(pathsResult.has('2')).toBe(true);
+      expect(pathsResult.get('2')!.has('src/b.ts')).toBe(true);
+      // `### T3` (bare T shorthand) keeps the T (#636); `### Task t4` (the
+      // "Task" word) stays `t4`.
+      expect(pathsResult.has('T3')).toBe(true);
+      expect(pathsResult.get('T3')!.has('src/c.ts')).toBe(true);
+      expect(pathsResult.has('t4')).toBe(true);
+      expect(pathsResult.get('t4')!.has('src/d.ts')).toBe(true);
+    });
+
+    it('#620: non-digit remediation/alpha ids still parse ("Task rem-adr-001", "Task A8")', async () => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task rem-adr-001: Remediation task
+**Files:** \`src/rem.ts\`
+
+### Task A8: Resolver warnings
+**Files:** \`src/a8.ts\`
+`;
+      const tasksResult = mod.parsePlanTasks(planText);
+      expect(tasksResult.has('rem-adr-001')).toBe(true);
+      expect(tasksResult.has('A8')).toBe(true);
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.has('rem-adr-001')).toBe(true);
+      expect(pathsResult.has('A8')).toBe(true);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests for parsePlanTaskVerifyOnly (verify-only-prove-closed-task-evidence
+// plan, Task 1). Recognizes a `**Verify-only:** yes` marker line inside a task
+// block (exact-match "yes", case-insensitive). Anything else — "maybe", empty,
+// missing — means false/absent (fail-closed). Does not alter
+// parsePlanTaskPaths' existing Map<string, Set<string>> shape or behavior.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parsePlanTaskVerifyOnly', () => {
+  it('marks a task true when its block has `**Verify-only:** yes`', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** yes
+**Dependencies:** none
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('is case-insensitive for the "yes" value', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** YES
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('leaves an unmarked task false/absent', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Dependencies:** none
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1') ?? false).toBe(false);
+  });
+
+  it.each(['maybe', '', 'true', 'y'])(
+    'fail-closed: malformed value %j resolves to false, not true',
+    async (value) => {
+      const mod = await loadAutoheal();
+
+      const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** ${value}
+`;
+      const result = mod.parsePlanTaskVerifyOnly(planText);
+      expect(result.get('1') ?? false).toBe(false);
+    },
+  );
+
+  it('does not change parsePlanTaskPaths output for existing no-marker fixtures', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: First
+**Files:** \`src/a.ts\`
+
+### Task 2: Second
+**Files:** \`src/b.ts\`
+`;
+    const pathsResult = mod.parsePlanTaskPaths(planText);
+    expect(Array.from(pathsResult.keys())).toEqual(['1', '2']);
+    expect(Array.from(pathsResult.get('1')!)).toEqual(['src/a.ts']);
+    expect(Array.from(pathsResult.get('2')!)).toEqual(['src/b.ts']);
+
+    const verifyOnlyResult = mod.parsePlanTaskVerifyOnly(planText);
+    expect(verifyOnlyResult.get('1') ?? false).toBe(false);
+    expect(verifyOnlyResult.get('2') ?? false).toBe(false);
+  });
+
+  // Regression (Task 2, verify-only-prove-closed-task-evidence plan): the new
+  // `**Verify-only:**` marker grammar (Task 1) must be inert against the
+  // existing committed plan corpus, none of which carries the marker. Sweeps
+  // representative real fixtures under .docs/plans/ — spanning both header
+  // grammars (`### Task N:` and bare `### T<N>` shorthand) — and asserts
+  // parsePlanTaskVerifyOnly yields zero true entries and parsePlanTaskPaths'
+  // output is unchanged (snapshotted) for the same plan text.
+  describe('regression: existing plan corpus (no markers) is inert', () => {
+    const fixtures = [
+      '2026-07-12-rtk-hook-preservation.md',
+      '2026-06-30-daemon-owner-gate.md',
+      '2026-07-03-daemon-issue-priority-scheduling.md',
+      '2026-07-05-changelog-migration-block-enforcement.md',
+    ];
+
+    it.each(fixtures)('%s: zero verify-only true entries, unchanged parsePlanTaskPaths', async (fixture) => {
+      const mod = await loadAutoheal();
+      const fixturePath = join(__dirname, '../../../../.docs/plans/', fixture);
+      const planText = await readFile(fixturePath, 'utf-8');
+
+      const pathsResult = mod.parsePlanTaskPaths(planText);
+      expect(pathsResult.size).toBeGreaterThan(0);
+
+      const serializedPaths = Array.from(pathsResult.entries()).map(([id, paths]) => [
+        id,
+        Array.from(paths).sort(),
+      ]);
+      expect(serializedPaths).toMatchSnapshot('parsePlanTaskPaths');
+
+      const verifyOnlyResult = mod.parsePlanTaskVerifyOnly(planText);
+      const trueEntries = Array.from(verifyOnlyResult.entries()).filter(([, v]) => v === true);
+      expect(trueEntries).toEqual([]);
+    });
+  });
+
+  // Union semantics (Task 2, no-diff-task-evidence-stamp plan): a `**Type:**`
+  // line whose value contains the exact token `verification` (split on `+`)
+  // is ALSO verify-only-eligible, in addition to `**Verify-only:** yes`.
+  it('marks a task true when its block has `**Type:** verification`', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** verification
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it('still marks a task true via `**Verify-only:** yes` (unchanged)', async () => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Verify-only:** yes
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1')).toBe(true);
+  });
+
+  it.each([
+    'happy-path',
+    'negative-path',
+    'refactor',
+    'feature',
+    'integration',
+    'infrastructure',
+    'review',
+    'happy-path + negative-path',
+    'verification-only',
+    'preverification',
+  ])('fail-closed: `**Type:** %s` does not match (not exact token verification)', async (value) => {
+    const mod = await loadAutoheal();
+
+    const planText = `# Plan
+
+### Task 1: Do the thing
+
+**Type:** ${value}
+`;
+    const result = mod.parsePlanTaskVerifyOnly(planText);
+    expect(result.get('1') ?? false).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -904,6 +1325,82 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  it('skips the reachability probe for an absent (empty-string) anchor and derives merge-base without an unreachable warning', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Absent anchor must fall straight into the merge-base ladder without
+    // ever being probed for reachability, so no "unreachable" warning.
+    expect(range.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(range.anomalies).toHaveLength(0);
+    expect(range.commits.length).toBeGreaterThan(0);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('emits a distinct info line (not a warning) noting the anchor was absent', async () => {
+    const mod = await loadAutoheal();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // The info line must be surfaced via console.info/console.log, not
+    // pushed onto range.warnings and not routed through console.warn.
+    expect(range.warnings).toHaveLength(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    const allCalls = [...infoSpy.mock.calls, ...logSpy.mock.calls].map((args) => String(args[0]));
+    expect(allCalls.length).toBeGreaterThan(0);
+    expect(allCalls.some((msg) => /no recorded anchor/i.test(msg))).toBe(true);
+    expect(allCalls.some((msg) => /unreachable/i.test(msg))).toBe(false);
+    expect(allCalls.some((msg) => /anchor\s\sis/.test(msg))).toBe(false);
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('logs warning when anchor is unreachable', async () => {
     const mod = await loadAutoheal();
 
@@ -932,6 +1429,59 @@ describe('getEvidenceRange', () => {
     // Should log a warning about the unreachable anchor
     expect(range.warnings).toHaveLength(1);
     expect(range.warnings[0]).toContain('unreachable');
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('regression guard: non-empty unreachable anchor keeps the exact prior warn text and fallback result (Task 3, #510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const unreachableSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const shortSha = unreachableSha.slice(0, 7);
+
+    const range = await mod.getEvidenceRange(gitDir, unreachableSha);
+
+    // Exactly one warning, matching /unreachable/, containing the 7-char
+    // short SHA, and with no doubled-space/empty-value rendering.
+    expect(range.warnings).toHaveLength(1);
+    expect(range.warnings[0]).toMatch(/unreachable/);
+    expect(range.warnings[0]).toContain(shortSha);
+    expect(range.warnings[0]).not.toMatch(/anchor\s\sis/);
+
+    // Compute the plain merge-base fallback independently and assert the
+    // returned range/commits are unchanged vs. before the Task 1/2 refactor.
+    const plainMergeBase = await execa('git', ['merge-base', 'origin/main', 'HEAD'], {
+      cwd: gitDir,
+    });
+    const expectedLowerBound = plainMergeBase.stdout.trim();
+
+    const logOutput = await execa(
+      'git',
+      ['log', '--format=%H', `${expectedLowerBound}..HEAD`],
+      { cwd: gitDir },
+    );
+    const expectedShas = logOutput.stdout.split('\n').filter((s) => s.trim());
+
+    expect(range.commits.map((c) => c.sha)).toEqual(expectedShas);
 
     // Cleanup
     await rm(bareDir, { recursive: true, force: true });
@@ -1255,6 +1805,68 @@ describe('getEvidenceRange', () => {
     await rm(bareDir, { recursive: true, force: true });
     await rm(seedDir, { recursive: true, force: true });
   });
+
+  it('treats a whitespace-only anchor as absent: no unreachable warning, range is merge-base..HEAD (#510)', async () => {
+    const mod = await loadAutoheal();
+
+    // Create a bare repo to act as origin/main
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+
+    // Add origin remote to our test repo
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+
+    // Create a commit and push to origin
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    // Create a new commit after pushing, so there are commits ahead of the
+    // resolved origin default branch.
+    await writeFile(join(gitDir, 'file2.txt'), 'content2');
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'new commit'], { cwd: gitDir });
+
+    const whitespaceRange = await mod.getEvidenceRange(gitDir, '   ');
+    const emptyRange = await mod.getEvidenceRange(gitDir, '');
+
+    // Whitespace-only anchor must be treated exactly like an absent anchor:
+    // no "unreachable" warning, and the same commits/anomalies as ''.
+    expect(whitespaceRange.warnings.some((w) => /unreachable/i.test(w))).toBe(false);
+    expect(whitespaceRange.anomalies).toHaveLength(0);
+    expect(whitespaceRange.commits.length).toBeGreaterThan(0);
+    expect(whitespaceRange.commits.map((c) => c.sha)).toEqual(
+      emptyRange.commits.map((c) => c.sha),
+    );
+
+    // Cleanup
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
+  it('fails closed on an absent anchor when origin default is unresolvable (no origin/HEAD, origin/main, or origin/master) (#510)', async () => {
+    const mod = await loadAutoheal();
+    const mockErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // No origin remote at all, so origin/HEAD, origin/main, and
+    // origin/master are all unresolvable.
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: gitDir });
+
+    const range = await mod.getEvidenceRange(gitDir, '');
+
+    // Fail-closed at the `if (!originRef)` guard must be reached before the
+    // anchor is ever inspected: zero commits, exactly one anomaly, and the
+    // anomaly text matches the same origin-unresolvable message as the
+    // no-anchor-at-all case.
+    expect(range.commits).toHaveLength(0);
+    expect(range.anomalies).toHaveLength(1);
+    expect(range.anomalies[0]).toMatch(/origin\/main|origin\/HEAD|origin default/i);
+    expect(range.warnings).toHaveLength(0);
+
+    mockErr.mockRestore();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1481,7 +2093,7 @@ Some task.
     expect(result['3']).toHaveProperty('completed', false);
   });
 
-  it('does NOT complete task when trailer path overlap is zero', async () => {
+  it('completes task via bounded dirname corroboration when trailer file shares the declared immediate dir (#707)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
 
@@ -1500,7 +2112,9 @@ Update the API.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: 4 but touching DIFFERENT files
+    // Create a commit with Task: 4 touching a DIFFERENT file, but in the same
+    // immediate directory as the declared paths — credited via the bounded
+    // dirname pass (#707), not the old exact/suffix-only rule.
     await mkdir(join(gitDir, 'src'), { recursive: true });
     await writeFile(join(gitDir, 'src/utils.ts'), 'export const util = 1;');
     await execa('git', ['add', 'src/utils.ts'], { cwd: gitDir });
@@ -1511,9 +2125,8 @@ Update the API.
 
     const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
 
-    // Should NOT mark as completed (no path overlap)
     expect(result).toHaveProperty('4');
-    expect(result['4']).toHaveProperty('completed', false);
+    expect(result['4']).toHaveProperty('completed', true);
   });
 
   it('stores evidence stamp in sidecar when task completed', async () => {
@@ -1554,7 +2167,7 @@ Implement a feature.
     expect(stamp!.form).toBe('trailer');
   });
 
-  it('logs audit trail entry when path overlap is zero', async () => {
+  it('completes via bounded dirname corroboration when commit file is a same-dir sibling (#707)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
     const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1573,7 +2186,9 @@ Update specific files.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: trailer but no path overlap
+    // Create a commit with Task: trailer touching a same-immediate-dir
+    // sibling — no exact/suffix overlap, but credited via the bounded
+    // dirname pass (#707).
     await mkdir(join(gitDir, 'src'), { recursive: true });
     await writeFile(join(gitDir, 'src/other.ts'), 'export const other = 1;');
     await execa('git', ['add', 'src/other.ts'], { cwd: gitDir });
@@ -1584,10 +2199,108 @@ Update specific files.
 
     const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
 
-    // Should have audit entry or warning about path mismatch
     expect(result).toHaveProperty('6');
-    expect(result['6']).toHaveProperty('completed', false);
-    expect(result['6']).toHaveProperty('auditEntry');
+    expect(result['6']).toHaveProperty('completed', true);
+
+    mockWarn.mockRestore();
+  });
+
+  // DOMAIN: precedence rule — semantic-verified evidence stamp outranks a
+  // failing (path-mismatched) Task: trailer.
+  //
+  // The judge lane (#520/#586) stamps `form: 'semantic-verified'` only after
+  // an LLM judge has read the actual diff and confirmed the task's intent is
+  // satisfied — a strictly higher-trust signal than the trailer/path-overlap
+  // heuristic, which merely regexes commit messages and diffs file lists.
+  // A judge can rightly verify a task through files the plan didn't
+  // enumerate (refactors, generated files, indirection) — that is not
+  // evidence of failure, it's evidence the heuristic's path list was
+  // incomplete. Today (line ~661-716), deriveCompletionInternal finds
+  // `matchingCommit` via the Task: trailer BEFORE consulting the sidecar
+  // stamp, so a truthy `matchingCommit` short-circuits past the demotion
+  // -prevention branch at line 668 (which only runs when `!matchingCommit`)
+  // and falls into the path-overlap check, which zeroes out completion and
+  // clobbers the stamp's authority with `auditEntry` incompletion. The
+  // sidecar stamp must be checked, and take precedence, ahead of — not only
+  // in the absence of — a path-mismatched trailer. This is a "stamp wins"
+  // rule specifically for the already-verified case: it must NOT be
+  // read as "any stamp waives path corroboration" — no-verdict/fail judge
+  // outcomes are untouched (no-whitewash preserved), and the second test
+  // below pins that absent-stamp + failing-trailer still yields
+  // `completed: false` with no invented coverage.
+  it('semantic-verified stamp outranks a Task: trailer whose files do not overlap declared paths', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 9: Judged task
+Update specific files.
+
+- \`src/judged.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Commit carries the Task: trailer but touches unrelated files — a
+    // path-mismatch that would normally zero out completion.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/unrelated.ts'), 'export const unrelated = 1;');
+    await execa('git', ['add', 'src/unrelated.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: unrelated work\n\nTask: 9\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    // Judge lane already stamped this task as semantically satisfied.
+    const judgeSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+    evidence.evidenceStamps.set('9', { sha: judgeSha, form: 'semantic-verified' });
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // The semantic-verified stamp must win: task is completed despite the
+    // path-mismatched trailer.
+    expect(result).toHaveProperty('9');
+    expect(result['9']).toHaveProperty('completed', true);
+  });
+
+  it('no stamp + trailer file in a genuinely different directory still yields completed: false (no invented coverage)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 10: Unjudged task
+Update specific files.
+
+- \`src/unjudged.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Commit carries the Task: trailer but touches a file in a genuinely
+    // different directory (not same-immediate-dir, not exact/suffix), and no
+    // sidecar stamp exists at all (no judge lane involvement) — the #707
+    // dirname pass must NOT credit this.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/unrelated.ts'), 'export const other = 1;');
+    await execa('git', ['add', 'other/unrelated.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: other unrelated work\n\nTask: 10\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('10');
+    expect(result['10']).toHaveProperty('completed', false);
 
     mockWarn.mockRestore();
   });
@@ -1895,6 +2608,65 @@ Work on the literal task-N form.
     await rm(bareDir, { recursive: true, force: true });
   });
 
+  // ───────────────────────────────────────────────────────────────────────
+  // Task 5 (#510): prove the fix reaches the real production entry point.
+  // `deriveCompletion(root, planPath)` — the no-anchor gate form used by
+  // conductor.ts, artifacts.ts, and evidence-cli.ts — must NOT emit the
+  // spurious "anchor  is unreachable" warning when no anchor is recorded
+  // (anchorArg omitted, so getEvidenceRange resolves the branch base itself
+  // via its merge-base ladder). Completion results must be unchanged from
+  // prior behavior.
+  // ───────────────────────────────────────────────────────────────────────
+  it('gate path (no anchor arg) derives completion with zero unreachable warnings (#510)', async () => {
+    const autoheal = await loadAutoheal();
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'origin-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      `# Test Plan\n\n### Task 2: Branch work\nDo the branch work.\n`,
+    );
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Branch commits, last one carrying a `Task:` trailer.
+    await writeFile(join(gitDir, 'a.txt'), 'a');
+    await execa('git', ['add', 'a.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit a'], { cwd: gitDir });
+
+    await writeFile(join(gitDir, 'b.txt'), 'b');
+    await execa('git', ['add', 'b.txt'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: branch commit b\n\nTask: 2\n'], { cwd: gitDir });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result;
+    try {
+      // Real production entry: no anchor arg supplied.
+      result = await autoheal.deriveCompletion(gitDir, planPath);
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // Completion is unchanged from current (fixed) behavior.
+    expect(result).toHaveProperty('2');
+    expect(result['2']).toHaveProperty('completed', true);
+    expect(result['2'].evidencedBy).toBeTruthy();
+
+    // No `unreachable` warning was logged during the call — the absent
+    // anchor path must not synthesize a fake unreachable-anchor warning.
+    for (const call of warnSpy.mock.calls) {
+      const msg = String(call[0] ?? '');
+      expect(msg).not.toMatch(/unreachable/);
+    }
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+
   it('no code path invokes `git log --reverse` for anchor resolution', async () => {
     // Static assertion: the genesis-fallback block that shelled out to
     // `git log --format=%H --reverse HEAD` to resolve a missing anchor has
@@ -1902,6 +2674,72 @@ Work on the literal task-N form.
     // asserting the source no longer contains that invocation.
     const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
     expect(src).not.toMatch(/--reverse/);
+  });
+
+  // Own-diff-before-lane ordering (no-diff-task-evidence-stamp plan, Task 3;
+  // re-asserts under `**Type:** verification` eligibility). A task with a
+  // real Task-trailered commit whose diff overlaps its declared paths is
+  // resolved HERE, in `deriveCompletion`'s mechanical trailer pass, before
+  // the judged-closure lane ever runs. `conductor.ts` derives its residue
+  // set as the task IDs where `derivedCompletion[id].completed` is false
+  // (~line 3267); a task stamped `completed: true` by this pass is therefore
+  // absent from residue regardless of whether it also carries a
+  // `**Type:** verification` (or `**Verify-only:** yes`) eligibility marker
+  // — the mechanical match takes precedence and the lane is never consulted
+  // for it. This holds independent of Task 2's widened eligibility parsing,
+  // since `deriveCompletion` does not consult `parsePlanTaskVerifyOnly` at
+  // all; the marker is orthogonal to own-diff resolution.
+  it('resolves a Type: verification task via the trailer path when its own diff overlaps declared paths — completed:true, evidenced by the trailer commit (own-diff-before-lane ordering)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: GREEN + full-suite check
+**Type:** verification
+
+Prove the suite passes.
+
+- \`src/verify.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // A REAL commit trailered to task 7 whose diff overlaps the task's own
+    // declared path — this is the own-diff shape, not a no-diff/verify-only
+    // shape, so it must resolve mechanically.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/verify.ts'), 'export const verify = 1;');
+    await execa('git', ['add', 'src/verify.ts'], { cwd: gitDir });
+    const commitSha = (
+      await execa('git', ['commit', '-m', 'test: verify\n\nTask: 7\n'], { cwd: gitDir })
+    ) && (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Type: verification eligibility does not block (or require) the
+    // mechanical trailer match — this task resolves like any other.
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7'].evidencedBy).toBe(commitSha);
+
+    // Stamped via the trailer path specifically (not a judged/semantic
+    // stamp) — confirming the lane was never consulted for this task.
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('7');
+    expect(stamp?.form).toBe('trailer');
+
+    // Own-diff-before-lane ordering: this task is therefore excluded from
+    // the residue set a caller (e.g. conductor.ts's gate-miss branch) would
+    // otherwise compute as `Object.keys(result).filter(id => !result[id].completed)`.
+    const residueIds = Object.keys(result).filter((id) => !result[id].completed);
+    expect(residueIds).not.toContain('7');
   });
 });
 
@@ -1988,6 +2826,69 @@ A task that will be skipped.
     expect(result).toHaveProperty('8');
     expect(result['8']).toHaveProperty('status', 'skipped');
     expect(result['8']).toHaveProperty('skipReason', 'build unavailable');
+  });
+
+  it('mints an evidenceStamps entry for Evidence: skipped so the gate treats it as resolved (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 14: Skippable task with stamp
+A task that will be skipped and must still mint an evidence stamp.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Create a no-op commit with the ADR-canonical form: `Task: <id>` PLUS
+    // the Evidence: skipped trailer.
+    await execa('git', ['commit', '--allow-empty', '-m', 'noop: skip evidence\n\nTask: 14\nEvidence: skipped no diff for this task\n'], { cwd: gitDir });
+    const skipSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('14');
+    expect(result['14']).toHaveProperty('status', 'skipped');
+    expect(result['14']).toHaveProperty('completed', false);
+
+    expect(evidence.evidenceStamps.has('14')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('14');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(skipSha);
+    expect(stamp!.form).toBe('evidence:skipped');
+  });
+
+  it('leaves evidenceStamps empty for a task with no Evidence: skipped (or any) commit (#733)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    // Create a plan with a task that has no matching commit at all.
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 15: Untouched task
+No commit will reference this task.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result).toHaveProperty('15');
+    expect(result['15']).toHaveProperty('completed', false);
+    expect(evidence.evidenceStamps.has('15')).toBe(false);
   });
 
   it('does NOT complete task with dangling satisfied-by sha', async () => {
@@ -2334,10 +3235,12 @@ Update specific file.
     await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
 
-    // Create a commit with Task: task-6 (aliased form) that touches a DIFFERENT file
-    await mkdir(join(gitDir, 'docs'), { recursive: true });
-    await writeFile(join(gitDir, 'docs/path-b.md'), 'content');
-    await execa('git', ['add', 'docs/path-b.md'], { cwd: gitDir });
+    // Create a commit with Task: task-6 (aliased form) that touches a file in
+    // a genuinely different directory (not same-immediate-dir, not
+    // exact/suffix) — the #707 dirname pass must NOT credit this either.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/path-b.md'), 'content');
+    await execa('git', ['add', 'other/path-b.md'], { cwd: gitDir });
     await execa('git', ['commit', '-m', 'feat: wrong path\n\nTask: task-6\n'], { cwd: gitDir });
 
     const commits = await autoheal.listCommitsWithTrailers(gitDir);
@@ -2677,5 +3580,358 @@ describe('applyDerivedCompletion', () => {
     // 4. Use task-progress reader to confirm task 26 is resolved
     const resolvedCount = await countResolvedTasks(gitDir);
     expect(resolvedCount).toBe(1); // One task is now completed
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #548 sub-cause: per-task corroboration must consider the SET of trailered
+// commits, not solely the newest one.
+//
+// Live failure (2026-07-13, build 2026-07-12-wiring-reachability-gate): tasks
+// 10/18 each had an earlier feature commit that overlapped plan paths AND a
+// newer test-fix commit carrying the same `Task: <id>` trailer touching only
+// test files. deriveCompletionInternal selected a single candidate via
+// `commits.find(...)` (newest-first git log order), so the newest trailer
+// shadowed the perfectly-corroborated earlier commit and the task was
+// rejected ("trailer <sha> has no overlap with plan paths").
+//
+// Correct semantics: a task is corroborated if ANY reachable commit bearing
+// its trailer overlaps the task's plan paths. Adjacent variant (#535): a
+// stale/unreachable candidate SHA is skipped, not a terminal rejection, when
+// another satisfying candidate exists.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion any-candidate corroboration (#548)', () => {
+  it('newer no-overlap commit does not shadow an older overlapping commit with the same Task trailer', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 10: Wire the gate-loop tail
+Wire wiring_check kickback.
+
+- \`src/conductor.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Earlier feature commit: overlaps the plan's declared path.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/conductor.ts'), 'export const wired = true;');
+    await execa('git', ['add', 'src/conductor.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wire kickback into gate-loop tail\n\nTask: 10\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer test-fix commit: same trailer, touches only a test file NOT in
+    // the plan's declared paths. This is the shadowing candidate.
+    await mkdir(join(gitDir, 'test'), { recursive: true });
+    await writeFile(join(gitDir, 'test/fixtures.ts'), 'export const fixture = 1;');
+    await execa('git', ['add', 'test/fixtures.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'fix(test): seed default fixtures\n\nTask: 10\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // ANY satisfying trailered commit corroborates: the task must resolve via
+    // the earlier feature commit, not be rejected on the newest one.
+    expect(result).toHaveProperty('10');
+    expect(result['10']).toHaveProperty('completed', true);
+    expect(result['10']).toHaveProperty('evidencedBy', featureSha);
+    expect(result['10'].status).toBe('completed');
+
+    const stamp = evidence.evidenceStamps.get('10');
+    expect(stamp).toBeDefined();
+    expect(stamp!.sha).toBe(featureSha);
+    expect(stamp!.form).toBe('trailer');
+
+    mockWarn.mockRestore();
+  });
+
+  it('newer empty commit with the same trailer does not shadow an older overlapping commit', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 18: Injection seam
+Invoke live probe via injection seam.
+
+- \`src/artifacts.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/artifacts.ts'), 'export const seam = 1;');
+    await execa('git', ['add', 'src/artifacts.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: injection seam\n\nTask: 18\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer EMPTY commit with the same trailer (no Evidence: form).
+    await execa('git', ['commit', '--allow-empty', '-m', 'chore: retry marker\n\nTask: 18\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['18']).toHaveProperty('completed', true);
+    expect(result['18']).toHaveProperty('evidencedBy', featureSha);
+  });
+
+  it('skips a stale/unreachable candidate SHA when another satisfying candidate exists', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 11: Tolerant reads
+Tolerant sidecar accessor.
+
+- \`src/task-evidence.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/task-evidence.ts'), 'export const tolerant = 1;');
+    await execa('git', ['add', 'src/task-evidence.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: tolerant accessor\n\nTask: 11\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+
+    // Prepend a stale candidate: a trailered commit whose SHA no longer
+    // resolves in this repo (e.g. rewritten by a rebase). It sorts newest,
+    // so a single-candidate gate would reject the task on it.
+    const staleCandidate = {
+      sha: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      subject: 'feat: tolerant accessor (pre-rebase)',
+      trailers: { Task: ['11'] },
+    };
+    const withStale = [staleCandidate, ...commits];
+
+    const evidence = await createTaskEvidence(gitDir);
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', withStale, evidence);
+
+    // The unreachable SHA is skipped as a candidate — not a terminal
+    // rejection — because a reachable satisfying candidate exists.
+    expect(result['11']).toHaveProperty('completed', true);
+    expect(result['11']).toHaveProperty('evidencedBy', featureSha);
+
+    mockWarn.mockRestore();
+  });
+
+  it('dangling Evidence: satisfied-by falls back to a satisfying trailered commit instead of terminally rejecting', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 12: Feature with stale evidence pointer
+Implement the feature.
+
+- \`src/pointer.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // Real overlapping feature commit with the Task trailer.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/pointer.ts'), 'export const pointer = 1;');
+    await execa('git', ['add', 'src/pointer.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: pointer feature\n\nTask: 12\n'], { cwd: gitDir });
+    const featureSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Newer no-op evidence commit whose satisfied-by SHA is dangling
+    // (e.g. it referenced a commit later rewritten by a rebase).
+    await execa(
+      'git',
+      ['commit', '--allow-empty', '-m', 'chore: evidence\n\nTask: 12\nEvidence: satisfied-by deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n'],
+      { cwd: gitDir },
+    );
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // The dangling satisfied-by pointer must not terminally reject the task:
+    // the reachable, overlapping trailered commit still corroborates it.
+    expect(result['12']).toHaveProperty('completed', true);
+    expect(result['12']).toHaveProperty('evidencedBy', featureSha);
+
+    mockWarn.mockRestore();
+  });
+
+  it('still rejects with an audit entry when NO trailered candidate overlaps the plan paths', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const mockWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 13: Strict task
+Update the declared file only.
+
+- \`src/declared.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // TWO trailered commits, NEITHER overlapping the declared path, AND in a
+    // genuinely different immediate directory (not same-dir as `src/`) so
+    // the #707 bounded dirname pass does not credit either.
+    await mkdir(join(gitDir, 'other'), { recursive: true });
+    await writeFile(join(gitDir, 'other/wrong-a.ts'), 'export const a = 1;');
+    await execa('git', ['add', 'other/wrong-a.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong a\n\nTask: 13\n'], { cwd: gitDir });
+    await writeFile(join(gitDir, 'other/wrong-b.ts'), 'export const b = 1;');
+    await execa('git', ['add', 'other/wrong-b.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: wrong b\n\nTask: 13\n'], { cwd: gitDir });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    expect(result['13']).toHaveProperty('completed', false);
+    expect(result['13']).toHaveProperty('auditEntry');
+    expect(evidence.evidenceStamps.has('13')).toBe(false);
+
+    mockWarn.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED (Task 8 of rebase-orphans-every-sha-anchored-evidence-citatio.md):
+// the deriveCompletion satisfied-by consumer (autoheal.ts:602-645) must
+// resolve a cited old sha through a persisted `.pipeline/rebase-rewrites.json`
+// map (via `resolveThroughMap`) before its existence/ancestry check on the
+// `Evidence: satisfied-by <sha>` trailer target — per
+// adr-2026-07-12-rebase-evidence-stamp-translation.md. Today it only does
+// `git rev-parse --verify <sha>^{commit}`, with no map consultation, so a
+// citation naming a sha that a sanctioned engine rebase rewrote (and whose
+// pre-rebase object has since been pruned) is wrongly treated as dangling.
+// Task 9 wires this resolution in (and upgrades the check to ancestry); this
+// test pins the desired post-Task-9 behavior and is expected to FAIL
+// (genuine RED) until that wiring lands.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('deriveCompletion resolves satisfied-by citations through a persisted rebase rewrite map (RED, Task 8)', () => {
+  it('a satisfied-by trailer citing the pre-rebase sha still completes the task against the new HEAD', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 30: Rebased evidence
+A task whose satisfied-by evidence sha was rewritten by a rebase.
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Pre-rebase work commit — this is what the satisfied-by trailer cites.
+    await writeFile(join(gitDir, 'src.ts'), 'export const x = 1;');
+    await execa('git', ['add', 'src.ts'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'feat: real work\n\nTask: 30\n'], { cwd: gitDir });
+    const oldWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Pre-rebase evidence commit citing the (still current) work sha.
+    await execa(
+      'git',
+      ['commit', '--allow-empty', '-m', `noop: evidence commit\n\nTask: 30\nEvidence: satisfied-by ${oldWorkSha}\n`],
+      { cwd: gitDir },
+    );
+    const oldEvidenceSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Simulate the sanctioned rebase: rewind to base (via a force checkout
+    // of a recreated branch, not `reset --hard`), add an upstream commit to
+    // change `onto` (so the replayed commits land on a genuinely different
+    // parent and get NEW shas rather than reproducing the old commits
+    // bit-for-bit), then cherry-pick both commits back on. The evidence
+    // commit's message text (including the OLD work sha it cites) is
+    // carried over verbatim by cherry-pick, exactly as the ADR says trailer
+    // text is never rewritten in place.
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: gitDir });
+    await writeFile(join(gitDir, 'UPSTREAM.md'), 'upstream change\n');
+    await execa('git', ['add', 'UPSTREAM.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'chore: upstream commit (onto)'], { cwd: gitDir });
+    await execa('git', ['cherry-pick', oldWorkSha], { cwd: gitDir });
+    const newWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+    await execa('git', ['cherry-pick', '--allow-empty', oldEvidenceSha], { cwd: gitDir });
+    const newEvidenceSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    // Confirm the trailer text on the rewritten evidence commit is
+    // unmutated: still names the OLD work sha, never rewritten to the new
+    // one — the ADR's immutable-trailer invariant.
+    const newEvidenceMessage = (
+      await execa('git', ['log', '-1', '--format=%B', newEvidenceSha], { cwd: gitDir })
+    ).stdout;
+    expect(newEvidenceMessage).toContain(`Evidence: satisfied-by ${oldWorkSha}`);
+    expect(newEvidenceMessage).not.toContain(newWorkSha);
+
+    // Prune the pre-rebase objects so the old work sha is genuinely gone —
+    // not merely lingering, which would let the existence-only check pass
+    // by accident and mask whether resolution actually happened.
+    await execa('git', ['reflog', 'expire', '--expire=now', '--all'], { cwd: gitDir });
+    await execa('git', ['gc', '--prune=now'], { cwd: gitDir });
+    const goneCheck = await execa('git', ['cat-file', '-e', `${oldWorkSha}^{commit}`], {
+      cwd: gitDir,
+      reject: false,
+    });
+    expect(goneCheck.exitCode).not.toBe(0); // sanity: fixture genuinely pruned the old object
+
+    // Persist the rewrite map old -> new, exactly as `performRebase` would
+    // after a `changed` outcome.
+    await persistRewriteMap(gitDir, { [oldWorkSha]: newWorkSha });
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Desired post-Task-9 behavior: the satisfied-by consumer resolves the
+    // cited oldWorkSha -> newWorkSha through the persisted map before its
+    // existence/ancestry check, so the task completes.
+    expect(result).toHaveProperty('30');
+    expect(result['30']).toHaveProperty('completed', true);
+    expect(result['30'].evidencedBy).toBe(newWorkSha);
+
+    // Load-bearing invariant (ADR), re-checked after deriveCompletion runs:
+    // the trailer text on disk is still the immutable pre-rebase citation —
+    // deriveCompletion must never rewrite commit messages to "fix" a sha.
+    const messageAfter = (
+      await execa('git', ['log', '-1', '--format=%B', newEvidenceSha], { cwd: gitDir })
+    ).stdout;
+    expect(messageAfter).toBe(newEvidenceMessage);
+    expect(messageAfter).toContain(`Evidence: satisfied-by ${oldWorkSha}`);
   });
 });

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
+import { verdictFreshnessFloor } from '../../src/engine/artifacts.js';
 
 // Mirrors the real repo convention: **Status:**, ### Happy Path / ### Negative
 // Paths headings with Given/When/Then bullets. See gate-audit-2026-06-23.md.
@@ -176,6 +177,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const full = join(dir, '.pipeline/architecture-review-as-built.md');
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content);
+    return full;
   }
 
   const header = '# As-Built Architecture Review\n**Mode:** as-built\n';
@@ -184,12 +186,14 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no \.pipeline\/architecture-review-as-built\.md/);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('passes on a clean APPROVED verdict', async () => {
     await report(`${header}**Verdict:** APPROVED\n`);
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(true);
+    expect(r.routeClass).toBeUndefined();
   });
 
   it('passes on APPROVED WITH DRIFT NOTES', async () => {
@@ -203,6 +207,7 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/BLOCKED/);
+    expect(r.routeClass).toBe('named-route');
   });
 
   // The reported random-number-api bug: a non-clean, non-BLOCKED verdict was
@@ -212,13 +217,106 @@ describe('engine/artifacts — architecture_review_as_built predicate (fail-clos
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/not a clean APPROVED|NEEDS REVIEW/);
+    expect(r.routeClass).toBe('named-route');
   });
 
-  it('fails when the report has no Verdict line at all', async () => {
+  it('fails when the report has no Verdict line at all (unparseable verdict)', async () => {
     await report(`${header}## Notes\nThere were no ADRs to check.\n`);
     const r = await checkGateCompletion(dir, 'architecture_review_as_built');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no parseable .*Verdict|not a clean APPROVED/i);
+    expect(r.routeClass).toBe('absent');
+  });
+
+  it('fails on a stale report (mtime predates session) with routeClass absent', async () => {
+    const full = await report(`${header}**Verdict:** APPROVED\n`);
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    await utimes(full, old, old);
+    const sessionStartedAt = Date.now();
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.routeClass).toBe('absent');
+  });
+
+  // Task 1, session-fresh-verdict-artifacts (incident 2026-07-12-wiring-reachability-gate):
+  // require the verdict artifact to be fresh relative to the per-attempt
+  // judging session, not just the conductor-run session start.
+  it('passes when artifact mtime >= attemptStartedAt', async () => {
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const T = Date.now();
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
+  });
+
+  it("scores no-fresh-verdict when mtime < attemptStartedAt though >= sessionStartedAt (the incident)", async () => {
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const S = Date.now() - 60_000;
+    const T = Date.now();
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    // mtime between S and T: fresh for the run session, stale for this attempt.
+    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
+      sessionStartedAt: S,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.reason).not.toBe('as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review');
+    expect(r.reason).not.toMatch(/^as-built review verdict is "BLOCKED"/);
+    expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'attempt' });
+  });
+
+  it('byte-identical rewrite this attempt still passes', async () => {
+    const content = `${header}**Verdict:** APPROVED\n`;
+    await report(content);
+    const T = Date.now();
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    // Simulate a rewrite this attempt with identical bytes but a fresh mtime.
+    await writeFile(full, content);
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+  });
+
+  // Filesystem-clock lag: a verdict written *during* this dispatch can record an
+  // mtime a few ms BEFORE `attemptStartedAt` (captured just before the write via
+  // Date.now()) because the kernel's coarse filesystem clock lags CLOCK_REALTIME.
+  // The per-attempt comparison absorbs this via VERDICT_FRESHNESS_FS_TOLERANCE_MS
+  // so a genuinely fresh verdict is never a false "no fresh verdict".
+  it('passes when mtime is a few ms below attemptStartedAt (filesystem-clock lag tolerance)', async () => {
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const T = Date.now();
+    const full = join(dir, '.pipeline/architecture-review-as-built.md');
+    // Written this dispatch, but mtime lags the captured floor by 50ms.
+    await utimes(full, new Date(T - 50), new Date(T - 50));
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
+  });
+
+  it('verdictFreshnessFloor falls back to sessionStartedAt when attemptStartedAt is undefined', async () => {
+    const S = Date.now() - 1000;
+    expect(verdictFreshnessFloor({ sessionStartedAt: S })).toBe(S);
+    expect(verdictFreshnessFloor({ sessionStartedAt: S, attemptStartedAt: undefined })).toBe(S);
+
+    // Predicate outcome identical to pre-change: only sessionStartedAt present.
+    await report(`${header}**Verdict:** APPROVED\n`);
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
   });
 });
 
@@ -242,6 +340,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const r = await checkGateCompletion(dir, 'build_review');
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/no build-review verdict/i);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('passes on a fresh valid PASS verdict', async () => {
@@ -249,6 +348,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(true);
+    expect(r.routeClass).toBeUndefined();
   });
 
   it('fails when the verdict file predates the session (stale)', async () => {
@@ -261,7 +361,8 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now();
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
-    expect(r.reason).toMatch(/stale/i);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('fails on a FAIL verdict and surfaces the reasons', async () => {
@@ -275,6 +376,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     expect(r.done).toBe(false);
     expect(r.reason).toMatch(/tautological assertion in test/);
     expect(r.reason).toMatch(/scope creep beyond acceptance criteria/);
+    expect(r.routeClass).toBe('named-route');
   });
 
   it('fails on malformed JSON', async () => {
@@ -284,6 +386,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
+    expect(r.routeClass).toBe('absent');
   });
 
   it('fails on a verdict that fails validation (e.g. missing rubric)', async () => {
@@ -291,5 +394,201 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(false);
+    expect(r.routeClass).toBe('absent');
+  });
+
+  // Task 1, session-fresh-verdict-artifacts.
+  it('reuses no stale PASS across attempts (mtime < attemptStartedAt)', async () => {
+    const full = await verdict({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false },
+    });
+    const S = Date.now() - 60_000;
+    const T = Date.now();
+    // Fresh for the run session but stale relative to this attempt's dispatch.
+    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: S, attemptStartedAt: T });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'attempt' });
+  });
+
+  it('passes a fresh PASS verdict rewritten this attempt', async () => {
+    const full = await verdict({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false },
+    });
+    const T = Date.now();
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const r = await checkGateCompletion(dir, 'build_review', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
+  });
+});
+
+describe('engine/artifacts — prd_audit predicate (per-attempt verdict freshness)', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'prd-audit-pred-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function report(content: string) {
+    const full = join(dir, '.pipeline/prd-audit.md');
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, content);
+    return full;
+  }
+
+  const aligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+
+  it('reuses no stale ALIGNED report across attempts (mtime < attemptStartedAt)', async () => {
+    const full = await report(aligned);
+    const S = Date.now() - 60_000;
+    const T = Date.now();
+    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
+    const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S, attemptStartedAt: T });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/no fresh verdict/i);
+    expect(r.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'attempt' });
+  });
+
+  it('passes an ALIGNED report rewritten this attempt', async () => {
+    const full = await report(aligned);
+    const T = Date.now();
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const r = await checkGateCompletion(dir, 'prd_audit', {
+      sessionStartedAt: T - 60_000,
+      attemptStartedAt: T,
+    });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'attempt' });
+  });
+});
+
+// Task 3, session-fresh-verdict-artifacts: regression/fallback coverage for
+// the verdict-freshness floor across all three predicates it touches.
+describe('engine/artifacts — verdict-freshness floor regression/fallback', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'freshness-regress-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function write(path: string, content: string) {
+    const full = join(dir, path);
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, content);
+    return full;
+  }
+
+  const asBuiltHeader = '# As-Built Architecture Review\n**Mode:** as-built\n';
+  const prdAligned = '# PRD Audit\n\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+  async function buildReviewPass() {
+    return write(
+      '.pipeline/build-review.json',
+      JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false } }),
+    );
+  }
+
+  it('(a) no attemptStartedAt: architecture_review_as_built behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    const S = Date.now() - 60_000;
+    // Fresh relative to session (mtime is "now", after S) — should pass.
+    const r = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    // Stale relative to session — should fail, same as pre-change behavior.
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(a) no attemptStartedAt: prd_audit behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await write('.pipeline/prd-audit.md', prdAligned);
+    const S = Date.now() - 60_000;
+    const r = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'prd_audit', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(a) no attemptStartedAt: build_review behaves exactly as before against sessionStartedAt only', async () => {
+    const full = await buildReviewPass();
+    const S = Date.now() - 60_000;
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: S });
+    expect(r.done).toBe(true);
+    expect(r.verdictFreshness).toMatchObject({ fresh: true, floorSource: 'session' });
+
+    const old = new Date(S - 60_000);
+    await utimes(full, old, old);
+    const r2 = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: S });
+    expect(r2.done).toBe(false);
+    expect(r2.verdictFreshness).toMatchObject({ fresh: false, floorSource: 'session' });
+  });
+
+  it('(b) both attemptStartedAt and sessionStartedAt undefined: fail-open on presence for all three predicates', async () => {
+    await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    await write('.pipeline/prd-audit.md', prdAligned);
+    await buildReviewPass();
+
+    const rAsBuilt = await checkGateCompletion(dir, 'architecture_review_as_built', {});
+    expect(rAsBuilt.done).toBe(true);
+    expect(rAsBuilt.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+
+    const rPrd = await checkGateCompletion(dir, 'prd_audit', {});
+    expect(rPrd.done).toBe(true);
+    expect(rPrd.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+
+    const rBuild = await checkGateCompletion(dir, 'build_review', {});
+    expect(rBuild.done).toBe(true);
+    expect(rBuild.verdictFreshness).toMatchObject({ fresh: true, floorMs: undefined });
+  });
+
+  it('(b) verdictFreshnessFloor itself returns undefined when both are undefined', () => {
+    expect(verdictFreshnessFloor({})).toBeUndefined();
+    expect(verdictFreshnessFloor({ sessionStartedAt: undefined, attemptStartedAt: undefined })).toBeUndefined();
+  });
+
+  it('(c) idempotency: repeated evaluation of identical on-disk state yields an identical decision + reason', async () => {
+    const full = await write('.pipeline/architecture-review-as-built.md', `${asBuiltHeader}**Verdict:** APPROVED\n`);
+    const T = Date.now();
+    await utimes(full, new Date(T + 1000), new Date(T + 1000));
+    const ctx = { sessionStartedAt: T - 60_000, attemptStartedAt: T };
+
+    const r1 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);
+    const r2 = await checkGateCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(r2.done).toBe(r1.done);
+    expect(r2.reason).toBe(r1.reason);
+    expect(r2.verdictFreshness).toEqual(r1.verdictFreshness);
+  });
+
+  it('(c) idempotency: repeated evaluation of an identical stale/no-fresh-verdict state yields an identical decision + reason', async () => {
+    const full = await buildReviewPass();
+    const S = Date.now() - 60_000;
+    const T = Date.now();
+    await utimes(full, new Date(S + 30_000), new Date(S + 30_000));
+    const ctx = { sessionStartedAt: S, attemptStartedAt: T };
+
+    const r1 = await checkGateCompletion(dir, 'build_review', ctx);
+    const r2 = await checkGateCompletion(dir, 'build_review', ctx);
+    expect(r2.done).toBe(r1.done);
+    expect(r2.reason).toBe(r1.reason);
+    expect(r2.verdictFreshness).toEqual(r1.verdictFreshness);
   });
 });

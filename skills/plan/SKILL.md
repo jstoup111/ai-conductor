@@ -79,6 +79,10 @@ Write file paths **repo-relative** (e.g. `src/conductor/src/engine/foo.ts`, not
 paths. Basename/suffix forms are tolerated (matched at `/` boundaries, #425), but
 repo-relative paths corroborate precisely and never collide.
 
+**Wired-into:** [where the new production surface is called from, or an inheritance/waiver form — see below]
+
+**Verify-only:** [yes, or omit — see 5d below]
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
@@ -89,6 +93,60 @@ it. `same` inherits the previous task's set, `same as Task N` inherits task
 N's, and `none` means the task's commit trailer alone corroborates. Backticked
 file names elsewhere in the task (Steps prose) are only used when no Files
 line exists.
+
+### 5c. `Wired-into:` Grammar and Derivation
+
+Every task that introduces a new production surface (exported function/module, hook
+script, config key, emitted event, scheduled job, CLI subcommand, etc.) carries a
+`**Wired-into:**` line. This is the plan-level contract that the §12 As-Built
+Compliance Gate later checks against real `file:line` callers after implementation.
+
+**The four forms:**
+
+1. **Declared call site(s):** `path#symbol` — repo-relative path plus the calling
+   symbol, comma-separated for multiple call sites:
+   `src/conductor/src/engine/loop.ts#dispatchStep, src/conductor/bin/conduct-ts#commandTable`
+2. **Inheritance:** `same as Task N` — this task's surface is wired in by the same
+   call site(s) declared for Task N (e.g. a follow-up task adding a branch to
+   already-wired dispatch logic).
+3. **No new surface:** `none (no new production surface)` — the task only touches
+   tests, docs, or refactors existing wired code without adding a new call target.
+4. **Deferred/waived:** `none (inert until <ref>)` — the surface is intentionally
+   not yet reachable, where `<ref>` is either a repo-relative path (path-form,
+   e.g. `none (inert until src/conductor/src/engine/loop.ts)`) or a tracked issue
+   (issue-form, e.g. `none (inert until #431)`) naming where/when it will be wired.
+
+**Repo-relative paths only:** as with `**Files:**`, every path used in a
+`Wired-into:` line must be repo-relative and must not escape the repo via `../`.
+Paths that climb outside the repo root are malformed and must be rejected.
+
+**Derivation for Medium/Large tier:** for Medium/Large tier features,
+architecture-review's `## Wiring Surface` section (see `skills/architecture-review/SKILL.md`)
+is authored first, at design time, naming where each new production surface will be
+called from. `/plan` reads that section and DERIVES each task's `Wired-into:` line
+from it — the call sites named there become the `path#symbol` (or inheritance/waiver)
+forms on the corresponding tasks. Do not invent `Wired-into:` values ad hoc when a
+`## Wiring Surface` section exists; transcribe/refine what it already states.
+
+**Small-tier fallback:** Small-tier features skip architecture-review entirely (see
+its Lightweight Mode section), so there is no `## Wiring Surface` section to derive
+from. In that case `/plan` self-authors reasonable `Wired-into:` lines directly,
+using the same four-form grammar above, based on its own knowledge of where the
+task's surface will be called from.
+
+### 5d. `Verify-only:` Marker
+
+A task block MAY include a `**Verify-only:** yes` line to declare that the task is
+expected to prove existing behavior already satisfies its acceptance criteria, rather
+than land new code. The match is exact (case-insensitive) on the literal value `yes`;
+any other value, or the line's absence, means the task is NOT verify-only.
+
+Verify-only tasks preferably complete via an empty commit rather than a code commit:
+carry a `Task: <id>` trailer and an `Evidence: skipped <reason>` trailer (see
+`skills/tdd/SKILL.md`'s "Commit-less Completions: Evidence Trailers" section for the
+exact commit form and the sibling `Evidence: satisfied-by <sha>` form). Do not force a
+throwaway code change onto a task just to produce a corroborating commit when the task's
+own acceptance criteria are already met.
 
 ### 4. Task Ordering Rules
 
@@ -217,5 +275,8 @@ any code is written. The full flow from here is:
 - [ ] Tasks are 2-5 minute granularity
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Dependencies are declared and acyclic
+- [ ] Every task that touches new production-surface files carries a `**Wired-into:**`
+      line (declared call site(s), `same as Task N`, or a `none (...)` form) — BLOCKS
+      the plan's own verification if missing
 - [ ] Plan saved to `.docs/plans/`
 - [ ] Coverage mapping presented to user

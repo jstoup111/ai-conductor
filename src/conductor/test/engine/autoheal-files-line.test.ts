@@ -15,8 +15,14 @@
 // - `same` inherits the previous task's resolved set; `same as Task N`
 //   inherits task N's resolved set. Chains resolve (1 ← 2 ← 3).
 // - `none` declares no paths (trailer alone corroborates).
-// - A task WITHOUT a **Files:** line keeps the legacy whole-section backtick
-//   scan (remediation-append blocks and older plans rely on it).
+// - A task WITHOUT a **Files:** line keeps the legacy backtick scan, but ONLY
+//   over dedicated file-list bullet items (`- \`path\``) — NOT over backtick
+//   tokens embedded in prose sentences. An inline backtick in a prose sentence
+//   is almost always an incidental reference (a runtime artifact the task
+//   reads/guards, a `file:NNN-MMM` line citation, a module-import string), not
+//   a declaration of the file the task edits. Harvesting those as required
+//   corroboration paths caused #548's false rejections (T11's inline
+//   `task-status.json`, rtk T3's inline `bin/install:494–506`).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
@@ -193,5 +199,46 @@ describe('parsePlanTaskPaths **Files:** line sourcing (#424)', () => {
     expect(paths(m, '5')).toEqual(base);
     expect(paths(m, '6')).toEqual(base);
     expect(paths(m, '9')).toEqual(['src/conductor/src/index.ts']);
+  });
+});
+
+describe('parsePlanTaskPaths inline-prose backtick paths are not harvested (#548)', () => {
+  it('an inline prose backtick artifact does NOT become a declared path (T11 shape)', () => {
+    // #280 plan T11: names `task-status.json` in a prose sentence describing
+    // the robustness behavior — it is the artifact the task guards, not the
+    // file the task edits (task-evidence.ts). It must NOT be a declared path.
+    const m = parsePlanTaskPaths(`# Plan
+
+### Task T11 — Tolerant reads (robustness)
+Corrupt/missing \`task-status.json\` or sidecar → treated as zero delta / no change; no exception
+escapes the loop or the daemon tick.
+**Dependencies:** T4, T8.
+`);
+    expect(paths(m, 'T11')).toEqual([]);
+  });
+
+  it('an inline line-annotated path citation does NOT become a declared path (rtk T3 shape)', () => {
+    // rtk plan T3: cites `bin/install:494–506` inline in prose. The task edits
+    // bin/install, but the `:line-range` citation is not a clean declaration.
+    const m = parsePlanTaskPaths(`# Plan
+
+### T3 — Move RTK re-init onto the always-run path
+Extract the \`rtk init -g --auto-patch\` invocation (currently \`bin/install:494–506\`) into the
+always-run section of \`install()\`.
+**Dependencies:** T2.
+`);
+    expect(paths(m, '3')).toEqual([]);
+  });
+
+  it('a dedicated file-list bullet IS still harvested (no **Files:** line)', () => {
+    // The genuine "declare files as a bullet list" convention still corroborates
+    // — this is the #425 / remediation-append form that must keep rejecting
+    // disjoint commits.
+    const m = parsePlanTaskPaths(`# Plan
+
+### Task 1: Implementation
+- \`push-evidence.ts\`
+`);
+    expect(paths(m, '1')).toEqual(['push-evidence.ts']);
   });
 });

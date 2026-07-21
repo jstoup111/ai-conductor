@@ -37,6 +37,7 @@ import {
   formatGapReport,
 } from './engine/complete-verifier.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
+import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
@@ -80,9 +81,14 @@ import {
 import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
+  resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import {
+  detectHaltIssuesSweepCommand,
+  dispatchHaltIssuesSweep,
+} from './engine/halt-issues/halt-issues-cli.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
@@ -377,6 +383,16 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // Halt-issues subcommand (`halt-issues sweep --repo-dir ... --monitor-log ...
+  // --ledger ... --gh-repo ...`) runs NON-INTERACTIVELY and exits — orchestrates
+  // the sweep pipeline for processing filed halt-monitor issues. Mirrors the
+  // shipped-record dispatch pattern.
+  const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
+  if (haltIssuesCmd) {
+    const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
+    process.exit(code);
+  }
+
   // `daemon --help` / `daemon -h`: print the daemon command surface (run flags +
   // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
   // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and
@@ -404,7 +420,12 @@ async function main(): Promise<void> {
   // and the daemon run command so they are never mistaken for either.
   const daemonParkCmd = detectDaemonParkCommand(process.argv);
   if (daemonParkCmd) {
-    const code = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd() });
+    const resolved = await resolveMainRepoRoot(process.cwd());
+    if ('error' in resolved) {
+      console.error(resolved.error);
+      process.exit(1);
+    }
+    const code = await dispatchDaemonPark(daemonParkCmd, { cwd: resolved.root });
     process.exit(code);
   }
 
@@ -875,6 +896,13 @@ async function main(): Promise<void> {
       }`,
     );
   }
+
+  // Auto-update check (port-self-update-flow T5 / Story 7): spawn
+  // `bin/update --auto` before the pipeline boots. Advisory only — a missing
+  // harness root, a missing `bin/update`, or any spawn/exec failure is logged
+  // and swallowed inside spawnAutoUpdateCheck; it must never block or crash
+  // startup.
+  await spawnAutoUpdateCheck();
 
   const conductor = new Conductor({
     stateFilePath,

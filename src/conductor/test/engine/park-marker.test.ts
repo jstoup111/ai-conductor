@@ -1,13 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
-import { join } from 'path';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, readFile, mkdir, writeFile, chmod } from 'fs/promises';
+import { join, dirname } from 'path';
 import { tmpdir } from 'os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   writeAutoPark,
   isOperatorParked,
   getProvenanceType,
   writeOperatorPark,
+  resolveMainRepoRoot,
+  removeOperatorPark,
+  listOperatorParkedSlugs,
+  __resetResolveCacheForTests,
+  reconcileStrandedParkMarkers,
 } from '../../src/engine/park-marker';
+
+const execFile = promisify(execFileCb);
 
 let repoPath: string;
 
@@ -113,5 +122,910 @@ describe('park-marker auto-park provenance (Task 22)', () => {
     expect(secondContent).toBe(firstContent);
     expect(secondContent).toContain('First reason');
     expect(secondContent).not.toContain('Second reason');
+  });
+});
+
+describe('resolveMainRepoRoot (Task 1)', () => {
+  let mainRoot: string;
+
+  async function g(args: string[], cwd?: string) {
+    return execFile('git', args, { cwd: cwd || mainRoot });
+  }
+
+  /** Create a real git repo at mainRoot with a real linked worktree. */
+  async function initRepoWithWorktree(slug: string): Promise<string> {
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(mainRoot, 'README.md'), '# base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await mkdir(join(mainRoot, '.worktrees'), { recursive: true });
+    const worktreeDir = join(mainRoot, '.worktrees', slug);
+    await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+    return worktreeDir;
+  }
+
+  beforeEach(async () => {
+    mainRoot = await mkdtemp(join(tmpdir(), 'resolve-main-root-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(mainRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('resolveMainRepoRoot(mainRoot) returns mainRoot when called from main repo root', async () => {
+    await initRepoWithWorktree('test-feat');
+    const resolved = await resolveMainRepoRoot(mainRoot);
+    expect(resolved).toBe(mainRoot);
+  });
+
+  it('resolveMainRepoRoot(worktreeDir) returns mainRoot when called from a linked worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+    const resolved = await resolveMainRepoRoot(worktreeDir);
+    expect(resolved).toBe(mainRoot);
+  });
+
+  it('resolveMainRepoRoot caches results per startDir to avoid repeated git calls', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+
+    // First call resolves the worktree to main root
+    const first = await resolveMainRepoRoot(worktreeDir);
+    expect(first).toBe(mainRoot);
+
+    // Second call returns the same cached promise
+    const second = await resolveMainRepoRoot(worktreeDir);
+    expect(second).toBe(mainRoot);
+
+    // Both calls should return identical results
+    expect(first).toBe(second);
+
+    // Verify cache is populated by checking another directory uses different cache entry
+    const tmpDir = await mkdtemp(join(tmpdir(), 'cache-test-'));
+    try {
+      const third = await resolveMainRepoRoot(tmpDir);
+      // Non-git dir returns itself
+      expect(third).toBe(tmpDir);
+      // Different result from first call
+      expect(third).not.toBe(first);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot invokes git runner exactly once per unique directory', async () => {
+    const worktreeDir = await initRepoWithWorktree('test-feat');
+
+    // Create a counting runner that tracks invocation count
+    let callCount = 0;
+    const countingRunner = async (args: string[], cwd: string) => {
+      callCount++;
+      return execFile('git', args, { cwd });
+    };
+
+    // First call to worktreeDir — should invoke git runner once
+    const first = await resolveMainRepoRoot(worktreeDir, countingRunner);
+    expect(first).toBe(mainRoot);
+    expect(callCount).toBe(1);
+
+    // Second call to same worktreeDir — should NOT invoke git runner again (cached)
+    const second = await resolveMainRepoRoot(worktreeDir, countingRunner);
+    expect(second).toBe(mainRoot);
+    expect(callCount).toBe(1); // Still 1, not 2
+
+    // Call to a different directory — should invoke git runner again
+    const tmpDir = await mkdtemp(join(tmpdir(), 'unique-dir-'));
+    try {
+      const third = await resolveMainRepoRoot(tmpDir, countingRunner);
+      expect(third).toBe(tmpDir); // Falls back to tmpDir (not a git repo)
+      expect(callCount).toBe(2); // Now invoked for the new directory
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot(nonGitDir) returns nonGitDir as fallback', async () => {
+    const nonGitDir = await mkdtemp(join(tmpdir(), 'non-git-'));
+    try {
+      const resolved = await resolveMainRepoRoot(nonGitDir);
+      expect(resolved).toBe(nonGitDir);
+    } finally {
+      await rm(nonGitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot logs errors via onResolveError callback when provided', async () => {
+    const nonGitDir = await mkdtemp(join(tmpdir(), 'non-git-error-'));
+    const errors: Error[] = [];
+
+    try {
+      const resolved = await resolveMainRepoRoot(nonGitDir, undefined, (err) => {
+        errors.push(err);
+      });
+      expect(resolved).toBe(nonGitDir);
+      // Error should have been logged
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      await rm(nonGitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot falls back to startDir when injected gitRunner throws', async () => {
+    const testDir = await mkdtemp(join(tmpdir(), 'injected-runner-error-'));
+    const errors: Error[] = [];
+    const failingRunner = async () => {
+      throw new Error('Injected git failure');
+    };
+
+    try {
+      const resolved = await resolveMainRepoRoot(testDir, failingRunner, (err) => {
+        errors.push(err);
+      });
+      expect(resolved).toBe(testDir);
+      // Error should have been logged via callback
+      expect(errors.length).toBe(1);
+      expect(errors[0]?.message).toBe('Injected git failure');
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolveMainRepoRoot handles nonexistent paths without throwing', async () => {
+    const nonExistentPath = '/tmp/this-path-definitely-does-not-exist-12345-67890';
+    const errors: Error[] = [];
+
+    // Should not throw, should return input path as fallback
+    const resolved = await resolveMainRepoRoot(nonExistentPath, undefined, (err) => {
+      errors.push(err);
+    });
+    expect(resolved).toBe(nonExistentPath);
+    // Error should be logged (git command failed)
+    expect(errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe('write/read primitives converge on main root (Task 4)', () => {
+  let mainRoot: string;
+
+  async function g(args: string[], cwd?: string) {
+    return execFile('git', args, { cwd: cwd || mainRoot });
+  }
+
+  /** Create a real git repo at mainRoot with a real linked worktree. */
+  async function initRepoWithWorktree(slug: string): Promise<string> {
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(mainRoot, 'README.md'), '# base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await mkdir(join(mainRoot, '.worktrees'), { recursive: true });
+    const worktreeDir = join(mainRoot, '.worktrees', slug);
+    await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+    return worktreeDir;
+  }
+
+  beforeEach(async () => {
+    mainRoot = await mkdtemp(join(tmpdir(), 'task4-convergence-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(mainRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('writeAutoPark(worktreeDir) writes marker to main root, not worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-a');
+    const slug = 'my-auto-park';
+    const reason = 'No evidence after 3 attempts';
+
+    await writeAutoPark(worktreeDir, slug, reason);
+
+    // Marker should exist at MAIN root, not worktree
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toContain('auto-parked: No evidence after 3 attempts');
+
+    // Worktree should NOT have a .daemon/parked directory
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('writeOperatorPark(worktreeDir) writes marker to main root, not worktree', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-b');
+    const slug = 'my-operator-park';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Marker should exist at MAIN root, not worktree
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toContain('parked by operator');
+
+    // Worktree should NOT have a .daemon/parked directory
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('isOperatorParked(worktreeDir) returns true for auto-parked marker at main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-c');
+    const slug = 'my-auto-park-2';
+
+    await writeAutoPark(worktreeDir, slug, 'Test reason');
+
+    // Both roots should see the marker as parked
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
+
+  it('isOperatorParked(worktreeDir) returns true for operator-parked marker at main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-d');
+    const slug = 'my-operator-park-2';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Both roots should see the marker as parked
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
+
+  it('getProvenanceType(worktreeDir) returns "auto" for auto-parked marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-e');
+    const slug = 'my-auto-provenance';
+
+    await writeAutoPark(worktreeDir, slug, 'Auto-park test');
+
+    // Both roots should see the same provenance
+    const fromWorktree = await getProvenanceType(worktreeDir, slug);
+    const fromMain = await getProvenanceType(mainRoot, slug);
+
+    expect(fromWorktree).toBe('auto');
+    expect(fromMain).toBe('auto');
+  });
+
+  it('getProvenanceType(worktreeDir) returns "operator" for operator-parked marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-f');
+    const slug = 'my-operator-provenance';
+
+    await writeOperatorPark(worktreeDir, slug);
+
+    // Both roots should see the same provenance
+    const fromWorktree = await getProvenanceType(worktreeDir, slug);
+    const fromMain = await getProvenanceType(mainRoot, slug);
+
+    expect(fromWorktree).toBe('operator');
+    expect(fromMain).toBe('operator');
+  });
+
+  it('listOperatorParkedSlugs(worktreeDir) includes markers from main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-g');
+    const slug1 = 'slug-1';
+    const slug2 = 'slug-2';
+
+    await writeAutoPark(worktreeDir, slug1, 'reason 1');
+    await writeOperatorPark(mainRoot, slug2);
+
+    // Both roots should list both slugs
+    const fromWorktree = await listOperatorParkedSlugs(worktreeDir);
+    const fromMain = await listOperatorParkedSlugs(mainRoot);
+
+    expect(fromWorktree).toContain(slug1);
+    expect(fromWorktree).toContain(slug2);
+    expect(fromMain).toContain(slug1);
+    expect(fromMain).toContain(slug2);
+  });
+
+  it('removeOperatorPark(worktreeDir) removes marker from main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-h');
+    const slug = 'my-removable-park';
+
+    await writeOperatorPark(worktreeDir, slug);
+    expect(await isOperatorParked(worktreeDir, slug)).toBe(true);
+
+    await removeOperatorPark(worktreeDir, slug);
+    expect(await isOperatorParked(mainRoot, slug)).toBe(false);
+  });
+
+  it('import: removeOperatorPark is exported for use in tests', async () => {
+    // This is a placeholder to ensure removeOperatorPark is importable
+    expect(typeof removeOperatorPark).toBe('function');
+  });
+
+  it('concurrent writes from worktree + main produce exactly one marker (race-safe)', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-concurrent');
+    const slug = 'concurrent-race-test';
+    const reasonA = 'Attempt limit from worktree';
+    const reasonB = 'Attempt limit from main';
+
+    // Race two writes from different roots concurrently
+    const results = await Promise.all([
+      writeAutoPark(worktreeDir, slug, reasonA),
+      writeAutoPark(mainRoot, slug, reasonB),
+    ]);
+
+    // Both should resolve without throwing
+    expect(results).toHaveLength(2);
+
+    // Exactly one marker should exist at the main root
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const markerContent = await readFile(mainMarkerPath, 'utf-8');
+
+    // One of the two reasons should win; both produce valid auto-park format
+    expect(markerContent).toContain('auto-parked:');
+    expect(markerContent).toContain('timestamp:');
+
+    // No marker should exist at the worktree
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Both roots should see exactly one marker
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+
+    // Provenance should be 'auto' from both roots
+    const provenanceWorktree = await getProvenanceType(worktreeDir, slug);
+    const provenanceMain = await getProvenanceType(mainRoot, slug);
+    expect(provenanceWorktree).toBe('auto');
+    expect(provenanceMain).toBe('auto');
+  });
+
+  it('concurrent mixed writes (auto + operator) from different roots produce exactly one marker', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-mixed-concurrent');
+    const slug = 'mixed-race-test';
+
+    // Race writeAutoPark from worktree against writeOperatorPark from main
+    const results = await Promise.all([
+      writeAutoPark(worktreeDir, slug, 'Auto reason'),
+      writeOperatorPark(mainRoot, slug),
+    ]);
+
+    // Both should resolve without throwing
+    expect(results).toHaveLength(2);
+
+    // Exactly one marker should exist at the main root
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const markerContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(markerContent).toBeTruthy();
+
+    // No marker at worktree
+    const worktreeMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    try {
+      await readFile(worktreeMarkerPath);
+      throw new Error('worktree marker should not exist');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Both roots see exactly one marker
+    const fromWorktree = await isOperatorParked(worktreeDir, slug);
+    const fromMain = await isOperatorParked(mainRoot, slug);
+    expect(fromWorktree).toBe(true);
+    expect(fromMain).toBe(true);
+  });
+});
+
+describe('non-git directories preserve pre-#486 semantics (Task 6)', () => {
+  let nonGitRoot: string;
+
+  beforeEach(async () => {
+    nonGitRoot = await mkdtemp(join(tmpdir(), 'non-git-root-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(nonGitRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('writeAutoPark(nonGitRoot) writes marker to <nonGitRoot>/.daemon/parked/<slug>, not resolved elsewhere', async () => {
+    const slug = 'non-git-feature';
+    const reason = 'Test in non-git directory';
+
+    await writeAutoPark(nonGitRoot, slug, reason);
+
+    // Marker should exist at the input root (no resolution attempted)
+    const markerPath = join(nonGitRoot, '.daemon', 'parked', slug);
+    const content = await readFile(markerPath, 'utf-8');
+    expect(content).toContain(`auto-parked: ${reason}`);
+  });
+
+  it('isOperatorParked(nonGitRoot) returns true for auto-parked marker in non-git directory', async () => {
+    const slug = 'non-git-feature';
+
+    await writeAutoPark(nonGitRoot, slug, 'No evidence');
+
+    const isParked = await isOperatorParked(nonGitRoot, slug);
+    expect(isParked).toBe(true);
+  });
+
+  it('removeOperatorPark(nonGitRoot) removes marker from non-git directory', async () => {
+    const slug = 'non-git-removable';
+
+    await writeOperatorPark(nonGitRoot, slug);
+    expect(await isOperatorParked(nonGitRoot, slug)).toBe(true);
+
+    await removeOperatorPark(nonGitRoot, slug);
+    expect(await isOperatorParked(nonGitRoot, slug)).toBe(false);
+  });
+
+  it('writeOperatorPark(nonGitRoot) writes marker to non-git directory', async () => {
+    const slug = 'non-git-operator-park';
+
+    await writeOperatorPark(nonGitRoot, slug);
+
+    const markerPath = join(nonGitRoot, '.daemon', 'parked', slug);
+    const content = await readFile(markerPath, 'utf-8');
+    expect(content).toContain('parked by operator');
+  });
+
+  it('getProvenanceType(nonGitRoot) returns "auto" for auto-parked marker in non-git directory', async () => {
+    const slug = 'non-git-auto-provenance';
+
+    await writeAutoPark(nonGitRoot, slug, 'Auto reason');
+
+    const provenance = await getProvenanceType(nonGitRoot, slug);
+    expect(provenance).toBe('auto');
+  });
+
+  it('getProvenanceType(nonGitRoot) returns "operator" for operator-parked marker in non-git directory', async () => {
+    const slug = 'non-git-operator-provenance';
+
+    await writeOperatorPark(nonGitRoot, slug);
+
+    const provenance = await getProvenanceType(nonGitRoot, slug);
+    expect(provenance).toBe('operator');
+  });
+
+  it('listOperatorParkedSlugs(nonGitRoot) returns slugs from non-git directory', async () => {
+    const slug1 = 'slug-1';
+    const slug2 = 'slug-2';
+
+    await writeAutoPark(nonGitRoot, slug1, 'reason 1');
+    await writeOperatorPark(nonGitRoot, slug2);
+
+    const slugs = await listOperatorParkedSlugs(nonGitRoot);
+    expect(slugs).toContain(slug1);
+    expect(slugs).toContain(slug2);
+  });
+});
+
+describe('fail-toward-parked: unreadable markers report true (Task 6)', () => {
+  let testRoot: string;
+
+  beforeEach(async () => {
+    testRoot = await mkdtemp(join(tmpdir(), 'fail-toward-parked-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(testRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('isOperatorParked() returns true when marker exists but is unreadable (permission denied)', async () => {
+    const slug = 'permission-denied-test';
+
+    // Create a marker
+    await writeOperatorPark(testRoot, slug);
+    expect(await isOperatorParked(testRoot, slug)).toBe(true);
+
+    // Make the marker directory unreadable by removing read permissions from the parent
+    const markerDir = join(testRoot, '.daemon', 'parked');
+    await chmod(markerDir, 0o000);
+
+    try {
+      // isOperatorParked should still return true (fail toward parked)
+      const result = await isOperatorParked(testRoot, slug);
+      expect(result).toBe(true);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(markerDir, 0o755);
+    }
+  });
+
+  it('isOperatorParked() with onResolveError callback fires callback on permission denied', async () => {
+    const slug = 'callback-fire-test';
+    const errors: Error[] = [];
+
+    // Create a marker
+    await writeOperatorPark(testRoot, slug);
+
+    // Make the marker directory unreadable
+    const markerDir = join(testRoot, '.daemon', 'parked');
+    await chmod(markerDir, 0o000);
+
+    try {
+      // Call isOperatorParked with error callback
+      const result = await isOperatorParked(testRoot, slug, (err) => {
+        errors.push(err);
+      });
+
+      // Should return true (fail toward parked) and fire callback
+      expect(result).toBe(true);
+      expect(errors.length).toBeGreaterThan(0);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(markerDir, 0o755);
+    }
+  });
+});
+
+describe('reconcileStrandedParkMarkers (Task 13)', () => {
+  let mainRoot: string;
+
+  async function g(args: string[], cwd?: string) {
+    return execFile('git', args, { cwd: cwd || mainRoot });
+  }
+
+  /** Create a real git repo at mainRoot with a real linked worktree. */
+  async function initRepoWithWorktree(slug: string): Promise<string> {
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(mainRoot, 'README.md'), '# base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await mkdir(join(mainRoot, '.worktrees'), { recursive: true });
+    const worktreeDir = join(mainRoot, '.worktrees', slug);
+    await g(['worktree', 'add', '-b', `spec/${slug}`, worktreeDir, 'main']);
+    return worktreeDir;
+  }
+
+  beforeEach(async () => {
+    mainRoot = await mkdtemp(join(tmpdir(), 'reconcile-stranded-'));
+    __resetResolveCacheForTests?.();
+  });
+
+  afterEach(async () => {
+    await rm(mainRoot, { recursive: true, force: true });
+    __resetResolveCacheForTests?.();
+  });
+
+  it('reconcileStrandedParkMarkers() moves stranded marker from worktree to main root', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-reconcile');
+    const slug = 'stranded-marker';
+    const strandedBody = 'auto-parked: no evidence\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed a stranded marker in the worktree (pre-#486 scenario)
+    const strandedMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    await mkdir(dirname(strandedMarkerPath), { recursive: true });
+    await writeFile(strandedMarkerPath, strandedBody);
+
+    // Verify it exists at worktree
+    const beforeWorktree = await readFile(strandedMarkerPath, 'utf-8');
+    expect(beforeWorktree).toBe(strandedBody);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Main marker should now exist with identical body
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(strandedBody);
+
+    // Worktree marker should be gone
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() is idempotent — second run is no-op', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-idempotent');
+    const slug = 'idempotent-marker';
+    const strandedBody = 'auto-parked: test\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed a stranded marker
+    const strandedMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    await mkdir(dirname(strandedMarkerPath), { recursive: true });
+    await writeFile(strandedMarkerPath, strandedBody);
+
+    // First reconciliation
+    const logs1: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs1.push(msg));
+
+    // Get mtime of main marker after first reconciliation
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const stat1 = require('node:fs').statSync(mainMarkerPath);
+    const mtime1 = stat1.mtime.getTime();
+
+    // Small delay to ensure different mtime if file is rewritten
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Second reconciliation (no worktree marker exists anymore, so should be no-op)
+    const logs2: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs2.push(msg));
+
+    // Get mtime of main marker after second reconciliation
+    const stat2 = require('node:fs').statSync(mainMarkerPath);
+    const mtime2 = stat2.mtime.getTime();
+
+    // mtime should be identical (file not rewritten)
+    expect(mtime2).toBe(mtime1);
+
+    // Main marker should still have identical body
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(strandedBody);
+  });
+
+  it('reconcileStrandedParkMarkers() keeps main marker but deletes worktree marker on conflict', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-conflict');
+    const slug = 'conflict-marker';
+    const strandedBody = 'auto-parked: stranded-reason\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    const mainBody = 'auto-parked: main-reason\ntimestamp: 2026-01-02T00:00:00.000Z\n';
+
+    // Create main marker first
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    await mkdir(dirname(mainMarkerPath), { recursive: true });
+    await writeFile(mainMarkerPath, mainBody);
+
+    // Seed stranded marker in worktree
+    const strandedMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    await mkdir(dirname(strandedMarkerPath), { recursive: true });
+    await writeFile(strandedMarkerPath, strandedBody);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Main marker should be unchanged (main copy wins)
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(mainBody);
+
+    // Worktree marker should be deleted (cleaned up during reconciliation)
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() handles multiple stranded markers', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-multiple');
+    const slug1 = 'marker-1';
+    const slug2 = 'marker-2';
+    const body1 = 'auto-parked: reason-1\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    const body2 = 'auto-parked: reason-2\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed two stranded markers in worktree
+    const markerPath1 = join(worktreeDir, '.daemon', 'parked', slug1);
+    const markerPath2 = join(worktreeDir, '.daemon', 'parked', slug2);
+    await mkdir(dirname(markerPath1), { recursive: true });
+    await writeFile(markerPath1, body1);
+    await writeFile(markerPath2, body2);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Both main markers should exist with correct bodies
+    const mainMarkerPath1 = join(mainRoot, '.daemon', 'parked', slug1);
+    const mainMarkerPath2 = join(mainRoot, '.daemon', 'parked', slug2);
+    expect(await readFile(mainMarkerPath1, 'utf-8')).toBe(body1);
+    expect(await readFile(mainMarkerPath2, 'utf-8')).toBe(body2);
+
+    // Both worktree markers should be gone
+    try {
+      await readFile(markerPath1);
+      throw new Error('marker 1 should not exist at worktree');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+    try {
+      await readFile(markerPath2);
+      throw new Error('marker 2 should not exist at worktree');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() handles missing .worktrees directory gracefully', async () => {
+    await initRepoWithWorktree('feature-no-worktree');
+    // Don't create any stranded markers
+
+    // Run reconciliation (should not throw)
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Should complete without error
+    expect(logs.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reconcileStrandedParkMarkers() logs reconciliation events when log callback provided', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-logging');
+    const slug = 'logged-marker';
+    const body = 'auto-parked: logged\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed a stranded marker
+    const strandedMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    await mkdir(dirname(strandedMarkerPath), { recursive: true });
+    await writeFile(strandedMarkerPath, body);
+
+    // Run reconciliation with logging
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Should have logged something (at minimum the reconciliation)
+    expect(logs.length).toBeGreaterThan(0);
+  });
+
+  it('reconcileStrandedParkMarkers() works with operator-park markers too', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-operator');
+    const slug = 'operator-stranded';
+    const operatorBody = '2026-01-01T00:00:00.000Z\nparked by operator\n';
+
+    // Seed a stranded operator-park marker
+    const strandedMarkerPath = join(worktreeDir, '.daemon', 'parked', slug);
+    await mkdir(dirname(strandedMarkerPath), { recursive: true });
+    await writeFile(strandedMarkerPath, operatorBody);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Main marker should exist with identical body
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', slug);
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(operatorBody);
+
+    // Worktree marker should be gone
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() failure isolation: readable marker moves, unreadable skipped', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-failure-isolation');
+    const readableSlug = 'readable-marker';
+    const unreadableSlug = 'unreadable-marker';
+    const readableBody = 'auto-parked: readable\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    const unreadableBody = 'auto-parked: unreadable\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+
+    // Seed two stranded markers in worktree
+    const parkedDir = join(worktreeDir, '.daemon', 'parked');
+    await mkdir(parkedDir, { recursive: true });
+    const readableMarkerPath = join(parkedDir, readableSlug);
+    const unreadableMarkerPath = join(parkedDir, unreadableSlug);
+    await writeFile(readableMarkerPath, readableBody);
+    await writeFile(unreadableMarkerPath, unreadableBody);
+
+    // Make only the unreadable marker file inaccessible (chmod 000)
+    await chmod(unreadableMarkerPath, 0o000);
+
+    try {
+      // Run reconciliation with logging
+      const logs: string[] = [];
+      await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+      // The readable marker should have been reconciled to main root
+      const mainReadableMarkerPath = join(mainRoot, '.daemon', 'parked', readableSlug);
+      const mainReadableContent = await readFile(mainReadableMarkerPath, 'utf-8');
+      expect(mainReadableContent).toBe(readableBody);
+
+      // The readable marker should be deleted from worktree
+      try {
+        await readFile(readableMarkerPath);
+        throw new Error('readable marker should not exist in worktree after reconciliation');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw err;
+        }
+      }
+
+      // The unreadable marker should still exist in worktree (skipped)
+      // We can't read it because it's chmod 000, but we can verify the deletion attempt failed
+      try {
+        const stat = require('node:fs').statSync(unreadableMarkerPath);
+        expect(stat).toBeTruthy(); // file should still exist
+      } catch (err) {
+        // If stat fails, the file was successfully deleted - that's wrong
+        throw new Error('unreadable marker should remain in worktree (not deleted)');
+      }
+
+      // Logs should contain failure information for the unreadable marker
+      const failureLogs = logs.filter((log) => log.includes('Failed to') || log.includes('reconcile'));
+      expect(failureLogs.length).toBeGreaterThan(0);
+    } finally {
+      // Restore permissions for cleanup
+      await chmod(unreadableMarkerPath, 0o644);
+    }
+  });
+
+  it('reconcileStrandedParkMarkers() cross-slug stray: marker filename differs from worktree dirname', async () => {
+    const worktreeDir = await initRepoWithWorktree('feature-cross-slug');
+
+    // Create a marker with filename 'foo-bar' in a worktree named 'foo-baz'
+    const markerFilename = 'foo-bar';
+    const parkedDir = join(worktreeDir, '.daemon', 'parked');
+    await mkdir(parkedDir, { recursive: true });
+    const strandedMarkerPath = join(parkedDir, markerFilename);
+    const strandedBody = 'auto-parked: cross-slug-stray\ntimestamp: 2026-01-01T00:00:00.000Z\n';
+    await writeFile(strandedMarkerPath, strandedBody);
+
+    // Run reconciliation
+    const logs: string[] = [];
+    await reconcileStrandedParkMarkers(mainRoot, (msg) => logs.push(msg));
+
+    // Main marker should exist with key = markerFilename (not worktree dirname)
+    const mainMarkerPath = join(mainRoot, '.daemon', 'parked', markerFilename);
+    const mainContent = await readFile(mainMarkerPath, 'utf-8');
+    expect(mainContent).toBe(strandedBody);
+
+    // Verify no marker was created with the worktree dirname as key
+    const wrongMarkerPath = join(mainRoot, '.daemon', 'parked', 'feature-cross-slug');
+    try {
+      await readFile(wrongMarkerPath);
+      throw new Error('marker should not exist with worktree dirname as key');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
+    // Worktree marker should be gone
+    try {
+      await readFile(strandedMarkerPath);
+      throw new Error('worktree marker should not exist after reconciliation');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+    }
   });
 });

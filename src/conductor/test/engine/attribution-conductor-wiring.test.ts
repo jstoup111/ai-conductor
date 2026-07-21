@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -31,6 +31,14 @@ import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/executi
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMachinery } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { runAttributionLane } from '../../src/engine/attribution-lane.js';
+import { reconcileStatusFromStamps } from '../../src/engine/autoheal.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -492,4 +500,1726 @@ Implementation that requires semantic verification.
     expect(taskEvidencePath).toBeDefined(); // Verify path is set up correctly
   });
 
+});
+
+/**
+ * RED (Story 2, Task 3): no-whitewash paths for the judged attribution lane.
+ *
+ * PROBLEM: Task 2 taught runAttributionLane to stamp 'semantic-verified' evidence
+ * for satisfied verdicts with valid citations so covered builds can advance past
+ * the completion gate. That gain must not come at the cost of whitewashing: a
+ * `no-verdict` residue task, a `satisfied` verdict whose citations don't hold up
+ * under validateCitations, or a mix of satisfied/unsatisfied results must all
+ * leave the affected task(s) unstamped — so the completion gate (which derives
+ * "done" from task-status.json rows reconciled off evidence stamps, see
+ * autoheal.ts reconcileStatusFromStamps) stays not-done and the build is refused
+ * rather than allowed to advance on an unearned verdict.
+ *
+ * These tests exercise runAttributionLane end-to-end with a fake dispatchVerifier
+ * (writes the verdict file, simulating the real verifier) and a fake git runner
+ * (controls citation validation outcomes deterministically, no real repo needed),
+ * then reconcile task-status.json off the resulting evidence stamps and assert
+ * the gate-relevant row(s) never reach 'completed'.
+ */
+describe('attribution lane no-whitewash: gate stays not-done on no-verdict/invalid-citation/mixed results', () => {
+  let dir: string;
+  let projectRoot: string;
+  const HEAD_SHA = 'abc1234567890123456789012345678901234567';
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-no-whitewash-'));
+    projectRoot = dir;
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** git runner where every check (reachability, ancestry, non-empty, path overlap) passes. */
+  function passingGit() {
+    return async (args: string[]) => {
+      if (args[0] === 'diff-tree' && args.includes('--name-only')) {
+        return { stdout: 'src/main.ts\n', stderr: '', exitCode: 0 };
+      }
+      if (args[0] === 'diff-tree' && args.includes('--quiet')) {
+        // exit 1 == has diffs (non-empty commit)
+        return { stdout: '', stderr: '', exitCode: 1 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+  }
+
+  /** git runner where the citation SHA is unreachable — fails validateCitations check 1. */
+  function failingGit() {
+    return async (args: string[]) => {
+      if (args[0] === 'cat-file') {
+        return { stdout: '', stderr: 'fatal: bad object', exitCode: 1 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    };
+  }
+
+  async function writeStatusFile(tasks: Array<{ id: string; status: string }>) {
+    const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    await writeFile(
+      statusPath,
+      JSON.stringify({ tasks: tasks.map((t) => ({ ...t, name: `Task ${t.id}` })) }, null, 2) + '\n',
+      'utf-8',
+    );
+    return statusPath;
+  }
+
+  async function writePlan(entries: Array<{ id: string; title: string; path: string }>) {
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const body = entries
+      .map((e) => `### Task ${e.id}: ${e.title}\n**Files:** \`${e.path}\`\n\nWork for task ${e.id}.\n`)
+      .join('\n');
+    const planPath = join(planDir, 'test.md');
+    await writeFile(planPath, `# Plan\n\n${body}`, 'utf-8');
+    return planPath;
+  }
+
+  it('(a) no-verdict residue task → no stamp written → gate row stays not-completed → refuse', async () => {
+    const planPath = await writePlan([{ id: '7', title: 'No-verdict task', path: 'src/main.ts' }]);
+    await writeStatusFile([{ id: '7', status: 'in_progress' }]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'no-verdict',
+            reason: 'diff ambiguous between adjacent tasks',
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: passingGit(),
+      dispatchVerifier,
+    });
+
+    // No task should be stamped for a no-verdict result.
+    expect(result.stampedTaskIds).toEqual([]);
+
+    // No evidence stamp should exist for task 7.
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+
+    // Reconciling task-status off stamps must leave the row un-advanced (refused, not
+    // whitewashed to completed).
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    expect(task7.status).not.toBe('completed');
+    expect(task7.status).toBe('in_progress');
+  });
+
+  it('(b) satisfied verdict whose citations fail validateCitations → refused → no advance', async () => {
+    const planPath = await writePlan([{ id: '7', title: 'Bad citation task', path: 'src/main.ts' }]);
+    await writeStatusFile([{ id: '7', status: 'in_progress' }]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'deadbeef', rationale: 'claims to implement the feature' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      // Citation SHA is unreachable — engine refuses to trust the verifier's claim.
+      git: failingGit(),
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(false);
+
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    expect(task7.status).not.toBe('completed');
+    expect(task7.status).toBe('in_progress');
+  });
+
+  it('(c) mixed satisfied+unsatisfied residue → satisfied stamps, unsatisfied stays not-done', async () => {
+    const planPath = await writePlan([
+      { id: '7', title: 'Satisfied task', path: 'src/main.ts' },
+      { id: '9', title: 'Unsatisfied task', path: 'src/cli.ts' },
+    ]);
+    await writeStatusFile([
+      { id: '7', status: 'in_progress' },
+      { id: '9', status: 'in_progress' },
+    ]);
+
+    const dispatchVerifier = async () => {
+      const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
+      const verdict = {
+        schema: 1,
+        anchor: { head: HEAD_SHA, residue: ['7', '9'] },
+        results: [
+          {
+            taskId: '7',
+            verdict: 'satisfied',
+            citations: [{ sha: 'def456', rationale: 'implements the feature' }],
+            testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+          },
+          {
+            taskId: '9',
+            verdict: 'unsatisfied',
+            reason: 'no candidate diff touches the CLI surface',
+          },
+        ],
+      };
+      await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
+      return { success: true };
+    };
+
+    const result = await runAttributionLane({
+      projectRoot,
+      planPath,
+      residueIds: ['7', '9'],
+      headSha: HEAD_SHA,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: passingGit(),
+      dispatchVerifier,
+    });
+
+    // Only the satisfied task should be stamped.
+    expect(result.stampedTaskIds).toEqual(['7']);
+
+    const evidence = await createTaskEvidence(projectRoot);
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    expect(evidence.evidenceStamps.has('9')).toBe(false);
+
+    await reconcileStatusFromStamps(projectRoot);
+    const status = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
+    );
+    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
+    const task9 = status.tasks.find((t: Record<string, unknown>) => t.id === '9');
+
+    // Satisfied, cited task advances.
+    expect(task7.status).toBe('completed');
+    // Unsatisfied task must NOT be whitewashed to completed — gate stays not-done
+    // for the residue that failed judging.
+    expect(task9.status).not.toBe('completed');
+    expect(task9.status).toBe('in_progress');
+  });
+});
+
+/**
+ * Story 1 (RED): in-cycle rescue wiring.
+ *
+ * PROBLEM: In `Conductor.run()`'s build gate-miss branch, `completion` is
+ * snapshotted BEFORE `runAttributionLane` dispatches the verifier and stamps
+ * residue tasks (conductor.ts:~1968, re-checked only on `heal.healed.length >
+ * 0`, i.e. from auto-heal — NOT re-derived after the lane's stamps land).
+ * The halt decision at `if (!completion.done)` (conductor.ts:~2070) reads
+ * that stale, pre-lane snapshot even when every residue task the lane just
+ * judged is `satisfied` with valid citations and passing test evidence. This
+ * drives the REAL `Conductor` (not a fake dispatcher) through a genuine
+ * build-gate miss and asserts the gate resolves `done` on the SAME attempt —
+ * no HALT marker, no dependency on a second while-loop iteration or retry.
+ *
+ * This block needs real git plumbing (git log/diff/show for
+ * `deriveCompletion`'s auto-heal derivation, not just `git rev-parse HEAD`),
+ * so it restores the real `execa` implementation for its own tests rather
+ * than relying on the file-level `vi.mock('execa', ...)` stub used by the
+ * dispatcher-only tests above.
+ */
+describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () => {
+  let repos: Array<{ root: string; bareOrigin: string }> = [];
+  let realExeca: typeof import('execa')['execa'];
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('execa')>('execa');
+    realExeca = actual.execa;
+    vi.mocked(execa).mockImplementation(((...args: unknown[]) =>
+      (realExeca as (...a: unknown[]) => unknown)(...args)) as typeof execa);
+  });
+
+  afterEach(async () => {
+    await Promise.all(
+      repos.flatMap((r) => [
+        rm(r.root, { recursive: true, force: true }),
+        rm(r.bareOrigin, { recursive: true, force: true }),
+      ]),
+    );
+    repos = [];
+    // Restore the file-level fake so the dispatcher-only tests above are
+    // unaffected if the file's test order changes.
+    vi.mocked(execa).mockImplementation(async (cmd: string, args: string[]) => {
+      if (cmd === 'git' && args[0] === 'rev-parse' && args[1] === 'HEAD') {
+        return { stdout: 'abc1234567890123456789012345678901234567\n', stderr: '', exitCode: 0 } as never;
+      }
+      return { stdout: '', stderr: '', exitCode: 0 } as never;
+    });
+  });
+
+  /**
+   * deriveCompletion's evidence-range resolution fails closed (zero commits)
+   * unless an `origin` remote with a resolvable default branch exists — a
+   * bare origin + `push -u` is the minimal fixture (mirrors
+   * test/engine/autoheal.test.ts and the #581 acceptance spec's own
+   * `initRepo` convention).
+   */
+  async function initRepo(prefix: string): Promise<{ root: string; bareOrigin: string }> {
+    const root = await mkdtemp(join(tmpdir(), `${prefix}-`));
+    const bareOrigin = await mkdtemp(join(tmpdir(), `${prefix}-origin-`));
+    await realExeca('git', ['init', '--bare'], { cwd: bareOrigin });
+    await realExeca('git', ['init', '-b', 'main'], { cwd: root });
+    await realExeca('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await realExeca('git', ['config', 'user.name', 'Test User'], { cwd: root });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await mkdir(join(root, '.docs/plans'), { recursive: true });
+    await writeFile(join(root, 'README.md'), '# fixture\n');
+    await realExeca('git', ['add', 'README.md'], { cwd: root });
+    await realExeca('git', ['commit', '-m', 'chore: init'], { cwd: root });
+    await realExeca('git', ['remote', 'add', 'origin', bareOrigin], { cwd: root });
+    await realExeca('git', ['push', '-u', 'origin', 'main'], { cwd: root });
+    return { root, bareOrigin };
+  }
+
+  async function commit(
+    repo: { root: string },
+    file: string,
+    contents: string,
+    message: string,
+  ): Promise<string> {
+    const fileDir = join(repo.root, file.split('/').slice(0, -1).join('/') || '.');
+    await mkdir(fileDir, { recursive: true });
+    await writeFile(join(repo.root, file), contents, 'utf-8');
+    await realExeca('git', ['add', file], { cwd: repo.root });
+    await realExeca('git', ['commit', '-m', message], { cwd: repo.root });
+    const sha = await realExeca('git', ['rev-parse', 'HEAD'], { cwd: repo.root });
+    return sha.stdout.trim();
+  }
+
+  async function headSha(repo: { root: string }): Promise<string> {
+    const res = await realExeca('git', ['rev-parse', 'HEAD'], { cwd: repo.root });
+    return res.stdout.trim();
+  }
+
+  /**
+   * Conductor's push-evidence check (finish gate) shells out to `git` via an
+   * injectable `GitRunner`; `makeProductionGit()` refuses to exec under
+   * `AI_CONDUCTOR_NO_REAL_EXEC` (the vitest global setup's kill-switch —
+   * belt-and-suspenders against a test mutating real state). Since this
+   * describe block drives a REAL git repo end-to-end (execa is restored to
+   * its real implementation in `beforeEach` above), inject a real
+   * execa-backed runner so `headPushedToUpstream` can resolve the upstream
+   * ref and ancestry against the fixture's actual `origin` remote instead of
+   * hitting the kill-switch and returning null (indeterminate — which the
+   * finish gate fails closed on).
+   */
+  function makeRealGitRunner(repo: { root: string }): (
+    args: string[],
+    opts: { cwd: string },
+  ) => Promise<{ stdout: string }> {
+    return async (args: string[], opts: { cwd: string }) => {
+      const result = await realExeca('git', args, { cwd: opts.cwd ?? repo.root });
+      return { stdout: String(result.stdout ?? '') };
+    };
+  }
+
+  async function seedToBuildGate(statePath: string, featureDesc: string): Promise<void> {
+    const state: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      state[s.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = featureDesc;
+    state.track = 'technical';
+    await writeState(statePath, state as unknown as ConductState);
+  }
+
+  async function writeTaskStatus(root: string, taskIds: string[]): Promise<void> {
+    const tasks = taskIds.map((id) => ({ id, status: 'pending' }));
+    await writeFile(
+      join(root, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks }, null, 2) + '\n',
+      'utf-8',
+    );
+  }
+
+  function makeStepRunner(
+    dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']>,
+    root: string,
+  ): StepRunner {
+    return {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') return { success: true };
+        const pipelineDir = join(root, '.pipeline');
+        if (step === 'manual_test') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s | PASS |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'build_review') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'build-review.md'),
+            '# Build Review\n\n| Item | Status |\n|--|--|\n| Design | approved |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'wiring_check') {
+          await mkdir(pipelineDir, { recursive: true });
+          const head = (await realExeca('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+          await writeFile(
+            join(pipelineDir, 'wiring-evidence.json'),
+            JSON.stringify({
+              schema: 1,
+              base: head,
+              head,
+              layer2: { applicable: false },
+              waivers: [],
+              tasks: [{ id: '1', contract: 'none (no new production surface)', gaps: [] }],
+            }),
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'architecture_review_as_built') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'architecture-review-as-built.md'),
+            '# Architecture Review\n\nVerdict: APPROVED\n\n| Item | Status |\n|--|--|\n| Aligned | approved |\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'prd_audit') {
+          await mkdir(pipelineDir, { recursive: true });
+          await writeFile(
+            join(pipelineDir, 'prd-audit.md'),
+            '# PRD Audit\n\nNo FRs to audit (technical track).\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'retro') {
+          const retroDir = join(root, '.docs/retros');
+          await mkdir(retroDir, { recursive: true });
+          await writeFile(
+            join(retroDir, '2026-07-12-fixture.md'),
+            '# Retro\n\nNothing notable.\n',
+            'utf-8',
+          );
+          return { success: true };
+        }
+        if (step === 'finish') {
+          await mkdir(pipelineDir, { recursive: true });
+          // The finish gate's push-evidence check requires HEAD to be a real
+          // ancestor of refs/remotes/origin/<branch> — push before recording
+          // the choice so `isHeadPushed` resolves true instead of null
+          // (indeterminate, which the gate fails closed on).
+          await realExeca('git', ['push', 'origin', 'HEAD'], { cwd: root }).catch(() => {});
+          await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n', 'utf-8');
+          await writeFile(
+            join(pipelineDir, 'conduct-state.json'),
+            JSON.stringify({ pr_url: 'https://github.com/example/repo/pull/1' }, null, 2),
+            'utf-8',
+          );
+          return { success: true };
+        }
+        return { success: true };
+      },
+      dispatchVerifier,
+    };
+  }
+
+  it('a fully-covered residue build advances (done, no HALT) on the SAME attempt when the judge lane stamps every residue task satisfied', async () => {
+    const repo = await initRepo('wiring-rescue-happy-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Task 1 resolves mechanically (trailered commit). Task 2 is residue —
+    // implemented but untrailered, exactly the shape the judge lane exists
+    // to rescue.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    const shaB = await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const calls: Array<{ residueIds: string[] }> = [];
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'satisfied',
+          citations: [{ sha: shaB, rationale: 'implements task 2 (b.ts)' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    };
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      // Final retry attempt (retries exhausted) — the rescue must not depend
+      // on a "next cycle" that will never run.
+      maxRetries: 1,
+      fromStep: 'build',
+      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+    });
+
+    await conductor.run();
+
+    // The lane must have been dispatched exactly once, on residue task 2.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].residueIds).toEqual(['2']);
+
+    // KEY ASSERTION (RED today): the gate resolves 'done' on the SAME
+    // attempt — no HALT, no reliance on a second loop iteration. Today the
+    // gate-miss decision reads the pre-lane `completion` snapshot, so
+    // `build` stays incomplete despite every residue task being stamped
+    // 'satisfied' with valid citations and passing test evidence.
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).toBe('done');
+    }
+    const haltMarker = await readFile(join(repo.root, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltMarker).toBeNull();
+  });
+
+  /**
+   * RED (Task 1, #570): the judge lane must dispatch on INHERITED residue —
+   * a resumed build where the residue-producing commit already landed
+   * before this attempt started, so `headShaBeforeBuild` (captured at
+   * build-step entry) already equals `headShaAfterBuild` (captured at gate
+   * evaluation, no new commits made during this attempt).
+   *
+   * PROBLEM: conductor.ts's dispatch predicate (~3223-3228) requires
+   * `!isZeroWork`, and `detectZeroWorkProduct` (attribution-enforcement.ts)
+   * treats `headBefore === headAfter` as zero-work whenever enforcement is
+   * configured (`isEnforcementConfigured`) — regardless of whether that
+   * "unchanged" HEAD still carries real, unjudged residue from a prior
+   * attempt. On a resumed build this collapses real residue into a
+   * false-positive zero-work signal and the judge is never dispatched.
+   *
+   * This test arms BOTH `attribution_judge_cutover` (gates the lane) and
+   * `attribution_enforcement_cutover` (arms `isEnforcementConfigured`, the
+   * precondition for `detectZeroWorkProduct` to actually evaluate head
+   * movement instead of short-circuiting to `false`) so the interaction bug
+   * is actually exercised. Task 2's commit (residue, untrailered) lands
+   * BEFORE `conductor.run()` starts — mirroring a resumed build where the
+   * work already happened in a prior attempt — and the stubbed `build` step
+   * makes no further commits, so `headBefore === headAfter` for this
+   * attempt even though task 2 is real, unjudged residue.
+   */
+  it('resumed build with inherited residue (headBefore === headAfter) still dispatches the judge lane', async () => {
+    const repo = await initRepo('wiring-rescue-resumed-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-resumed-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-resumed-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Arming attribution_enforcement_cutover below also arms the pre-dispatch
+    // attribution-machinery guard (conductor.ts checkAttributionMachineryIntact),
+    // which requires session-hooks/ scripts to exist before a build dispatch
+    // is allowed — independent of the judge-lane bug this test targets.
+    // Without this, the build step fails the machinery check before ever
+    // reaching the judge-lane dispatch code.
+    await mkdir(join(repo.root, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(repo.root, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+    // Task 1 resolves mechanically (trailered commit). Task 2 is residue —
+    // implemented but untrailered, and (critically) already committed BEFORE
+    // conductor.run() starts, simulating a resumed build where this
+    // attempt's dispatch adds nothing new.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    const shaB = await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'satisfied',
+          citations: [{ sha: shaB, rationale: 'implements task 2 (b.ts)' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    });
+
+    // The stubbed build step makes NO commits during this attempt — the
+    // inherited-residue shape: headShaBeforeBuild (captured at step entry)
+    // already equals headShaAfterBuild (captured at gate evaluation).
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        // Arms isEnforcementConfigured so detectZeroWorkProduct actually
+        // evaluates headBefore === headAfter instead of short-circuiting.
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    // KEY ASSERTION (RED today): the judge lane must dispatch exactly once
+    // on the inherited residue task 2, even though headShaBeforeBuild ===
+    // headShaAfterBuild for this attempt. Today `isZeroWork` collapses this
+    // to a false-positive zero-work signal and dispatchVerifier is never
+    // called.
+    expect(dispatchVerifier).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * PIN (Task 2, #570): when `attribution_judge_cutover` is absent (undefined),
+   * the judge lane must NEVER dispatch — even with inherited residue (no new
+   * commits this attempt). This guarantee must hold both before AND after
+   * Task 4 removes the `!isZeroWork` clause from the dispatch predicate; the
+   * cutover gate at conductor.ts:~3037-3039 is the sole no-op guard being
+   * pinned here, independent of the zero-work signal.
+   */
+  it('cutover absent (undefined): judge lane never dispatches, even with inherited residue', async () => {
+    const repo = await initRepo('wiring-rescue-cutover-absent-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-cutover-absent-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-cutover-absent-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        // attribution_judge_cutover intentionally absent.
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
+   * PIN (Task 2, #570): when `attribution_judge_cutover` is set to a FUTURE
+   * timestamp (not yet armed), the judge lane must NEVER dispatch — even with
+   * inherited residue (no new commits this attempt). Same guarantee as the
+   * cutover-absent pin above, exercising the "not yet active" branch of the
+   * cutover gate instead of the "absent" branch.
+   */
+  it('cutover set to future timestamp: judge lane never dispatches, even with inherited residue', async () => {
+    const repo = await initRepo('wiring-rescue-cutover-future-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-rescue-cutover-future-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-rescue-cutover-future-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2999-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
+   * PIN (Task 3, #570): the judge lane must NEVER dispatch when the residue
+   * set is EMPTY — independent of the zero-work signal (`isZeroWork`) and of
+   * whether this attempt made new commits. `residueIds.length > 0` is a
+   * standalone guard at conductor.ts:~3223-3228 alongside `!isZeroWork`; this
+   * pins that guard's own no-op path so it can't silently regress (e.g. if a
+   * future change accidentally makes an empty residue array dispatch, or if
+   * removing the `!isZeroWork` clause in Task 4 were mistakenly paired with
+   * removing this clause too). Every task resolves mechanically (trailered
+   * commits), so `deriveCompletion` reports full completion and
+   * `residueIds` is empty.
+   *
+   * Two sub-cases, both asserting zero dispatchVerifier calls:
+   *   (a) no new commits during this attempt (headBefore === headAfter,
+   *       mirrors a resumed build with nothing left to judge)
+   *   (b) new commits made during this attempt (headBefore !== headAfter)
+   */
+  it('empty residue (all tasks resolved): judge lane never dispatches — no new commits this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-nocommit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-nocommit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-nocommit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Both tasks resolve mechanically via trailered commits, landing BEFORE
+    // conductor.run() starts — no residue, no new commits this attempt.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  it('empty residue (all tasks resolved): judge lane never dispatches — new commits made this attempt', async () => {
+    const repo = await initRepo('wiring-rescue-empty-residue-commit-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-residue-commit-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-residue-commit-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    // Task 1 resolves mechanically before the attempt starts.
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+
+    const dispatchVerifier = vi.fn(async (inputs: { residueIds: string[] }) => {
+      return { success: true, output: JSON.stringify({ schema: 1, results: inputs.residueIds }) };
+    });
+
+    // The stubbed build step makes a NEW trailered commit during this
+    // attempt (headBefore !== headAfter), and also mechanically resolves
+    // task 2 — so residue is still empty despite fresh commits landing.
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b\n\nTask: 2\n');
+          return { success: true };
+        }
+        return makeStepRunner(dispatchVerifier, repo.root).run(step);
+      },
+      dispatchVerifier,
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      git: makeRealGitRunner(repo),
+      maxRetries: 1,
+      fromStep: 'build',
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        attribution_enforcement_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatchVerifier).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Story 4 (guard): the re-check added in Story 1 must only fire when the
+   * lane actually stamped something. A lane that runs but stamps nothing
+   * (e.g. a no-verdict result) must not trigger a redundant
+   * `checkStepCompletion` call — that call would be pure overhead and, if the
+   * guard regressed to "always re-check", risks masking future no-whitewash
+   * bugs behind a spurious second evaluation.
+   */
+  it('lane runs but stampedTaskIds is empty → no extra checkStepCompletion call', async () => {
+    const repo = await initRepo('wiring-rescue-empty-stamps-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-empty-stamps-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-empty-stamps-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const realHead = await headSha(repo);
+    const calls: Array<{ residueIds: string[] }> = [];
+    // No-verdict result: dispatcher runs, writes a verdict, but nothing is
+    // stamped — stampedTaskIds must end up empty.
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      const verdict = {
+        schema: 1,
+        anchor: { head: realHead, residue: inputs.residueIds },
+        results: inputs.residueIds.map((id) => ({
+          taskId: id,
+          verdict: 'no-verdict',
+          reason: 'diff ambiguous between adjacent tasks',
+        })),
+      };
+      await writeFile(
+        join(repo.root, '.pipeline/attribution-verdict.json'),
+        JSON.stringify(verdict, null, 2),
+        'utf-8',
+      );
+      return { success: true, output: JSON.stringify(verdict) };
+    };
+
+    const artifactsModule = await import('../../src/engine/artifacts.js');
+    const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+      // build_progress_halt defaults to enabled: true (adr-2026-07-12); this
+      // spec is isolated to the attribution-lane re-check wiring and must not
+      // also exercise the (orthogonal) progress-bypass gate, which would
+      // otherwise re-dispatch the attempt and double-count checkStepCompletion
+      // calls whenever the fixture's own setup commits register as forward
+      // progress.
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        build_progress_halt: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    // The lane dispatched (residue existed, cutover armed) but stamped
+    // nothing — no-whitewash means the gate stays not-done.
+    expect(calls).toHaveLength(1);
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+
+    // Exactly one checkStepCompletion call for the 'build' step: the guard
+    // must NOT fire a second call when stampedTaskIds is empty.
+    const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
+    expect(buildChecks).toHaveLength(1);
+
+    checkSpy.mockRestore();
+  });
+
+  /**
+   * Story 4 (guard): with the cutover absent (unconfigured), the lane must
+   * be skipped entirely — same as the pre-attribution-lane flow. No
+   * dispatchVerifier call, no extra checkStepCompletion call, byte-identical
+   * to behavior before the lane existed.
+   */
+  it('cutover absent → lane skipped entirely, no re-check, flow byte-identical to before', async () => {
+    const repo = await initRepo('wiring-rescue-no-cutover-');
+    repos.push(repo);
+    const statePath = join(repo.root, 'conduct-state.json');
+    await seedToBuildGate(statePath, 'wiring-no-cutover-fixture');
+
+    await writeFile(
+      join(repo.root, '.docs/plans', 'wiring-no-cutover-fixture.md'),
+      '### Task 1\n**Files:** `a.ts`\n\nA.\n### Task 2\n**Files:** `b.ts`\n\nB.\n',
+      'utf-8',
+    );
+    await writeTaskStatus(repo.root, ['1', '2']);
+    await commit(repo, 'a.ts', 'export const a = 1;\n', 'feat: a\n\nTask: 1\n');
+    await commit(repo, 'b.ts', 'export const b = 1;\n', 'feat: b (untrailered)');
+
+    const calls: Array<{ residueIds: string[] }> = [];
+    const dispatchVerifier: NonNullable<StepRunner['dispatchVerifier']> = async (inputs) => {
+      calls.push({ residueIds: [...inputs.residueIds] });
+      return { success: false, output: 'should never be called' };
+    };
+
+    const artifactsModule = await import('../../src/engine/artifacts.js');
+    const checkSpy = vi.spyOn(artifactsModule, 'checkStepCompletion');
+
+    const runner = makeStepRunner(dispatchVerifier, repo.root);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: repo.root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+      // No attribution_judge_cutover configured — lane must be fully skipped.
+      // build_progress_halt defaults to enabled: true (adr-2026-07-12);
+      // disable it here so this spec — isolated to the attribution-lane
+      // wiring — doesn't also exercise the orthogonal progress-bypass gate.
+      config: { build_progress_halt: { enabled: false } } as never,
+    });
+
+    await conductor.run();
+
+    // Lane never dispatched.
+    expect(calls).toHaveLength(0);
+
+    const result = await readState(statePath);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.build).not.toBe('done');
+    }
+
+    // Exactly one checkStepCompletion call for 'build' — the pre-lane
+    // baseline, with no lane-triggered re-check.
+    const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
+    expect(buildChecks).toHaveLength(1);
+
+    checkSpy.mockRestore();
+  });
+});
+
+/**
+ * RED (Task 3, #671): unattributed-dispatch streak surfaces its own loud
+ * event during/immediately after the build dispatch — NOT deferred to the
+ * evidence gate. A build cycle whose `.pipeline/dispatch-count` lines are
+ * all "Task: none" must emit a distinct `unattributed_dispatch` event
+ * naming the streak count. A mixed cycle that stays below threshold must
+ * remain quiet (no such event).
+ */
+describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'unattributed-dispatch-wiring-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeIncompleteTaskStatus(): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf8',
+    );
+    // This describe block exercises the unattributed-dispatch streak signal,
+    // not the pre-dispatch attribution-machinery guard (Task 5/6, #676) —
+    // seed healthy session hooks so that guard doesn't block build dispatch
+    // before the streak logic under test ever runs.
+    const hooksDir = join(dir, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+    await writeFile(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(hooksDir, 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(hooksDir, 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+  }
+
+  it('emits unattributed_dispatch naming the streak when every dispatch in the build cycle is "Task: none"', async () => {
+    await writeIncompleteTaskStatus();
+
+    const received: Array<Record<string, unknown>> = [];
+    events.on('unattributed_dispatch' as never, (e: unknown) => {
+      received.push(e as Record<string, unknown>);
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          // Simulate the PRE session hook appending unattributed dispatch
+          // lines during this build cycle — fully unattributed streak.
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline', 'dispatch-count'),
+            'Task: none\nTask: none\nTask: none\n',
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    const fired = received.find((e) => e.type === 'unattributed_dispatch');
+    expect(fired).toBeDefined();
+    expect(fired?.unattributedCount).toBe(3);
+    expect(fired?.step).toBe('build');
+  });
+
+  it('stays quiet (no unattributed_dispatch event) for a mixed cycle below the threshold', async () => {
+    await writeIncompleteTaskStatus();
+
+    const received: Array<Record<string, unknown>> = [];
+    events.on('unattributed_dispatch' as never, (e: unknown) => {
+      received.push(e as Record<string, unknown>);
+    });
+
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          // Mostly attributed, one stray unattributed line — below any
+          // reasonable threshold, must stay quiet.
+          await writeFile(
+            join(dir, '.pipeline', 'dispatch-count'),
+            'Task: 1\nTask: 2\nTask: 3\nTask: 4\nTask: none\n',
+            'utf8',
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    const fired = received.find((e) => e.type === 'unattributed_dispatch');
+    expect(fired).toBeUndefined();
+  });
+});
+
+/**
+ * RED (Task 5, #676): pre-dispatch attribution-machinery guard at the
+ * build-step dispatch seam.
+ *
+ * PROBLEM: conductor.ts's build-step dispatch (around the
+ * `writeBuildStepMarker` call, ~2674-2677) currently has no check that the
+ * attribution machinery the enforcement/judge lanes depend on
+ * (`.pipeline/task-status.json`, `.pipeline/session-hooks/`, the
+ * `.pipeline/current-task` stamp path) is actually intact before dispatching
+ * a build step. When enforcement is configured (cutover in the past) and
+ * that machinery is broken/missing, dispatch silently proceeds today — a
+ * later task (Task 6) will add a loud pre-dispatch check here. These tests
+ * assert the desired FUTURE behavior and therefore fail (RED) until Task 6
+ * lands.
+ */
+describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #676)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-machinery-guard-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    // .pipeline exists but is deliberately left WITHOUT session-hooks/ and
+    // WITHOUT task-status.json — the broken-machinery fixture for tests 1
+    // and 2 below.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('build step + broken attribution machinery + enforcement configured → dispatch fails loudly naming attribution machinery / .pipeline/current-task', async () => {
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    // The build step must NOT have been dispatched at all — the guard must
+    // fire before the step runner is ever invoked for 'build'.
+    expect(buildWasDispatched).toBe(false);
+
+    // Dispatch must fail LOUDLY via a HALT marker naming the broken
+    // machinery — not a silent no-op and not a generic/unrelated halt
+    // reason.
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toMatch(/\.pipeline\/current-task|attribution machinery/i);
+  });
+
+  it('non-build step (plan) + broken attribution machinery → dispatch proceeds unaffected', async () => {
+    const dispatchedSteps: string[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        dispatchedSteps.push(step);
+        return { success: true };
+      },
+    };
+
+    // Seed every step before 'plan' as done so the conductor's own
+    // step-ordering preconditions don't block dispatch before we ever
+    // reach the seam under test — mirrors seedToBuildGate's pattern above.
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'plan') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = 'attribution-machinery-guard-fixture';
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      fromStep: 'plan',
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    // Plan step dispatched normally.
+    expect(dispatchedSteps).toContain('plan');
+
+    // No HALT related to attribution machinery — the guard is build-step
+    // specific and must not affect non-build steps.
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    }
+  });
+
+  it('build step + healthy/intact attribution machinery + enforcement configured → dispatch proceeds normally', async () => {
+    // Seed intact attribution machinery: task-status.json and
+    // session-hooks/ both present.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(true);
+
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    }
+  });
+
+  it('build step + task-status.json present but session-hooks/ missing its expected scripts + enforcement configured → dispatch fails loudly naming session hooks', async () => {
+    // task-status.json present, but session-hooks/ dir absent entirely —
+    // the machinery required to attribute a dispatched build is incomplete.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(false);
+
+    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toMatch(/session-hooks|session hooks/i);
+  });
+
+  it('build step + task-status.json and session-hooks/ present but .pipeline/ not writable + enforcement configured → dispatch fails loudly naming the stamp path', async () => {
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    // Leave .pipeline/ itself writable (the HALT marker also lives there and
+    // must still be writable when the guard fires) but make the
+    // `.pipeline/current-task` stamp path itself unwritable — simulating a
+    // stuck stamp file left over from a prior run with bad permissions, even
+    // though task-status.json and the hook scripts are both present.
+    const currentTaskPath = join(dir, '.pipeline', 'current-task');
+    await writeFile(currentTaskPath, 'Task: 1\n', 'utf-8');
+    await chmod(currentTaskPath, 0o444);
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+    });
+
+    try {
+      await conductor.run();
+
+      expect(buildWasDispatched).toBe(false);
+
+      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      expect(halt).toMatch(/current-task|stamp path|writable/i);
+    } finally {
+      // Restore writability so afterEach's rm(dir, { recursive: true }) can
+      // clean up the temp directory.
+      await chmod(currentTaskPath, 0o644);
+    }
+  });
+
+  it('task-status.json absent + plan unresolvable → diagnostic names the plan, not task-status.json', async () => {
+    // Session hooks present and stamp path writable — only task-status.json
+    // is missing, and the caller has already determined the plan itself
+    // could not be resolved (ambiguous/missing plan artifact), not merely
+    // that seeding hasn't happened yet.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const diagnostic = await checkAttributionMachineryIntact(dir, { planResolvable: false });
+
+    expect(diagnostic).not.toBeNull();
+    expect(diagnostic).toMatch(/plan/i);
+    expect(diagnostic).not.toContain('task-status.json is missing');
+  });
+
+  it('task-status.json absent + resolvable plan → seedAndCheckAttributionMachinery seeds task-status.json and reports intact', async () => {
+    // Session hooks present and stamp path writable — only task-status.json
+    // is missing, mirroring a fresh dispatch where seeding simply hasn't
+    // happened yet (not a broken-plan scenario).
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-and-check-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+    expect(diagnostic).toBeNull();
+
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+    expect(seeded.tasks).toHaveLength(1);
+    expect(seeded.tasks[0].id).toBe('1');
+    expect(seeded.tasks[0].status).toBe('pending');
+  });
+
+  it('seedTaskStatus write fails (task-status.json unwritable) → seedAndCheckAttributionMachinery returns a distinct seed-write-failure diagnostic, not the generic missing-file message', async () => {
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-write-failure-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    // Pre-create task-status.json and make it read-only, so seedTaskStatus's
+    // atomic write (writeFile(statusPath, ...)) throws EACCES instead of
+    // silently succeeding.
+    const taskStatusPath = join(dir, '.pipeline', 'task-status.json');
+    await writeFile(taskStatusPath, JSON.stringify({ tasks: [] }), 'utf-8');
+    await chmod(taskStatusPath, 0o444);
+    await chmod(join(dir, '.pipeline'), 0o555);
+
+    try {
+      const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+      expect(diagnostic).not.toBeNull();
+      expect(diagnostic).toMatch(/failed to seed/i);
+      expect(diagnostic).not.toContain('task-status.json is missing');
+    } finally {
+      await chmod(join(dir, '.pipeline'), 0o755);
+      await chmod(taskStatusPath, 0o644);
+    }
+  });
+
+  it('Task 5 (#692): fresh build dispatch with resolvable plan + missing task-status.json → seam seeds it and dispatches build without a HALT', async () => {
+    // Fresh-dispatch fixture: session hooks present, stamp path writable,
+    // task-status.json deliberately ABSENT (never seeded), but a resolvable
+    // plan exists under .docs/plans/ — mirrors a legitimate fresh build
+    // dispatch where seeding simply hasn't happened yet. Before this task,
+    // the seam called the bare checkAttributionMachineryIntact (no seeding),
+    // so this would halt naming "task-status.json is missing" on attempt 1.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'fresh-build-dispatch-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n',
+      'utf-8',
+    );
+
+    // Seed every step before 'build' as done, and set feature_desc so the
+    // plan is resolvable at the seam.
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = featureDesc;
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      config: PAST_CUTOVER,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    // Build must dispatch on attempt 1 — no HALT for missing task-status.json.
+    expect(buildWasDispatched).toBe(true);
+
+    const haltContent = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toMatch(/task-status\.json is missing/i);
+    }
+
+    // task-status.json must have been seeded as a side effect of running
+    // this step, proving the seam went through seedAndCheckAttributionMachinery
+    // rather than the bare check.
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+    expect(seeded.tasks).toHaveLength(1);
+    expect(seeded.tasks[0].id).toBe('1');
+  });
+
+  it('resumed build with prior completed progress → seedAndCheckAttributionMachinery preserves completed row and reports intact', async () => {
+    // Session hooks present and stamp path writable — mirrors a resumed
+    // dispatch on a build that already made real progress in a prior run.
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const featureDesc = 'seed-and-check-resume-fixture';
+    const planDir = join(dir, '.docs', 'plans');
+    await mkdir(planDir, { recursive: true });
+    await writeFile(
+      join(planDir, `${featureDesc}.md`),
+      '### Task 1: Do the thing\n\nSome task body.\n\n### Task 2: Do another thing\n\nMore task body.\n',
+      'utf-8',
+    );
+
+    // Pre-write task-status.json with Task 1 already completed, as if a
+    // prior build attempt had already dispatched and finished it.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [
+          { id: '1', name: 'Do the thing', status: 'completed', commit: 'abc1234567890123456789012345678901234567' },
+        ],
+      }),
+      'utf-8',
+    );
+
+    // Pre-write the matching evidence sidecar stamp so the completed row is
+    // not treated as unattributed/ungrandfathered progress.
+    await writeFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: {
+          '1': { sha: 'abc1234567890123456789012345678901234567', form: 'commit' },
+        },
+        noEvidenceAttempts: 0,
+        migrationGrandfather: [],
+      }),
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, featureDesc);
+
+    expect(diagnostic).toBeNull();
+
+    const seeded = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; status: string }> };
+
+    const task1 = seeded.tasks.find((t) => t.id === '1');
+    const task2 = seeded.tasks.find((t) => t.id === '2');
+
+    // The previously-completed row must NOT be reset to pending on a
+    // resumed dispatch — seedTaskStatus's merge must preserve it.
+    expect(task1?.status).toBe('completed');
+    // The newly-appearing plan task should be seeded as pending.
+    expect(task2?.status).toBe('pending');
+  });
+
+  /**
+   * Task 6 (#676 follow-up): regression locks proving the seam's real
+   * protection still holds after Task 5's seeding change, plus a check that
+   * enforcement-off scoping was untouched by that change.
+   */
+
+  it('(a) session-hooks missing → seedAndCheckAttributionMachinery still returns the session-hooks diagnostic unchanged', async () => {
+    // task-status.json present (so the seed path is a no-op / not the thing
+    // under test) but session-hooks/ absent entirely.
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
+
+    expect(diagnostic).not.toBeNull();
+    expect(diagnostic).toMatch(/session-hooks|session hooks/i);
+  });
+
+  it('(b) stamp path unwritable → seedAndCheckAttributionMachinery still returns the stamp-path diagnostic unchanged', async () => {
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      'utf-8',
+    );
+    await mkdir(join(dir, '.pipeline', 'session-hooks'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+    await writeFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+    const currentTaskPath = join(dir, '.pipeline', 'current-task');
+    await writeFile(currentTaskPath, 'Task: 1\n', 'utf-8');
+    await chmod(currentTaskPath, 0o444);
+
+    try {
+      const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
+
+      expect(diagnostic).not.toBeNull();
+      expect(diagnostic).toMatch(/current-task|stamp path|writable/i);
+    } finally {
+      await chmod(currentTaskPath, 0o644);
+    }
+  });
+
+  it('(c) no .pipeline/ dir at all → checkAttributionMachineryIntact returns null (benign, no false HALT)', async () => {
+    // A fresh project root with no .pipeline/ directory whatsoever — the
+    // documented "nothing to attribute against yet" case.
+    const freshDir = await mkdtemp(join(tmpdir(), 'attribution-no-pipeline-dir-'));
+    try {
+      const diagnostic = await checkAttributionMachineryIntact(freshDir);
+      expect(diagnostic).toBeNull();
+    } finally {
+      await rm(freshDir, { recursive: true, force: true });
+    }
+  });
+
+  it('(d) enforcement NOT configured → the build seam never invokes seedAndCheckAttributionMachinery (no pre-dispatch seed side effect)', async () => {
+    // No .pipeline/ at all, and deliberately no attribution_enforcement_cutover
+    // in config — isEnforcementConfigured must be false, so the seam's guard
+    // condition (`step.name === 'build' && isEnforcementConfigured(this.config)`)
+    // must short-circuit to null without ever calling
+    // seedAndCheckAttributionMachinery, meaning no .pipeline/ dir or
+    // task-status.json gets created as a side effect of dispatching build.
+    let buildWasDispatched = false;
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildWasDispatched = true;
+        }
+        return { success: true };
+      },
+    };
+
+    const preState: Record<string, unknown> = {};
+    for (const s of ALL_STEPS) {
+      if (s.name === 'build') break;
+      preState[s.name] = 'done';
+    }
+    preState.complexity_tier = 'M';
+    preState.feature_desc = 'enforcement-off-fixture';
+    preState.track = 'technical';
+    await writeState(statePath, preState as unknown as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      // No attribution_enforcement_cutover — enforcement not configured.
+      config: {} as HarnessConfig,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(buildWasDispatched).toBe(true);
+
+    // No seeding side effect: task-status.json must NOT have been created by
+    // the seam (seedAndCheckAttributionMachinery was never invoked). Note:
+    // dir already has .pipeline/ from beforeEach, so we check specifically
+    // that the seeding write never happened.
+    const taskStatusExists = await readFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(taskStatusExists).toBeNull();
+  });
 });

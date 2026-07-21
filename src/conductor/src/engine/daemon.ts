@@ -101,6 +101,18 @@ export interface PickEligibleCtx {
    * at the same eligibility-guard layer.
    */
   isParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Task 8 (D2, progress-gated cross-dispatch re-kick): true when `slug`'s
+   * most recent dispatch made forward progress (its worktree's current
+   * resolved-task count exceeds the `lastResolvedCount` its build step
+   * stamped to the `TaskEvidence` sidecar at that dispatch's end). Consulted
+   * ONLY for a slug still sitting in `parked` with a live `isHalted` marker
+   * (i.e. no base advance has cleared it) — additive to that path, never a
+   * replacement for it. Absent → behavior is unchanged (backward-compatible):
+   * a live-HALT parked slug stays parked until `isHalted` clears or an
+   * operator un-parks it.
+   */
+  isProgressReKickEligible?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -124,8 +136,18 @@ export async function pickEligible(
     // only an explicit un-park makes the slug eligible again.
     if (ctx.isParked && (await ctx.isParked(b.slug))) continue;
     if (ctx.parked.has(b.slug)) {
-      if (!ctx.isHalted || (await ctx.isHalted(b.slug))) continue; // still parked
-      // marker cleared → fall through as eligible (re-dispatch + resume)
+      if (!ctx.isHalted || (await ctx.isHalted(b.slug))) {
+        // Still parked by the HALT marker (no base advance cleared it). Task 8
+        // (D2): a live-HALT parked slug is ALSO eligible when its last dispatch
+        // made forward progress — an additive path, checked only once the
+        // isHalted-cleared path above has already said "still parked".
+        if (ctx.isProgressReKickEligible && (await ctx.isProgressReKickEligible(b.slug))) {
+          // progress-gated re-kick → fall through as eligible (re-dispatch + resume)
+        } else {
+          continue;
+        }
+      }
+      // marker cleared, or progress-gated re-kick eligible → fall through
     } else if (ctx.started.has(b.slug)) {
       continue; // done/error — permanently excluded this run
     } else if (ctx.isHalted && (await ctx.isHalted(b.slug))) {
@@ -188,6 +210,30 @@ export interface DaemonDeps {
    * production wires `isOperatorParked` (see park-marker.ts / daemon-deps.ts).
    */
   isParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Task 8 (D2, progress-gated cross-dispatch re-kick): true when `slug`'s
+   * most recent dispatch made forward progress — passed straight through to
+   * `pickEligible`'s `isProgressReKickEligible` ctx field (see there for the
+   * full contract). Absent → behavior is unchanged (backward-compatible).
+   */
+  isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /**
+   * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
+   * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
+   * (resolved config default: 20 — see `config.ts` `BUILD_PROGRESS_HALT_DEFAULTS`).
+   * This is an already-resolved plain number (mirrors `checkAndAutoPark`'s
+   * `maxAttempts` seam) — the daemon core has no config-parsing knowledge.
+   * Once a slug's re-kick count reaches this ceiling, `isProgressReKickEligible`
+   * is treated as permanently false for it for the rest of this run (a single
+   * `log()` line records the reason, once, distinct from T5's absolute
+   * attempt-ceiling reason) — but this ONLY disables the progress-gated
+   * re-kick path; `isHalted`/`isParked`/the base-advance `rekickSweep` and
+   * operator-unpark remain fully in effect (FR: spec stays eligible for
+   * base-advance re-kick / operator unpark). Absent → defaults to 20 (same
+   * numeric default as the prior hardcoded interim cap, so unconfigured
+   * behavior is unchanged).
+   */
+  progressReKickDispatchCeiling?: number;
   /**
    * Watch for HALT marker cleared on a parked feature and invoke `onCleared` when
    * detected. Returns an unsubscribe function to tear down the watch. Used by
@@ -361,6 +407,13 @@ export interface DaemonDeps {
    */
   repoRootMissing?: () => string | null;
 
+  // ── #561: cooperative stop signal ───────────────────────────────────
+  /**
+   * Checked at loop top; when it returns true, stop STARTING new features
+   * and drain in-flight before returning.
+   */
+  shouldStop?: () => boolean;
+
   // ── Task 3: per-sweep pidfile ownership gate ──────────────────────────
   /**
    * Return true ONLY on a definitive loss-of-ownership reading — absent,
@@ -422,7 +475,8 @@ export type DaemonStopReason =
   | 'idle_timeout'
   | 'repo_root_missing'
   | 'engine_restart'
-  | 'lock_lost';
+  | 'lock_lost'
+  | 'signal_teardown';
 
 export interface DaemonResult {
   processed: FeatureOutcome[];
@@ -431,6 +485,42 @@ export interface DaemonResult {
 
 /** A runFeature promise tagged with its slug so a race can identify the winner. */
 type Tagged = Promise<{ slug: string; outcome: FeatureOutcome }>;
+
+/**
+ * Task 1 (#651): the park check consulted immediately before every
+ * build-start. `pickEligible`'s selection-time check (:137) filters the
+ * backlog, but selection and the actual `dispatch` call are separated by an
+ * `await` (stale-engine rebuild/restart) — a marker written in that window
+ * would otherwise be dispatched anyway. `isParked` is awaited again right
+ * here, immediately before `onDispatch` runs, closing that race.
+ *
+ * A throwing (or rejecting) `isParked` is treated as parked — fail-closed
+ * toward the emergency-stop, mirroring `isOperatorParked`'s own contract.
+ * Absent `isParked` is a no-op guard: `onDispatch` always runs, preserving
+ * pre-#651 behavior exactly.
+ *
+ * Exported as a standalone function (params instead of closure state) so the
+ * gate itself is unit-testable without driving the full pool.
+ */
+export async function guardedDispatchWith(
+  item: BacklogItem,
+  isParked: ((slug: string) => boolean | Promise<boolean>) | undefined,
+  onDispatch: (item: BacklogItem) => void,
+  log: (msg: string) => void,
+): Promise<boolean> {
+  let parked = false;
+  try {
+    parked = !!(await isParked?.(item.slug));
+  } catch {
+    parked = true; // fail-closed toward the emergency-stop
+  }
+  if (parked) {
+    log(`park: skipped dispatch of ${item.slug} — operator-parked`);
+    return false;
+  }
+  onDispatch(item);
+  return true;
+}
 
 export async function runDaemon(
   deps: DaemonDeps,
@@ -487,6 +577,44 @@ export async function runDaemon(
 
   const waker = Waker();
   const watchers = new Map<string, () => void>();
+
+  // Task 9: per-spec dispatch-ceiling bound on `isProgressReKickEligible`.
+  // Defaults to 20 (same numeric value as the prior hardcoded interim cap —
+  // T8's safety valve — so unconfigured behavior is unchanged); production
+  // wires `deps.progressReKickDispatchCeiling` from the resolved
+  // `build_progress_halt.dispatch_ceiling` config. Once a slug's count
+  // reaches the ceiling, the progress-gated re-kick path is disabled for it
+  // (permanently, for this run) and a distinct reason is logged exactly
+  // once — this does NOT touch isHalted/isParked/rekickSweep/operator-unpark,
+  // so the slug stays eligible for base-advance re-kick or operator unpark.
+  const progressReKickDispatchCeiling = deps.progressReKickDispatchCeiling ?? 20;
+  const progressReKickCounts = new Map<string, number>();
+  const progressReKickCeilingLogged = new Set<string>();
+  const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
+    ? async (slug: string): Promise<boolean> => {
+        const count = progressReKickCounts.get(slug) ?? 0;
+        if (count >= progressReKickDispatchCeiling) {
+          if (!progressReKickCeilingLogged.has(slug)) {
+            progressReKickCeilingLogged.add(slug);
+            log(
+              `[daemon] ${slug}: progress-gated re-kick dispatch ceiling (${progressReKickDispatchCeiling}) reached — stopping re-kicks for this run; spec remains eligible for base-advance rekickSweep / operator unpark`,
+            );
+          }
+          return false;
+        }
+        let eligible = false;
+        try {
+          eligible = await deps.isProgressReKickEligible!(slug);
+        } catch (err) {
+          log(
+            `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+          );
+          return false;
+        }
+        if (eligible) progressReKickCounts.set(slug, count + 1);
+        return eligible;
+      }
+    : undefined;
 
   // Register a watchHaltCleared watcher for a newly-parked slug, if the seam
   // is present and no watcher already exists for it. Shared by both park
@@ -569,6 +697,16 @@ export async function runDaemon(
       }));
     inFlight.set(item.slug, tagged);
   };
+
+  // Task 1 (#651): park check immediately before every build-start, closing
+  // the selection→dispatch race — pickEligible's selection-time check
+  // (:137) can pass, then `await rebuildAndMaybeRestartForStaleEngine()`
+  // (below) opens a window where an operator-park marker can land before
+  // this slug is actually dispatched. Delegates to the module-level
+  // `guardedDispatchWith` so the gate itself is unit-testable without
+  // driving the full pool.
+  const guardedDispatch = (item: BacklogItem): Promise<boolean> =>
+    guardedDispatchWith(item, deps.isParked, dispatch, log);
 
   const collectOne = async (): Promise<void> => {
     const { slug, outcome } = await Promise.race(inFlight.values());
@@ -709,6 +847,12 @@ export async function runDaemon(
   let wasEpisodeActive = false;
 
   while (true) {
+    if (deps.shouldStop?.()) {
+      log('[daemon] teardown requested — draining in-flight, no new dispatch');
+      stopReason = 'signal_teardown';
+      break;
+    }
+
     const missingRoot = deps.repoRootMissing?.();
     if (missingRoot != null) {
       log(`[daemon] repo root missing: ${missingRoot} — stopping`);
@@ -747,6 +891,7 @@ export async function runDaemon(
         started,
         isHalted: deps.isHalted,
         isParked: deps.isParked,
+        isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
       let next: BacklogItem | undefined;
@@ -794,8 +939,15 @@ export async function runDaemon(
         }
         // Task 20: Update episode state when dispatching
         wasEpisodeActive = episodeActive;
-        dispatch(next);
-        continue; // try to fill another slot before awaiting
+        // Task 1 (#651): re-check park immediately before this dispatch — closes
+        // the selection→dispatch race opened by the rebuild/restart await above.
+        const dispatched = await guardedDispatch(next);
+        if (dispatched) {
+          continue; // try to fill another slot before awaiting
+        }
+        // Parked between selection and here: fall through to the idle/await
+        // section below instead of `continue`, so the tick doesn't tight-loop
+        // re-picking the same parked slug.
       }
       // Nothing new to start.
       if (inFlight.size === 0) {

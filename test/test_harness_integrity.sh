@@ -611,6 +611,22 @@ else
   fi
 fi
 
+# ── Intake Owner markers (owner-gate) ────────────────────────────────────────
+# Every intake doc must carry an Owner: marker. This is a supplementary local
+# belt only, not the enforcement mechanism: authoring now stamps Owner: from
+# machine identity at write time (born owned), and an un-owned arrival at the
+# daemon no longer dead-letters silently — decideSpecGate default-builds it
+# under the daemon's own owner (unowned-defaulted) with a loud escalation.
+# This check just catches a hand-authored doc that slipped through unstamped.
+echo ""
+echo "Checking intake Owner markers..."
+missing_owner=0
+for f in .docs/intake/*.md; do
+  [ -e "$f" ] || continue
+  grep -qE '^Owner:[[:space:]]*[^[:space:]]+' "$f" || { missing_owner=1; echo "    missing Owner: $f"; }
+done
+assert ".docs/intake/*.md all carry an Owner: marker" "$missing_owner"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

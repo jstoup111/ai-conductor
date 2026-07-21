@@ -39,6 +39,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   acceptance_specs: 'sonnet',
   build: 'sonnet',
   build_review: 'opus',
+  wiring_check: 'sonnet',
   manual_test: 'sonnet',
   prd_audit: 'opus',
   architecture_review_as_built: 'sonnet',
@@ -53,8 +54,8 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   bootstrap: 'low',
   memory: 'low',
   assess: 'high',
-  explore: 'xhigh',
-  prd: 'xhigh',
+  explore: 'medium',
+  prd: 'medium',
   complexity: 'low',
   stories: 'medium',
   conflict_check: 'medium',
@@ -65,6 +66,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   acceptance_specs: 'medium',
   build: 'low',
   build_review: 'high',
+  wiring_check: 'low',
   manual_test: 'medium',
   prd_audit: 'high',
   architecture_review_as_built: 'medium',
@@ -79,18 +81,24 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
   memory: 1,
   assess: 3,
-  explore: 5,
-  prd: 5,
+  // #188 retry-as-escalation: deep steps dropped 5 → 3. A retry now escalates
+  // (effort, then model tier) instead of repeating an identical coin-flip, so
+  // five identical retries are wasteful. Floored at 3, not 2 — the model-bump
+  // rung lives at attempt 3, so a budget of 2 would truncate the ladder before
+  // it ever exercises the model bump (adr Decision 4).
+  explore: 3,
+  prd: 3,
   complexity: 1,
   stories: 3,
   conflict_check: 3,
-  plan: 5,
+  plan: 3,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
   acceptance_specs: 3,
-  build: 5,
+  build: 3,
   build_review: 3,
+  wiring_check: 3,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -117,6 +125,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   acceptance_specs: 'auto',
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
+  wiring_check: 'auto', // deterministic gap-carrying evidence file, no LLM verdict to review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
@@ -153,6 +162,13 @@ export const FALLBACK_EFFORT: EffortLevel = 'medium';
 export const FALLBACK_RETRIES = 3;
 export const FALLBACK_REVIEW: ReviewMode = 'manual';
 
+/**
+ * Default for the per-step `escalate` knob (#188). True means retries climb the
+ * escalation ladder (effort, then model tier). Existing configs begin escalating
+ * by default — the intended behavior change, documented as a migration note.
+ */
+export const DEFAULT_STEP_ESCALATE = true;
+
 // ────────────────────────────────────────────────────────────────────────────
 // Resolution
 // ────────────────────────────────────────────────────────────────────────────
@@ -166,6 +182,12 @@ export interface ResolvedStepConfig {
   skill?: string;
   hooks: { before?: string; after?: string };
   disabled: boolean;
+  /**
+   * Retry-as-escalation flag (#188). When true (default), the retry loop climbs
+   * the escalation ladder on each attempt; when false, every attempt uses the
+   * base (model, effort).
+   */
+  escalate: boolean;
 }
 
 export interface ResolveOptions {
@@ -249,6 +271,15 @@ export function resolveStepConfig(
   // of the step's skill contract, not a tuning knob.
   const review: ReviewMode = DEFAULT_STEP_REVIEW[step] ?? FALLBACK_REVIEW;
 
+  // #188: escalate follows the same step → phase → defaults precedence as the
+  // other knobs (no tier/CLI override — it's a coarse per-step policy switch),
+  // defaulting to DEFAULT_STEP_ESCALATE (true) when unset everywhere.
+  const escalate: boolean =
+    stepCfg?.escalate ??
+    phaseCfg?.escalate ??
+    defaultsCfg?.escalate ??
+    DEFAULT_STEP_ESCALATE;
+
   return {
     step,
     model,
@@ -261,6 +292,7 @@ export function resolveStepConfig(
       after: stepCfg?.hooks?.after,
     },
     disabled: stepCfg?.disable === true,
+    escalate,
   };
 }
 

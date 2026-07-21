@@ -345,3 +345,145 @@ describe('validateCitations', () => {
     expect(result.reasons).toEqual([]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED (Task 8 of rebase-orphans-every-sha-anchored-evidence-citatio.md):
+// read-time resolution through a persisted rebase rewrite map.
+//
+// Per adr-2026-07-12-rebase-evidence-stamp-translation.md: a citation naming a
+// commit sha that a sanctioned engine rebase has rewritten must still validate
+// successfully against the new HEAD, by resolving through the persisted
+// `.pipeline/rebase-rewrites.json` map (via `resolveThroughMap`) BEFORE the
+// `merge-base --is-ancestor` check in `validateCitations`. Task 9 wires this
+// resolution in; today `validateCitations` does not consult the map at all,
+// so a citation naming the OLD (pre-rebase, now-pruned) sha fails ancestry —
+// this test pins the desired post-Task-9 behavior and is expected to FAIL
+// (genuine RED) until that wiring lands.
+//
+// The rewrite map is built here the same way `buildRewriteMap` would after a
+// real rebase: the pre-rebase work commit is cherry-picked onto a fresh base
+// (new sha, identical patch), the pre-rebase objects are then pruned from the
+// object database so the old sha is genuinely unreachable/gone (not merely
+// "still lying around"), and the map is persisted via `persistRewriteMap`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validateCitations resolves citations through a persisted rebase rewrite map (RED, Task 8)', () => {
+  it('a satisfied-by citation naming the pre-rebase sha still validates against the new HEAD', async () => {
+    const mod = await loadAttributionValidate();
+    const { persistRewriteMap } = await import('../../src/engine/rebase-translate.js');
+    const repo = await initRepo();
+
+    // Pre-rebase: base -> oldWorkSha (touches src/widget.ts).
+    const baseSha = await getCurrentHead(repo);
+    const oldWorkSha = await commitFile(repo, 'src/widget.ts', 'export const widget = 1;', 'feat: add widget');
+
+    // Simulate the sanctioned rebase: rewind the branch to base (via a
+    // force checkout of a recreated branch, not `reset --hard`), add an
+    // upstream commit to change `onto` (so the cherry-picked replay lands
+    // on a genuinely different parent and gets a NEW sha rather than
+    // reproducing the identical old commit bit-for-bit), then cherry-pick
+    // the work commit's patch back on. This mirrors what `buildRewriteMap`'s
+    // patch-id correspondence would match post-rebase.
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: repo.root });
+    await commitFile(repo, 'UPSTREAM.md', 'upstream change\n', 'chore: upstream commit (onto)');
+    await execa('git', ['cherry-pick', oldWorkSha], { cwd: repo.root });
+    const newWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.root })).stdout.trim();
+    const head = newWorkSha;
+
+    // Prune the pre-rebase object out of the odb so the old sha is genuinely
+    // gone — not lingering, which would let the existence check pass by
+    // accident and mask whether resolution actually happened.
+    await execa('git', ['reflog', 'expire', '--expire=now', '--all'], { cwd: repo.root });
+    await execa('git', ['gc', '--prune=now'], { cwd: repo.root });
+    const goneCheck = await execa('git', ['cat-file', '-e', `${oldWorkSha}^{commit}`], {
+      cwd: repo.root,
+      reject: false,
+    });
+    expect(goneCheck.exitCode).not.toBe(0); // sanity: fixture genuinely pruned the old object
+
+    // Persist the rewrite map old -> new, exactly as `performRebase` would
+    // after a `changed` outcome.
+    await persistRewriteMap(repo.root, { [oldWorkSha]: newWorkSha });
+
+    // The verdict cites the OLD (pre-rebase) sha — this is the immutable
+    // satisfied-by citation text that a rebase can never rewrite in place.
+    const verdictEntry = {
+      taskId: '1',
+      verdict: 'satisfied' as const,
+      citations: [{ sha: oldWorkSha, rationale: 'adds widget' }],
+    };
+    const taskPaths = new Set(['src/widget.ts']);
+
+    const result = await mod.validateCitations(repo.git, { taskId: '1', paths: taskPaths }, verdictEntry, head);
+
+    // Desired post-Task-9 behavior: resolves oldWorkSha -> newWorkSha through
+    // the persisted map before the ancestry check, so validation succeeds.
+    expect(result.valid).toBe(true);
+    expect(result.reasons).toEqual([]);
+
+    // Load-bearing invariant (ADR): the citation TEXT itself is never
+    // mutated — only in-memory resolution changes. The verdict entry we
+    // constructed still names the old sha after validation.
+    expect(verdictEntry.citations[0].sha).toBe(oldWorkSha);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 12 of rebase-orphans-every-sha-anchored-evidence-citatio.md (Story 8):
+// no-laundering invariant.
+//
+// The persisted rewrite map only ever contains keys for shas that were
+// genuinely part of a pre-image commit set the engine itself rewrote via a
+// sanctioned rebase (Task 9's `resolveThroughMap` gate). A forged/unrelated
+// sha that was never a pre-image commit — i.e. never a key in the map — must
+// NOT be "laundered" into passing validation. `resolveThroughMap` must return
+// such a sha completely unchanged (identity), and `validateCitations` must
+// still refuse it via the ordinary ancestry/existence check, exactly as it
+// would have before this feature existed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validateCitations does not launder unrelated/forged citations through the rewrite map (Task 12)', () => {
+  it('a sha that was never a key in the persisted rewrite map resolves to itself and is still refused', async () => {
+    const mod = await loadAttributionValidate();
+    const { resolveThroughMap, persistRewriteMap, loadRewriteMap } = await import('../../src/engine/rebase-translate.js');
+    const repo = await initRepo();
+
+    // A real rebase happened for an UNRELATED commit (oldWorkSha -> newWorkSha),
+    // so the persisted map is non-empty — but the forged sha below was never
+    // part of that pre-image set and is not a key in the map.
+    const baseSha = await getCurrentHead(repo);
+    const oldWorkSha = await commitFile(repo, 'src/widget.ts', 'export const widget = 1;', 'feat: add widget');
+    await execa('git', ['checkout', '-f', '-B', 'main', baseSha], { cwd: repo.root });
+    await commitFile(repo, 'UPSTREAM.md', 'upstream change\n', 'chore: upstream commit (onto)');
+    await execa('git', ['cherry-pick', oldWorkSha], { cwd: repo.root });
+    const newWorkSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: repo.root })).stdout.trim();
+    const head = newWorkSha;
+
+    await persistRewriteMap(repo.root, { [oldWorkSha]: newWorkSha });
+
+    // A forged sha: 40 hex chars, syntactically valid, but never committed in
+    // this repo at all — never a key in the rewrite map.
+    const forgedSha = 'deadbeef'.repeat(5);
+    expect(forgedSha).toHaveLength(40);
+
+    // 1. resolveThroughMap must return the forged sha unchanged (identity) —
+    //    it is not a key in the map.
+    const persistedMap = await loadRewriteMap(repo.root);
+    expect(persistedMap[forgedSha]).toBeUndefined();
+    expect(resolveThroughMap(forgedSha, persistedMap)).toBe(forgedSha);
+
+    // 2. validateCitations must still refuse the forged citation via the
+    //    normal ancestry/existence check.
+    const verdictEntry = {
+      taskId: '1',
+      verdict: 'satisfied' as const,
+      citations: [{ sha: forgedSha, rationale: 'forged citation' }],
+    };
+    const taskPaths = new Set(['src/widget.ts']);
+
+    const result = await mod.validateCitations(repo.git, { taskId: '1', paths: taskPaths }, verdictEntry, head);
+
+    expect(result.valid).toBe(false);
+    expect(result.reasons.length).toBeGreaterThan(0);
+  });
+});

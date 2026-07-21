@@ -85,6 +85,58 @@ unaffected. To deliberately install from a worktree anyway, pass `--allow-worktr
 ./bin/install --update --allow-worktree-root
 ```
 
+## How the Pieces Fit Together
+
+Three cooperating roles drive every feature from idea to merged PR — the **engineer**
+(spec authoring), the **daemon** (autonomous build), and the **operator** (judgment +
+merges). GitHub issues/PRs are the coordination medium; the daemon never merges.
+
+```mermaid
+flowchart TB
+  OP(["Operator<br/>(you)"])
+
+  subgraph GH["GitHub — coordination medium"]
+    ISSUES["Issues<br/>(intake: symptom capture,<br/>priority / size / links)"]
+    SPECPR["Spec PR<br/>(Refs #N)"]
+    BUILDPR["Implementation PR<br/>(Closes #N)"]
+  end
+
+  subgraph ENG["Engineer — spec authoring (supervisor, /engineer)"]
+    CLAIM["claim intake"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs"]
+    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped)"]
+  end
+
+  subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
+    SCAN["backlog scan<br/>(specs on main · owner gate ·<br/>shipped-record dedup · priority order)"]
+    WT["dispatch → git worktree<br/>+ per-worktree engine build"]
+    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → evidence gate<br/>(completion derived from commits)"]
+    HEAL["self-heal:<br/>retry escalation (effort→model) ·<br/>stall remediation · ci-fix on red PRs ·<br/>halt / park for the operator"]
+    VAL["SHIP validators:<br/>manual_test · prd_audit ·<br/>architecture review (as built)"]
+    FIN["finish: rebase → push →<br/>PR + committed shipped-record"]
+    SCAN --> WT --> BUILD --> VAL --> FIN
+    BUILD <--> HEAL
+  end
+
+  OP -->|"file / approve intake"| ISSUES
+  ISSUES --> CLAIM
+  LAND --> SPECPR
+  SPECPR -->|"operator merges"| MAIN[("main")]
+  MAIN --> SCAN
+  FIN --> BUILDPR
+  BUILDPR -->|"operator merges<br/>(daemon never merges)"| MAIN
+  HEAL -.->|"halts / parks needing judgment"| OP
+  OP -->|"unpark · approve VERSION bumps"| DAEMON
+```
+
+- **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
+  lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
+- **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
+  through the full SDLC with deterministic evidence gates, self-heals stalls and red CI,
+  and opens the implementation PR with a committed shipped-record so the work is never
+  re-dispatched.
+- **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
+  escalates, and signs off version bumps.
+
 ## Quick Start
 
 ### Interactive (recommended for first use)
@@ -309,6 +361,59 @@ For implementation details, see `src/conductor/src/engine/session-hook-assets.ts
 bodies), `src/conductor/src/engine/worktree-prepare.ts` (provisioning/wiring), and
 `src/conductor/README.md` → "Session-hook task stamping at subagent dispatch".
 
+### `halt-issues sweep` — filed halt-monitor issue lifecycle
+
+`conduct-ts halt-issues sweep` closes out GitHub issues that were auto-filed by the
+out-of-repo halt-monitor daemon (`monitor.sh`, tracked in #355 — that script does not
+live in this repo) once their halt condition has shipped. Without this sweep, filed
+issues never auto-close: they sit open even after the fix lands, and there's no link
+back from the shipped commit to the issue that reported it.
+
+```
+conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name> [options]
+```
+
+**Flags:**
+- `--repo-dir <dir>` — repository directory to search for shipping evidence (required)
+- `--gh-repo <owner/name>` — GitHub repository the filed issues live in (required)
+- `--dry-run` — run the full pipeline without writing to the ledger or GitHub; prints
+  what would be stamped/closed
+- `--monitor-log <path>` — path to the halt-monitor's log file (default:
+  `~/.ai-conductor/halt-monitor/monitor.log`)
+- `--ledger <path>` — path to the sweep's own ledger file (default:
+  `~/.ai-conductor/halt-issues/ledger.json`)
+
+**Monitor hook integration.** `monitor.sh` (out-of-repo, #355) should call the sweep
+after each halt-monitor cycle so filed issues get reconciled continuously:
+
+```bash
+conduct-ts halt-issues sweep --repo-dir "$REPO_DIR" --gh-repo "$GH_REPO" || true
+```
+
+Note: `--repo-dir` and `--gh-repo` are required flags — omitting either makes the CLI
+(`src/conductor/src/engine/halt-issues/halt-issues-cli.ts:85-87`) return a usage guide
+instead of running the sweep.
+
+The `|| true` keeps a sweep failure from taking down the monitor loop — the sweep is
+safe to retry on the next cycle since it's idempotent (stamped issues and already-closed
+issues are skipped on re-run).
+
+**`halt-sweep:keep-open` label contract.** Add the `halt-sweep:keep-open` label to any
+filed issue you want the sweep to leave alone permanently (e.g. a false positive still
+worth tracking, or a known issue you're deliberately not shipping a fix for). The sweep
+checks for this label before every close attempt; if present, it records
+`kept-open (label)` in the ledger and never closes or comments on the issue, even once
+shipping evidence appears.
+
+**Ledger rebuild semantics.** The sweep persists per-issue state (Halt-Slug stamp,
+resolution status, close status, last error) in a JSON ledger at `--ledger`. If the
+ledger file is missing, it's created fresh. If it exists but fails to parse as valid
+JSON (corruption), the sweep quarantines the bad file by renaming it to
+`ledger.json.corrupt-<timestamp>` alongside a warning, then rebuilds a fresh ledger from
+the current monitor-log verdicts — so a corrupted ledger never blocks the sweep, it just
+loses previously-recorded per-issue progress (already-closed issues are re-detected via
+GitHub issue state, not re-closed).
+
 ### Priority scheduling for issue-labeled backlog items
 
 When a GitHub issue is labeled with priority metadata, the daemon orders eligible
@@ -386,6 +491,65 @@ BLOCKED as-built architecture review (`.pipeline/architecture-review-as-built.md
 each fixable gap back to the right step with concrete tasks, reserving the HALT for gaps that
 genuinely need a human decision (architectural clarity or product scope).
 
+**Progress-aware build halt (`build_progress_halt`).** A build step that keeps resolving
+tasks on every attempt — but hasn't yet cleared the completion gate — is no longer halted
+just because it exceeded `max_retries`. As long as the resolved-task count keeps advancing,
+the retry loop keeps re-dispatching (bounded by `attempt_ceiling`, default 30) instead of
+marking the step `failed` at the fixed retry budget. A build that parked or halted while
+still making progress is also eligible for a re-kick on the next daemon idle tick even if
+`origin/main` hasn't advanced, bounded by `dispatch_ceiling` (default 20) per spec; once
+that ceiling is hit the spec stops being progress-re-kicked (with an explicit logged reason)
+but stays eligible for the normal base-advance `rekickSweep` or a manual operator unpark. A
+true zero-progress build (no advancing resolved count) still parks at the existing threshold —
+unchanged. Configure via a `build_progress_halt:` block in the project config:
+
+```yaml
+build_progress_halt:
+  enabled: true          # default true; false reproduces the pre-change fixed-budget halt exactly
+  attempt_ceiling: 30    # absolute per-dispatch backstop for a progressing build (must be >= max_retries)
+  dispatch_ceiling: 20   # per-spec cap on cross-dispatch progress-gated re-kicks
+```
+
+Omit the block entirely to get the defaults above. See `src/conductor/README.md` for the
+implementation details.
+
+**Kickback→build no-op escalation (`kickback_escalation`).** A kickback→build re-entry
+(e.g. from `as-built` review or `prd-audit`) that ends with zero net progress — no HEAD
+movement and no increase in resolved-task count — AND leaves the gate's verdict unchanged
+now HALTs loud on the first such cycle instead of silently re-kicking toward
+`MAX_KICKBACKS_PER_GATE`. Configure via a `kickback_escalation:` block in the project config:
+
+```yaml
+kickback_escalation:
+  enabled: true   # default true; false reverts to the prior re-kick-until-cap behavior
+```
+
+Omit the block entirely to get `enabled: true`. This only gates the zero-progress escalation
+(D2); the route-into-no-op guard that recomputes build completion before routing a kickback
+(D1) is fail-closed correctness and always stays active. See `src/conductor/README.md` for
+implementation details.
+
+**Rerun-vs-route retry classifier (`retry_routing`).** In daemon mode, a completion-check miss on
+one of the SHIP-tail verdict steps (`architecture_review_as_built`, `build_review`, `prd_audit`)
+routes into the same `/remediate` self-heal path above instead of burning a rerun whenever either:
+(a) the verdict artifact itself names a fresh, adverse result (a fresh `BLOCKED` as-built, a fresh
+`build_review` FAIL, or a non-clean prd-audit) — a "named-route" signal that rerunning the grader
+can't change; or (b) the failure reason is byte-identical to the prior attempt's *and* both the
+HEAD commit and the verdict artifact are provably unchanged since then — an "identical-repeat"
+signal that a rerun would just restate. Anything else (an absent/malformed verdict on the first
+attempt, or a same-reason repeat where the inputs actually changed) still reruns as before.
+Configure via a `retry_routing:` block in the project config:
+
+```yaml
+retry_routing:
+  enabled: true   # default true; false is an exact revert to the pre-existing prd_audit-only short-circuit
+```
+
+Omit the block entirely to get `enabled: true`. Setting `enabled: false` disables this classifier
+completely — only the original `prd_audit`-only short-circuit runs, and the other two verdict
+steps burn their full retry budget before routing at `step_failed`, exactly as before this
+feature. See `src/conductor/README.md` for the implementation details.
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a
@@ -421,7 +585,12 @@ pipeline.
 
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
-terminal and `daemon.log`. Each row shows the bits you triage on — complexity tier, the step a
+terminal and `daemon.log`. **By default the PROCESSED (completed) group is omitted**
+from both the console and the persisted `.daemon/daemon.log`. Pass `conduct-ts daemon
+--completed` (or `--all`) to additionally show the PROCESSED group **on the console
+only** — `.daemon/daemon.log` never includes the PROCESSED group, regardless of the
+flag. This does not affect `conduct-ts daemon-status`, which never rendered PROCESSED.
+Each row shows the bits you triage on — complexity tier, the step a
 feature reached, and the PR link once one is open (shipped features list their PR too).
 **WAITING** lists build-ready specs held back by an unresolved GitHub issue dependency (a
 `Source-Ref:` marker linked via GitHub's issue-dependencies API): the gate resolves each spec's
@@ -512,7 +681,9 @@ The park state is stored in `.daemon/parked/<slug>`, validated against a known p
 not the same as HALTed:** a HALT (`.pipeline/HALT`) is written by the pipeline itself and cleared
 automatically by re-kick; an operator-park is placed by a human and survives both — clearing a
 HALT does not unpark a slug. Unlike a HALT, an operator-parked worktree preserves its REKICK
-sentinel and resumes re-dispatch right where it left off once unparked. The status dashboard's
+sentinel and resumes re-dispatch right where it left off once unparked. The park check is
+re-consulted **immediately before dispatch**, not only at initial pool selection, closing a race
+where a park written between selection and dispatch was previously ignored. The status dashboard's
 PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE, etc.) — a parked
 slug always shows there and nowhere else. See
 [`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
@@ -764,6 +935,57 @@ advisory, not binding.
 - [HARNESS.md Key Conventions](HARNESS.md#key-conventions) — "Intake states WHAT and outcomes — DECIDE owns HOW"
   documents this rule in detail.
 
+### Intake-Only Criteria Enforcement (Priority + Size + Dependency-Linking)
+
+Every intake issue must carry the criteria the daemon backlog needs to schedule it — a
+`priority:` label, a `size:` label, and (when applicable) a `blocked_by:` link — and this
+harness stamps them **at intake, never downstream**. No build, gate, or CI workflow ever
+blocks on missing criteria; an unlabeled issue simply defaults and moves on. See
+`src/conductor/README.md` → "Intake-only criteria enforcement" for the full pipeline; summary
+below.
+
+- **Required form fields.** [`.github/ISSUE_TEMPLATE/intake.yml`](.github/ISSUE_TEMPLATE/intake.yml)
+  now has required `Priority` (`critical`/`high`/`medium`/`low`) and `Size` (`S`/`M`/`L`)
+  dropdowns, plus an optional free-text `Depends on` field (issue numbers, or "none"),
+  alongside the existing Observed/Impact/Desired-outcome/Hypotheses sections.
+
+- **`intake-label-sync` Action.** [`.github/workflows/intake-label-sync.yml`](.github/workflows/intake-label-sync.yml)
+  fires on `issues: [opened, edited]`, parses the submitted form body, and stamps the
+  matching `priority:`/`size:` labels plus one `blocked_by:#N` label per dependency —
+  defaulting to `size: M` / `priority: medium` on unparsable or missing input rather than
+  leaving the issue unlabeled. It is entirely isolated from `ci.yml`: labels-only
+  permissions (`issues: write` / `contents: read`), `continue-on-error: true`, and the
+  underlying `syncIssueLabels()` (`src/conductor/src/engine/engineer/intake/label-sync.ts`)
+  catches all errors internally and always exits 0 — a label-sync failure can never fail a
+  build or block another workflow. Idempotent: re-editing an issue re-diffs and re-applies
+  labels rather than duplicating them.
+
+- **`bin/intake-file`** — files a criteria-complete issue in one atomic operation instead of
+  relying on the web form:
+  ```bash
+  src/conductor/bin/intake-file --title "..." --body "..." \
+    [--size S|M|L] [--priority critical|high|medium|low] \
+    [--depends-on owner/repo#N ...] [--repo owner/repo]
+  ```
+  Size and priority are resolved in order: explicit flag ▸ prompted (interactive TTY) ▸
+  inferred from the body ▸ defaulted. `--depends-on` may repeat; when omitted interactively
+  the tool records an explicit "no dependencies" acknowledgement rather than silently
+  leaving the field blank. Exits 0 once the issue is created, even if label application or a
+  dependency link partially fails — those surface as warnings, never as a filing failure.
+  Backed by `fileIntakeIssue()` (`src/conductor/src/engine/engineer/intake/file-issue.ts`).
+
+- **`bin/intake-backfill`** — a one-shot, non-interactive sweep for the existing backlog:
+  ```bash
+  src/conductor/bin/intake-backfill --repo owner/repo
+  ```
+  Lists open issues assigned to the authenticated `gh` user, backfills any missing
+  `size:`/`priority:` labels (infer from body ▸ default), and prints an operator report
+  (labelled/skipped/failed breakdown). Per-issue failures are isolated and never abort the
+  sweep; it is idempotent, safe to re-run, and never HALTs. Run it once after adopting this
+  feature to catch up pre-existing backlog issues that predate the required form fields, or
+  any time issues were filed by hand (`gh issue create`) bypassing `bin/intake-file`.
+  Backed by `backfillIntakeLabels()` (`src/conductor/src/engine/engineer/intake/backfill.ts`).
+
 ## Choosing a Conductor
 
 Two conductor binaries ship together. Both drive the same 16-step SDLC pipeline and read
@@ -803,6 +1025,11 @@ pipeline. This prevents accidental typos and makes the CLI more discoverable:
 - **Conduct-TS forwarded verbs are documented:** Verbs like `daemon`, `render-diagrams`, 
   `engineer`, etc. are forwarded to conduct-ts if it's available on PATH. Run `conduct --help` 
   to see the full list.
+- **`engineer` subcommand help and unknown-flag rejection:** every `conduct-ts engineer
+  <subcommand> --help`/`-h` prints usage with zero side effects (no registry read, no
+  worktree/ledger mutation, no `gh` call) instead of executing the subcommand, and an
+  unrecognized flag on any `engineer` subcommand is now rejected (exit 1) instead of being
+  silently ignored. See `src/conductor/README.md` for the full subcommand reference.
 
 For details, see [Unknown-Command Guard](https://github.com/anthropics/ai-conductor#unknown-command-guard).
 
@@ -853,7 +1080,10 @@ steps:
     effort: max
     max_retries: 1
 
-  # Disable a built-in step (gating/structural steps cannot be disabled)
+  # Disable a built-in step. Gating/structural steps cannot be disabled,
+  # except gating steps whose StepDefinition opts in via `configDisableAllowed`
+  # (currently only manual_test). A disabled step is marked `skipped`, which
+  # satisfies downstream prerequisites and the gate-loop selector.
   assess:
     disable: true
 
@@ -895,6 +1125,13 @@ steps:
 # retries the next model in this list instead of failing the step. Omit to use the
 # default; set to `[]` to disable fallback entirely.
 model_fallback_ladder: ["fable", "opus", "sonnet"]   # default shown
+
+# ── SHIP validation fan-out (#469, auto mode only) ────────────────────────────
+# Concurrency cap for the parallel validation group (manual_test, prd_audit,
+# architecture_review_as_built). Default 2. Zero/negative/non-numeric values
+# fall back to the default; the effective width is additionally capped at the
+# number of dispatchable members. Interactive runs ignore this (serial walk).
+validation_concurrency: 2
 
 # ── Complexity tier ───────────────────────────────────────────────────────────
 complexity:
@@ -998,27 +1235,38 @@ spec_owner: your-github-login
 - **Fail-closed:** a daemon that can resolve **no** identity (no user-config `spec_owner`
   and no `gh` login) builds **nothing** and logs a loud, once-per-pass notice — it never
   falls back to building every operator's work.
-- **Un-owned specs are surfaced, never silently skipped:** a merged spec with no `Owner:`
-  marker is skipped with a distinct, deduped line telling you to add an `Owner:` marker on
-  the default branch (or grandfather it via `owner_gate_cutover`).
+- **Born owned, not silently skipped:** every DECIDE-phase write path stamps an `Owner:`
+  marker from machine identity (`spec_owner` → `gh` login) at authoring time, so intake
+  markers arrive with an owner by default. If a spec still arrives un-owned (pre-cutover
+  history, or an indeterminate merge time), the gate no longer skips it — it **default-builds
+  under the daemon's own resolved owner** (`unowned-defaulted`) and emits a distinct, deduped
+  log line naming the slug and defaulted owner and telling you to add an explicit `Owner:`
+  marker on the default branch to make ownership unambiguous. `other-owner` specs (stamped
+  with a **different** operator's identity) are still skipped — that case is unchanged.
+- **Enforcement is harness-native, not a local script:** this born-owned stamping and
+  default-build behavior is carried by `conduct-ts` itself (authoring + gate). This repo's
+  own `test/test_harness_integrity.sh` also checks that `.docs/intake/*.md` carry an `Owner:`
+  marker, but that is a supplementary local belt for this self-host repo — not the mechanism
+  that enforces ownership in consumer projects.
 
 **GATED dashboard section:** every daemon status view (`conduct-ts daemon-status`, the
 startup dashboard, `.daemon/gated.json`) carries a `GATED (n)` group alongside
 PARKED/HALTED/PROCESSED/IN-PROGRESS/WAITING/ELIGIBLE. It always renders explicitly — even
 `GATED (0)` — so an empty backlog is never mistaken for "nothing to do" when the real cause
 is an unresolved owner gate. Each `kind: 'spec'` row names the slug, the skip reason
-(`other-owner` / `unowned-post-cutover` / `unowned-indeterminate`), the other operator when
-known, and a remedy hint; each `kind: 'repo'` row is a section-level warning (e.g. "building
-NOTHING — identity unresolved" or "un-owned specs skipped — no owner_gate_cutover
-configured") for conditions with no single owning slug.
+(`other-owner` — the only reason a spec is still skipped rather than default-built), the other
+operator when known, and a remedy hint; each `kind: 'repo'` row is a section-level warning
+(e.g. "building NOTHING — identity unresolved") for conditions with no single owning slug.
+Un-owned arrivals no longer appear here as a skip: they default-build under
+`unowned-defaulted` (see above) and are surfaced only via the loud daemon log line, not the
+GATED group.
 
 **Gate write-back (owner-gated PR/issue announcement):** on every discovery pass, the daemon
 also announces each owner-gated spec where a GitHub artifact exists to announce on:
   - if the spec already has an implementation PR open (e.g. a prior build attempt halted
     before ownership changed underneath it), the PR gets an `owner-gated` label and a single
     upserted marker comment naming the reason/remedy/other-owner — edited in place on later
-    passes rather than duplicated, and updated when the reason transitions (e.g.
-    `unowned-indeterminate` → `other-owner`);
+    passes rather than duplicated;
   - if the spec originated from GitHub issue intake (carries a `Source-Ref: owner/repo#N`
     marker), the same label + marker comment are applied to the originating **issue** too, so
     the reporter sees why their request stalled without needing daemon/dashboard access.
@@ -1141,6 +1389,25 @@ attribution_audit_sample_pct: 10
 - Absent `attribution_judge_cutover` → judgment disabled, deterministic evidence only
 - Absent `attribution_audit_sample_pct` → defaults to 10% sampling
 - Both are inert when the judgment gate is inactive
+
+**Verify-only marker (#677):** a plan task can be marked prove-closed —
+legitimately expected to produce no commit (e.g. re-running an existing suite
+to confirm coverage) — with a `**Verify-only:** yes` line in its plan section.
+A gate-miss residue made up of (or including) marked task ids arms the judge
+lane for that class-scoped subset even when `attribution_judge_cutover` is
+dark/absent; an active cutover is unaffected and still judges the full
+residue. This prevents a verify-only task's absent commit from burning the
+`noEvidenceAttempts` counter and auto-parking an otherwise evaluator-APPROVED
+build. Pairs with an `Evidence: skipped <reason>` trailer accepted by the
+generated commit-msg hook as an alternative to `Task:` on an intentionally
+empty commit (a non-empty reason is required; bare empty commits are still
+rejected).
+
+**No-diff completion currency (#733):** a `**Type:** verification` plan marker
+is recognized in union with `**Verify-only:** yes` and arms the same judged-closure
+lane; and an `Evidence: skipped <reason>` commit itself mints an `evidenceStamps`
+entry (`form: 'evidence:skipped'`), so a no-diff task can resolve without ever
+reaching the judge.
 
 **Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
 can be triggered by hand for a parked/halted feature:
@@ -1565,6 +1832,24 @@ dedicated test coverage (950+ tests). See the feature comparison in
   reasons (bounded retries, then HALT); absent config preserves the legacy
   `build → manual_test` topology unchanged. See `src/conductor/README.md` → "Judgement gate
   at the build → manual_test seam" for config, cap/HALT behavior, and the cost trade-off.
+  SHIP-tail verdict checks (`build_review`, `prd_audit`, `architecture_review_as_built`)
+  require their verdict artifact's mtime to be fresh relative to the **per-attempt** judging
+  session (`attemptStartedAt`), not just the conductor-run start (`sessionStartedAt`) — a
+  re-dispatched judging session that fails to rewrite its verdict file scores "no fresh
+  verdict" instead of silently re-scoring a prior attempt's verdict forever.
+- **Wiring reachability gate** (`wiring_check`, gating, always-on, all tiers): sits strictly
+  between `build_review` and `manual_test` (`build → build_review → wiring_check →
+  manual_test → ...`), verifying that new production surface is actually *called*, not just
+  built and tested. Each plan task declares a `**Wired-into:** ` line (declared call
+  site(s), `same as Task N`, `none (no new production surface)`, or a waived `none (inert
+  until <ref>)` — full grammar in `skills/plan/SKILL.md` §5c); the gate cross-references
+  those declarations against the diff's new exports (universal reference-scan Layer 1,
+  plus an opt-in TypeScript import-graph reachability Layer 2 via `wiring.entry_points`
+  config). Plans with zero `Wired-into:` lines predate the convention and get
+  advisory-only findings; contract-bearing plans (one or more `Wired-into:` lines) are
+  fully blocking. `inert` waivers resolve against on-disk paths (no network) or `gh issue
+  view` for issue refs (open = waived, closed or `gh` error = fail-closed gap). See
+  `src/conductor/README.md` → "Wiring reachability gate" for the full breakdown.
 - **Manual-test FAIL routing + whitewash guard** (#367): `manual_test` is gating (locked —
   overrides and config disables are rejected) so a failing manual test can never be silently
   skipped. In daemon runs a manual_test that keeps FAILing kicks back to `build` with the
@@ -1572,6 +1857,22 @@ dedicated test coverage (950+ tests). See the feature comparison in
   FAIL rows and refuses a FAIL→PASS rewrite with no new commits — a claimed fix must exist
   as commits. Results are append-only per attempt (`## Attempt N` sections; the latest
   section is the verdict). See `src/conductor/README.md` → "Daemon manual-test routing".
+- **Parallel SHIP validation phase** (#469, auto mode only): when an auto-mode run
+  (`inline`/`daemon`) reaches the SHIP validators, `manual_test`, `prd_audit`, and
+  `architecture_review_as_built` fan out as a **concurrent validation group** instead of the
+  serial walk — each branch on its own fresh session, bounded by the `validation_concurrency`
+  config key (default **2**; zero/negative/non-numeric values fall back to 2; always capped at
+  the number of actually-dispatchable members, so a width-1 group degrades to exact serial
+  semantics). Branches never write state — a **single-writer join** recomputes every member's
+  objective gate verdict from on-disk evidence after all branches settle, then writes
+  `conduct-state.json` + `.pipeline/gates/*` once. Join classification preserves the serial
+  guarantees: all-green advances; an MT-only FAIL takes the same deterministic
+  `manual_test → build` kickback (#367); mixed gaps dispatch **one** `/remediate` over the
+  union of failing members' evidence (shared `MAX_KICKBACKS_PER_GATE` budget, D2 no-op-cycle
+  HALT parity); a branch with no verdict HALTs loudly. SIGINT mid-group persists each settled
+  member's `done`, and a resumed run re-dispatches only unfinished members. Interactive runs
+  are untouched — members execute via the pre-existing serial walk with their normal
+  checkpoints. See `src/conductor/README.md` → "Parallel validation phase".
 - **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
@@ -1592,6 +1893,19 @@ dedicated test coverage (950+ tests). See the feature comparison in
   exhausted, the engine writes `.pipeline/HALT`, leaves the rebase **paused**, and opens no PR.
   The gated resolution loop is daemon-only; the `/rebase` skill is also manually invokable by
   an operator. Resume: resolve → `git rebase --continue` → `rm .pipeline/HALT` → re-queue.
+- **Evidence citation translation across rebases** (#535): whenever either engine-owned rebase
+  (rebase-on-latest above, or the daemon re-kick's play-forward rebase) actually rewrites
+  commits, the engine automatically translates every sha-anchored evidence citation so rebases
+  no longer orphan them — no new flag or config. It builds a `git patch-id --stable`
+  old-sha→new-sha map, persists it to `.pipeline/rebase-rewrites.json`, rewrites
+  `task-evidence.json`/`task-status.json`/`attribution-memo.json` sha references and the memo
+  key in place, and resolves satisfied-by trailer citations through the map at read time
+  (trailer text itself is never rewritten). Pre-rebase commits that can't be matched (dropped,
+  or conflict-modified so their diff changed) are written to `.pipeline/rebase-residue.json`
+  with a `rebase_citation_residue` event — a loud signal to re-verify, never a silent dangle.
+  A sha that was never genuinely part of the rebase's pre-image is never laundered through the
+  map; it still fails the existing ancestry check. See
+  `.docs/decisions/adr-2026-07-12-rebase-evidence-stamp-translation.md`.
 - **Daemon mode** (`conduct-ts daemon`): drains a backlog of features that already have
   stories **and** plans, running each in its own worktree (parallel via `--concurrency N`,
   bounded by `--max-items`), and opening a PR on finish. Per-feature failures are isolated;
@@ -1646,7 +1960,9 @@ by matching commits to tasks and verifying no intermediate work was dropped. See
 **Auto-park on N-attempt trigger:** The daemon auto-parks after N consecutive no-evidence
 gate misses (where a gate found no new commit evidence since its prior attempt) or when the
 plan is empty/missing at seed time. This replaces infinite re-kick with a survivable halt.
-Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. See
+Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. When the
+unresolved residue at park time includes `**Verify-only:** yes`-marked tasks (#677), the
+park reason names those task ids instead of only the generic message. See
 `src/conductor/README.md` → "Auto-park on N-attempt trigger".
 
 **Remediation (agentic gap routing):** When a SHIP gate blocks the daemon, the `/remediate`
@@ -1673,7 +1989,8 @@ ai-conductor/
 │   ├── install              # Install/update/uninstall harness
 │   ├── conduct              # Stable bash SDLC runner
 │   ├── conduct-ts           # TypeScript conductor wrapper (requires built dist/)
-│   └── migrate              # Changelog-driven migration runner
+│   ├── update                # bin/update — self-update check/apply CLI (see HARNESS.md → "Update flow")
+│   └── migrate               # Changelog-driven migration runner
 ├── src/conductor/           # TypeScript conductor (tsup bundle, vitest tests)
 │   ├── src/engine/          # State machine, gates, completion, auto-heal
 │   ├── src/execution/       # Claude provider, subprocess, rate limiting

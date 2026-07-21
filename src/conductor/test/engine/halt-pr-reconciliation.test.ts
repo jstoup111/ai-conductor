@@ -311,4 +311,351 @@ describe('reconcileHaltPrs (Task 15)', () => {
     expect(finishedPr.labels).not.toContain('needs-remediation'); // no re-label
     expect(finishedPr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER); // marker still gone
   });
+
+  it('(Task 1) warm cache holding conforming for all marked PRs → sweep logs zero per-PR conforming lines', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    const logs: string[] = [];
+    const log = (msg: string) => logs.push(msg);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>([[PR_URL_CONFORMING, 'conforming']]);
+
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log, cache });
+
+    expect(logs.some((msg) => msg.includes('already conforming'))).toBe(false);
+  });
+
+  it('(Task 1) fresh cache → conforming PR logged once, second sweep with same cache logs zero', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache });
+    expect(logs1.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache });
+    expect(logs2.filter((msg) => msg.includes('already conforming'))).toHaveLength(0);
+  });
+
+  it('(Task 1) PR removed from list has cache entry pruned, re-appearing PR logged again as first-seen', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const { gh: gh1 } = makeFakeGhForReconciliation([conforming]);
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh1, log: (m) => logs1.push(m), cache });
+    expect(logs1.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+    expect(cache.get(PR_URL_CONFORMING)).toBe('conforming');
+
+    const { gh: gh2 } = makeFakeGhForReconciliation([]);
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh2, log: (m) => logs2.push(m), cache });
+    expect(cache.has(PR_URL_CONFORMING)).toBe(false);
+
+    const { gh: gh3 } = makeFakeGhForReconciliation([conforming]);
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh3, log: (m) => logs3.push(m), cache });
+    expect(logs3.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+  });
+
+  it('(Task 2) PR stays unconfirmed across two sweeps with same cache → action lines logged both times', async () => {
+    // Arrange: PR marked broken, but gh pr view will keep reporting non-conforming
+    // state even after the "heal" attempt, so ensureHaltPresentation returns 'unconfirmed'.
+    const stubbornPr: FakePr = {
+      number: 401,
+      url: 'https://github.com/owner/repo/pull/401',
+      isDraft: false,
+      labels: [],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    // Fake gh where the ready/label calls silently fail to mutate state,
+    // forcing ensureHaltPresentation's re-verification to see unconfirmed.
+    const calls: string[][] = [];
+    const unconfirmedGh: GhRunner = async (args: string[]) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: stubbornPr.number,
+              url: stubbornPr.url,
+              body: stubbornPr.body,
+              isDraft: stubbornPr.isDraft,
+              labels: stubbornPr.labels.map((name) => ({ name })),
+            },
+          ]),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        // Always report non-conforming, regardless of mutation attempts
+        return {
+          stdout: JSON.stringify({ isDraft: false, labels: [], body: stubbornPr.body }),
+        };
+      }
+      // ready/label/edit calls: accept but don't actually change stubbornPr
+      return { stdout: '' };
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: unconfirmedGh, log: (m) => logs1.push(m), cache });
+    expect(logs1.some((msg) => msg.includes(`healing ${stubbornPr.url}`))).toBe(true);
+    expect(logs1.some((msg) => msg.includes(`${stubbornPr.url} heal unconfirmed`))).toBe(true);
+
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: unconfirmedGh, log: (m) => logs2.push(m), cache });
+    expect(logs2.some((msg) => msg.includes(`healing ${stubbornPr.url}`))).toBe(true);
+    expect(logs2.some((msg) => msg.includes(`${stubbornPr.url} heal unconfirmed`))).toBe(true);
+  });
+
+  it('(Task 2) PR heals to confirmed, then observed conforming next sweep → conforming logged exactly once on first post-heal sweep, zero on third sweep', async () => {
+    const healingPr: FakePr = {
+      number: 402,
+      url: 'https://github.com/owner/repo/pull/402',
+      isDraft: false,
+      labels: [],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([healingPr]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: heals the PR (draft + label applied by fake gh)
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache });
+    expect(logs1.some((msg) => msg.includes(`${healingPr.url} healed (confirmed)`))).toBe(true);
+    expect(logs1.some((msg) => msg.includes('already conforming'))).toBe(false);
+    expect(cache.get(healingPr.url)).toBe('healed');
+    expect(healingPr.isDraft).toBe(true);
+    expect(healingPr.labels).toContain('needs-remediation');
+
+    // Sweep 2: PR is now observed conforming (draft+labeled) — first post-heal conforming sweep
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache });
+    expect(logs2.filter((msg) => msg.includes('already conforming'))).toHaveLength(1);
+    expect(cache.get(healingPr.url)).toBe('conforming');
+
+    // Sweep 3: no state change — zero conforming logs
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs3.push(m), cache });
+    expect(logs3.filter((msg) => msg.includes('already conforming'))).toHaveLength(0);
+  });
+
+  it('(Task 2) a per-PR exception logs error and sweep continues to next PR, with cache present', async () => {
+    // Arrange: gh pr list returns malformed `labels` (not an array) for one PR,
+    // which throws inside the per-PR loop's own processing (before/around
+    // ensureHaltPresentation) and is caught by the existing per-PR try/catch.
+    const throwingUrl = 'https://github.com/owner/repo/pull/403';
+    const okPr: FakePr = {
+      number: 404,
+      url: 'https://github.com/owner/repo/pull/404',
+      isDraft: false,
+      labels: [],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const throwingGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 403,
+              url: throwingUrl,
+              body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+              isDraft: false,
+              labels: 'not-an-array', // malformed: .map will throw
+            },
+            {
+              number: okPr.number,
+              url: okPr.url,
+              body: okPr.body,
+              isDraft: okPr.isDraft,
+              labels: okPr.labels.map((name) => ({ name })),
+            },
+          ]),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === okPr.url) {
+        return {
+          stdout: JSON.stringify({ isDraft: okPr.isDraft, labels: okPr.labels.map((name) => ({ name })), body: okPr.body }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready' && args.includes('--undo') && args.includes(okPr.url)) {
+        okPr.isDraft = true;
+        return { stdout: '' };
+      }
+      if (args[0] === 'api' && args[2] === 'POST' && /\/labels$/.test(args[3] ?? '') && args[3]?.includes(`issues/${okPr.number}/`)) {
+        const label = (args[5] ?? '').replace(/^labels\[\]=/, '');
+        if (!okPr.labels.includes(label)) okPr.labels.push(label);
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+    const logs: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: throwingGh, log: (m) => logs.push(m), cache });
+
+    expect(logs.some((msg) => msg.includes(`error healing ${throwingUrl}:`))).toBe(true);
+    // Sweep continued: the other PR was still healed
+    expect(okPr.isDraft).toBe(true);
+    expect(okPr.labels).toContain('needs-remediation');
+  });
+
+  it('(Task 3) warm all-conforming steady-state sweep (unchanged signature) logs zero lines total, including no summary line', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: establishes cache + signature (1 marked PR observed conforming)
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache });
+    expect(logs1.length).toBeGreaterThan(0);
+
+    // Sweep 2: warm steady-state — same list/marked counts, cache already conforming
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache });
+    expect(logs2).toHaveLength(0);
+  });
+
+  it('(Task 3) sweep whose (prList.length, markedPrs.length) signature changed logs exactly one summary line, even with zero per-PR lines', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+    const unmarked: FakePr = {
+      number: 303,
+      url: PR_URL_UNMARKED,
+      isDraft: false,
+      labels: [],
+      body: 'A completely normal feature PR description.',
+    };
+
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: only the marked PR present → establishes signature (1, 1)
+    const { gh: gh1 } = makeFakeGhForReconciliation([conforming]);
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh1, log: (m) => logs1.push(m), cache });
+    expect(logs1.length).toBeGreaterThan(0);
+
+    // Sweep 2: prList.length changes (2, 1) — cache still says conforming for the marked PR,
+    // so zero per-PR lines, but the signature change must still force exactly one summary line.
+    const { gh: gh2 } = makeFakeGhForReconciliation([conforming, unmarked]);
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh2, log: (m) => logs2.push(m), cache });
+    expect(logs2.filter((msg) => msg.includes('already conforming'))).toHaveLength(0);
+    expect(logs2.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+    expect(logs2).toHaveLength(1);
+  });
+
+  it('(Task 3) sweep emitting >=1 per-PR line also emits exactly one summary line', async () => {
+    const broken: FakePr = {
+      number: 301,
+      url: PR_URL_BROKEN,
+      isDraft: false,
+      labels: [],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([broken]);
+    const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    const logs: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs.push(m), cache });
+
+    expect(logs.some((msg) => msg.includes('healing'))).toBe(true);
+    expect(logs.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+  });
+
+  it('(Task 3) no cache/carrier passed → summary line always emitted (legacy/back-compat)', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    // Sweep 1 (no cache passed)
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m) });
+    expect(logs1.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+
+    // Sweep 2 (no cache passed, identical state) — still must emit summary every time
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m) });
+    expect(logs2.filter((msg) => msg.includes('enumerated'))).toHaveLength(1);
+  });
+
+  it('(Task 4) per-run cache ownership: same cache instance across sweeps stays quiet, a fresh cache instance re-logs baseline', async () => {
+    const conforming: FakePr = {
+      number: 302,
+      url: PR_URL_CONFORMING,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    };
+
+    const { gh } = makeFakeGhForReconciliation([conforming]);
+
+    // Simulates daemon-cli.ts's runDaemonMode: one cache constructed once per
+    // daemon run, reused across every sweep call for the lifetime of the run.
+    const runCache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+
+    // Sweep 1: fresh cache -> full baseline log.
+    const logs1: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs1.push(m), cache: runCache });
+    expect(logs1.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
+
+    // Sweep 2: SAME cache instance, unchanged conforming PR -> silent (no per-PR line).
+    const logs2: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs2.push(m), cache: runCache });
+    expect(logs2.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(false);
+
+    // A second, independently-constructed fresh cache (simulating a new daemon
+    // run / process restart) must NOT inherit suppression from runCache - proves
+    // the cache is in-memory per-run, not persisted to disk.
+    const freshCache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
+    const logs3: string[] = [];
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, log: (m) => logs3.push(m), cache: freshCache });
+    expect(logs3.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
+  });
 });

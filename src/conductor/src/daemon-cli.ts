@@ -8,7 +8,15 @@ import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
-import { isEligibleForCiFix, runCiFix, buildCiFixHint, productionCiFixRunner } from './engine/ci-fix.js';
+import {
+  isEligibleForCiFix,
+  runCiFix,
+  buildCiFixHint,
+  productionCiFixRunner,
+  classifyFixError,
+  preflightCiFixInvocation,
+  defaultCiFixProbe,
+} from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
@@ -19,8 +27,11 @@ import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-f
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
-import { loadConfig, resolveMemoryProvider } from './engine/config.js';
-import { holdLock, readPidRecord, ownsLock } from './engine/daemon-lock.js';
+import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import type { HarnessConfig } from './types/config.js';
+import { readLastResolvedCount } from './engine/task-evidence.js';
+import { countResolvedTasks } from './engine/task-progress.js';
+import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
   formatDaemonLogLine,
@@ -28,6 +39,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
+import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
@@ -58,7 +70,7 @@ import {
   makeFeatureRunnerDeps,
   makeWatchHaltClearedSeam,
 } from './engine/daemon-deps.js';
-import { isOperatorParked } from './engine/park-marker.js';
+import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
@@ -83,7 +95,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
-import { reconcileHaltPrs } from './engine/halt-pr-reconciliation.js';
+import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
 import { readRestartPending, consumeOnBoot, type RestartIntent } from './engine/restart-marker.js';
@@ -216,6 +228,12 @@ export interface DaemonModeOptions {
    * Tests inject a fake to verify the exit call is made.
    */
   exitProcess?: (code: number) => void;
+  /**
+   * Task 3: Show completed (PROCESSED) features in the startup dashboard's
+   * console output. Defaults to false/undefined — the persisted log sink
+   * NEVER includes PROCESSED regardless of this flag.
+   */
+  showCompleted?: boolean;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -362,6 +380,63 @@ export function createRestartRequester(
 }
 
 /**
+ * T14 (daemon-halts-a-build-that-is-making-forward-progre): construct the
+ * REAL `DaemonDeps.isProgressReKickEligible` predicate and
+ * `progressReKickDispatchCeiling` from `config.build_progress_halt` — the
+ * production wiring that was missing despite T8/T9/T10's full unit coverage
+ * at the daemon.ts/pickEligible level (with hand-injected stub predicates)
+ * and `readLastResolvedCount`'s existence in task-evidence.ts. Without this,
+ * a parked-but-progressing build in the real daemon stayed parked exactly as
+ * it did before the feature shipped.
+ *
+ * Gated on `build_progress_halt.enabled`: when disabled (or config/the block
+ * is absent), `isProgressReKickEligible` is OMITTED entirely (not merely a
+ * function that always returns false) so pickEligible's optional-chaining
+ * guard (`ctx.isProgressReKickEligible && ...`) never even consults it —
+ * true end-to-end inertness, matching the pre-feature behavior byte for
+ * byte. `progressReKickDispatchCeiling` is always threaded (mirrors
+ * `BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling` when the block/field is
+ * absent), since daemon.ts already defaults it — this just avoids a second,
+ * possibly-drifting default living in two places.
+ *
+ * Eligibility per slug: the live resolved-task count in that slug's worktree
+ * (`countResolvedTasks`, reads the pipeline task-status sidecar) strictly
+ * exceeds the count its last build-step dispatch stamped to the
+ * `TaskEvidence` sidecar (`readLastResolvedCount`, reads
+ * `.pipeline/task-evidence.json`) —
+ * i.e. forward progress happened since the dispatch that halted/parked it.
+ * Both readers are tolerant of a missing/corrupt file (read as 0), so an
+ * absent worktree degrades to "no progress" rather than throwing.
+ */
+export function buildProgressReKickDeps(
+  config: HarnessConfig | undefined,
+  worktreeBase: string,
+): {
+  isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  progressReKickDispatchCeiling: number;
+} {
+  const block = config?.build_progress_halt;
+  const progressReKickDispatchCeiling =
+    block?.dispatch_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling;
+
+  if (!block?.enabled) {
+    return { progressReKickDispatchCeiling };
+  }
+
+  return {
+    progressReKickDispatchCeiling,
+    isProgressReKickEligible: async (slug: string) => {
+      const slugRoot = join(worktreeBase, slug);
+      const [lastResolvedCount, liveResolvedCount] = await Promise.all([
+        readLastResolvedCount(slugRoot),
+        countResolvedTasks(slugRoot),
+      ]);
+      return liveResolvedCount > lastResolvedCount;
+    },
+  };
+}
+
+/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -370,14 +445,13 @@ export function createRestartRequester(
  * runDaemon / makeRunFeature.
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
-  const { projectRoot } = opts;
+  const { projectRoot, showCompleted } = opts;
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
   // actionable error rather than silently dispatching unregistered skills (which
   // surfaces as a cryptic "no parseable result" HALT). The interactive prompt to
   // self-heal lives at `daemon start`.
   const ensureFresh = opts.ensureFresh ?? (() => ensureInstallFresh({ interactive: false }));
-  await ensureFresh();
   // The local branch worktrees fork from and discovery reads. Resolve origin's
   // real default (main/master/trunk) rather than hardcoding 'main'; the daemon
   // fast-forwards this branch on each idle poll (see fastForwardRoot).
@@ -392,9 +466,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // `log` goes to the console only.
   let logSink: DaemonLogSink | null = null;
 
+  // ci-fix startup preflight (CF-5/CF-6) result is disabled below, right
+  // after `log` is defined.
+  let ciFixEnabled = true;
+
   // Task 16: Transition-only per-slug status logging + resume line
   // Track the last status for each slug so we only emit log lines when status changes
   const lastStatus = new Map<string, string>();
+
+  // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
+  // of this daemon run. Constructed once, outside the sweep loop, and reused on
+  // every startup + idle-poll sweep so steady-state (unchanged) PRs stay silent
+  // instead of re-logging every tick. A fresh daemon run always starts with a
+  // fresh (empty) cache — in-memory only, never persisted across process restarts.
+  const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
   const log = (msg: string) => {
     // Task 16: Parse per-feature log lines and suppress unchanged status
@@ -446,6 +531,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
   const discoveryLogger = createDiscoveryLogger(log);
+
+  // CF-5/CF-6 (intake #666): run the ci-fix startup preflight exactly once,
+  // before the sweep loop starts, so a broken `claude` fix-invocation surface
+  // (missing binary, bad auth, stale flag) disables ci-fix for this daemon
+  // run instead of crashing or silently retrying a broken invocation on every
+  // PR. Never repeated per-PR — the `ciFix.dispatch` closure only reads the
+  // resulting `ciFixEnabled` flag.
+  const ciFixPreflight = await preflightCiFixInvocation({ probe: defaultCiFixProbe });
+  if (!ciFixPreflight.ok) {
+    ciFixEnabled = false;
+    log(`[ci-fix] startup preflight failed, disabling ci-fix for this run: ${ciFixPreflight.reason}`);
+  }
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -507,6 +604,39 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   };
   process.once('exit', releaseBackstop);
 
+  // Task 5: run the install-freshness check (which may trigger publish/GC)
+  // only AFTER holdLock has succeeded and the exit backstop above is
+  // registered. This closes the pre-lock startup window where GC could
+  // self-evict the running daemon's own dist before any pidfile/backstop
+  // protection existed — a throw here (stale-install refusal) now
+  // propagates with the lock already guarded by releaseBackstop on exit.
+  // Stamp this process's own engine version onto env BEFORE any GC-triggering
+  // step runs, so publish-engine.mjs's gcVersions call (Task 3) can never
+  // delete the dist-versions/<id> this daemon is currently running out of.
+  Object.assign(process.env, selfGuardEnv());
+  await ensureFresh();
+
+  // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
+  // lock is released — force-exiting on SIGTERM (the old behavior) let a
+  // second daemon race the pidfile while a conductor was still mid-write.
+  // The teardown controller gives the daemon loop a bounded window to drain
+  // (via shouldStop, wired into runDaemon below); if the drain doesn't
+  // finish within FORCE_RELEASE_TIMEOUT_MS, onForceRelease fires as a
+  // last-resort backstop: release the lock synchronously and exit non-zero,
+  // logged with a greppable marker for post-hoc forensics.
+  const FORCE_RELEASE_TIMEOUT_MS = 30_000;
+  const teardown = createDaemonTeardown({
+    timeoutMs: FORCE_RELEASE_TIMEOUT_MS,
+    onForceRelease: () => {
+      log(
+        `[daemon] teardown force-release: drain did not complete within ${FORCE_RELEASE_TIMEOUT_MS / 1000}s — releasing lock and exiting`,
+      );
+      releaseBackstop();
+      const exitProcess = opts.exitProcess ?? process.exit;
+      exitProcess(1);
+    },
+  });
+
   // Task 22: Process-level SIGTERM handler for daemon mode. Track all in-flight
   // rate-limit waits across N concurrent conductors so a single process-level
   // handler can abort them all and coordinate state saves before exit.
@@ -514,16 +644,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // AbortControllers here instead of installing per-conductor handlers.
   const allWaitSignals = new Set<AbortController>();
 
-  // Task 22: Install ONE process-level SIGTERM handler (not N per-conductor).
-  // When SIGTERM fires, abort all in-flight waits and coordinate state saves.
+  // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
+  // per-conductor). When SIGTERM fires, abort all in-flight waits so they
+  // unblock promptly, then request the bounded drain-then-release teardown
+  // — runDaemon's shouldStop dep (wired below) sees the request at the top
+  // of its loop and exits normally, after which the completion path
+  // releases the lock. No direct process.exit here: the only force-exit
+  // path is the teardown's bounded onForceRelease backstop above.
   const daemonSigtermHandler = async () => {
     // Abort all in-flight rate-limit waits across all conductors
     for (const controller of allWaitSignals) {
       controller.abort();
     }
     // Note: State saves are handled by individual conductors' exit handlers.
-    // The daemon-cli process cleanup (releaseBackstop) will flush logs + release lock.
-    process.exit(1);
+    // Request the drain — runDaemon observes shouldStop() at its next loop
+    // boundary and stops with stoppedReason 'signal_teardown'; the normal
+    // completion path below then releases the lock and exits.
+    teardown.requestStop();
   };
   process.on('SIGTERM', daemonSigtermHandler);
 
@@ -1078,6 +1215,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // `.daemon/parked/<slug>` marker is durable across restarts and is
       // never lifted by clearing the HALT marker (halt-clear resume, PR-#109).
       isParked: (slug) => isOperatorParked(projectRoot, slug),
+      // T14 (daemon-halts-a-build-that-is-making-forward-progre): wire the
+      // real progress-gated cross-dispatch re-kick (T8/T9/T10) into runDaemon
+      // — previously constructed and fully unit-tested only at the
+      // daemon.ts/pickEligible level, never reachable from this entrypoint.
+      ...buildProgressReKickDeps(config, worktreeBase),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -1177,7 +1319,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
             parked.push({ slug, provenance: provenance || undefined, reason });
           }
         }
-        log(`\n${renderDashboard({ ...state, parked })}`);
+        // Task 3: split the previously single tee'd call so the persisted
+        // daemon.log NEVER carries the PROCESSED group (kept lean for
+        // grep/tail), while the console optionally shows it per
+        // `showCompleted` (--completed/--all). Uses the same formatting
+        // conventions as the `log()` closure above.
+        const dashboardState = { ...state, parked };
+        logSink?.write(
+          formatDaemonLogLine(`[daemon] ${stripAnsi(`\n${renderDashboard(dashboardState)}`)}`),
+        );
+        console.log(
+          `${chalk.dim('[daemon]')} \n${renderDashboard(dashboardState, { includeCompleted: showCompleted })}`,
+        );
       },
       // FR-4: resolve the base-branch tip SHA from the SAME local default branch
       // the backlog reads. On idle refresh we fast-forward it first so the SHA
@@ -1189,6 +1342,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
       rekickSweep: async (sha) => {
+        // Reconcile stranded park markers at the TOP of the sweep so the same
+        // sweep that moves them also skips them (#486).
+        await reconcileStrandedParkMarkers(projectRoot, log);
         // Fresh resolver per sweep: makeIsProcessed caches the shipped-record
         // listing per instance, and this sweep runs because the base branch
         // just advanced — a run-long cache would miss records merged mid-run.
@@ -1205,7 +1361,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // silently no-ops the "ultimate safety net" for halt-PR presentation
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
-        await reconcileHaltPrs({ projectRoot, log });
+        await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
@@ -1338,6 +1494,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
             dispatch: async (entry) => {
+              if (!ciFixEnabled) {
+                return;
+              }
               log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
 
               try {
@@ -1362,12 +1521,37 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
                 const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
 
+                // Route the ci-fix dispatch through resolveCiFailure (T4):
+                // adapt a real DefaultStepRunner into productionCiFixRunner's
+                // dispatcher seam instead of wiring the bare exec-based
+                // runner directly — mirrors the resolveRebaseConflict /
+                // DefaultStepRunner pattern used for rebase resolution above.
+                const ciFixDispatcher = {
+                  resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
+                    const sessionId = uuidv4();
+                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.worktreePath, {
+                      featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                      config,
+                      mode: 'auto',
+                    });
+                    await stepRunner.resolveCiFailure({
+                      worktreePath: ctx.worktreePath,
+                      prUrl: ctx.entry.prUrl,
+                      hint: ctx.hint,
+                      slug: ctx.entry.slug,
+                    });
+                    return { kind: 'changed' as const };
+                  },
+                };
+
                 const outcome = await runCiFix(
                   entry,
                   branch,
                   hint,
                   {
-                    fixRunner: productionCiFixRunner,
+                    fixRunner: {
+                      run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
+                    },
                     suiteCommand: config?.mergeable_autoresolve?.suiteCommand,
                   },
                   log,
@@ -1379,7 +1563,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 }
                 return;
               } catch (err: any) {
-                log(`[ci-fix] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                log(
+                  `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,
+                );
                 return;
               }
             },
@@ -1401,6 +1587,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       repoRootMissing: () => (existsSync(projectRoot) ? null : projectRoot),
       // Task 4: per-sweep ownership check — stop dispatch if pidfile was overwritten
       lockOwnershipLost: async () => !(await ownsLock(projectRoot, lock.uuid)),
+      // #561: SIGTERM requests a drain via the teardown controller instead of
+      // force-exiting; runDaemon polls this at the top of its loop and stops
+      // with 'signal_teardown' once true.
+      shouldStop: () => teardown.shouldStop(),
     },
     {
       concurrency: clampDaemonConcurrency(opts.concurrency, log),
@@ -1428,11 +1618,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
   // Normal completion: drop the crash backstop, restore the console tee,
   // flush+close the log, and release the lock asynchronously.
+  // #561: cancel the teardown's force-release timer first — the drain (or
+  // ordinary completion) is finishing on its own, so the bounded backstop
+  // must not fire after the lock is already released below.
+  const teardownWasRequested = teardown.shouldStop();
+  teardown.cancel();
   process.off('exit', releaseBackstop);
   console.warn = originalConsoleWarn;
   console.error = originalConsoleError;
   await logSink.close();
   await lock.release();
+  // #561 (Story 1): only force a clean process exit when this completion was
+  // driven by a SIGTERM-requested drain — ordinary (non-signal) completion
+  // keeps today's return-and-let-the-event-loop-drain behavior.
+  if (teardownWasRequested) {
+    (opts.exitProcess ?? process.exit)(0);
+  }
 }
 
 /**
@@ -1535,6 +1736,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,
       );
       break;
+    case 'auto_park_contradiction': {
+      // Loud refusal line (#612): a would-be `empty/missing plan` auto-park
+      // was refused because the run's own evidence disagrees — surface the
+      // slug, verdict, and the disagreeing evidence counts unmissably.
+      const { summaryTasksCompleted, evidenceStamps, resolvedTasks } = event.evidence;
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(
+          `auto_park_contradiction[${event.slug}]: refused verdict="${event.verdict}" — evidence: summaryTasksCompleted=${summaryTasksCompleted} evidenceStamps=${evidenceStamps} resolvedTasks=${resolvedTasks}`,
+        )}`,
+      );
+      break;
+    }
     default:
       break;
   }

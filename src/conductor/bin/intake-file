@@ -1,0 +1,97 @@
+#!/usr/bin/env -S npx tsx
+// bin/intake-file — files a criteria-complete GitHub issue in one atomic
+// operation: create + priority:/size: labels + a --depends-on link (or an
+// explicit "no dependencies" acknowledgement).
+//
+// Thin CLI shell: all decision logic (prompt ▸ infer ▸ default; label
+// application; blocked_by linking; label-apply-failure-is-a-warning) lives in
+// `fileIntakeIssue` (src/engine/engineer/intake/file-issue.ts), unit-tested in
+// test/acceptance/intake-file-completeness.test.ts. This script wires that
+// function to the real `gh` CLI and process argv/stdin.
+//
+// Usage:
+//   bin/intake-file --title "..." --body "..." [--size S|M|L]
+//     [--priority critical|high|medium|low] [--depends-on owner/repo#N]
+//     [--repo owner/repo]
+//
+// Exit code: 0 on successful filing, even if label application or a
+// --depends-on link partially fails (those surface as warnings). Non-zero
+// only if issue *creation* itself fails.
+
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import * as readline from 'node:readline/promises';
+import { fileIntakeIssue } from '../src/engine/engineer/intake/file-issue.js';
+import type { FileIntakeIssueOpts } from '../src/engine/engineer/intake/file-issue.js';
+
+const execFileP = promisify(execFileCb);
+
+function parseArgs(argv: string[]): FileIntakeIssueOpts & { dependsOnGiven: boolean } {
+  const opts: Record<string, string> = {};
+  const dependsOn: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--depends-on') {
+      dependsOn.push(argv[++i]);
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      opts[key] = argv[++i];
+    }
+  }
+
+  return {
+    title: opts.title ?? '',
+    body: opts.body ?? '',
+    size: opts.size as FileIntakeIssueOpts['size'],
+    priority: opts.priority as FileIntakeIssueOpts['priority'],
+    dependsOn,
+    dependsOnGiven: dependsOn.length > 0,
+    repo: opts.repo,
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+  };
+}
+
+async function main(): Promise<void> {
+  const parsed = parseArgs(process.argv.slice(2));
+
+  if (!parsed.title || !parsed.body) {
+    console.error('[intake-file] --title and --body are required');
+    process.exit(1);
+  }
+
+  const gh = async (args: string[], cwdOpts: { cwd: string }) => {
+    const result = await execFileP('gh', args, { cwd: cwdOpts.cwd });
+    return { stdout: String(result.stdout) };
+  };
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const prompt = async (question: string) => rl.question(`${question} `);
+
+  try {
+    const result = await fileIntakeIssue(parsed, { gh, cwd: '.', prompt });
+    rl.close();
+
+    console.log(`[intake-file] filed: ${result.issueUrl}`);
+    console.log(`[intake-file] size=${result.size} (${result.sizeSource}), priority=${result.priority} (${result.prioritySource})`);
+    console.log(
+      result.dependsOnDecision === 'none'
+        ? '[intake-file] dependencies: none'
+        : `[intake-file] dependencies: linked ${result.linked.join(', ')}`,
+    );
+    for (const warning of result.warnings) {
+      console.warn(`[intake-file] warning: ${warning}`);
+    }
+
+    // Per FR-2/FR-4: a label-apply (or link) hiccup after successful issue
+    // creation is a warning, never a filing failure.
+    process.exit(0);
+  } catch (error) {
+    rl.close();
+    console.error('[intake-file] issue creation failed:', error);
+    process.exit(1);
+  }
+}
+
+main();

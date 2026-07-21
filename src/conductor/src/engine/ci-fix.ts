@@ -23,6 +23,39 @@ import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
 
 /**
+ * Classify a ci-fix resolver error into a coarse category so logs and
+ * escalation paths can distinguish "the CLI flag is wrong" from "we're
+ * not authenticated" from "the binary isn't spawnable" from anything else.
+ *
+ * Inspects the error's message plus execa-style fields (`.stderr`,
+ * `.shortMessage`) since spawn failures often carry the useful text there
+ * rather than in `.message`.
+ */
+export function classifyFixError(err: unknown): 'flag-invalid' | 'auth' | 'spawn-env' | 'unknown' {
+  const parts: string[] = [];
+  if (err && typeof err === 'object') {
+    const anyErr = err as Record<string, unknown>;
+    if (typeof anyErr.message === 'string') parts.push(anyErr.message);
+    if (typeof anyErr.shortMessage === 'string') parts.push(anyErr.shortMessage);
+    if (typeof anyErr.stderr === 'string') parts.push(anyErr.stderr);
+  } else if (typeof err === 'string') {
+    parts.push(err);
+  }
+  const text = parts.join(' ').toLowerCase();
+
+  if (/enoent|spawn .*(enoent|failed)|spawnfile/.test(text)) {
+    return 'spawn-env';
+  }
+  if (/unknown option|unrecognized option|unknown flag|unrecognized flag|invalid option/.test(text)) {
+    return 'flag-invalid';
+  }
+  if (/\b401\b|not authenticated|unauthorized|authentication failed|auth failed/.test(text)) {
+    return 'auth';
+  }
+  return 'unknown';
+}
+
+/**
  * Build a RETRY hint from failing checks and their logs.
  *
  * Story: TR-4 happy (hint names failing checks + includes log excerpt)
@@ -246,28 +279,52 @@ export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'bra
  * entry. The runner's result becomes the dispatch outcome.
  */
 export interface CiFixRunner {
-  run(opts: { worktreePath: string; hint: string; entry: WatchEntry }): Promise<CiFixOutcome>;
+  run(opts: {
+    worktreePath: string;
+    hint: string;
+    entry: WatchEntry;
+    dispatcher?: CiFixDispatcher;
+  }): Promise<CiFixOutcome>;
 }
 
 /**
- * Production {@link CiFixRunner}: shells out to a fix session inside the
- * worktree, injecting the hint. Guarded by the AI_CONDUCTOR_NO_REAL_EXEC
- * kill-switch (used in tests/dry-run to avoid spawning real processes) — when
- * set, it short-circuits to a no-op outcome without shelling out.
+ * StepRunner-backed dispatcher seam for {@link productionCiFixRunner}.
+ * Mirrors `DefaultStepRunner.resolveCiFailure`'s role (T2,
+ * src/engine/step-runners.ts) but is expressed in `CiFixRunner`'s own
+ * ctx/outcome shape so `productionCiFixRunner` doesn't need to know about
+ * `DefaultStepRunner` construction — callers (e.g. daemon-cli.ts) adapt a
+ * real `DefaultStepRunner` into this shape at the call site.
+ */
+export interface CiFixDispatcher {
+  resolveCiFailure(ctx: {
+    worktreePath: string;
+    hint: string;
+    entry: WatchEntry;
+  }): Promise<CiFixOutcome>;
+}
+
+/**
+ * Production {@link CiFixRunner}: delegates to an injected StepRunner-backed
+ * dispatcher (see {@link CiFixDispatcher}) instead of shelling out to a
+ * fictional "fix session" CLI flag that never existed (CF-1).
+ * Guarded by the AI_CONDUCTOR_NO_REAL_EXEC kill-switch (used in tests/dry-run
+ * to avoid dispatching real fix sessions) — when set, it short-circuits to a
+ * no-op outcome without invoking the dispatcher.
  */
 export const productionCiFixRunner: CiFixRunner = {
-  async run({ worktreePath, hint, entry }): Promise<CiFixOutcome> {
+  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixOutcome> {
     if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
       return { kind: 'noop' };
     }
 
-    await execa(
-      'claude',
-      ['--fix-session', '--pr-url', entry.prUrl, '--hint', hint],
-      { cwd: worktreePath },
-    );
+    if (!dispatcher) {
+      throw new Error(
+        'productionCiFixRunner.run requires an injected dispatcher (StepRunner-backed ' +
+          'resolveCiFailure seam) — see daemon-cli.ts ciFix dispatch wiring.',
+      );
+    }
 
-    return { kind: 'changed' };
+    return dispatcher.resolveCiFailure({ worktreePath, hint, entry });
   },
 };
 
@@ -410,7 +467,81 @@ export async function runCiFix(
     return outcome;
   } catch (err) {
     // Any unhandled error in worktree setup gets logged but re-thrown
-    log(`${prUrl}: unexpected error in ci-fix resolver: ${err}`);
+    const tag = classifyFixError(err);
+    const message = err instanceof Error ? err.message : String(err);
+    log(`${prUrl}: unexpected error in ci-fix resolver [${tag}]: ${message}`);
     throw err;
   }
+}
+
+/**
+ * Result of {@link preflightCiFixInvocation}.
+ */
+export interface CiFixPreflightResult {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Default probe for {@link preflightCiFixInvocation}: a cheap, no-model-round-trip
+ * check that the `claude` binary is spawnable and responds to `--version`. This
+ * intentionally never starts a real fix session — it's meant to catch the "the
+ * daemon host has no claude binary / no auth / a stale flag" class of failure
+ * once at startup, not on every per-PR dispatch.
+ */
+export async function defaultCiFixProbe(): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  try {
+    const result = await execa('claude', ['--version'], { reject: false });
+    return {
+      exitCode: result.exitCode ?? 1,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? '',
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { exitCode: 1, stdout: '', stderr: message };
+  }
+}
+
+/**
+ * CF-5/CF-6 (intake #666): startup preflight for the ci-fix resolver's
+ * fix-invocation surface (the `claude` CLI ci-fix relies on). Runs a cheap
+ * capability/dry probe (see {@link defaultCiFixProbe}) exactly once —
+ * no model round-trip — so the daemon can disable ci-fix for the run and log
+ * a diagnosable reason instead of crashing or silently retrying a broken
+ * invocation on every PR.
+ *
+ * Never throws: a rejecting probe is caught and reported as
+ * `{ ok: false, reason }` just like a non-zero exit code, so callers (see
+ * daemon-cli.ts startup wiring) can safely `await` this without a try/catch.
+ *
+ * @param opts.probe Injectable probe seam (tests stub this; production wiring
+ *                     passes {@link defaultCiFixProbe}).
+ */
+export async function preflightCiFixInvocation(opts: {
+  probe: () => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+}): Promise<CiFixPreflightResult> {
+  let result: { exitCode: number; stdout: string; stderr: string };
+  try {
+    result = await opts.probe();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const tag = classifyFixError(err);
+    return { ok: false, reason: `ci-fix preflight probe threw [${tag}]: ${message}` };
+  }
+
+  if (result.exitCode === 0) {
+    return { ok: true };
+  }
+
+  const err = new Error(result.stderr || `probe exited with code ${result.exitCode}`);
+  const tag = classifyFixError(err);
+  const reason =
+    `ci-fix preflight probe failed [${tag}] (exit ${result.exitCode}): ` +
+    `${result.stderr || result.stdout || '(no output)'}`;
+  return { ok: false, reason };
 }

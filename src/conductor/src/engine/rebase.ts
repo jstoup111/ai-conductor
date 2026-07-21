@@ -20,7 +20,7 @@ import { saveStepStatus } from './state.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
 export interface GitRunner {
-  (args: string[]): Promise<GitResult>;
+  (args: string[], opts?: { input?: string }): Promise<GitResult>;
 }
 
 export interface GitResult {
@@ -31,7 +31,7 @@ export interface GitResult {
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
-  return async (args: string[]): Promise<GitResult> => {
+  return async (args: string[], opts?: { input?: string }): Promise<GitResult> => {
     try {
       // Engine bookkeeping marker (#505 Task 8): any `git commit` this runner
       // spawns is engine-authored (rebase mechanics, quarantine, etc.), never
@@ -42,6 +42,7 @@ export function makeGitRunner(cwd: string): GitRunner {
         cwd,
         reject: false,
         ...(isCommit ? { env: withEngineCommitEnv() } : {}),
+        ...(opts?.input !== undefined ? { input: opts.input } : {}),
       });
       // Tolerate odd/mocked results (no object, no exitCode) → treat as failure.
       if (!r || typeof r !== 'object') {
@@ -358,10 +359,30 @@ export type RebaseOutcome =
  *   changelog_resolved → CHANGELOG-only conflict auto-resolved (FR-7).
  *   conflict_halt      → any other / mixed conflict (FR-8); rebase left paused.
  */
+/** Optional capabilities injectable into `performRebase` (Task 15). */
+export interface PerformRebaseOpts {
+  /**
+   * Post-rebase evidence-citation translation (adr-2026-07-12-rebase-evidence-
+   * stamp-translation.md), invoked on ANY clean rebase that actually ran
+   * (commit shas are rewritten by every real rebase, independent of whether
+   * the diff is code-classified as `changed` or `noop`), BEFORE the caller
+   * applies rebase verdicts. Absent -> today's behavior, byte-identical no-op
+   * (legacy/unit-test callers that don't pass a 4th argument).
+   */
+  translateAfterRebase?: (
+    git: GitRunner,
+    projectRoot: string,
+    onto: string,
+    origHead: string,
+    head: string,
+  ) => Promise<void>;
+}
+
 export async function performRebase(
   git: GitRunner,
   projectRoot: string,
   localBase: string,
+  opts?: PerformRebaseOpts,
 ): Promise<RebaseOutcome> {
   // No usable git work tree (e.g. a non-repo fixture, or git unavailable):
   // degrade to a no-op so the feature still completes (FR-3 spirit) rather
@@ -411,7 +432,18 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
-    return classifyClean(git, preTree);
+    const outcome = await classifyClean(git, preTree);
+    // Every clean rebase that reaches here rewrites commit shas (the parent
+    // changed), regardless of whether classifyClean's code-path heuristic
+    // calls it `changed` or `noop` — a docs/config-only rebase still orphans
+    // any evidence citation pinned to the pre-rebase shas. Translate
+    // unconditionally on any real rebase, not gated on that heuristic.
+    if (opts?.translateAfterRebase) {
+      const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
+      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
+    }
+    return outcome;
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -519,6 +551,12 @@ export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttem
 export type SetupFailureAttempt = { attempted: true };
 export interface SetupFailureContext { worktreePath: string; outputTail: string; slug: string }
 export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFailureAttempt>;
+
+// ── CI failure resolution (ci-fix resolver autofix) ─────────────────────────
+
+export type CiFailureAttempt = { attempted: true };
+export interface CiFailureContext { worktreePath: string; prUrl: string; hint: string; slug: string }
+export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 
 /**
  * Check whether every commit subject from before the rebase is still present in
@@ -811,9 +849,14 @@ export async function applyRebaseVerdicts(
   // verdict. Included unconditionally: even if build_review is disabled
   // for this project the verdict file is inert, but when it IS enabled the
   // stale state must exist before manual_test is re-selectable.
+  //
+  // wiring_check (Task 6) sits between build_review and manual_test — it
+  // asserts new code is actually reachable from an entry point, which a
+  // file-changing rebase can falsify just as easily as build_review's
+  // grading, so it must be invalidated the same way (Task 11).
   const targets: StepName[] = ranManualTest
-    ? ['build', 'build_review', 'manual_test']
-    : ['build', 'build_review'];
+    ? ['build', 'build_review', 'wiring_check', 'manual_test']
+    : ['build', 'build_review', 'wiring_check'];
   for (const target of targets) {
     // Skip build if it was pre-verified (already wrote verdict above).
     if (target === 'build' && buildReVerified) {

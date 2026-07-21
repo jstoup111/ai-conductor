@@ -595,14 +595,25 @@ async function showOnBranch(
 
 describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => {
   let repoPath: string;
+  let fakeHome: string;
+  let savedHome: string | undefined;
 
   beforeEach(async () => {
     ({ repoPath } = await makeGitRepo());
+    // Isolate $HOME so these gh-fallback/unowned assertions never observe the
+    // real developer machine's ~/.ai-conductor/config.yml spec_owner (Story 1
+    // wired runAuthoring to consult machine identity when ownerConfig is
+    // empty — these tests intentionally exercise the chain PAST that step).
+    fakeHome = await mkdtemp(join(tmpdir(), 'authoring-owner-gate-home-'));
+    savedHome = process.env.HOME;
+    process.env.HOME = fakeHome;
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    process.env.HOME = savedHome;
     await rm(repoPath, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
   });
 
   it('stamps Owner from configured spec_owner (gh not consulted)', async () => {
@@ -649,5 +660,129 @@ describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => 
     const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
     expect(marker).toContain('Source-Ref: acme/app#7');
     expect(marker ?? '').not.toContain('Owner:');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Covers: FR-1 (Story 1 — owner-stamped-at-authoring, #721)
+//
+// RED acceptance specs: `runAuthoring` with an EMPTY/ABSENT `ownerConfig` must
+// fall back to `readMachineOwnerConfig()` (the `~/.ai-conductor/config.yml`
+// `spec_owner` → `gh` login chain) exactly like `conductor.ts`/`loop.ts`
+// already do. Today it does not: `deps.ownerConfig ?? {}` feeds an EMPTY object
+// straight into `resolveDaemonOwner`, which never reads machine config — a
+// resolvable machine identity is silently dropped and the marker ships
+// un-owned. These specs drive the REAL `runAuthoring` entry point (not the
+// identity helpers directly) with a fake `$HOME` carrying a real
+// `~/.ai-conductor/config.yml`, mirroring the established technique in
+// `loop.test.ts` ("Owner-gate: autonomous authoring threads owner deps into
+// runAuthoring"), and assert against the COMMITTED intake marker.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('runAuthoring — born owned from machine identity when ownerConfig is empty (Story 1, FR-1)', () => {
+  let repoPath: string;
+
+  beforeEach(async () => {
+    ({ repoPath } = await makeGitRepo());
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  /** Create an isolated fake $HOME carrying `~/.ai-conductor/config.yml` (or none). */
+  async function makeUserHome(body?: string): Promise<string> {
+    const home = await mkdtemp(join(tmpdir(), 'authoring-user-home-'));
+    if (body !== undefined) {
+      const { mkdir } = await import('fs/promises');
+      await mkdir(join(home, '.ai-conductor'), { recursive: true });
+      await writeFile(join(home, '.ai-conductor', 'config.yml'), body, 'utf-8');
+    }
+    return home;
+  }
+
+  /** Run `fn` with process.env.HOME pointed at `home`; always restores it. */
+  async function withHome<T>(home: string, fn: () => Promise<T>): Promise<T> {
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      return await fn();
+    } finally {
+      process.env.HOME = saved;
+    }
+  }
+
+  it('falls back to machine identity (~/.ai-conductor/config.yml spec_owner) when ownerConfig is absent and gh is not consulted', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const fakeHome = await makeUserHome('spec_owner: carol\n');
+    try {
+      await withHome(fakeHome, async () => {
+        // A throwing gh proves machine config won without a login fallback —
+        // mirrors the "configured owner" test above, one seam earlier in the chain.
+        const failingGh: GhRunner = async () => {
+          throw new Error('gh should not be consulted when machine spec_owner resolves');
+        };
+        const result = await runAuthoring(target, 'dep bump', {
+          decide: approvedDecide(),
+          gh: failingGh,
+          // No ownerConfig injected — this is exactly the autonomous-authoring gap.
+        });
+
+        const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+        // Fails today: authoring.ts feeds `{}` into resolveDaemonOwner and never
+        // reads machine config, so this marker ships un-owned instead.
+        expect(marker ?? '').toContain('Owner: carol');
+      });
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to gh login when ownerConfig is absent AND machine config has no spec_owner (chain continues past machine identity)', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const fakeHome = await makeUserHome(); // no config.yml at all
+    try {
+      await withHome(fakeHome, async () => {
+        const gh: GhRunner = async () => ({ stdout: 'dave\n' });
+        const result = await runAuthoring(target, 'dep bump', {
+          decide: approvedDecide(),
+          gh,
+        });
+
+        const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+        // Fails today for the wrong reason if it ever passes: current code
+        // already reaches gh in this case (empty ownerConfig also falls through
+        // to gh), so this pins that the machine-identity fallback is additive,
+        // not a regression of the existing gh path.
+        expect(marker).toContain('Owner: dave');
+      });
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('never writes a BLANK Owner: line when identity is genuinely unresolvable (un-owned = omitted, never blank)', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const fakeHome = await makeUserHome(); // no config.yml → machine identity unresolved
+    try {
+      await withHome(fakeHome, async () => {
+        const failingGh: GhRunner = async () => {
+          throw new Error('gh unavailable');
+        };
+        const result = await runAuthoring(target, 'dep bump', {
+          decide: approvedDecide(),
+          sourceRef: 'acme/app#7', // guarantees a marker is written
+          gh: failingGh,
+        });
+
+        const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
+        expect(marker).toContain('Source-Ref: acme/app#7');
+        expect(marker ?? '').not.toMatch(/^Owner:\s*$/m); // never a blank Owner: line
+        expect(marker ?? '').not.toContain('Owner:'); // un-owned = omitted entirely
+      });
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
   });
 });

@@ -203,20 +203,27 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
   });
 
-  it('changed → rebase satisfied + build/manual_test kicked back (from rebase)', async () => {
+  it('changed → rebase satisfied + build/build_review/wiring_check/manual_test kicked back (from rebase)', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, true);
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
+    // wiring_check (Task 6) sits between build_review and manual_test and
+    // must be invalidated the same way — a file-changing rebase can falsify
+    // reachability evidence just as easily as build_review's grading
+    // (Task 11).
+    const wiringCheck = await readVerdict(dir, 'wiring_check');
+    expect(wiringCheck?.satisfied).toBe(false);
+    expect(wiringCheck?.kickback?.from).toBe('rebase');
   });
 
   it('changed but manual_test did not run → only build kicked back', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
-    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
   });
 
   it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
@@ -240,7 +247,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true, undefined);
     // Verify existing behavior is unchanged (byte-identical)
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     // Verify new field is present and empty when preVerify is absent
     expect(r.reverified).toEqual([]);
     const build = await readVerdict(dir, 'build');
@@ -271,7 +278,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is reverified, NOT in kickedBack
-    expect(r.kickedBack).toEqual(['build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -305,7 +312,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is kicked back, NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback (byte-identical to today)
@@ -341,7 +348,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is kicked back (fail-closed), NOT in reverified
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'manual_test']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with fail-closed kickback
@@ -376,7 +383,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build is reverified (not in kickedBack), build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build_review']);
+    expect(r.kickedBack).toEqual(['build_review', 'wiring_check']);
     expect(r.reverified).toEqual(['build']);
 
     // build verdict is fresh satisfied
@@ -409,7 +416,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
 
     // build and build_review kicked back, manual_test NOT present
-    expect(r.kickedBack).toEqual(['build', 'build_review']);
+    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check']);
     expect(r.reverified).toEqual([]);
 
     // build verdict is unsatisfied with kickback
@@ -621,4 +628,205 @@ Task 1 needs to be done.
     expect(result.done).toBe(false);
     expect(result.reason).toMatch(/pending|not completed|no.*evidence/i);
   });
+});
+
+// ── Task 14 (RED): performRebase invokes translateAfterRebase on `changed` ──
+//
+// Story 6/9 (#535, ADR adr-2026-07-12-rebase-evidence-stamp-translation): once
+// Task 15 wires it, a clean rebase that changes code paths must invoke a
+// deterministic `translateAfterRebase(git, projectRoot, onto, origHead, head)`
+// step so sha-anchored evidence citations survive the engine's own rebase.
+// `performRebase` accepts the capability via an optional 4th `opts` argument
+// (mirroring the existing `resolveRebaseConflict`-style optional-capability DI
+// used elsewhere in this module) — today `performRebase(git, projectRoot,
+// localBase)` takes no such argument, so it is silently ignored and these
+// "invoked on changed" assertions are genuinely RED. The "not invoked"
+// assertions are forward-looking regression guards for the no-op/absent case
+// and may already trivially pass.
+describe('engine/rebase — performRebase translateAfterRebase capability (Task 14, real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execa('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-xlate-di-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await writeFile(join(repo, 'base.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('invokes an injected translateAfterRebase(git, projectRoot, onto, origHead, head) after a `changed` clean rebase', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    // The real pre-rebase tip (what git's own ORIG_HEAD resolves to once the
+    // rebase below runs) — captured AFTER the feature commit, not before it,
+    // so buildRewriteMap's `rev-list onto..origHead` sees the actual feature
+    // commit range.
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'feat']);
+
+    const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+    const git = makeGitRunner(repo);
+    const outcome = await (performRebase as unknown as (
+      git: GitRunner,
+      projectRoot: string,
+      localBase: string,
+      opts?: { translateAfterRebase?: typeof translateAfterRebase },
+    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+
+    expect(outcome.kind).toBe('changed');
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    expect(translateAfterRebase).toHaveBeenCalledTimes(1);
+    expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
+  }, 20000);
+
+  it('does NOT invoke translateAfterRebase on a `noop` outcome (branch already current)', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+    const git = makeGitRunner(repo);
+    const outcome = await (performRebase as unknown as (
+      git: GitRunner,
+      projectRoot: string,
+      localBase: string,
+      opts?: { translateAfterRebase?: typeof translateAfterRebase },
+    ) => Promise<RebaseOutcome>)(git, repo, 'main', { translateAfterRebase });
+
+    expect(outcome.kind).toBe('noop');
+    expect(translateAfterRebase).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('does NOT invoke translateAfterRebase, and behaves byte-identically to today, when the capability is absent from a `changed` rebase', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const git = makeGitRunner(repo);
+    // No 4th argument — today's exact call shape.
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    // Backward-compat guard: nothing about the outcome changes when the
+    // capability is never supplied.
+    if (outcome.kind === 'changed') {
+      expect(outcome.changedCodePaths.length).toBeGreaterThan(0);
+    }
+  }, 20000);
+
+  // Story 9 (amended, FR-9 remediation): classifyClean's `noop` is a code-path
+  // heuristic for downstream re-verification, NOT the translation gate. A clean
+  // rebase over a docs-only base advance reports `noop` yet still rewrites every
+  // replayed commit's sha — skipping translation there is the exact #535
+  // dangling-citation defect (rebase.ts:436-440).
+  it('STILL invokes translateAfterRebase when a clean rebase moved HEAD but classifyClean reports `noop` (docs-only base advance), with no residue on a pure replay', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    const { translateAfterRebase: realTranslate } = await import(
+      '../../src/engine/rebase-translate.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    // The base advances with a DOCS-ONLY commit: post-rebase, diff(preTree,
+    // HEAD) contains only this .md path (the feature commit is in both trees),
+    // so classifyClean reports `noop` — yet the replay gives feat's commit a
+    // new parent and therefore a new sha.
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'docs-note.md'), 'docs only\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'docs: base advance']);
+    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'feat']);
+
+    // Seed the sha-anchored .pipeline stores with the PRE-rebase sha (kept
+    // untracked, and seeded only now — after the base advance — so `git add .`
+    // on main can't sweep them into the docs commit), so the "stores
+    // translated" half of the amended Story 9 is asserted for real — not just
+    // the rewrite map's existence.
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(repo, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 'T1', name: 'seeded', status: 'completed', commit: origHead }],
+      }),
+    );
+    await writeFile(
+      join(repo, '.pipeline/task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: {
+          T1: { sha: origHead, form: 'commit', citedShas: [origHead] },
+        },
+      }),
+    );
+
+    // Delegate to the REAL translation (with an emitter, so residue — if any —
+    // would actually be written) to prove the pure-replay case leaves none.
+    const events = new ConductorEventEmitter();
+    const translateAfterRebase = vi.fn(
+      (gr: GitRunner, root: string, o: string, oh: string, h: string) =>
+        realTranslate(gr, root, o, oh, h, events),
+    );
+    const git = makeGitRunner(repo);
+    const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
+
+    // The heuristic outcome is `noop`…
+    expect(outcome.kind).toBe('noop');
+    // …but the rebase genuinely moved HEAD (shas rewritten)…
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    expect(newHead).not.toBe(origHead);
+    // …so translation MUST still run, with the real pre/post HEADs.
+    expect(translateAfterRebase).toHaveBeenCalledTimes(1);
+    expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
+
+    // Pure replay: patch-ids match, the map covers the replayed commit…
+    const rewrites = JSON.parse(
+      await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8'),
+    ) as Record<string, string>;
+    expect(rewrites[origHead]).toBe(newHead);
+
+    // The sha-anchored stores are TRANSLATED, not just mapped: every seeded
+    // pre-rebase citation now points at the post-rebase sha.
+    const status = JSON.parse(
+      await readFile(join(repo, '.pipeline/task-status.json'), 'utf-8'),
+    ) as { tasks: Array<{ id: string; commit?: string }> };
+    expect(status.tasks[0].commit).toBe(newHead);
+    const evidence = JSON.parse(
+      await readFile(join(repo, '.pipeline/task-evidence.json'), 'utf-8'),
+    ) as { evidenceStamps: Record<string, { sha?: string; citedShas?: string[] }> };
+    expect(evidence.evidenceStamps.T1.sha).toBe(newHead);
+    expect(evidence.evidenceStamps.T1.citedShas).toEqual([newHead]);
+
+    // …and NO residue is written.
+    await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
+  }, 20000);
 });

@@ -17,8 +17,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   assess:
     'The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
-    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; Fable\'s cheaper generation wins, but mistakes here cascade downstream.',
-  prd: 'Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase.',
+    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis).',
+  prd: 'Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need.',
   complexity:
     'Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching.',
   stories: 'Pattern-following from design doc, structured output.',
@@ -33,6 +33,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build: 'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku.',
   build_review:
     'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
+  wiring_check:
+    'Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and manual_test — mechanical evidence gathering, no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',
   prd_audit: 'Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR.',
   architecture_review_as_built:
@@ -145,7 +147,7 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
     name: 'engineer',
     model: 'fable',
     rationale:
-      'Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration.',
+      'Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus).',
   },
   {
     name: 'intake',

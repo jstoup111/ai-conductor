@@ -728,12 +728,28 @@ describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () =
     expect(result.outputTail).toContain('setup still failing');
   });
 
-  it('(c) negative: runPrepare passes but porcelain dirty → park with dirty paths', async () => {
+  it('(c) negative: runPrepare passes but porcelain dirty → park with distinct dirty-tree-uncleaned outcome, quarantined, no "setup failed"', async () => {
     const { git, calls } = fakeGit([
-      // Porcelain check shows dirty tree
+      // Porcelain check shows dirty tree, including a tracked file and an untracked file
       {
         match: ['status', '--porcelain'],
-        result: { stdout: ' M src/dirty-file.ts\n?? src/new-file.ts\n' },
+        result: { stdout: ' M src/conductor/src/engine/conductor.ts\n?? scratch.txt\n' },
+      },
+      // quarantine(): no pre-existing ref
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 1, stdout: '', stderr: 'unknown revision' } },
+      { match: ['add', '-A'], result: { exitCode: 0 } },
+      {
+        match: ['commit', '-m'],
+        result: { stdout: '[feat-branch aaaaaaa] Quarantine before reset\n', exitCode: 0 },
+      },
+      {
+        match: ['rev-parse', 'HEAD'],
+        result: { stdout: 'aaaaaaa11111111111111111111111111111111\n' },
+      },
+      { match: ['branch', '-f'], result: { exitCode: 0 } },
+      {
+        match: ['reset', '--hard', 'HEAD~1'],
+        result: { stdout: 'HEAD is now at bbbbbb Original commit\n' },
       },
     ]);
 
@@ -751,9 +767,69 @@ describe('engine/setup-triage — fixSession (Task 10: fix-session stage)', () =
 
     expect(dispatchCalled).toBe(true);
     expect(result.kind).toBe('park');
-    expect(result.preservedPaths).toContain('src/dirty-file.ts');
-    expect(result.preservedPaths).toContain('src/new-file.ts');
-    expect(result.contractOutcome).toBeUndefined();
+    expect(result.contractOutcome).toBe('dirty-tree-uncleaned');
+    expect((result as any).quarantineRef).toBe('wip/setup-quarantine-test-slug');
+    expect(result.preservedPaths).toContain('src/conductor/src/engine/conductor.ts');
+    expect(result.preservedPaths).toContain('scratch.txt');
+    expect(result.outputTail).not.toContain('setup failed');
+  });
+
+  it('(g) negative: dirty porcelain over a pre-existing quarantine ref → refreshes (git branch -f issued)', async () => {
+    const { git, calls } = fakeGit([
+      {
+        match: ['status', '--porcelain'],
+        result: { stdout: ' M src/existing.ts\n' },
+      },
+      // quarantine(): a quarantine ref already exists from a prior rotation
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 0, stdout: 'cccccc\n' } },
+      { match: ['add', '-A'], result: { exitCode: 0 } },
+      {
+        match: ['commit', '-m'],
+        result: { stdout: '[feat-branch dddddd] Quarantine before reset\n', exitCode: 0 },
+      },
+      {
+        match: ['rev-parse', 'HEAD'],
+        result: { stdout: 'dddddd1111111111111111111111111111111111\n' },
+      },
+      { match: ['branch', '-f'], result: { exitCode: 0 } },
+      {
+        match: ['reset', '--hard', 'HEAD~1'],
+        result: { stdout: 'HEAD is now at eeeeee Original commit\n' },
+      },
+    ]);
+
+    const dispatchFixSession = async () => {};
+    const runPrepare = async (_path: string) => {};
+
+    const result = await fixSession(git, '/path/to/wt', 'test-slug', dispatchFixSession, runPrepare);
+
+    expect(result.kind).toBe('park');
+    expect(result.contractOutcome).toBe('dirty-tree-uncleaned');
+    const branchForceCall = calls.find(c => c[0] === 'branch' && c[1] === '-f');
+    expect(branchForceCall).toBeDefined();
+    expect(branchForceCall).toEqual(['branch', '-f', 'wip/setup-quarantine-test-slug', 'dddddd1111111111111111111111111111111111']);
+  });
+
+  it('(h) negative: quarantine preservation failure (git add -A/commit nonzero) → park naming the preservation failure, does not proceed', async () => {
+    const { git, calls } = fakeGit([
+      {
+        match: ['status', '--porcelain'],
+        result: { stdout: ' M src/broken.ts\n' },
+      },
+      { match: ['rev-parse', '--verify', 'wip/setup-quarantine-test-slug'], result: { exitCode: 1, stdout: '', stderr: 'unknown revision' } },
+      { match: ['add', '-A'], result: { exitCode: 1, stderr: 'fatal: unable to add files' } },
+    ]);
+
+    const dispatchFixSession = async () => {};
+    const runPrepare = async (_path: string) => {};
+
+    const result = await fixSession(git, '/path/to/wt', 'test-slug', dispatchFixSession, runPrepare);
+
+    expect(result.kind).toBe('park');
+    expect(result.outputTail).toContain('unable to add files');
+    // Must not have proceeded to commit/branch/reset after the failed add
+    expect(calls.some(c => c[0] === 'commit')).toBe(false);
+    expect(calls.some(c => c[0] === 'branch')).toBe(false);
   });
 
   it('(d) negative: dispatchFixSession throws → park, seam called exactly once', async () => {

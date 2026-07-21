@@ -8,8 +8,10 @@
 
 /**
  * prepare-commit-msg hook
- * Appends Task: <id> via git interpret-trailers when no trailer exists.
- * ID comes from .pipeline/current-task, else abstains.
+ * Stamps/reconciles Task: <id> via git interpret-trailers. The engine's
+ * .pipeline/current-task id always wins over any self-stamped Task: trailer
+ * already present in the message (replaces, never appends a duplicate).
+ * ID comes from .pipeline/current-task, else abstains (message untouched).
  * Abstains on amend, rebase-in-progress, or when current-task is absent.
  */
 export const PREPARE_COMMIT_MSG_HOOK = [
@@ -35,11 +37,6 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  exit 0',
   'fi',
   '',
-  '# Check if a Task: trailer already exists',
-  'if git interpret-trailers --parse < "$COMMIT_MSG_FILE" 2>/dev/null | grep -q \'^Task:\'; then',
-  '  exit 0',
-  'fi',
-  '',
   'WORKTREE_ROOT="$(git rev-parse --show-toplevel)"',
   'CURRENT_TASK_FILE="$WORKTREE_ROOT/.pipeline/current-task"',
   'TASK_STATUS_FILE="$WORKTREE_ROOT/.pipeline/task-status.json"',
@@ -50,9 +47,11 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  TASK_ID="$(cat "$CURRENT_TASK_FILE" 2>/dev/null || true)"',
   'fi',
   '',
-  '# If we have a task id, stamp the trailer',
+  '# If we have a task id, stamp/reconcile the trailer — the engine\'s',
+  '# current-task id always wins over any self-stamped Task: trailer already',
+  '# present in the message (--if-exists replace ensures replace, not append).',
   'if [[ -n "$TASK_ID" ]]; then',
-  '  git interpret-trailers --in-place --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
+  '  git interpret-trailers --in-place --if-exists replace --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
   'fi',
   '',
   '# Chain to the repository\'s own prepare-commit-msg hook if it exists',
@@ -99,6 +98,11 @@ export const COMMIT_MSG_HOOK = [
   '',
   '# Extract Evidence: satisfied-by value',
   'EVIDENCE_TRAILER=$(git interpret-trailers --parse < "$COMMIT_MSG_FILE" 2>/dev/null | grep \'^Evidence: satisfied-by\' | head -1 | sed \'s/^Evidence: satisfied-by *//\' || true)',
+  '',
+  '# Extract Evidence: skipped <reason> value (alternative acceptance form for',
+  '# empty commits — mirrors the deriver in autoheal.ts, which already treats',
+  '# this trailer as satisfying a task).',
+  'EVIDENCE_SKIPPED_REASON=$(git interpret-trailers --parse < "$COMMIT_MSG_FILE" 2>/dev/null | grep \'^Evidence: skipped\' | head -1 | sed \'s/^Evidence: skipped *//\' | sed \'s/^[[:space:]]*//;s/[[:space:]]*$//\' || true)',
   '',
   '# Surface A (#505 Task 5): fail-closed rejection of unattributed content',
   '# commits made during an active build-step session. The',
@@ -149,8 +153,15 @@ export const COMMIT_MSG_HOOK = [
   '    # Exemption (#505 Task 7): empty commit with a resolvable',
   '    # Evidence: satisfied-by trailer — nothing is being smuggled in, and',
   '    # the trailer proves the work is already accounted for elsewhere.',
-  '    if [[ -z "$EVIDENCE_TRAILER" ]] || ! git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
-  '      echo "commit-msg: rejected — unattributed empty build-step commit (no Task: trailer and no resolvable Evidence: satisfied-by)" >&2',
+  '    # Exemption (#570-class): empty commit with Evidence: skipped <reason>',
+  '    # (non-empty reason) — same acceptance form the autoheal deriver',
+  '    # already treats as satisfying a task.',
+  '    if [[ -n "$EVIDENCE_TRAILER" ]] && git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
+  '      :',
+  '    elif [[ -n "$EVIDENCE_SKIPPED_REASON" ]]; then',
+  '      :',
+  '    else',
+  '      echo "commit-msg: rejected — unattributed empty build-step commit (no Task: trailer and no resolvable Evidence: satisfied-by or non-empty Evidence: skipped)" >&2',
   '      exit 1',
   '    fi',
   '  else',
@@ -191,14 +202,17 @@ export const COMMIT_MSG_HOOK = [
   '  # Check if this is an empty commit',
   '  IS_EMPTY=$(git diff-index --cached --quiet HEAD 2>/dev/null && echo "yes" || echo "no")',
   '  if [[ "$IS_EMPTY" == "yes" ]]; then',
-  '    # Empty commit must have resolvable Evidence: satisfied-by',
-  '    if [[ -z "$EVIDENCE_TRAILER" ]]; then',
-  '      echo "commit-msg: rejected — empty commit requires Evidence: satisfied-by <sha>" >&2',
+  '    # Empty commit must have either a resolvable Evidence: satisfied-by sha',
+  '    # or a non-empty Evidence: skipped <reason>.',
+  '    if [[ -z "$EVIDENCE_TRAILER" ]] && [[ -z "$EVIDENCE_SKIPPED_REASON" ]]; then',
+  '      echo "commit-msg: rejected — empty commit requires Evidence: satisfied-by <sha> or Evidence: skipped <reason>" >&2',
   '      exit 1',
   '    fi',
   '',
-  '    # Verify the sha exists',
-  '    if ! git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
+  '    # If a satisfied-by sha was provided, it must resolve. (An',
+  '    # Evidence: skipped reason alone, with no satisfied-by trailer, needs',
+  '    # no sha resolution.)',
+  '    if [[ -n "$EVIDENCE_TRAILER" ]] && ! git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
   '      echo "commit-msg: rejected — Evidence: satisfied-by $EVIDENCE_TRAILER not found in repository" >&2',
   '      exit 1',
   '    fi',

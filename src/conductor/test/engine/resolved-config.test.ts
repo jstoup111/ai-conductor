@@ -26,7 +26,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('reasoning-heavy steps get high+ effort', () => {
-      expect(DEFAULT_STEP_EFFORT.prd).toBe('xhigh');
+      expect(DEFAULT_STEP_EFFORT.prd).toBe('medium');
       expect(DEFAULT_STEP_EFFORT.plan).toBe('high');
       expect(DEFAULT_STEP_EFFORT.architecture_review).toBe('high');
       expect(DEFAULT_STEP_EFFORT.assess).toBe('high');
@@ -57,9 +57,15 @@ describe('engine/resolved-config', () => {
     });
 
     it('retry budgets scale with step criticality', () => {
-      expect(DEFAULT_STEP_RETRIES.prd).toBe(5);
-      expect(DEFAULT_STEP_RETRIES.plan).toBe(5);
-      expect(DEFAULT_STEP_RETRIES.build).toBe(5);
+      // #188 retry-as-escalation: deep steps dropped 5 → 3 (a retry now escalates
+      // instead of repeating an identical attempt). Floored at 3 so the
+      // attempt-3 model-bump rung stays reachable.
+      expect(DEFAULT_STEP_RETRIES.prd).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.plan).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.build).toBe(3);
+      expect(DEFAULT_STEP_RETRIES.explore).toBe(3);
+      // architecture_review is out of #188 scope — stays at 5.
+      expect(DEFAULT_STEP_RETRIES.architecture_review).toBe(5);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
     });
 
@@ -246,9 +252,9 @@ describe('engine/resolved-config', () => {
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
       // Under-modeling here cascades into everything downstream.
       expect(resolveStepConfig('explore', 'DECIDE').model).toBe('fable');
-      expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('medium');
       expect(resolveStepConfig('prd', 'DECIDE').model).toBe('fable');
-      expect(resolveStepConfig('prd', 'DECIDE').effort).toBe('xhigh');
+      expect(resolveStepConfig('prd', 'DECIDE').effort).toBe('medium');
       expect(resolveStepConfig('architecture_review', 'DECIDE').model).toBe('fable');
       expect(resolveStepConfig('architecture_review', 'DECIDE').effort).toBe('high');
       expect(resolveStepConfig('architecture_review_as_built', 'DECIDE').model).toBe('sonnet');
@@ -507,6 +513,38 @@ describe('engine/resolved-config', () => {
       const result = resolveSelfHostConfig(config);
       expect(result.buildAuthMode).toBe('daemon-token');
       expect(result.buildAuthTokenPath).toBe('/etc/daemon/token');
+    });
+  });
+
+  // #188 retry-as-escalation: the `escalate` knob resolves through the same
+  // step → phase → defaults precedence as the other tuning knobs.
+  describe('escalate resolution (#188)', () => {
+    it('defaults to true when unset everywhere', () => {
+      expect(resolveStepConfig('plan', 'DECIDE', undefined).escalate).toBe(true);
+      expect(resolveStepConfig('build', 'BUILD', {}).escalate).toBe(true);
+    });
+
+    it('step-level escalate:false wins', () => {
+      const config: HarnessConfig = { steps: { plan: { escalate: false } } };
+      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+    });
+
+    it('phase-level applies when step is unset', () => {
+      const config: HarnessConfig = { phases: { DECIDE: { escalate: false } } };
+      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+    });
+
+    it('defaults-level applies when step and phase are unset', () => {
+      const config: HarnessConfig = { defaults: { escalate: false } };
+      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+    });
+
+    it('step overrides phase (precedence parity with other knobs)', () => {
+      const config: HarnessConfig = {
+        phases: { DECIDE: { escalate: false } },
+        steps: { plan: { escalate: true } },
+      };
+      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(true);
     });
   });
 });

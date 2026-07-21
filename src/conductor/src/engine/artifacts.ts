@@ -1,4 +1,4 @@
-import { access, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -6,7 +6,7 @@ import { slugify } from './worktree.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
-import { readStaleHaltTitle } from './halt-pr-rehabilitation.js';
+import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
 
 /**
@@ -72,6 +72,9 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   build: ['.pipeline/task-status.json'],
   build_review: ['.pipeline/build-review.json'],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
+  // committed, same convention as build_review/manual_test above.
+  wiring_check: ['.pipeline/wiring-evidence.json'],
+  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
   // rebase. `.pipeline/` is already gitignored in consumer repos, so the gate
@@ -113,6 +116,52 @@ export async function fileIsFreshSinceSession(
   } catch {
     return false;
   }
+}
+
+/**
+ * The freshness floor a verdict artifact must meet: the per-attempt judging
+ * session start when present, else the conductor-run session start. Without
+ * a per-attempt floor, a review session that fails to rewrite its verdict
+ * file would silently re-score a prior session's verdict forever (incident
+ * 2026-07-12-wiring-reachability-gate) — the per-attempt floor makes that
+ * loud instead by scoring "no fresh verdict".
+ */
+export function verdictFreshnessFloor(ctx: CompletionContext): number | undefined {
+  return ctx.attemptStartedAt ?? ctx.sessionStartedAt;
+}
+
+/**
+ * Tolerance (ms) applied to the per-attempt verdict-freshness comparison to
+ * absorb filesystem timestamp lag. `attemptStartedAt` is `Date.now()` captured
+ * immediately before the review dispatch (a monotonic-ish CLOCK_REALTIME read),
+ * while a verdict file's mtime comes from the kernel's coarse filesystem clock,
+ * which can lag wall-clock time by up to a scheduler tick (and is second- or
+ * even 2s-granular on some filesystems). Without this tolerance a verdict
+ * written *during* the same dispatch — the legitimate fresh case the ADR
+ * assumes "passes" — can record an mtime a few ms BEFORE the captured floor and
+ * be scored a false "no fresh verdict", spuriously kicking back a genuine
+ * review (observed across the gate-loop/rebase-loop suites and on WSL2 locally).
+ *
+ * The tolerance only relaxes the *attempt* floor. A genuinely stale verdict —
+ * one left by a PRIOR judging attempt — is separated from the current attempt
+ * by at least a full build+review re-dispatch (seconds to minutes; the suite's
+ * negative cases use a 30s gap), so a small fixed tolerance never masks real
+ * staleness. The session floor (captured at run start, ≥ seconds before any
+ * write) needs no tolerance and is compared exactly.
+ */
+export const VERDICT_FRESHNESS_FS_TOLERANCE_MS = 2000;
+
+/**
+ * The floor a verdict artifact's mtime is actually COMPARED against (as opposed
+ * to the raw floor recorded in the `verdictFreshness` trace, which stays exact —
+ * see `verdictFreshnessFloor`). Applies `VERDICT_FRESHNESS_FS_TOLERANCE_MS` only
+ * when the floor is the per-attempt timestamp, absorbing filesystem-clock lag
+ * for a verdict written during the current dispatch.
+ */
+export function verdictFreshnessComparand(ctx: CompletionContext): number | undefined {
+  const floor = verdictFreshnessFloor(ctx);
+  if (floor === undefined) return undefined;
+  return ctx.attemptStartedAt !== undefined ? floor - VERDICT_FRESHNESS_FS_TOLERANCE_MS : floor;
 }
 
 export const HALT_MARKER = '.pipeline/halt-user-input-required';
@@ -317,6 +366,27 @@ export interface CompletionResult {
    * or predicates that don't classify).
    */
   missing?: 'recording' | 'other';
+  /**
+   * Trace of the per-attempt verdict-freshness check (Task 1,
+   * session-fresh-verdict-artifacts). Populated by the three dispatched-judge
+   * verdict predicates (architecture_review_as_built, prd_audit, build_review)
+   * on both the pass and stale paths.
+   */
+  verdictFreshness?: {
+    artifact: string;
+    mtimeMs?: number;
+    floorMs?: number;
+    floorSource: 'attempt' | 'session';
+    fresh: boolean;
+  };
+  /**
+   * Route-signal facet for retry-classification (issue #646). 'named-route'
+   * marks a fresh, parseable, non-passing verdict (a real reviewer decision
+   * that should route rather than rerun); 'absent' marks a missing, stale, or
+   * unparseable verdict (no decision yet — safe to rerun). Undefined on
+   * `done:true` and on predicates that don't classify.
+   */
+  routeClass?: 'named-route' | 'absent';
 }
 
 /**
@@ -334,6 +404,16 @@ export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 export interface CompletionContext {
   /** Epoch ms; predicates reject artifacts older than this when set. */
   sessionStartedAt?: number;
+  /**
+   * Epoch ms captured immediately before the current review dispatch (the
+   * judging session that must (re)write the verdict artifact). When set,
+   * the three dispatched-judge verdict predicates
+   * (architecture_review_as_built, prd_audit, build_review) require the
+   * verdict artifact's mtime to be at or after THIS, not just
+   * `sessionStartedAt` — see `verdictFreshnessFloor`. Absent for
+   * resume/backstop/legacy callers, which fall back to `sessionStartedAt`.
+   */
+  attemptStartedAt?: number;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
   /**
@@ -378,6 +458,18 @@ export interface CompletionContext {
    * If repair throws, a warning is logged and Phase 2 proceeds (warn-only, not fatal).
    */
   repairFinishPr?: (prUrl: string) => Promise<void>;
+  /**
+   * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
+   * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
+   * `checkContractConsistency` orchestration into the gate live). When the
+   * wiring_check predicate finds no pre-existing evidence file, it invokes
+   * this to COMPUTE fresh evidence (rather than only reading a pre-written
+   * `.pipeline/wiring-evidence.json` fixture), then durably writes the
+   * result so subsequent reads (and audit trail) see the same evidence.
+   * Absent → predicate falls back to the pre-Task-18 read-only behavior
+   * (fail-closed "evidence not found" when no fixture exists).
+   */
+  wiringProbe?: () => Promise<WiringEvidence>;
 }
 
 /**
@@ -539,6 +631,168 @@ export function validateAcceptanceRedEvidence(
 }
 
 /**
+ * Path to the wiring-reachability gate's evidence artifact. Written by the
+ * wiring-reachability-gate skill after analyzing whether a task's symbols
+ * are actually wired into a reachable surface. Gitignored run evidence, not
+ * a committed design artifact.
+ */
+export const WIRING_EVIDENCE = '.pipeline/wiring-evidence.json';
+
+export type WiringContractForm = 'declared' | 'none_no_surface' | 'inert' | 'malformed';
+export type WiringGapKind =
+  | 'no-reference'
+  | 'orphan-export'
+  | 'unreferenced-site'
+  | 'undeclared-surface'
+  | 'contradiction'
+  | 'scope-undeterminable'
+  | 'waiver-unresolved';
+
+export interface WiringGap {
+  kind: WiringGapKind;
+  /**
+   * The specific, human-readable gap message computed by the wiring-probe
+   * gap-producing functions (e.g. `orphanBackstop`, `verifyDeclaredSites`).
+   */
+  message: string;
+}
+
+export interface WiringTaskResult {
+  id: string;
+  /** Freeform description of the task's declared contract (e.g. a
+   * `file#symbol` reference, or 'none (no new production surface)'). */
+  contract: string;
+  gaps: WiringGap[];
+}
+
+export interface WiringLayer2 {
+  applicable: boolean;
+  /** Why Layer 2 did/didn't run (e.g. "no TS project detected"). */
+  reason?: string;
+}
+
+export interface WiringEvidence {
+  schema: number;
+  base: string;
+  head: string;
+  tasks: WiringTaskResult[];
+  layer2: WiringLayer2;
+  waivers: unknown[];
+}
+
+const WIRING_GAP_KINDS: WiringGapKind[] = [
+  'no-reference',
+  'orphan-export',
+  'unreferenced-site',
+  'undeclared-surface',
+  'contradiction',
+  'scope-undeterminable',
+  'waiver-unresolved',
+];
+
+/**
+ * Validate a parsed wiring-reachability evidence object.
+ */
+export function validateWiringEvidence(
+  ev: unknown,
+  currentHead?: string | null,
+): { ok: true } | { ok: false; reason: string } {
+  if (typeof ev !== 'object' || ev === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} is not a JSON object` };
+  }
+  const e = ev as Record<string, unknown>;
+  const str = (k: string): string | null =>
+    typeof e[k] === 'string' && (e[k] as string).trim() !== '' ? (e[k] as string) : null;
+
+  if (typeof e.schema !== 'number') {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "schema" as a number` };
+  }
+  if (str('base') === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "base" as a non-empty string` };
+  }
+  const head = str('head');
+  if (head === null) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "head" as a non-empty string` };
+  }
+  if (currentHead != null && currentHead !== head) {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} is stale — evidence recorded for ${head} but HEAD is ${currentHead}; re-run wiring-reachability analysis at the current HEAD`,
+    };
+  }
+  if (typeof e.layer2 !== 'object' || e.layer2 === null || Array.isArray(e.layer2)) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include a "layer2" object` };
+  }
+  const layer2 = e.layer2 as Record<string, unknown>;
+  if (typeof layer2.applicable !== 'boolean') {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} "layer2" must include "applicable" as a boolean`,
+    };
+  }
+  if (layer2.reason !== undefined && typeof layer2.reason !== 'string') {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} "layer2" has a non-string "reason"`,
+    };
+  }
+  if (!Array.isArray(e.waivers)) {
+    return {
+      ok: false,
+      reason: `${WIRING_EVIDENCE} must include "waivers" as an array`,
+    };
+  }
+  if (!Array.isArray(e.tasks)) {
+    return { ok: false, reason: `${WIRING_EVIDENCE} must include "tasks" as an array` };
+  }
+
+  for (const task of e.tasks as unknown[]) {
+    if (typeof task !== 'object' || task === null) {
+      return { ok: false, reason: `${WIRING_EVIDENCE} has a "tasks" entry that is not an object` };
+    }
+    const t = task as Record<string, unknown>;
+    if (typeof t.id !== 'string') {
+      return { ok: false, reason: `${WIRING_EVIDENCE} has a task missing a string "id"` };
+    }
+    if (typeof t.contract !== 'string') {
+      return {
+        ok: false,
+        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "contract" as a string`,
+      };
+    }
+    if (!Array.isArray(t.gaps)) {
+      return {
+        ok: false,
+        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "gaps" as an array`,
+      };
+    }
+    for (const gap of t.gaps as unknown[]) {
+      if (typeof gap !== 'object' || gap === null) {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a "gaps" entry that is not an object`,
+        };
+      }
+      const g = gap as Record<string, unknown>;
+      if (typeof g.kind !== 'string' || !WIRING_GAP_KINDS.includes(g.kind as WiringGapKind)) {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap with an unknown kind "${g.kind as string}"`,
+        };
+      }
+      if (typeof g.message !== 'string' || g.message.trim() === '') {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap missing a non-empty string "message"`,
+        };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+/**
  * Path to the build_review judgement gate's verdict artifact. Written by the
  * grader dispatched between `build` and `manual_test`; read back by the
  * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
@@ -692,10 +946,31 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
 
       // Quick check: plan must have at least one task block. The header match
-      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar) — the
-      // old `^### Task \d+` form rejected h2 headings and every remediation
-      // id (`rem-…`), reading real plans as "empty".
-      if (!planText.trim() || !/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+/im.test(planText)) {
+      // mirrors parsePlanTaskPaths (any heading level, H9 id grammar,
+      // including the bare `T<N>` shorthand with no "Task" word — #578) —
+      // the old `^### Task \d+` form rejected h2 headings and every
+      // remediation id (`rem-…`), reading real plans as "empty".
+      //
+      // A pure-alpha id requires an explicit terminator (colon, or a
+      // whitespace-preceded em/en-dash) immediately after it; only an id
+      // CONTAINING A DIGIT may stand bare at end-of-line (#620 fix).
+      // Without that restriction, #615's widened id grammar
+      // (`[A-Za-z0-9._-]+`, any word) let structural headings like
+      // `## Task Graph` / `## Task Dependency Graph` — present in many
+      // committed plans — read as "the plan has a task", and downstream
+      // the same over-wide grammar in parsePlanTaskPaths seeded a phantom
+      // task ("Graph"/"Dependency") that can never be completed, making
+      // build completion permanently unsatisfiable. Real headers are
+      // either separator-terminated (`### Task rem-adr-001: x`,
+      // `### Task A8 — x`) or bare title-less with a digit in the id
+      // (`### Task 2`, `### Task t1`, `### T0`) — never a bare
+      // `Task <digitless-word>`.
+      if (
+        !planText.trim() ||
+        !/^#{1,6}\s+(?:Task\s+[A-Za-z0-9._-]+(?::|\s[—–])|Task\s+[A-Za-z._-]*\d[A-Za-z0-9._-]*\s*$|T\d[A-Za-z0-9._-]*(?::|\s[—–])|T\d[A-Za-z0-9._-]*\s*$)/im.test(
+          planText,
+        )
+      ) {
         return {
           done: false,
           reason: 'plan is empty or contains no tasks (### Task <id> headings required)',
@@ -956,16 +1231,25 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: 'no .pipeline/prd-audit.md present — the prd-audit skill must record a per-FR verdict table',
       };
     }
-    // Only consider reports written in this session; a stale audit left in the
-    // same worktree by a prior feature must not satisfy the gate.
+    // Only consider reports written by THIS judging attempt (falls back to
+    // sessionStartedAt when no per-attempt floor is present); a stale audit
+    // left over from a prior feature — or a prior attempt whose session
+    // failed to rewrite the verdict — must not satisfy the gate.
+    const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
+      const f = files[0];
+      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
-        reason: 'prd-audit report exists but is stale (mtime predates this session) — re-run the prd-audit for the current feature',
+        reason:
+          "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
+        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
       };
     }
     for (const f of fresh) {
@@ -979,7 +1263,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
     }
-    return { done: true };
+    const passF = fresh[0];
+    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
   },
 
   // As-built architecture gate is FAIL-CLOSED: it passes only when a fresh
@@ -996,16 +1285,25 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: 'no .pipeline/architecture-review-as-built.md present — the as-built review must record a verdict',
+        routeClass: 'absent',
       };
     }
+    const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
-      if (await fileIsFreshSinceSession(f, ctx.sessionStartedAt)) fresh.push(f);
+      if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
+      const f = files[0];
+      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
-        reason: 'as-built architecture review exists but is stale (mtime predates this session) — re-run for the current feature',
+        reason:
+          "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
+        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        routeClass: 'absent',
       };
     }
     for (const f of fresh) {
@@ -1015,6 +1313,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: 'as-built review has no parseable `Verdict:` line — expected APPROVED / APPROVED WITH DRIFT NOTES / BLOCKED; re-run the as-built review',
+          routeClass: 'absent',
         };
       }
       // Clean pass iff the verdict begins with APPROVED (covers both
@@ -1024,10 +1323,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: `as-built review verdict is "${verdict}" — not a clean APPROVED (BLOCKED means shipped code violates an APPROVED ADR; an unrecognized verdict means the review may have found no ADRs to check). Fix the code or supersede the ADR (human-approved), then re-run`,
+          routeClass: 'named-route',
         };
       }
     }
-    return { done: true };
+    const passF = fresh[0];
+    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
   },
 
   // build_review judgement gate: satisfied only by a fresh, valid PASS
@@ -1037,17 +1342,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // reasons so the kickback message tells `build` what to fix.
   build_review: async (dir, ctx): Promise<CompletionResult> => {
     const path = join(dir, BUILD_REVIEW_VERDICT);
-    if (!(await fileIsFreshSinceSession(path, ctx.sessionStartedAt))) {
+    const floor = verdictFreshnessFloor(ctx);
+    const cmpFloor = verdictFreshnessComparand(ctx);
+    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
+    if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.
-      const exists = await access(path)
-        .then(() => true)
-        .catch(() => false);
+      const mtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+      const exists = mtimeMs !== undefined;
       return {
         done: false,
         reason: exists
-          ? `${BUILD_REVIEW_VERDICT} is stale (mtime predates this session) — the build_review grader must re-run and rewrite it`
+          ? "build-review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused"
           : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
+        verdictFreshness: exists
+          ? { artifact: path, mtimeMs, floorMs: floor, floorSource, fresh: false }
+          : undefined,
+        routeClass: 'absent',
       };
     }
     let parsed: unknown;
@@ -1057,11 +1368,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must rewrite it`,
+        routeClass: 'absent',
       };
     }
     const result = validateBuildReviewVerdict(parsed);
     if (!result.ok) {
-      return { done: false, reason: result.reason };
+      return { done: false, reason: result.reason, routeClass: 'absent' };
     }
     if (result.verdict === 'FAIL') {
       const reasons = result.reasons && result.reasons.length > 0
@@ -1070,6 +1382,99 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
+        routeClass: 'named-route',
+      };
+    }
+    const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+    return {
+      done: true,
+      verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+    };
+  },
+
+  // Wiring-reachability gate: satisfied only by a fresh evidence artifact at
+  // WIRING_EVIDENCE recorded for the CURRENT HEAD, with zero gap symbols
+  // across every task. Missing file, malformed/invalid evidence, or a stale
+  // (prior-HEAD) evidence file all keep the gate unsatisfied (fail-closed).
+  // When any task's symbols array is non-empty, every gap's full message is
+  // surfaced verbatim in the reason so the kickback tells build exactly what
+  // is unreachable/undeclared.
+  wiring_check: async (dir, ctx): Promise<CompletionResult> => {
+    const path = join(dir, WIRING_EVIDENCE);
+    let raw: string | null;
+    try {
+      raw = await readFile(path, 'utf-8');
+    } catch {
+      raw = null;
+    }
+
+    let parsed: unknown;
+    if (raw === null) {
+      // No pre-existing evidence fixture — compute it live via the
+      // injected probe (push-evidence injection, same convention as
+      // ctx.getHeadSha/ctx.isHeadPushed). A getHeadSha that resolves to
+      // null is the real Conductor's own signal (completionCtx wires
+      // getHeadSha to currentCommitSha(projectRoot)) that projectRoot
+      // isn't a git-tracked directory at all, so there is no
+      // wiring-relevant diff to evaluate in the first place (same
+      // "nothing to verify" logic as the freshness check being skipped
+      // when currentHead is indeterminate) — this must be checked BEFORE
+      // invoking the probe, not only when the probe is absent, or a
+      // non-git projectRoot with wiringProbe wired unconditionally
+      // (the real Conductor, always) falls through into the probe and
+      // fails closed instead of short-circuiting. Absent injector →
+      // fail closed exactly as before Task 18. A caller that omits
+      // getHeadSha entirely (raw unit/acceptance calls against a real
+      // git fixture) is NOT covered by this — that path still fails
+      // closed, matching the "no evidence file exists at all"
+      // acceptance spec.
+      if (ctx.getHeadSha) {
+        const head = await ctx.getHeadSha().catch(() => null);
+        if (head === null) {
+          return { done: true };
+        }
+      }
+      if (!ctx.wiringProbe) {
+        return {
+          done: false,
+          reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
+        };
+      }
+      let computed: WiringEvidence;
+      try {
+        computed = await ctx.wiringProbe();
+      } catch (err) {
+        return {
+          done: false,
+          reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(path, JSON.stringify(computed, null, 2));
+      parsed = computed;
+    } else {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return { done: false, reason: `invalid JSON in ${WIRING_EVIDENCE}` };
+      }
+    }
+    const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
+    const validated = validateWiringEvidence(parsed, currentHead);
+    if (!validated.ok) {
+      return { done: false, reason: validated.reason };
+    }
+    const evidence = parsed as WiringEvidence;
+    const gapMessages: string[] = [];
+    for (const task of evidence.tasks) {
+      for (const g of task.gaps) {
+        gapMessages.push(g.message);
+      }
+    }
+    if (gapMessages.length > 0) {
+      return {
+        done: false,
+        reason: `wiring-reachability gaps found:\n${gapMessages.join('\n')}`,
       };
     }
     return { done: true };
@@ -1248,6 +1653,25 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
+            missing: 'other',
+          };
+        }
+      } catch {
+        // fail-open — presentation is not worth blocking a ship on gh failure
+      }
+
+      // adr-2026-07-06-halt-pr-rehab-body-floor: the halt banner is a
+      // stateless halt signal — a reused PR whose body still carries it
+      // must be rewritten before the ship can complete. Fail-open on any
+      // gh error (readStaleHaltBanner returns null): network unavailability
+      // never blocks a ship.
+      try {
+        const ghRunner = ctx.gh ?? makeProductionGh();
+        const staleBanner = await readStaleHaltBanner(ghRunner, dir, prUrl);
+        if (staleBanner !== null) {
+          return {
+            done: false,
+            reason: `recorded PR ${prUrl} body still carries the halt banner ("${staleBanner}") — the engine bodyFloor/finish skill must rewrite the reused halt PR's body before completing`,
             missing: 'other',
           };
         }
@@ -1650,6 +2074,54 @@ export async function classifyPrdAuditGaps(
     kind: allImpl ? 'impl-only' : 'needs-decide',
     summary: summary + more,
   };
+}
+
+/** Steps eligible for the retry-classify rerun-vs-route decision (issue #646). */
+const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
+  'architecture_review_as_built',
+  'prd_audit',
+  'build_review',
+]);
+
+export type RetryDecision =
+  | { decision: 'rerun' }
+  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' };
+
+/**
+ * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
+ * (issue #646). Out of scope steps (e.g. `build`) always rerun. In scope,
+ * signal (a) "named-route" fires when the step has a real, fresh, non-passing
+ * decision to route on — `completion.routeClass === 'named-route'` for the
+ * review steps, or `prdAuditNonClean` for prd_audit — regardless of attempt
+ * number. Signal (b) "identical-repeat" fires only when the retry has already
+ * happened once (`attempt >= 2`) and produced the exact same reason on inputs
+ * that provably haven't changed. The conductor computes `inputsUnchanged` and
+ * `prdAuditNonClean` and passes them in; this helper does no I/O.
+ */
+export function classifyRetryDecision(input: {
+  step: StepName;
+  completion: CompletionResult;
+  attempt: number;
+  priorReason?: string;
+  inputsUnchanged: boolean;
+  prdAuditNonClean?: boolean;
+}): RetryDecision {
+  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean } = input;
+  if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
+
+  const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
+  if (namedRoute) return { decision: 'route', signal: 'named-route' };
+
+  if (
+    attempt >= 2 &&
+    priorReason !== undefined &&
+    priorReason === completion.reason &&
+    inputsUnchanged
+  ) {
+    return { decision: 'route', signal: 'identical-repeat' };
+  }
+
+  return { decision: 'rerun' };
 }
 
 // --- Remediation plan (the /remediate skill's structured output) -------------

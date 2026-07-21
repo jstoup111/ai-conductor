@@ -17,6 +17,7 @@ import { VALID_MARKDOWN_VIEWER_MODES } from './md-viewer-presets.js';
 import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
+import { FALLBACK_RETRIES } from './resolved-config.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -181,6 +182,8 @@ export function validateConfig(
     'attribution_audit_sample_pct',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
+    // Bounds the validation-phase fan-out concurrency.
+    'validation_concurrency',
     // Self-host guardrails (adr-2026-06-30-self-host-detection-seam).
     'harness_self_host',
     // Model availability fallback ladder.
@@ -193,6 +196,14 @@ export function validateConfig(
     'build_review',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
+    // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
+    'build_progress_halt',
+    // Retry-routing kill-switch (retry-classify-rerun-vs-route).
+    'retry_routing',
+    // Wiring-reachability gate Layer 2 (TS import-graph reachability).
+    'wiring',
+    // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
+    'kickback_escalation',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -260,6 +271,7 @@ export function validateConfig(
         'effort',
         'max_retries',
         'disable',
+        'escalate',
         'skill',
         'hooks',
         'by_tier',
@@ -287,6 +299,9 @@ export function validateConfig(
       }
       if (cfg.disable !== undefined && typeof cfg.disable !== 'boolean') {
         return errVal(`steps.${name}.disable must be a boolean`);
+      }
+      if (cfg.escalate !== undefined && typeof cfg.escalate !== 'boolean') {
+        return errVal(`steps.${name}.escalate must be a boolean`);
       }
       if (cfg.model !== undefined && typeof cfg.model !== 'string') {
         return errVal(`steps.${name}.model must be a string`);
@@ -407,10 +422,17 @@ export function validateConfig(
           return errVal(`steps.${name}.enforcement is not valid for built-in steps`);
         }
 
-        // Disabling a gating/structural built-in is not allowed.
+        // Disabling a gating/structural built-in is not allowed, unless the
+        // step definition explicitly opts in via `configDisableAllowed`
+        // (per-step, deliberate — an explicit committed config disable is not
+        // the silent-skip failure mode the gating promotion guards against).
+        // Structural steps can never be disabled.
         const def = stepDefs.get(name as StepName);
         if (cfg.disable === true && def) {
-          if (def.enforcement === 'gating' || def.enforcement === 'structural') {
+          if (
+            def.enforcement === 'structural' ||
+            (def.enforcement === 'gating' && def.configDisableAllowed !== true)
+          ) {
             return errVal(
               `Cannot disable ${def.enforcement} step: "${name}". Only advisory steps may be disabled.`,
             );
@@ -567,6 +589,14 @@ export function validateConfig(
     obj.attribution_audit_sample_pct = 10;
   }
 
+  // validation_concurrency — bounds the validation-phase fan-out. Absent →
+  // engine default (no override). Numeric type required.
+  if (obj.validation_concurrency !== undefined) {
+    if (typeof obj.validation_concurrency !== 'number') {
+      return errVal('validation_concurrency must be a number');
+    }
+  }
+
   // harness_self_host — self-host guardrail activation override + per-gate
   // toggles (adr-2026-06-30-self-host-detection-seam / TR-11). Absent → safe
   // default (auto-detect, all gates on) applied by resolveSelfHostConfig.
@@ -585,6 +615,25 @@ export function validateConfig(
     for (const entry of obj.model_fallback_ladder) {
       if (typeof entry !== 'string' || entry === '') {
         return errVal('model_fallback_ladder must contain only non-empty strings');
+      }
+    }
+  }
+
+  // wiring — Layer 2 (TS import-graph reachability) entry points. Must be an
+  // object with an optional entry_points array of non-empty strings.
+  if (obj.wiring !== undefined) {
+    if (!isPlainObject(obj.wiring)) {
+      return errVal('wiring must be an object');
+    }
+    const wiring = obj.wiring as Record<string, unknown>;
+    if (wiring.entry_points !== undefined) {
+      if (!Array.isArray(wiring.entry_points)) {
+        return errVal('wiring.entry_points must be an array of strings');
+      }
+      for (const entry of wiring.entry_points) {
+        if (typeof entry !== 'string' || entry === '') {
+          return errVal('wiring.entry_points must contain only non-empty strings');
+        }
       }
     }
   }
@@ -689,6 +738,50 @@ export function validateConfig(
     }
   } else {
     obj.ci_watch = { enabled: true };
+  }
+
+  // build_progress_halt — progress-aware build halt/park decision.
+  {
+    const resolvedMaxRetries =
+      typeof (obj.defaults as Record<string, unknown> | undefined)?.max_retries === 'number'
+        ? ((obj.defaults as Record<string, unknown>).max_retries as number)
+        : FALLBACK_RETRIES;
+    const err = validateBuildProgressHaltBlock(obj.build_progress_halt, resolvedMaxRetries);
+    if (err) return { ok: false, error: err };
+    obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+  }
+
+  // kickback_escalation — kickback→build no-op escalation (D2).
+  // Contract (total — never throws, never undefined):
+  //   K1  absent / null → { enabled: true } (no warning)
+  //   K2  { enabled: true|false } → as given (no warning)
+  //   K3  malformed (non-object, unknown key, or non-boolean enabled) →
+  //       { enabled: true } without warning (fail-safe)
+  if (obj.kickback_escalation !== undefined && obj.kickback_escalation !== null) {
+    if (isPlainObject(obj.kickback_escalation)) {
+      const ke = obj.kickback_escalation as Record<string, unknown>;
+      const unknownKey = Object.keys(ke).find((k) => k !== 'enabled');
+      if (unknownKey !== undefined) {
+        obj.kickback_escalation = { enabled: true };
+      } else if (ke.enabled === undefined) {
+        obj.kickback_escalation = { enabled: true };
+      } else if (typeof ke.enabled === 'boolean') {
+        obj.kickback_escalation = { enabled: ke.enabled };
+      } else {
+        obj.kickback_escalation = { enabled: true };
+      }
+    } else {
+      obj.kickback_escalation = { enabled: true };
+    }
+  } else {
+    obj.kickback_escalation = { enabled: true };
+  }
+
+  // retry_routing — retry classify rerun-vs-route kill-switch.
+  {
+    const err = validateRetryRoutingBlock(obj.retry_routing);
+    if (err) return { ok: false, error: err };
+    obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
@@ -948,6 +1041,121 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   return null;
 }
 
+export const BUILD_PROGRESS_HALT_DEFAULTS = {
+  enabled: true,
+  attempt_ceiling: 30,
+  dispatch_ceiling: 20,
+} as const;
+
+/**
+ * Validate the `build_progress_halt:` block (progress-aware build halt/park
+ * decision knobs). `resolvedMaxRetries` is the config's effective max_retries
+ * (from `defaults.max_retries`, falling back to the same `FALLBACK_RETRIES`
+ * used by step resolution) — `attempt_ceiling` must never sit below it, or
+ * the halt/park decision could fire before a single step exhausted its own
+ * retry budget.
+ */
+function validateBuildProgressHaltBlock(
+  raw: unknown,
+  resolvedMaxRetries: number,
+): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'build_progress_halt must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled', 'attempt_ceiling', 'dispatch_ceiling']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in build_progress_halt: "${k}"` };
+    }
+  }
+
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'build_progress_halt.enabled must be a boolean' };
+  }
+
+  for (const field of ['attempt_ceiling', 'dispatch_ceiling'] as const) {
+    const value = obj[field];
+    if (value === undefined) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+      return {
+        type: 'validation_error',
+        message: `build_progress_halt.${field} must be a positive integer`,
+      };
+    }
+  }
+
+  if (
+    typeof obj.attempt_ceiling === 'number' &&
+    obj.attempt_ceiling < resolvedMaxRetries
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_progress_halt.attempt_ceiling (${obj.attempt_ceiling}) must not be below the resolved max_retries (${resolvedMaxRetries})`,
+    };
+  }
+
+  return null;
+}
+
+function resolveBuildProgressHaltBlock(raw: unknown): {
+  enabled: boolean;
+  attempt_ceiling: number;
+  dispatch_ceiling: number;
+} {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : BUILD_PROGRESS_HALT_DEFAULTS.enabled,
+    attempt_ceiling:
+      typeof obj.attempt_ceiling === 'number'
+        ? obj.attempt_ceiling
+        : BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling,
+    dispatch_ceiling:
+      typeof obj.dispatch_ceiling === 'number'
+        ? obj.dispatch_ceiling
+        : BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling,
+  };
+}
+
+/**
+ * Defaults for the `retry_routing:` kill-switch. Absent block resolves to
+ * `enabled: true` (feature on by default).
+ */
+export const RETRY_ROUTING_DEFAULTS = {
+  enabled: true,
+} as const;
+
+/**
+ * Validate the `retry_routing:` block (retry classify rerun-vs-route
+ * kill-switch). Object-only; `enabled` must be a boolean if present; unknown
+ * keys inside the block are rejected.
+ */
+function validateRetryRoutingBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'retry_routing must be an object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set(['enabled']);
+  for (const k of Object.keys(obj)) {
+    if (!allowed.has(k)) {
+      return { type: 'validation_error', message: `Unknown key in retry_routing: "${k}"` };
+    }
+  }
+  if (obj.enabled !== undefined && typeof obj.enabled !== 'boolean') {
+    return { type: 'validation_error', message: 'retry_routing.enabled must be a boolean' };
+  }
+  return null;
+}
+
+function resolveRetryRoutingBlock(raw: unknown): { enabled: boolean } {
+  const obj = isPlainObject(raw) ? (raw as Record<string, unknown>) : {};
+  return {
+    enabled: typeof obj.enabled === 'boolean' ? obj.enabled : RETRY_ROUTING_DEFAULTS.enabled,
+  };
+}
+
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
   if (!isPlainObject(raw)) {
     return { type: 'validation_error', message: 'mergeable_autoresolve must be an object' };
@@ -1084,7 +1292,7 @@ function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | nu
   const obj = raw as Record<string, unknown>;
   // defaults/phases accept the same knobs as steps minus skill/disable/hooks/after.
   // (review is not user-configurable — it's fixed per step in resolved-config.ts)
-  const allowed = new Set(['model', 'effort', 'max_retries', 'by_tier']);
+  const allowed = new Set(['model', 'effort', 'max_retries', 'escalate', 'by_tier']);
   for (const k of Object.keys(obj)) {
     if (!allowed.has(k)) {
       return {
@@ -1092,6 +1300,9 @@ function validateEffortAndModelBag(raw: unknown, path: string): ConfigError | nu
         message: `Unknown key in ${path}: "${k}"`,
       };
     }
+  }
+  if (obj.escalate !== undefined && typeof obj.escalate !== 'boolean') {
+    return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
   }
   if (obj.effort !== undefined && !VALID_EFFORTS.has(obj.effort as EffortLevel)) {
     return {
@@ -1376,6 +1587,35 @@ const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
  *
  * @param config - The HarnessConfig (or partial) to read `build_progress` from.
  */
+/**
+ * Default validation-phase fan-out concurrency (used when
+ * `validation_concurrency` is absent, zero, negative, or non-numeric).
+ */
+export const DEFAULT_VALIDATION_CONCURRENCY = 2;
+
+/**
+ * Resolve the validation-phase fan-out concurrency from `config`.
+ *
+ * Resolution rules:
+ *   - undefined / absent     → DEFAULT_VALIDATION_CONCURRENCY (2)
+ *   - positive integer       → use the value as-is
+ *   - 0, negative, NaN, or
+ *     non-numeric             → DEFAULT_VALIDATION_CONCURRENCY (2)
+ */
+export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'validation_concurrency'>): number {
+  const override = config?.validation_concurrency;
+  if (
+    override === undefined ||
+    override === null ||
+    typeof override !== 'number' ||
+    !Number.isFinite(override) ||
+    override <= 0
+  ) {
+    return DEFAULT_VALIDATION_CONCURRENCY;
+  }
+  return override;
+}
+
 export function resolveBuildProgressConfig(
   config: Pick<HarnessConfig, 'build_progress'>,
 ): ResolvedBuildProgressConfig {

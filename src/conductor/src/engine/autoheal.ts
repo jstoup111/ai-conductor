@@ -1,7 +1,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
+import { loadRewriteMap, resolveThroughMap } from './rebase-translate.js';
+import { WIRED_INTO_LINE } from './wired-into.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -39,6 +41,22 @@ export function fileMatchesPlanPath(file: string, planDeclaredPath: string): boo
   return f === p || f.endsWith('/' + p);
 }
 
+/**
+ * Bounded immediate-parent-dir corroboration predicate (#707).
+ *
+ * Strips a leading `./` from both sides, then compares `dirname(file)` to
+ * `dirname(planDeclaredPath)` for exact equality. No ancestor/prefix logic —
+ * a file in a nested or sibling directory does not match. This is
+ * intentionally narrower than `fileMatchesPlanPath`'s suffix match; it is
+ * used where corroboration needs the file to sit in the exact same
+ * directory as the plan-declared path, not merely share a path suffix.
+ */
+export function fileDirMatchesPlanPath(file: string, planDeclaredPath: string): boolean {
+  const f = file.replace(/^\.\//, '');
+  const p = planDeclaredPath.replace(/^\.\//, '');
+  return dirname(f) === dirname(p);
+}
+
 /** Commit files that satisfy at least one of the task's plan-declared paths (#425). */
 function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<string>): string[] {
   return files.filter((f) => {
@@ -47,6 +65,25 @@ function filesOverlappingTaskPaths(files: string[], taskPaths: ReadonlySet<strin
     }
     return false;
   });
+}
+
+/**
+ * Branch-aware corroboration (#707): try exact/suffix overlap first; only on
+ * a miss, try the bounded immediate-parent-dir overlap. Returns which branch
+ * (if any) satisfied corroboration so callers can distinguish the two for
+ * stamping purposes (Task 3) without re-deriving the match.
+ */
+function corroborationMatch(
+  filesInCommit: string[],
+  taskPaths: ReadonlySet<string>,
+): 'exact-suffix' | 'dirname' | null {
+  if (filesOverlappingTaskPaths(filesInCommit, taskPaths).length > 0) return 'exact-suffix';
+  for (const f of filesInCommit) {
+    for (const p of taskPaths) {
+      if (fileDirMatchesPlanPath(f, p)) return 'dirname';
+    }
+  }
+  return null;
 }
 
 // Simple logger interface for fail-closed operations
@@ -82,6 +119,18 @@ function createEvidenceRangeLogger(): EvidenceRangeLogger {
 export function taskTrailerMatches(trailerValues: string[], taskId: string, planIds: Set<string>): boolean {
   // Check exact match first: if taskId is in trailerValues, return true
   if (trailerValues.includes(taskId)) {
+    return true;
+  }
+
+  // #636: T<N> ↔ <N> grammar alias. A plan header written `### T<N>` yields a
+  // T-prefixed task id, but implementation commits (and pre-#615 machinery)
+  // may carry either the T-prefixed or the bare-numeric `Task:` trailer.
+  // Fold both sides to the canonical numeric key so `Task: 0` resolves a `T0`
+  // task and `Task: T3` resolves a `3` task. Non-numeric ids are unaffected
+  // (canonicalTaskId is a no-op for them), so this never widens matching for
+  // `task-7` / `rem-adr-001`.
+  const canonicalId = canonicalTaskId(taskId);
+  if (trailerValues.some((v) => canonicalTaskId(v) === canonicalId)) {
     return true;
   }
 
@@ -366,21 +415,7 @@ export async function getEvidenceRange(
 
     let lowerBound: string | null = null;
 
-    // First, verify that anchor is reachable
-    const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
-      cwd: projectRoot,
-      reject: false,
-    });
-
-    if (anchorCheck.exitCode === 0) {
-      // Anchor is reachable, use it as lower bound
-      lowerBound = anchor;
-    } else {
-      // Anchor is unreachable, fall back to merge-base
-      const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
-      logger.warnings.push(warningMsg);
-      console.warn(warningMsg);
-
+    const runMergeBaseLadder = async (): Promise<string | null> => {
       // Try fork-point merge-base first, then plain merge-base.
       const forkPoint = await execa('git', ['merge-base', '--fork-point', originRef, 'HEAD'], {
         cwd: projectRoot,
@@ -388,15 +423,48 @@ export async function getEvidenceRange(
       });
 
       if (forkPoint.exitCode === 0 && forkPoint.stdout.trim()) {
-        lowerBound = forkPoint.stdout.trim();
+        return forkPoint.stdout.trim();
+      }
+
+      const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
+        return plainMergeBase.stdout.trim();
+      }
+
+      return null;
+    };
+
+    if (anchor.trim() === '') {
+      // No anchor was supplied; skip the reachability probe entirely (it
+      // always fails on an empty string) and go straight to the merge-base
+      // ladder without logging a spurious "unreachable" warning. Still
+      // surface a routine informational line (not a warning/fault) so the
+      // absence is visible rather than silent.
+      const infoMsg =
+        'Evidence range: no recorded anchor; deriving lower bound from merge-base ladder';
+      console.info(infoMsg);
+
+      lowerBound = await runMergeBaseLadder();
+    } else {
+      // First, verify that anchor is reachable
+      const anchorCheck = await execa('git', ['rev-parse', '--verify', `${anchor}^{commit}`], {
+        cwd: projectRoot,
+        reject: false,
+      });
+
+      if (anchorCheck.exitCode === 0) {
+        // Anchor is reachable, use it as lower bound
+        lowerBound = anchor;
       } else {
-        const plainMergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
-          cwd: projectRoot,
-          reject: false,
-        });
-        if (plainMergeBase.exitCode === 0 && plainMergeBase.stdout.trim()) {
-          lowerBound = plainMergeBase.stdout.trim();
-        }
+        // Anchor is unreachable, fall back to merge-base
+        const warningMsg = `Evidence range: anchor ${anchor.slice(0, 7)} is unreachable; falling back to merge-base`;
+        logger.warnings.push(warningMsg);
+        console.warn(warningMsg);
+
+        lowerBound = await runMergeBaseLadder();
       }
     }
 
@@ -617,53 +685,92 @@ async function deriveCompletionInternal(
       );
 
       if (satisfiedByTrailer) {
-        // Extract the sha from "satisfied-by <sha>"
-        const sha = satisfiedByTrailer.slice('satisfied-by '.length).trim();
+        // Extract the sha from "satisfied-by <sha>" — this is the immutable
+        // citation TEXT, never rewritten in place by a rebase.
+        const citedSha = satisfiedByTrailer.slice('satisfied-by '.length).trim();
 
-        // Validate the sha exists in git
+        // Resolve through the persisted rewrite map (Task 9,
+        // adr-2026-07-12-rebase-evidence-stamp-translation.md): a sanctioned
+        // engine rebase may have moved the cited commit to a new sha. A sha
+        // that was never a rewrite-map key (unrelated/forged) resolves to
+        // itself, so this can never launder an off-branch citation.
+        const rewriteMap = await loadRewriteMap(projectRoot);
+        const sha = resolveThroughMap(citedSha, rewriteMap);
+
+        // Validate the (resolved) sha both exists AND is an ancestor of
+        // HEAD — existence alone is too soft: a pruned/dangling sha that
+        // happens to still resolve via a stale ref must not pass.
         const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
           cwd: projectRoot,
           reject: false,
         });
 
+        let isAncestor = false;
         if (shaCheck.exitCode === 0) {
+          const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
+            cwd: projectRoot,
+            reject: false,
+          });
+          if (headCheck.exitCode === 0) {
+            const headSha = headCheck.stdout.trim();
+            const ancestorCheck = await execa(
+              'git',
+              ['merge-base', '--is-ancestor', sha, headSha],
+              { cwd: projectRoot, reject: false },
+            );
+            isAncestor = ancestorCheck.exitCode === 0;
+          }
+        }
+
+        if (shaCheck.exitCode === 0 && isAncestor) {
           // Valid sha: mark task completed
           result[taskId].completed = true;
           result[taskId].evidencedBy = sha;
           result[taskId].status = 'completed';
           evidence.evidenceStamps.set(taskId, { sha, form: 'evidence:satisfied-by' });
-        } else {
-          // Dangling sha: log audit entry, leave incomplete
-          result[taskId].auditEntry = `Task ${taskId}: Evidence: satisfied-by ${sha.slice(0, 7)} is dangling (unreachable SHA)`;
-          console.warn(
-            `[autoheal] Task ${taskId}: dangling satisfied-by sha ${sha.slice(0, 7)}`,
-          );
+          continue;
         }
-        continue;
-      }
 
-      // Check for Evidence: skipped form
-      const skippedTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
-        e.startsWith('skipped '),
-      );
+        // Dangling sha: log audit entry, but do NOT terminally reject the
+        // task (#548/#535 stale-SHA variant) — fall through to trailer-based
+        // derivation below, which may find another satisfying candidate.
+        result[taskId].auditEntry = `Task ${taskId}: Evidence: satisfied-by ${sha.slice(0, 7)} is dangling (unreachable SHA)`;
+        console.warn(
+          `[autoheal] Task ${taskId}: dangling satisfied-by sha ${sha.slice(0, 7)}`,
+        );
+      } else {
+        // Check for Evidence: skipped form
+        const skippedTrailer = (evidenceCommit.trailers['Evidence'] || []).find((e) =>
+          e.startsWith('skipped '),
+        );
 
-      if (skippedTrailer) {
-        // Extract the reason from "skipped <reason>"
-        const reason = skippedTrailer.slice('skipped '.length).trim();
-        result[taskId].status = 'skipped';
-        result[taskId].skipReason = reason;
-        result[taskId].completed = false;
-        continue;
+        if (skippedTrailer) {
+          // Extract the reason from "skipped <reason>"
+          const reason = skippedTrailer.slice('skipped '.length).trim();
+          result[taskId].status = 'skipped';
+          result[taskId].skipReason = reason;
+          result[taskId].completed = false;
+          evidence.evidenceStamps.set(taskId, {
+            sha: evidenceCommit.sha,
+            form: 'evidence:skipped',
+          });
+          continue;
+        }
       }
     }
 
-    // Look for a commit with Task: <taskId> trailer
-    const matchingCommit = commits.find((c) => {
+    // Collect ALL commits carrying a matching Task: <taskId> trailer (#548).
+    // A single-candidate `find` here (newest-first git order) let a follow-up
+    // commit — e.g. a test-fix reusing the trailer — shadow an earlier
+    // feature commit that DOES overlap the plan's declared paths, terminally
+    // rejecting an evidenced task. Correct semantics: a task is corroborated
+    // if ANY reachable trailered commit satisfies the path check.
+    const matchingCommits = commits.filter((c) => {
       const taskTrailers = c.trailers['Task'] || [];
       return taskTrailerMatches(taskTrailers, taskId, planIds);
     });
 
-    if (!matchingCommit) {
+    if (matchingCommits.length === 0) {
       // No current evidence found; check if task has a pinned evidence stamp in sidecar
       if (evidence.evidenceStamps.has(taskId)) {
         // Task was previously completed and evidenced; preserve that status to prevent demotion
@@ -680,47 +787,93 @@ async function deriveCompletionInternal(
       continue;
     }
 
-    // Check if the commit is empty (no files changed)
-    const filesInCommit = await filesForCommit(projectRoot, matchingCommit.sha);
-    const isEmptyCommit = filesInCommit.length === 0;
-
-    // Empty commits with only Task: trailer (no Evidence:) do not complete tasks
-    if (isEmptyCommit) {
-      result[taskId].auditEntry = `Task ${taskId}: empty commit with Task: trailer but no Evidence: form (incomplete)`;
-      continue;
-    }
-
-    // Found a commit with the Task: trailer and file changes
     const taskPaths = planPaths.get(taskId);
     const hasPlanFiles = !!(taskPaths && taskPaths.size > 0);
 
-    if (!hasPlanFiles) {
-      // Task has no specific paths; trailer alone is enough
+    // Iterate the candidate SET (newest first). Accept the first candidate
+    // that satisfies: non-empty AND (no declared plan paths OR path overlap).
+    // Empty candidates are skipped, not terminal: an empty diff also covers
+    // the stale/unreachable-SHA variant (#535 adjacent) because
+    // filesForCommit returns [] when git cannot resolve the sha — such
+    // candidates must never mask a reachable satisfying one.
+    let satisfyingSha: string | null = null;
+    let satisfyingForm: string = 'trailer';
+    let newestNonEmpty: { sha: string; files: string[] } | null = null;
+    let dirnameSha: string | null = null;
+    for (const candidate of matchingCommits) {
+      const filesInCommit = await filesForCommit(projectRoot, candidate.sha);
+      if (filesInCommit.length === 0) continue;
+      if (!newestNonEmpty) newestNonEmpty = { sha: candidate.sha, files: filesInCommit };
+
+      if (!hasPlanFiles) {
+        // Task has no specific paths; trailer alone is enough
+        satisfyingSha = candidate.sha;
+        satisfyingForm = 'trailer';
+        break;
+      }
+
+      const match = corroborationMatch(filesInCommit, taskPaths!);
+      if (match === 'exact-suffix') {
+        // Exact/suffix matches always outrank a dirname match — scan the
+        // full candidate set for one before settling for the weaker form.
+        satisfyingSha = candidate.sha;
+        satisfyingForm = 'trailer';
+        break;
+      }
+      if (match === 'dirname' && !dirnameSha) {
+        // Remember the first (newest) dirname hit, but keep scanning the
+        // rest of the candidate set for a stronger exact-suffix match.
+        dirnameSha = candidate.sha;
+      }
+    }
+
+    if (!satisfyingSha && dirnameSha) {
+      satisfyingSha = dirnameSha;
+      satisfyingForm = 'trailer-dirname';
+    }
+
+    if (satisfyingSha) {
       result[taskId].completed = true;
       result[taskId].status = 'completed';
-      result[taskId].evidencedBy = matchingCommit.sha;
-      evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
+      result[taskId].evidencedBy = satisfyingSha;
+      evidence.evidenceStamps.set(taskId, { sha: satisfyingSha, form: satisfyingForm });
       continue;
     }
 
-    // Task has paths; verify commit touches at least one
-    const overlap = filesOverlappingTaskPaths(filesInCommit, taskPaths!);
-
-    if (overlap.length === 0) {
-      // Path mismatch: log audit entry
-      result[taskId].auditEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${matchingCommit.sha.slice(0, 7)} touched [${filesInCommit.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths).slice(0, 3).join(', ')}...]`;
-      warnOnce(
-        `${projectRoot}:pathcorr:${taskId}:${matchingCommit.sha}`,
-        `[autoheal] Path corroboration failed for task ${taskId}: trailer ${matchingCommit.sha.slice(0, 7)} has no overlap with plan paths`,
-      );
+    if (!newestNonEmpty) {
+      // Every candidate was empty (or unreachable): trailer-only empty
+      // commits without an Evidence: form do not complete tasks. Append to
+      // (never overwrite) an earlier audit entry — e.g. a dangling
+      // satisfied-by note from the fall-through above.
+      const emptyEntry = `Task ${taskId}: empty commit with Task: trailer but no Evidence: form (incomplete)`;
+      result[taskId].auditEntry = result[taskId].auditEntry
+        ? `${result[taskId].auditEntry}; ${emptyEntry}`
+        : emptyEntry;
       continue;
     }
 
-    // Path overlap confirmed; mark completed
-    result[taskId].completed = true;
-    result[taskId].status = 'completed';
-    result[taskId].evidencedBy = matchingCommit.sha;
-    evidence.evidenceStamps.set(taskId, { sha: matchingCommit.sha, form: 'trailer' });
+    // No candidate overlapped: a semantic-verified evidence stamp (judge
+    // lane) outranks the trailer/path-overlap heuristic — the judge has
+    // already confirmed intent against the actual diff.
+    const stamp = evidence.evidenceStamps.get(taskId);
+    if (stamp?.form === 'semantic-verified') {
+      result[taskId].completed = true;
+      result[taskId].status = 'completed';
+      result[taskId].evidencedBy = stamp.sha;
+      continue;
+    }
+
+    // Path mismatch across ALL candidates: log audit entry (report the
+    // newest non-empty candidate, as before), appending to — never
+    // overwriting — any earlier entry (e.g. dangling satisfied-by note)
+    const mismatchEntry = `Task ${taskId}: trailer found but no path overlap. Commit ${newestNonEmpty.sha.slice(0, 7)} touched [${newestNonEmpty.files.slice(0, 3).join(', ')}...] but expected paths like [${Array.from(taskPaths!).slice(0, 3).join(', ')}...]`;
+    result[taskId].auditEntry = result[taskId].auditEntry
+      ? `${result[taskId].auditEntry}; ${mismatchEntry}`
+      : mismatchEntry;
+    warnOnce(
+      `${projectRoot}:pathcorr:${taskId}:${newestNonEmpty.sha}`,
+      `[autoheal] Path corroboration failed for task ${taskId}: trailer ${newestNonEmpty.sha.slice(0, 7)} has no overlap with plan paths`,
+    );
   }
 
   // Write evidence to sidecar
@@ -894,7 +1047,7 @@ export function parseTrailers(trailerText: string): Record<string, string[]> {
 }
 
 export async function filesForCommit(projectRoot: string, sha: string): Promise<string[]> {
-  const out = await execa('git', ['diff-tree', '--name-only', '-r', sha], {
+  const out = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', sha], {
     cwd: projectRoot,
     reject: false,
   });
@@ -940,6 +1093,27 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 // post-commit fast-feedback CLI dispatch, validate/derive against the SAME
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+
+/**
+ * Canonical task-id key (#636).
+ *
+ * Folds a leading `T`/`t` that is immediately followed by a digit down to the
+ * bare numeric form, so a plan's `### T<N>` header, a `Task: T<N>` commit
+ * trailer, an evidence stamp keyed `T<N>`, and a bare `<N>` row/trailer all
+ * resolve to ONE task. Non-T ids (`task-7`, `rem-adr-001`, `A8`) and a bare
+ * `T`/`Task` word (no following digit) are returned unchanged — the fold is
+ * scoped to the `T<digits>` shorthand only.
+ *
+ * This is the alias seam that repairs the #615 id-grammar drift: #615 widened
+ * the header regex to accept `### T<N> —` but normalized it to a bare number,
+ * stranding the T-prefixed rows/trailers/stamps that predate it (the #417
+ * evidence-gate id-grammar class). The parsers now emit the id AS WRITTEN
+ * (keeping the T), and every comparison seam folds through this function so
+ * both grammars match the same task.
+ */
+export function canonicalTaskId(id: string): string {
+  return id.replace(/^[Tt](?=\d)/, '');
+}
 
 /**
  * Fast-feedback, single-commit evidence check (ADR post-landing amendment:
@@ -1002,17 +1176,28 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
   const lines = text.split('\n');
   let currentTaskId: string | null = null;
 
-  // Match: ### Task ID: Title (or ### Task ID — Title with em/en-dash)
+  // Match: ### Task ID: Title (or ### Task ID — Title with em/en-dash), or
+  // the bare `### T<N> — Title` shorthand (no "Task" word — a real plan,
+  // `2026-07-12-rtk-hook-preservation.md`, used this form with ids starting
+  // at T0, and it parsed to zero tasks under the old "Task"-only regex →
+  // false `empty/missing plan` auto-park of a completed build, #578).
   // Supports numeric (1, 18, 100), dotted (1.2), alphanumeric with separators (task_1, rem-adr-001)
   // Terminator accepts a colon or a whitespace-preceded em-dash/en-dash separator
   // (the authoring convention: `### Task N — Title`)
-  const taskHeader = new RegExp(`^#{1,6}\\s+Task\\s+(${TASK_ID_PATTERN})(?::\\s+|\\s+[—–]\\s+)(.+)$`);
+  // The T<N> alternative captures WITH the leading `T` (`### T1` → `T1`, not
+  // `1`) so the emitted id matches the plan header verbatim and the
+  // pre-existing T-prefixed task-status rows / `Task: T<N>` trailers / evidence
+  // stamps (#636). Cross-grammar matching (`Task: 1` ↔ `T1`) is handled at the
+  // comparison seams via canonicalTaskId, not by mangling the id here.
+  const taskHeader = new RegExp(
+    `^#{1,6}\\s+(?:Task\\s+(${TASK_ID_PATTERN})|(T\\d[A-Za-z0-9._-]*))(?::\\s+|\\s+[—–]\\s+)(.+)$`,
+  );
 
   for (const line of lines) {
     const headerMatch = line.match(taskHeader);
     if (headerMatch) {
-      const id = headerMatch[1];
-      const name = headerMatch[2].trim();
+      const id = headerMatch[1] ?? headerMatch[2];
+      const name = headerMatch[3].trim();
       currentTaskId = id;
       result.set(id, { name, paths: [] });
       continue;
@@ -1043,6 +1228,19 @@ export function parsePlanTasks(text: string): Map<string, PlanTask> {
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
+// `**Verify-only:** yes` marker line (verify-only-prove-closed-task-evidence
+// plan, Task 1). Exact-match "yes" (case-insensitive) only — "maybe", empty,
+// or any other value is fail-closed false, same as an absent marker.
+const VERIFY_ONLY_LINE = /^\s*(?:[-*]\s+)?\*\*Verify-only\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
+// `**Type:**` marker line (no-diff-task-evidence-stamp plan, Task 2). Union
+// semantics with VERIFY_ONLY_LINE: a task is verify-only-eligible if EITHER
+// marker is present. The value is split on `+` into tokens; only an exact
+// (trimmed, case-insensitive) token match of "verification" counts — a
+// substring match would false-positive on values like "verification-only" or
+// "preverification", so this stays fail-closed.
+const TYPE_LINE = /^\s*(?:[-*]\s+)?\*\*Type\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
 /** Path-looking tokens from a **Files:** line (plain text or backticked). */
 function extractFilesLinePaths(rest: string): string[] {
@@ -1075,19 +1273,46 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
 
   // Match task headers and extract task ids (supports comma-separated ids, ranges like 1-3 for numeric)
   // Pattern allows: Task 1-3, rem-adr-001, 1.2: or Task 1-3, rem-adr-001, 1.2
-  // Terminator accepts a colon, a whitespace-preceded em-dash/en-dash title
-  // separator (`### Task N — Title`, the authoring convention), or end-of-line.
-  // Without the dash alternative, em-dash headings parse to zero ids → the build
-  // gate reports "no tasks in plan" → false `empty/missing plan` auto-park of a
+  // Also accepts the bare `T<N>` shorthand (no "Task" word — e.g. `### T0 —
+  // Title`, ids starting at T0). Without this alternative, that heading form
+  // parses to zero ids → the build gate reports "no tasks in plan" → false
+  // `empty/missing plan` auto-park of a completed build (#578, live-fire
+  // 2026-07-12 on `2026-07-12-rtk-hook-preservation`, headers T0..T5).
+  // Terminator accepts a colon, or a whitespace-preceded em-dash/en-dash title
+  // separator (`### Task N — Title`, the authoring convention). Without the
+  // dash alternative, em-dash headings parse to zero ids → the build gate
+  // reports "no tasks in plan" → false `empty/missing plan` auto-park of a
   // completed build (#578).
-  const taskHeader = /^#{1,6}\s+Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–]|$)/;
+  //
+  // The bare end-of-line terminator requires an id CONTAINING A DIGIT
+  // (#620 fix): under #615's widened grammar, a pure-alpha id at
+  // end-of-line let structural headings like `## Task Graph` /
+  // `## Task Dependency Graph` (present in many committed plans) parse as
+  // a phantom task ("Graph"/"Dependency") that can never be completed —
+  // making build completion permanently unsatisfiable (live incident
+  // #620: a 4/4-complete build halted demanding a fifth task named
+  // "Graph"). A real task header either carries an explicit colon/dash
+  // separator (any id grammar, including `rem-adr-001` / `A8`) or is a
+  // bare title-less id with a digit in it (`### Task 2`, `### Task t1`,
+  // `### T0`) — never a bare `Task <digitless-word>`.
+  //
+  // The two `T<N>` alternatives capture WITH the leading `T` (`### T0` → `T0`,
+  // not `0`) so the emitted id matches the plan header verbatim and the
+  // pre-existing T-prefixed rows / `Task: T<N>` trailers / evidence stamps
+  // (#636 — #615 stripped the `T`, orphaning all of that as the #417
+  // id-grammar-drift class). Cross-grammar matching (`Task: 0` ↔ `T0`) is
+  // handled at the comparison seams via canonicalTaskId, not by mangling here.
+  const taskHeader =
+    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {
     const headerMatch = line.match(taskHeader);
     if (headerMatch) {
       current = {
-        ids: expandTaskIds(headerMatch[1]),
+        ids: expandTaskIds(
+          headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+        ),
         filesPaths: new Set(),
         sameRef: null,
         hasFilesLine: false,
@@ -1122,12 +1347,37 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
       inFilesBlock = false;
     }
 
-    // Legacy fallback source: backtick tokens anywhere in the section. Only
-    // used when the section has no **Files:** line — Steps prose routinely
-    // backticks module-import strings and runtime artifacts that must not
-    // become required corroboration paths (#424).
+    // A **Wired-into:** line is a distinct authoring-time declaration (the
+    // wiring reachability gate) — NOT a **Files:** corroboration source.
+    // It must be consumed and skipped here, BEFORE the legacy backtick
+    // prose-fallback below, or its `path#symbol` site(s) would otherwise be
+    // harvested as phantom **Files:** corroboration paths.
+    if (WIRED_INTO_LINE.test(line)) {
+      continue;
+    }
+
+    // Legacy fallback source: backtick path tokens in a section that has no
+    // **Files:** line. Restricted to dedicated file-list bullet items
+    // (`- \`path\``) — NOT backtick tokens embedded in a prose sentence.
+    //
+    // A `- \`path\`` bullet is a genuine "this task edits this file"
+    // declaration (the #425 / remediation-append form). A backtick token in a
+    // prose sentence is almost always an incidental reference — a runtime
+    // artifact the task reads/guards, a `file:NNN-MMM` line citation, or a
+    // module-import string — that must NOT become a required corroboration
+    // path (#424 intent). Harvesting inline-prose tokens produced phantom
+    // declared paths and rejected real single-file commits, zeroing build
+    // progress and cascading into stall halts (#548 live incidents: #280 plan
+    // T11's inline `task-status.json` while the commit touched task-evidence.ts;
+    // `2026-07-12-rtk-hook-preservation` T1/T3/T5 inline citations like
+    // `bin/install:494–506`). With no declared path, corroboration abstains and
+    // the engine-stamped Task: trailer stands on its own (abstain-or-loud,
+    // #519/#530), instead of contradicting valid evidence.
+    const bulletBody = line.match(/^\s*[-*]\s+(.*)$/);
+    if (!bulletBody) continue;
     let m: RegExpExecArray | null;
-    while ((m = BACKTICK_TOKEN.exec(line)) !== null) {
+    BACKTICK_TOKEN.lastIndex = 0;
+    while ((m = BACKTICK_TOKEN.exec(bulletBody[1])) !== null) {
       const token = m[1];
       if (!PATH_EXTENSIONS.test(token) && !token.includes('/')) continue;
       const normalized = token.replace(/^\.\//, '');
@@ -1170,6 +1420,58 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
         for (const p of resolved) existing.add(p);
       } else {
         result.set(id, new Set(resolved));
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Parses per-task-block verify-only-eligibility markers
+ * (verify-only-prove-closed-task-evidence plan, Task 1; extended by
+ * no-diff-task-evidence-stamp plan, Task 2). A task is eligible (`true`) if
+ * EITHER: its block has a `**Verify-only:** yes` marker (exact-match "yes",
+ * case-insensitive; "maybe", empty, or missing resolve to false), OR its
+ * block has a `**Type:**` line whose `+`-split values include the exact
+ * token "verification" (case-insensitive). A standalone sibling of
+ * `parsePlanTaskPaths` — it does NOT alter that function's existing
+ * `Map<string, Set<string>>` shape/behavior, so every current consumer is
+ * unaffected.
+ */
+export function parsePlanTaskVerifyOnly(text: string): Map<string, boolean> {
+  const taskHeader =
+    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
+
+  const result = new Map<string, boolean>();
+  let currentIds: string[] = [];
+
+  for (const line of text.split('\n')) {
+    const headerMatch = line.match(taskHeader);
+    if (headerMatch) {
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      for (const id of currentIds) {
+        if (!result.has(id)) result.set(id, false);
+      }
+      continue;
+    }
+    if (currentIds.length === 0) continue;
+
+    const verifyOnlyMatch = line.match(VERIFY_ONLY_LINE);
+    if (verifyOnlyMatch) {
+      const isYes = verifyOnlyMatch[1].trim().toLowerCase() === 'yes';
+      if (isYes) {
+        for (const id of currentIds) result.set(id, true);
+      }
+    }
+
+    const typeMatch = line.match(TYPE_LINE);
+    if (typeMatch) {
+      const tokens = typeMatch[1].split('+').map((token) => token.trim().toLowerCase());
+      if (tokens.includes('verification')) {
+        for (const id of currentIds) result.set(id, true);
       }
     }
   }
@@ -1231,7 +1533,12 @@ async function findMatchingCommit(
 }
 
 function matchSubject(subject: string, task: TaskRecord): { idMatch: boolean; nameMatch: boolean } {
-  const idRe = new RegExp(`(?:^|[^0-9A-Za-z])(?:T${escapeRegex(task.id)}|#${escapeRegex(task.id)})(?![0-9A-Za-z])`);
+  // #636: canonicalize the id before prefixing `T`/`#`, so a T-prefixed row id
+  // (`T1`) yields a `T1` subject probe rather than `TT1`. Both the raw and the
+  // canonical form are accepted, so `### T1`-derived rows and bare `1` rows
+  // both match a `T1`/`#1` mention in the subject line.
+  const canonicalId = canonicalTaskId(task.id);
+  const idRe = new RegExp(`(?:^|[^0-9A-Za-z])(?:T${escapeRegex(canonicalId)}|#${escapeRegex(canonicalId)})(?![0-9A-Za-z])`);
   const idMatch = idRe.test(subject);
 
   let nameMatch = false;
@@ -1302,8 +1609,13 @@ export async function reconcileStatusFromStamps(
 
     // For each evidence stamp, try to advance the matching task row
     for (const [taskId, stamp] of evidence.evidenceStamps.entries()) {
-      // Find the matching task row
-      const task = status.tasks.find((t) => t.id === taskId);
+      // Find the matching task row. #636: match under the canonical id fold so
+      // a bare-keyed stamp (`3`) advances a T-prefixed row (`T3`) and vice
+      // versa — the two grammars name the same task.
+      const canonicalStampId = canonicalTaskId(taskId);
+      const task =
+        status.tasks.find((t) => t.id === taskId) ??
+        status.tasks.find((t) => canonicalTaskId(t.id) === canonicalStampId);
       if (!task) continue; // No row for this stamp — will be tracked as orphan later
 
       stampIdsWithMatches.add(taskId);
@@ -1319,7 +1631,9 @@ export async function reconcileStatusFromStamps(
         task.rawEntry.commit = stamp.sha.slice(0, 7);
       }
 
-      result.synced.push(taskId);
+      // Report the matched ROW id (the plan-grammar id) so callers surface the
+      // canonical task, not the stamp's incidental grammar.
+      result.synced.push(task.id);
       wroteAnything = true;
     }
 

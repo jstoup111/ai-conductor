@@ -22,7 +22,18 @@ check for an in-progress rebase/merge:
 
 - `git status` reports `rebase in progress` / `You are currently rebasing` / `You
   have unmerged paths`, **or**
-- a `git rev-parse --git-path rebase-merge` / `rebase-apply` directory exists, **or**
+- a rebase state directory actually exists — check with `test -d` on BOTH:
+
+  ```bash
+  test -d "$(git rev-parse --git-path rebase-merge)" && echo REBASE-IN-PROGRESS
+  test -d "$(git rev-parse --git-path rebase-apply)" && echo REBASE-IN-PROGRESS
+  ```
+
+  ⚠️ `git rev-parse --git-path rebase-merge` prints the path UNCONDITIONALLY,
+  whether or not the directory exists. Output from `rev-parse` alone is NOT
+  evidence of a rebase — only `test -d` on that path is. Treating the printed
+  path as "rebase in progress" is a false positive that wrongly blocks finish
+  (issue #634). **Or**
 - `git diff --name-only --diff-filter=U` is non-empty (unresolved conflicts).
 
 If ANY of these hold, **STOP immediately**: do NOT run the test suite, do NOT push,

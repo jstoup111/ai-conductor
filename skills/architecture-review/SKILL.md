@@ -189,11 +189,18 @@ no existing ADR covers it, one must be created before implementation proceeds.
 - Worktree isolation boundary changes (new shared services, new per-worktree resources)
 
 **ADR format:** Use `templates/adr.md.template`. Name each ADR
-`.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug.
-**Do NOT use sequential numbers** (ADR-001, ADR-007, …): parallel worktrees each grabbing
-"the next number" collide. The date+slug is the ADR's identifier; cite the filename stem when
-superseding or referencing one. If two ADRs land on the same date, the slug disambiguates.
-This applies to newly created ADRs only — existing numbered ADRs keep their names (append-only).
+`.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug — and title it
+`# ADR: <title>` (the heading carries **no** number). **Never use a sequential number, in the
+filename or the heading:**
+
+- ❌ WRONG: `adr-0001-ci-fix.md` with heading `# ADR-0001: …`
+- ✅ RIGHT: `adr-2026-07-20-ci-fix.md` with heading `# ADR: …`
+
+Sequential numbers collide when parallel worktrees each grab "the next number"; the date+slug never
+collides and IS the ADR's identifier — cite the **filename stem** (never a number) when superseding
+or referencing one. If two ADRs land on the same date, the slug disambiguates. This applies to newly
+created ADRs only — existing numbered ADRs keep their names (append-only). (A deterministic gate to
+reject number-named ADRs is tracked in intake #705.)
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 
@@ -249,11 +256,30 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 ## Complexity
 ## Alignment
 ## Domain Integrity
+## Wiring Surface (required for Medium/Large tier — see below; omit for Small)
 ## Risks
 ## ADRs Created
 ## Conditions (if APPROVED WITH CONDITIONS)
 ## Blocking Issues (if BLOCKED)
 ```
+
+**Wiring Surface (design-time, Medium/Large tier only):** For each new production surface
+the feature introduces (exported function/module, hook script, config key, emitted event,
+scheduled job, CLI subcommand, etc.), state at design time where/how it will be called from
+in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
+`conduct-ts`'s CLI command table," "consumed by the existing event bus subscriber in
+`src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
+required yet since the code doesn't exist. It is the precursor `/plan` later derives its
+`Wired-into:` contract from for each task.
+
+This is **DESIGN-TIME ONLY**. It does not affect, duplicate, or substitute for the §12
+As-Built Compliance Gate's production reachability sweep, which independently verifies the
+*shipped* code against real `file:line` callers after implementation. Leave §12 untouched —
+the two checks run at different phases against different evidence (a stated intent here vs.
+an observed caller there).
+
+Not required for **Small** tier features (architecture-review is skipped entirely for Small
+per the Lightweight Mode section above).
 
 ### 9. Verdict Enforcement
 
@@ -305,8 +331,10 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 
 ### 12. As-Built Compliance Gate (`--as-built` mode)
 
-Invoked at **SHIP**, after `/prd-audit` and before `/retro` and `/finish`, as
-`/architecture-review --as-built`. This is the final architectural drift sweep: it checks the
+Invoked at **SHIP** as `/architecture-review --as-built`, a member of the concurrent
+validation group — fanned out alongside `/manual-test` and `/prd-audit` in daemon/auto
+runs; in interactive runs it runs serially, after `/prd-audit` and before `/retro` and
+`/finish`. This is the final architectural drift sweep: it checks the
 **shipped code** against **APPROVED** ADRs and the approved architecture only. It is lightweight —
 it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
 logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
@@ -403,6 +431,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] Alignment checked against .docs/decisions/ and CLAUDE.md
 - [ ] Domain integrity pre-checked
 - [ ] Risk register populated
+- [ ] **Medium/Large tier:** `## Wiring Surface` section present, naming where each new
+      production surface will be called from — BLOCKS approval if missing (not required
+      for Small; design-time only, does not affect §12 as-built reachability sweep)
 - [ ] ADR created for every architectural decision made
 - [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)

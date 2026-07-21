@@ -11,7 +11,7 @@ import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
-import { mkdtemp, rmdir, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -720,85 +720,135 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
   }, REAL_GIT_TIMEOUT_MS);
 });
 
-// ── Resolver real-binary smoke (Task 24) ──────────────────────────────────────
+// ── CF-1 (RED): productionCiFixRunner must delegate to an injected      ──────
+// ── StepRunner-backed dispatcher seam, not shell out to `claude --fix-session` ─
 //
-// Every other test in this file drives `productionCiFixRunner` through an
-// injected fake `CiFixRunner` (see `runCiFix` tests above) — that proves
-// `runCiFix`'s worktree lifecycle, but never actually calls
-// `productionCiFixRunner.run()` itself, so a bug in its argv construction
-// (wrong flag name, wrong arg order, wrong cwd) would pass every existing
-// test and only surface against a real `claude` binary in production. This
-// smoke test invokes `productionCiFixRunner.run()` directly against a real
-// `execa` spawn of a stub binary named `claude` on PATH, proving the argv
-// round-trips end-to-end through a real subprocess — no full Claude session
-// needed, just a stub script that records what it was invoked with.
-describe('ci-fix: productionCiFixRunner real-binary smoke (Task 24)', () => {
-  it('invokes a real spawn of the "claude" binary with the constructed argv and returns changed', async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'ci-fix-smoke-'));
-    const recordPath = join(tmpDir, 'invocation.json');
+// T2 added `DefaultStepRunner.resolveCiFailure(ctx)` as the real dispatch
+// path (src/engine/step-runners.ts). `productionCiFixRunner` (this file,
+// ~line 258) still shells out via execa with the fictional `--fix-session`
+// flag and has no seam through which a StepRunner/dispatcher can be
+// injected. This test mirrors the existing `fixRunner` injection pattern
+// used by `runCiFix` (see `deps.fixRunner` above) and the collaborator
+// injection pattern used elsewhere (e.g. `resolveSetupFailure`,
+// `resolveRebaseConflict` in rebase.ts/step-runners.ts): a fake dispatcher
+// is injected and the test asserts it — not `execa` — is what gets called.
+//
+// Expected to FAIL until T4 gives `productionCiFixRunner` a way to receive
+// an injected StepRunner-backed dispatcher instead of hardcoding the execa
+// `--fix-session` spawn.
+describe('ci-fix: productionCiFixRunner delegates to injected StepRunner dispatcher (CF-1, RED)', () => {
+  it('run() calls the injected dispatcher seam instead of shelling out to `claude --fix-session`', async () => {
+    const calls: Array<{ worktreePath: string; hint: string; entry: WatchEntry }> = [];
 
-    // Stub binary named `claude`: records argv + cwd to a file, exits 0.
-    // Placed on PATH ahead of any real `claude` so execa's PATH resolution
-    // picks this up — exercising the exact same spawn resolution the
-    // production code relies on.
-    const stubPath = join(tmpDir, 'claude');
-    const stubScript = [
-      '#!/usr/bin/env bash',
-      'set -euo pipefail',
-      `printf '%s\\n' "$@" > "${recordPath}.args"`,
-      `pwd > "${recordPath}.cwd"`,
-      'exit 0',
-    ].join('\n');
-    await writeFile(stubPath, stubScript, 'utf8');
-    await chmod(stubPath, 0o755);
+    // Fake StepRunner-backed dispatcher, mirroring DefaultStepRunner.resolveCiFailure's
+    // shape: takes a CI-failure context and resolves to an attempt outcome.
+    const fakeDispatcher = {
+      resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: WatchEntry }) => {
+        calls.push(ctx);
+        return { kind: 'changed' as const };
+      },
+    };
 
-    // The global test setup (test/setup.ts) sets AI_CONDUCTOR_NO_REAL_EXEC=1
-    // to keep every OTHER test from spawning real processes. This is the
-    // intentional exception per TR-4 Done-When — lift the kill-switch and
-    // prepend the stub dir to PATH for this test's duration only, restoring
-    // both in the finally block.
-    const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    const prevPath = process.env.PATH;
+    const entry: WatchEntry = {
+      prUrl: 'https://github.com/foo/bar/pull/42',
+      slug: 'foo/bar#42',
+      repoCwd: '/fake/repo',
+      ciFixAttempts: 0,
+    };
+    const hint = 'CI checks failed: build';
+    const worktreePath = '/fake/repo/.worktrees/ci-fix-foo-bar-42';
+
+    // `productionCiFixRunner` currently accepts no dispatcher — this call
+    // exercises the seam this task expects to exist. Until T4 wires it up,
+    // this either fails to type/compile against the real interface or the
+    // fake dispatcher is silently never invoked because the production
+    // implementation still calls execa directly.
+    const runner = productionCiFixRunner as unknown as {
+      run(opts: {
+        worktreePath: string;
+        hint: string;
+        entry: WatchEntry;
+        dispatcher?: typeof fakeDispatcher;
+      }): Promise<{ kind: string }>;
+    };
+
+    // test/setup.ts globally sets AI_CONDUCTOR_NO_REAL_EXEC so no test ever
+    // triggers a real exec by accident. That's exactly the kill-switch this
+    // runner honors (see the T7 regression test below), so to observe the
+    // dispatcher actually being invoked, this test must opt out of the
+    // global kill-switch for its own duration and restore it afterward.
+    const savedKillSwitch = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    process.env.PATH = `${tmpDir}${prevPath ? `:${prevPath}` : ''}`;
-
+    let outcome: { kind: string };
     try {
-      const entry = {
-        prUrl: 'https://github.com/foo/bar/pull/42',
-        slug: 'foo/bar#42',
-        repoCwd: tmpDir,
-        ciFixAttempts: 0,
-      };
-      const hint = 'CI checks failed: build';
-
-      const outcome = await productionCiFixRunner.run({
-        worktreePath: tmpDir,
-        hint,
-        entry,
-      });
-
-      expect(outcome).toEqual({ kind: 'changed' });
-
-      const recordedArgs = execSync(`cat "${recordPath}.args"`).toString();
-      const argv = recordedArgs.split('\n').filter((l) => l.length > 0);
-      expect(argv).toEqual([
-        '--fix-session',
-        '--pr-url',
-        entry.prUrl,
-        '--hint',
-        hint,
-      ]);
-
-      const recordedCwd = execSync(`cat "${recordPath}.cwd"`).toString().trim();
-      expect(recordedCwd).toBe(tmpDir);
+      outcome = await runner.run({ worktreePath, hint, entry, dispatcher: fakeDispatcher });
     } finally {
-      if (prevNoRealExec === undefined) {
-        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-      } else {
-        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
-      }
-      process.env.PATH = prevPath;
-      await rmdir(tmpDir, { recursive: true });
+      if (savedKillSwitch !== undefined) process.env.AI_CONDUCTOR_NO_REAL_EXEC = savedKillSwitch;
     }
+
+    expect(outcome).toEqual({ kind: 'changed' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({ worktreePath, hint, entry });
   });
 });
+
+// ── T7: AI_CONDUCTOR_NO_REAL_EXEC still short-circuits the dispatcher seam ──
+//
+// CF-1 (above) rewired `productionCiFixRunner` to delegate to an injected
+// StepRunner-backed dispatcher instead of shelling out via execa. This test
+// makes explicit that the kill-switch check still runs BEFORE the dispatcher
+// is invoked, so setting AI_CONDUCTOR_NO_REAL_EXEC continues to prevent any
+// fix session — real or dispatcher-mediated — from being dispatched.
+describe('ci-fix: productionCiFixRunner honors AI_CONDUCTOR_NO_REAL_EXEC against the dispatcher seam (T7)', () => {
+  it('never invokes the injected dispatcher and returns a noop outcome when the kill-switch is set', async () => {
+    // test/setup.ts already sets this globally; assert explicitly for clarity
+    // and to survive any future change to that global default.
+    expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeTruthy();
+
+    const calls: Array<{ worktreePath: string; hint: string; entry: WatchEntry }> = [];
+    const fakeDispatcher = {
+      resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: WatchEntry }) => {
+        calls.push(ctx);
+        return { kind: 'changed' as const };
+      },
+    };
+
+    const entry: WatchEntry = {
+      prUrl: 'https://github.com/foo/bar/pull/42',
+      slug: 'foo/bar#42',
+      repoCwd: '/fake/repo',
+      ciFixAttempts: 0,
+    };
+
+    const runner = productionCiFixRunner as unknown as {
+      run(opts: {
+        worktreePath: string;
+        hint: string;
+        entry: WatchEntry;
+        dispatcher?: typeof fakeDispatcher;
+      }): Promise<{ kind: string }>;
+    };
+
+    const outcome = await runner.run({
+      worktreePath: '/fake/repo/.worktrees/ci-fix-foo-bar-42',
+      hint: 'CI checks failed: build',
+      entry,
+      dispatcher: fakeDispatcher,
+    });
+
+    expect(outcome).toEqual({ kind: 'noop' });
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// ── Resolver real-binary smoke (Task 24) — REMOVED (T4) ──────────────────────
+//
+// This test used to spawn a stub `claude` binary and assert argv
+// `['--fix-session', '--pr-url', ..., '--hint', ...]` round-tripped through a
+// real subprocess. That was the fictional `--fix-session` CLI flag this
+// feature exists to remove (CF-1/CF-3): `productionCiFixRunner` no longer
+// spawns a subprocess at all — it delegates to an injected StepRunner-backed
+// dispatcher (see the CF-1 describe block above). There is no more argv to
+// round-trip, so the smoke test's premise no longer applies; it is deleted
+// rather than rewritten. Dispatcher round-trip coverage now lives in the
+// CF-1 describe block above and in test/integration/ci-fix-resolver-autofix.test.ts.

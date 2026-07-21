@@ -268,4 +268,83 @@ describe('acceptance: no evidence after N attempts parks the feature, survivably
     expect(result.parked).toBe(false);
     expect(await isOperatorParked(root, SLUG)).toBe(false);
   });
+
+  // Task 7 (plan): full park→unpark→dispatch budget cycle regression, proving
+  // Tasks 2 (a2cde88f — unpark resets the no-evidence counter for both
+  // provenances) and 6 (4e9c350d — inherited-budget halt message) compose
+  // end-to-end rather than merely passing in isolation. This drives
+  // `checkAndAutoPark` and `dispatchDaemonPark` together across two full
+  // exhaust→park→unpark cycles, then confirms a plain restart (no unpark
+  // verb) still leaves the counter untouched — only the unpark verb resets it.
+  it('regression: exhausted budget -> operator-park -> unpark -> 3 fresh attempts before re-park, repeated twice, with restart-survivability intact', async () => {
+    const taskEvidence = await loadTaskEvidence();
+    const autoPark = await loadAutoPark();
+
+    async function exhaustToPark(): Promise<void> {
+      // Drive exactly maxAttempts fresh increments through checkAndAutoPark,
+      // asserting it does NOT park before the budget is reached and DOES
+      // park on the Nth attempt — this is the "3 fresh attempts" bound.
+      let result: { parked: boolean } = { parked: false };
+      for (let i = 1; i <= MAX_ATTEMPTS; i++) {
+        await taskEvidence.incrementNoEvidenceAttempts(root);
+        result = await autoPark.checkAndAutoPark(root, SLUG, {
+          maxAttempts: MAX_ATTEMPTS,
+          daemon: true,
+        });
+        if (i < MAX_ATTEMPTS) {
+          expect(result.parked).toBe(false);
+        }
+      }
+      expect(result.parked).toBe(true);
+    }
+
+    for (let cycle = 1; cycle <= 2; cycle++) {
+      // 1. Exhaust the budget — auto-park fires on the 3rd fresh attempt.
+      await exhaustToPark();
+      expect(await isOperatorParked(root, SLUG)).toBe(true);
+
+      // 2. Operator parks explicitly on top (simulates an operator noticing
+      //    and confirming the park via the CLI verb, per Story 3).
+      const parkCode = await dispatchDaemonPark(
+        { kind: 'park', slug: SLUG },
+        { cwd: root, out: () => {} },
+      );
+      expect(parkCode).toBe(0);
+
+      // 3. Unpark — this MUST reset the durable counter to 0 (Task 2).
+      const unparkCode = await dispatchDaemonPark(
+        { kind: 'unpark', slug: SLUG },
+        { cwd: root, out: () => {} },
+      );
+      expect(unparkCode).toBe(0);
+      expect(await isOperatorParked(root, SLUG)).toBe(false);
+      expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(0);
+
+      // 4. Re-dispatch: must NOT immediately re-park using a stale inherited
+      //    count — it takes a full 3 fresh attempts again, both this cycle
+      //    and the next (proving the reset isn't a one-time fluke).
+    }
+
+    // Final sanity: after two full cycles, the slug is unparked and the
+    // counter sits at 0 (last unpark of the loop above).
+    expect(await isOperatorParked(root, SLUG)).toBe(false);
+    expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(0);
+  });
+
+  it('regression: a plain daemon restart (no unpark verb) does NOT reset the no-evidence counter — only unpark resets it', async () => {
+    const taskEvidence = await loadTaskEvidence();
+
+    await taskEvidence.incrementNoEvidenceAttempts(root);
+    await taskEvidence.incrementNoEvidenceAttempts(root);
+    expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(2);
+
+    // Simulate a plain daemon restart: re-read the sidecar from disk via a
+    // fresh module load path (no unpark verb involved at all).
+    const restarted = await loadTaskEvidence();
+    expect(await restarted.readNoEvidenceAttempts(root)).toBe(2);
+
+    // One more increment survives too — the restart never zeroed anything.
+    await restarted.incrementNoEvidenceAttempts(root);
+    expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(3);
+  });
 });

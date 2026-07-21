@@ -10,9 +10,40 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { writeOperatorPark, removeOperatorPark, isOperatorParked, getProvenanceType } from './park-marker.js';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
+
+const execFile = promisify(execFileCb);
+
+/**
+ * Resolve the main repo root (the parent of `.git`) from any cwd — the
+ * project root itself, or any directory inside a linked worktree.
+ * `git rev-parse --git-common-dir` returns the same common `.git` dir for
+ * the main checkout and every linked worktree, so its parent is the stable
+ * "main repo root" regardless of which worktree/cwd we were invoked from.
+ */
+export async function resolveMainRepoRoot(
+  startCwd: string,
+): Promise<{ root: string } | { error: string }> {
+  const NOT_A_PROJECT_ERROR =
+    "not inside a conduct project — run 'daemon park <slug>' from the project root or any directory inside it";
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', '--git-common-dir'], {
+      cwd: startCwd,
+    });
+    const raw = stdout.trim();
+    if (!raw) {
+      return { error: NOT_A_PROJECT_ERROR };
+    }
+    const absoluteCommonDir = isAbsolute(raw) ? raw : resolve(startCwd, raw);
+    return { root: dirname(absoluteCommonDir) };
+  } catch {
+    return { error: NOT_A_PROJECT_ERROR };
+  }
+}
 
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
@@ -40,10 +71,14 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
  * (`.docs/plans/<slug>.md`) or its worktree directory (`.worktrees/<slug>`)
  * exists — either one alone is sufficient. This guards against typo'd or
  * stale slugs silently parking nothing.
+ *
+ * When called from the CLI, the root should be the resolved main root (not a
+ * worktree cwd) so that a plan at the main root is visible even when parking
+ * from a worktree directory.
  */
-export function validateSlug(slug: string, cwd: string = process.cwd()): boolean {
-  const planPath = join(cwd, '.docs', 'plans', `${slug}.md`);
-  const worktreePath = join(cwd, '.worktrees', slug);
+export function validateSlug(slug: string, root: string = process.cwd()): boolean {
+  const planPath = join(root, '.docs', 'plans', `${slug}.md`);
+  const worktreePath = join(root, '.worktrees', slug);
   return existsSync(planPath) || existsSync(worktreePath);
 }
 
@@ -70,15 +105,25 @@ export async function dispatchDaemonPark(
   const out = deps.out ?? ((l: string) => console.log(l));
 
   try {
+    // Resolve the cwd to the main repo root once at dispatch start.
+    // This ensures all operations (validation, write, read) happen against
+    // the main root even when dispatched from a worktree cwd. If resolution
+    // fails (e.g. not a git repo — as in unit tests injecting a tmp dir),
+    // fall back to the given cwd (fail-toward-parked, pre-#486 behavior).
+    const rootResult = await resolveMainRepoRoot(cwd);
+    const resolvedRoot = 'error' in rootResult ? cwd : rootResult.root;
+
     if (cmd.kind === 'park') {
-      if (!validateSlug(cmd.slug, cwd)) {
-        out(`error: slug '${cmd.slug}' not found in plans/ or worktrees/`);
+      if (!validateSlug(cmd.slug, resolvedRoot)) {
+        out(
+          `error: slug '${cmd.slug}' not found under ${resolvedRoot} (no .docs/plans/${cmd.slug}.md or .worktrees/${cmd.slug})`,
+        );
         return 1;
       }
-      const alreadyParked = await isOperatorParked(cwd, cmd.slug);
-      await writeOperatorPark(cwd, cmd.slug);
+      const alreadyParked = await isOperatorParked(resolvedRoot, cmd.slug);
+      await writeOperatorPark(resolvedRoot, cmd.slug);
+      const markerPath = join(resolvedRoot, '.daemon', 'parked', cmd.slug);
       if (alreadyParked) {
-        const markerPath = join(cwd, '.daemon', 'parked', cmd.slug);
         let since = '';
         try {
           const body = await readFile(markerPath, 'utf-8');
@@ -93,25 +138,33 @@ export async function dispatchDaemonPark(
         out(
           `Parked '${cmd.slug}' — it will not be dispatched or re-kicked until unparked.`,
         );
+        out(`Marked for park: ${markerPath}`);
       }
     } else {
-      const wasParked = await isOperatorParked(cwd, cmd.slug);
+      const wasParked = await isOperatorParked(resolvedRoot, cmd.slug);
       if (!wasParked) {
         out(`'${cmd.slug}' was not operator-parked — nothing to do.`);
         return 0;
       }
 
-      // Check if this is an auto-parked feature (not operator-parked)
-      // If so, reset the no-evidence counter when unparking
-      const provenance = await getProvenanceType(cwd, cmd.slug);
-      if (provenance === 'auto') {
-        await resetNoEvidenceAttempts(cwd);
-        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
+      // Reset the no-evidence counter on unpark regardless of provenance
+      // (auto-park or operator-park) — an unpark is a fresh start either
+      // way, and the build agent should not inherit stale failed-attempt
+      // history (#667). Reset the counter in the feature worktree (where
+      // the build agent runs), or fall back to the resolved root.
+      const worktreeDir = join(resolvedRoot, '.worktrees', cmd.slug);
+      const resetRoot = existsSync(worktreeDir) ? worktreeDir : resolvedRoot;
+      const usedFallback = !existsSync(worktreeDir);
+      await resetNoEvidenceAttempts(resetRoot);
+      if (usedFallback) {
+        out(`Unparked '${cmd.slug}' and reset no-evidence counter at resolved root (fallback — worktree missing) — normal dispatch and re-kick resume.`);
       } else {
-        out(`Unparked '${cmd.slug}' — normal dispatch and re-kick resume.`);
+        out(`Unparked '${cmd.slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`);
       }
 
-      await removeOperatorPark(cwd, cmd.slug);
+      // Only remove the marker after counter reset succeeds.
+      // If reset failed, the marker survives for recovery/retry.
+      await removeOperatorPark(resolvedRoot, cmd.slug);
     }
     return 0;
   } catch (err) {

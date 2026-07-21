@@ -52,6 +52,12 @@ Skills chain via artifacts in `.docs/`. No skill orchestrates another internally
 UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
 ```
 
+In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
+architecture-review --as-built) execute as one **concurrent validation group** after the
+build gates (build_review → wiring_check), fan-out capped by `validation_concurrency`
+with a single-writer join; interactive runs keep the serial sequence and checkpoints
+shown above.
+
 | Phase | Skills | Artifacts |
 |-------|--------|-----------|
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
@@ -123,8 +129,8 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | bootstrap | sonnet | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
 | memory | haiku | low | Read/write files, update index — mechanical. |
 | assess | sonnet | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
-| explore | fable | xhigh | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel with high branching factor — mistake cost is localized; Fable's cheaper generation wins, but mistakes here cascade downstream. |
-| prd | fable | xhigh | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently; speed over supreme depth in the early design phase. |
+| explore | fable | medium | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). |
+| prd | fable | medium | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need. |
 | complexity | sonnet | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
 | stories | sonnet | low (S), medium (M), high (L) | Pattern-following from design doc, structured output. |
 | conflict-check | sonnet (S/M), fable (L) | medium | Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L. |
@@ -135,6 +141,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | writing-system-tests | sonnet | medium | Generating specs from acceptance criteria — templated work. |
 | pipeline | sonnet | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku. |
 | build-review | opus | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review. |
+| wiring-check | sonnet | low | Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and manual_test — mechanical evidence gathering, no generative judgement required. |
 | manual-test | sonnet | medium | Structured validation against stories — pattern-following. |
 | prd-audit | opus | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
 | architecture-review --as-built | sonnet | medium | The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design. |
@@ -149,7 +156,7 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 | code-review | opus |  | Multi-dimensional analysis (spec, quality, domain). |
 | debugging | fable |  | Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes. |
 | simplify | sonnet |  | Pattern matching for duplication and complexity — structured checklist work. |
-| engineer | fable |  | Interactive idea→spec control plane: cheaper generation with interactive feedback loop — routes real DECIDE skills without the cost of opus for every iteration. |
+| engineer | fable |  | Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus). |
 | intake | inherits caller |  | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | haiku |  | Artifact checking and status reporting — mechanical. |
 | pr | sonnet |  | Diff analysis and structured PR body — templated output. |
@@ -176,6 +183,23 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 > `.ai-conductor/config.yml` to disable fallback. The `--model` CLI flag and
 > `steps.<step>.model` config still take precedence as an explicit override, and the
 > override itself is checked for availability before use.
+
+> **Retry-as-escalation ladder (#188):** A retry is no longer an identical coin-flip —
+> it deliberately raises capability so the re-run changes the odds. On a step's failed
+> attempt the loop escalates from the resolved base `(model, effort)`, indexed by the
+> 1-based attempt: **attempt 1** runs the base; **attempt 2** bumps effort one level
+> (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model one
+> tier up the capability ladder (`haiku→sonnet→opus→fable`). Bumps are capped — an effort
+> already at `max` or a model already at `fable` is a no-op rung, never an error. The
+> model bump expresses *intent* only; it still routes through the #186 availability ladder
+> above, which substitutes a live model if the escalated tier is dead (escalation ascends
+> for upgrade-on-retry; availability descends for substitute-on-dead). Because escalation
+> derives purely from the attempt number, non-budget-consuming retries (rate-limit, stale
+> session, auth park-and-poll) re-run at the *same* rung rather than climbing. Deep-step
+> retry budgets (`explore`, `prd`, `plan`, `build`) drop from 5 to **3** — the floor that
+> still reaches the attempt-3 model-bump rung. Escalation is **on by default**; set
+> `steps.<step>.escalate: false` (also valid at `phases.<PHASE>` / `defaults`) to pin the
+> base `(model, effort)` across every retry (identical-retry, pre-#188 behavior).
 
 When dispatching subagents via the Agent tool, set the `model` parameter to match:
 ```
@@ -337,8 +361,12 @@ The harness version your project runs against is controlled by
 
 ### Update flow
 
-1. On every `conduct` invocation, `check_harness_update()` in `bin/conduct`
-   fetches either the latest tag (`tagged`) or the remote branch (`main`).
+1. `bin/update` fetches either the latest tag (`tagged`) or the remote branch
+   (`main`), depending on how it's invoked:
+   - `bin/update` (no args) forces a check now, bypassing the `autoCheck`
+     gate.
+   - `bin/update --auto` checks only if `autoCheck` is not `false`; this is
+     what `conduct-ts` spawns automatically at daemon startup.
 2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
    with the configured markdown viewer (see `markdown_viewer` in
    `~/.ai-conductor/config.yml`) and the user is prompted before anything is
@@ -349,16 +377,17 @@ The harness version your project runs against is controlled by
      `settings.json` entries.
    - Walks `CHANGELOG.md` entries between the old and new version for any
      `## Migration` bash blocks, displays them, and runs them on approval.
-4. On success, `currentVersion` is written back to the config and `conduct`
-   re-launches. On failure, the harness is rolled back to the previous ref and
-   the user is notified.
+4. On success, `currentVersion` is written back to the config. On failure,
+   the harness is rolled back to the previous ref and the user is notified.
 
 ### Changing channels
 
 ```
-conduct --set-channel tagged   # follow stable semver tags
-conduct --set-channel main     # follow main branch
-conduct --update               # force an update check now
+bin/update --set-channel tagged   # follow stable semver tags
+bin/update --set-channel main     # follow main branch
+bin/update                        # force an update check now
+bin/update --auto                 # check only if autoCheck != false
+bin/update -h                     # usage
 ```
 
 The `updateChannel` setting is per-user (lives in `~/.claude/`), so every

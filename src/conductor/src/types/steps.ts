@@ -14,6 +14,7 @@ export type StepName =
   | 'acceptance_specs'
   | 'build'
   | 'build_review'
+  | 'wiring_check'
   | 'manual_test'
   | 'prd_audit'
   | 'architecture_review_as_built'
@@ -84,4 +85,36 @@ export interface StepDefinition {
    * selector and by the conductor's linear + looped-region skip passes.
    */
   skipWhenSkipped?: StepName;
+  /**
+   * This gating step may be disabled per-project via `steps.<name>.disable:
+   * true` in config.yml. By default `validateConfig()` rejects disabling
+   * gating/structural built-ins (a partial config must never silently drop a
+   * guardrail); this flag is the step definition's explicit opt-in for an
+   * explicit, committed, validated config disable. Structural steps ignore it
+   * — they can never be disabled. Built-ins: manual_test.
+   */
+  configDisableAllowed?: boolean;
+}
+
+/**
+ * A built-in concurrent group entry (adr-2026-07-10-validation-group-join.md,
+ * Decision-1): a WRAPPER over an ordered run of contiguous `StepDefinition`s
+ * already present in `ALL_STEPS`, not a replacement for them. Each member
+ * keeps its own full `StepDefinition` (skill, gate config, skip rules) and
+ * its own position in the linear step-index space — `tryGetStepIndex` and
+ * per-step state keys are completely unaffected by a step's group
+ * membership. The group is purely additive metadata consumed by the
+ * (not-yet-built) concurrent dispatch/join logic; this type only describes
+ * "these steps are members of group X, in this order."
+ */
+export interface StepGroup {
+  /** Registry key for this group, e.g. 'validation'. */
+  name: string;
+  /**
+   * Member step names in ADR-declared order. Members must be contiguous in
+   * `ALL_STEPS` and immediately follow the group's anchor step (e.g.
+   * `build_review`) — the registry builder verifies this positioning, it is
+   * not re-derived from this list alone.
+   */
+  members: StepName[];
 }

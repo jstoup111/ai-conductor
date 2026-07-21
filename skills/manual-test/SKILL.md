@@ -18,7 +18,10 @@ pass is `verified` — you actually observed the response/behavior — never ass
 inferred from a green unit test. If a story was not actually exercised, do not claim it passed;
 report it as untested rather than presenting an assumption as a result.
 
-**Runs AFTER `/finish` and BEFORE `/retro`.**
+**Runs at SHIP as a member of the concurrent validation group — fanned out alongside
+`/prd-audit` and `/architecture-review --as-built` in daemon/auto runs. In interactive
+runs it runs serially, AFTER `/finish` and BEFORE `/retro`, with its post-step
+checkpoint unchanged.**
 
 ## Practices
 

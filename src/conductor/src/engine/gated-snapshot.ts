@@ -13,6 +13,14 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 
+// NOTE: the current gate (gate.ts) only ever produces `reason: 'other-owner'`
+// and `warning: 'identity-unresolved'` — un-owned specs always default-build
+// now, so 'unowned-post-cutover'/'unowned-indeterminate'/'no-cutover' are
+// dead on the WRITE side. The unions below are kept wide anyway because this
+// module is also the READER for `.daemon/gated.json`, an on-disk snapshot
+// that may have been written by a daemon build from before this change —
+// `readGatedSnapshot` must still type-accept those historical values rather
+// than reject/narrow them away.
 export interface GatedSpecItem {
   kind: 'spec';
   slug: string;

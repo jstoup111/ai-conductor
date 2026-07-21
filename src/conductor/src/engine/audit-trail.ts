@@ -31,6 +31,14 @@ export type AuditRecord = {
   cause?: string;
   attempt?: number;
   at: number;
+  /**
+   * #647 D3: for `event: 'kickback'` records, distinguishes a kickback that
+   * produced real build progress (`'did-work (commits N..M / resolved +K)'`)
+   * from one whose target was already evidence-complete before build ever
+   * ran (`'derived-already-complete'`). Absent for non-kickback records or
+   * kickbacks with no classification computed.
+   */
+  kickback_outcome?: string;
 };
 
 /** Input to `AuditTrailWriter.record` — `phase` and `at` are derived, not supplied. */
@@ -138,6 +146,7 @@ export class AuditTrailWriter {
           step: event.to,
           event: event.type,
           cause: `${event.from} evidence: ${event.evidence}`,
+          ...(event.kickback_outcome ? { kickback_outcome: event.kickback_outcome } : {}),
         };
       case 'loop_halt':
         return { step: 'build', event: 'intervention', cause: event.reason };

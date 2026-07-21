@@ -10,6 +10,7 @@ import {
   mergeConfigs,
   resolveMemoryProvider,
   isAttributionEnforcementActive,
+  resolveValidationConcurrency,
 } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
@@ -128,6 +129,65 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('accepts validation_concurrency as a known top-level key', () => {
+      const result = validateConfig({ validation_concurrency: 3 });
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a typo of validation_concurrency as an unknown top-level key', () => {
+      const result = validateConfig({ validation_concurency: 3 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('validation_concurency');
+    });
+
+    it('passes when validation_concurrency is absent', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.validation_concurrency).toBeUndefined();
+    });
+
+    it('rejects validation_concurrency when not a number', () => {
+      const result = validateConfig({ validation_concurrency: 'three' as unknown as number });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('validation_concurrency');
+    });
+
+    it('resolveValidationConcurrency defaults to 2 when absent', () => {
+      expect(resolveValidationConcurrency({})).toBe(2);
+    });
+
+    it('resolveValidationConcurrency returns explicit 3', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 3 })).toBe(3);
+    });
+
+    it('resolveValidationConcurrency returns explicit 1', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 1 })).toBe(1);
+    });
+
+    it('resolveValidationConcurrency clamps 0 to default 2', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 0 })).toBe(2);
+    });
+
+    it('resolveValidationConcurrency clamps negative to default 2', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: -4 })).toBe(2);
+    });
+
+    it('resolveValidationConcurrency clamps NaN/non-numeric to default 2', () => {
+      expect(
+        resolveValidationConcurrency({
+          validation_concurrency: NaN as unknown as number,
+        }),
+      ).toBe(2);
+      expect(
+        resolveValidationConcurrency({
+          validation_concurrency: 'x' as unknown as number,
+        }),
+      ).toBe(2);
+    });
+
     it('rejects disabling a gating step', () => {
       const result = validateConfig({
         steps: { stories: { disable: true } },
@@ -136,6 +196,13 @@ complexity:
       if (result.ok) return;
       expect(result.error.message).toMatch(/gating/i);
       expect(result.error.message).toContain('stories');
+    });
+
+    it('accepts steps.manual_test.disable: true — manual_test opts into config-disable', () => {
+      const result = validateConfig({
+        steps: { manual_test: { disable: true } },
+      });
+      expect(result.ok).toBe(true);
     });
 
     it('rejects disabling a structural step', () => {
@@ -1298,6 +1365,44 @@ complexity:
         const result = validateConfig(testCase);
         expect(result.ok).toBe(true);
       }
+    });
+  });
+
+  describe('retry_routing config field (Task 3)', () => {
+    it('resolves absent block to enabled: true', () => {
+      const result = validateConfig({ harness_version: '>=1.0.0' });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.retry_routing?.enabled).toBe(true);
+    });
+
+    it('resolves retry_routing: { enabled: false } to disabled', () => {
+      const result = validateConfig({ retry_routing: { enabled: false } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.retry_routing?.enabled).toBe(false);
+    });
+
+    it('rejects a non-boolean enabled value', () => {
+      const result = validateConfig({ retry_routing: { enabled: 'banana' } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+    });
+
+    it('rejects an unknown key inside the retry_routing block', () => {
+      const result = validateConfig({ retry_routing: { enabled: true, bogus: 1 } });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+    });
+
+    it('still rejects an unknown top-level sibling key (regression)', () => {
+      const result = validateConfig({ retry_routing: { enabled: true }, bogus_top_level: 1 });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe('validation_error');
+      expect(result.error.message).toContain('bogus_top_level');
     });
   });
 });

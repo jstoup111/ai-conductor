@@ -56,12 +56,14 @@ const KNOWN_BAD_FIXTURES = [
   `await exec('git', ['init', '-q'], { cwd: dir });`, // exec, no -b
   `await git(['init', '-q']);`, // local git() helper array form
   `await git('init', '-q');`, // local git() helper variadic form
+  `await exec('git', ['init', '--bare', '-q'], { cwd: dir });`, // --bare without -b/--initial-branch, no marker
 ];
 
 const KNOWN_GOOD_FIXTURES = [
   `await execa('git', ['init', '-b', 'main', '-q'], { cwd: dir });`, // with -b main
   `await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repoPath });`, // -b in middle
-  `await exec('git', ['init', '--bare', '-q'], { cwd: dir });`, // --bare, no -b needed
+  `await exec('git', ['init', '--bare', '-b', 'main', '-q'], { cwd: dir });`, // --bare, pinned with -b
+  `await exec('git', ['init', '--bare', '-q'], { cwd: dir }); // portability-ok: bare repo has no HEAD to matter`, // --bare, marker exemption
   `await git(['init', '-b', 'main']);`, // git() helper with -b
   `// await execa('git', ['init', '-q'], { cwd: dir });`, // commented out
   `  // await git('init', '-q');`, // commented out with indent
@@ -119,6 +121,14 @@ function isCommented(line: string): boolean {
 }
 
 /**
+ * Precisely detect a real `-b <branch>` or `--initial-branch <branch>` flag token.
+ * Deliberately does NOT match on `--bare`, which merely contains `-b` as a substring.
+ */
+function hasInitialBranchFlag(line: string): boolean {
+  return /(^|\s|['"[,])(-b|--initial-branch)(\s|=|['"\]])/.test(line);
+}
+
+/**
  * Extract git init patterns from a line. Returns the init invocation if found, null otherwise.
  * Handles: execa, execFile, exec, and local git() calls.
  */
@@ -132,31 +142,31 @@ function extractGitInitPattern(line: string): {
 
   // Pattern 1: execa('git', ['init', ...])
   if (line.includes("execa('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'execa', hasFlag, markerPresent };
   }
 
   // Pattern 2: execFile('git', ['init', ...])
   if (line.includes("execFile('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'execFile', hasFlag, markerPresent };
   }
 
   // Pattern 3: exec('git', ['init', ...])
   if (line.includes("exec('git', ['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'exec', hasFlag, markerPresent };
   }
 
   // Pattern 4a: git(['init', ...]) — array form
   if (line.includes("git(['init'")) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'git-helper', hasFlag, markerPresent };
   }
 
   // Pattern 4b: git('init', ...) — variadic form (make sure it's not git-daemon or similar)
   if (line.includes("git('init'") && !line.includes('git-daemon')) {
-    const hasFlag = line.includes('-b') || line.includes('--bare');
+    const hasFlag = hasInitialBranchFlag(line);
     return { type: 'git-helper', hasFlag, markerPresent };
   }
 
@@ -344,7 +354,7 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
       { fixture: `execa('git', ['init', '-q'])`, shouldViolate: true },
       { fixture: `execa('git', ['init', '-b', 'main', '-q'])`, shouldViolate: false },
       { fixture: `execFile('git', ['init', '-q'])`, shouldViolate: true },
-      { fixture: `execFile('git', ['init', '--bare', '-q'])`, shouldViolate: false },
+      { fixture: `execFile('git', ['init', '--bare', '-q'])`, shouldViolate: true },
       { fixture: `exec('git', ['init', '-q'])`, shouldViolate: true },
       { fixture: `exec('git', ['init', '-q', '-b', 'main'])`, shouldViolate: false },
       { fixture: `git(['init', '-q'])`, shouldViolate: true },
@@ -415,6 +425,35 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
     }
   });
 
+  // Tightening `hasInitialBranchFlag` (so a bare `--bare` alone no longer counts as a
+  // branch pin) surfaced pre-existing `git init --bare` fixtures elsewhere in the repo
+  // that use a bare repo purely as a push/clone remote (never reading its HEAD before
+  // a push or `remote set-head` fixes it) — a safe pattern, but one the guard cannot
+  // prove safe from the line alone. Per the plan's "Out of scope" section, these are
+  // reported and tracked here rather than mass-edited; fixing them (adding `-b`/marker)
+  // is a follow-up, not part of this change. Any NEW violation outside this known list
+  // still fails the test.
+  const KNOWN_BARE_REMOTE_OFFENDERS: ReadonlyArray<{ file: string; line: number }> = [
+    { file: 'acceptance/autoheal-path-corroboration-rejects-valid-build-co.acceptance.test.ts', line: 72 },
+    { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 58 },
+    { file: 'acceptance/judged-attribution-verdict-persistence.acceptance.test.ts', line: 76 },
+    { file: 'acceptance/no-diff-task-evidence-stamp.acceptance.test.ts', line: 63 },
+    { file: 'acceptance/verify-only-prove-closed-task-evidence.acceptance.test.ts', line: 64 },
+    { file: 'attribution-lane.integration.test.ts', line: 46 },
+    { file: 'conductor.build-gate.test.ts', line: 42 },
+    { file: 'engine/autoheal.test.ts', line: 1259 },
+    { file: 'engine/autoheal.test.ts', line: 1299 },
+    { file: 'engine/autoheal.test.ts', line: 1333 },
+    { file: 'engine/autoheal.test.ts', line: 1370 },
+    { file: 'engine/autoheal.test.ts', line: 1409 },
+    { file: 'engine/autoheal.test.ts', line: 1442 },
+    { file: 'engine/autoheal.test.ts', line: 1534 },
+    { file: 'engine/autoheal.test.ts', line: 1570 },
+    { file: 'engine/autoheal.test.ts', line: 1814 },
+    { file: 'engine/daemon-poll-refresh.test.ts', line: 216 },
+    { file: 'engine/push-evidence.test.ts', line: 281 },
+  ];
+
   it('scans real test tree and reports violations', async () => {
     // Scan src/conductor/test/ directory recursively
     const testDir = join(__dirname, '..');
@@ -433,7 +472,6 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
       allViolations.push(...violations);
     }
 
-    // Should find ~16-20 violations on current tree (before Tasks 27-28 fix them)
     if (allViolations.length > 0) {
       console.log(`\n✗ Found ${allViolations.length} fixture-portability violations:\n`);
       for (const v of allViolations) {
@@ -444,8 +482,21 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
       }
     }
 
-    // Expected to fail: list violations for the worklist (Tasks 27-28 will fix these)
-    expect(allViolations).toHaveLength(0, 'Fixture portability violations must be fixed (see list above)');
+    const unknownViolations = allViolations.filter((v) => {
+      const relPath = relative(testDir, v.file);
+      return !KNOWN_BARE_REMOTE_OFFENDERS.some(
+        (known) => known.file === relPath && known.line === v.line,
+      );
+    });
+
+    expect(unknownViolations).toHaveLength(
+      0,
+      'New fixture-portability violations found outside the known/tracked offender list (see list above)',
+    );
+
+    // Guards against the known-offender list silently going stale (entries fixed
+    // elsewhere without being removed here, or the guard regressing to find fewer).
+    expect(allViolations).toHaveLength(KNOWN_BARE_REMOTE_OFFENDERS.length);
   });
 });
 
@@ -530,5 +581,51 @@ describe('Structural guard: tmp-outside-target-dir matcher (src/engine/**)', () 
       0,
       'Hardcoded /tmp paths must use os.tmpdir() or carry a // portability-ok: marker'
     );
+  });
+});
+
+describe('Structural guard: hasInitialBranchFlag matcher (git init --bare exemption)', () => {
+  it('detects presence/absence of an initial-branch flag in a git init argv literal', () => {
+    expect(hasInitialBranchFlag("['init', '--bare', '-q']")).toBe(false);
+    expect(hasInitialBranchFlag("['init', '--bare', '-b', 'main']")).toBe(true);
+    expect(hasInitialBranchFlag("['init', '--initial-branch', 'main']")).toBe(true);
+    expect(hasInitialBranchFlag("['init']")).toBe(false);
+  });
+
+  it('a bare init with no branch-pin flag and no marker VIOLATES', () => {
+    const line = `await execa('git', ['init', '--bare', '-q']);`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.hasFlag).toBe(false);
+    expect(pattern?.markerPresent).toBe(false);
+  });
+
+  it('a bare init with a -b branch-pin flag PASSES', () => {
+    const line = `await execa('git', ['init', '--bare', '-b', 'main', '-q']);`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.hasFlag).toBe(true);
+  });
+
+  it('a bare init with a trailing portability-ok marker PASSES (even empty reason)', () => {
+    const line = `await execa('git', ['init', '--bare', '-q']); // portability-ok:`;
+    const pattern = extractGitInitPattern(line);
+    expect(pattern).toBeTruthy();
+    expect(pattern?.markerPresent).toBe(true);
+  });
+
+  it('known-bad fixture count still holds (non-regression)', () => {
+    const violations: typeof KNOWN_BAD_FIXTURES = [];
+
+    for (const fixture of KNOWN_BAD_FIXTURES) {
+      if (!isCommented(fixture)) {
+        const pattern = extractGitInitPattern(fixture);
+        if (pattern && !pattern.hasFlag && !pattern.markerPresent) {
+          violations.push(fixture);
+        }
+      }
+    }
+
+    expect(violations.length).toBe(KNOWN_BAD_FIXTURES.length);
   });
 });

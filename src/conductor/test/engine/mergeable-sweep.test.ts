@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -383,14 +383,53 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
   });
 
   it('prunes a PR whose gh runner throws a not-found-style error (FR-13 NOTFOUND)', async () => {
-    // A genuinely deleted PR causes gh to throw with "not found" text.
+    // A genuinely deleted PR causes gh to throw with the structured GraphQL
+    // not-found signal AND a non-zero exit code (the classifier requires
+    // both — see isNotFoundError in pr-labels.ts).
     // prMergeState classifies this as NOTFOUND; sweep must prune it.
+    const err = Object.assign(new Error('could not resolve to a PullRequest'), {
+      code: 1,
+    });
     const { gh } = makeFakeGh({
-      [PR_URL]: new Error('could not resolve to a PullRequest'),
+      [PR_URL]: err,
     });
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
     expect(await readWatch(tmpDir)).toHaveLength(0);
+  });
+
+  it('prunes on a structured GraphQL not-found signal in stderr with a non-zero exit code', async () => {
+    // Task 4 regression: proves the sweep-level prune still fires end-to-end
+    // when prMergeState's NOTFOUND classification comes from the structured
+    // (exit code + GraphQL stderr) signal introduced in Tasks 1-3, not from
+    // loose message-wording matching.
+    const err = Object.assign(new Error('gh: graphql error'), {
+      code: 1,
+      stderr: 'GraphQL: Could not resolve to a PullRequest with the number 42. (repository.pullRequest)',
+    });
+    const logs: string[] = [];
+    const { gh } = makeFakeGh({ [PR_URL]: err });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) });
+    expect(await readWatch(tmpDir)).toHaveLength(0);
+    expect(logs.some((l) => l.includes(PR_URL) && l.includes('NOTFOUND'))).toBe(true);
+  });
+
+  it('keeps entry when error message loosely matches old English wording ("not found" / "404") but lacks the structured GraphQL signal', async () => {
+    // Task 4 regression: the classifier no longer mis-prunes on loose wording
+    // drift. A non-zero exit with an ambiguous/ordinary message containing
+    // "not found" or "404" (but NOT the gh GraphQL not-found phrase) must be
+    // treated as UNKNOWN/transient and the entry kept for retry.
+    const err = Object.assign(new Error('HTTP 404: resource not found'), {
+      code: 1,
+      stderr: '',
+    });
+    const { gh } = makeFakeGh({ [PR_URL]: err });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].prUrl).toBe(PR_URL);
   });
 
   it('keeps entry when gh throws a DNS transient error "could not resolve host" (NOT pruned)', async () => {
@@ -436,6 +475,133 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     const remaining = await readWatch(tmpDir);
     expect(remaining).toHaveLength(1);
     expect(remaining[0].prUrl).toBe(PR_URL_2);
+  });
+});
+
+describe('sweepMergeableLabels — Task 1: MAX_WATCH_ENTRIES cap', () => {
+  const MAX_WATCH_ENTRIES = 100;
+
+  it('trims the registry to the last MAX_WATCH_ENTRIES entries, dropping the oldest', async () => {
+    const total = MAX_WATCH_ENTRIES + 10;
+    const urls = Array.from(
+      { length: total },
+      (_, i) => `https://github.com/foo/bar/pull/${i + 1}`,
+    );
+    const prStates: Record<string, { stdout: string }> = {};
+    for (const url of urls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+    for (const url of urls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+    const logs: string[] = [];
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(MAX_WATCH_ENTRIES);
+    // The oldest (front) entries were dropped; survivors are the last
+    // MAX_WATCH_ENTRIES of the seeded, append-ordered list.
+    const expectedUrls = urls.slice(-MAX_WATCH_ENTRIES);
+    expect(remaining.map((e) => e.prUrl)).toEqual(expectedUrls);
+    // Every dropped entry must be logged (no silent truncation).
+    const droppedUrls = urls.slice(0, urls.length - MAX_WATCH_ENTRIES);
+    for (const url of droppedUrls) {
+      expect(logs).toContainEqual(
+        `[mergeable-sweep] registry cap: dropping ${url} (slug ${entry(url).slug}) — over MAX_WATCH_ENTRIES`,
+      );
+    }
+  });
+
+  it('does not drop any entries when under the cap', async () => {
+    const total = MAX_WATCH_ENTRIES - 10;
+    const urls = Array.from(
+      { length: total },
+      (_, i) => `https://github.com/foo/bar/pull/${i + 1}`,
+    );
+    const prStates: Record<string, { stdout: string }> = {};
+    for (const url of urls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+    for (const url of urls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const remaining = await readWatch(tmpDir);
+    expect(remaining).toHaveLength(total);
+    expect(remaining.map((e) => e.prUrl)).toEqual(urls);
+  });
+
+  it('prunes gone PRs by state independently of the cap, and caps only the live survivors', async () => {
+    // Two "gone" PRs (MERGED / CLOSED) plus a surplus of live entries beyond
+    // MAX_WATCH_ENTRIES. The gone PRs must be pruned entirely (state-based
+    // pruning, FR-13) and must not count against the cap — the persisted
+    // registry should hold exactly MAX_WATCH_ENTRIES entries, all live.
+    const liveTotal = MAX_WATCH_ENTRIES + 10;
+    const liveUrls = Array.from(
+      { length: liveTotal },
+      (_, i) => `https://github.com/foo/bar/pull/live-${i + 1}`,
+    );
+    const goneMergedUrl = 'https://github.com/foo/bar/pull/gone-merged';
+    const goneClosedUrl = 'https://github.com/foo/bar/pull/gone-closed';
+
+    const prStates: Record<string, { stdout: string }> = {
+      [goneMergedUrl]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [goneClosedUrl]: prViewJson('CLOSED', 'UNKNOWN', [], []),
+    };
+    for (const url of liveUrls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+
+    // Enroll gone entries first, then the live surplus (append order).
+    await enrollWatch(tmpDir, entry(goneMergedUrl));
+    await enrollWatch(tmpDir, entry(goneClosedUrl));
+    for (const url of liveUrls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+
+    const remaining = await readWatch(tmpDir);
+    // Gone PRs pruned entirely — not present at all.
+    expect(remaining.some((e) => e.prUrl === goneMergedUrl)).toBe(false);
+    expect(remaining.some((e) => e.prUrl === goneClosedUrl)).toBe(false);
+    // Cap applies only to the live survivors.
+    expect(remaining).toHaveLength(MAX_WATCH_ENTRIES);
+    expect(remaining.map((e) => e.prUrl)).toEqual(liveUrls.slice(-MAX_WATCH_ENTRIES));
+  });
+
+  it('does not throw when rewriteWatch fails to persist an over-cap registry (best-effort)', async () => {
+    const total = MAX_WATCH_ENTRIES + 10;
+    const urls = Array.from(
+      { length: total },
+      (_, i) => `https://github.com/foo/bar/pull/${i + 1}`,
+    );
+    const prStates: Record<string, { stdout: string }> = {};
+    for (const url of urls) {
+      prStates[url] = prViewJson('OPEN', 'MERGEABLE', [], []);
+    }
+    const { gh } = makeFakeGh(prStates);
+    for (const url of urls) {
+      await enrollWatch(tmpDir, entry(url));
+    }
+
+    // Force rewriteWatch's write to fail: strip write permission on the
+    // .daemon directory after the (already-persisted) entries have been
+    // enrolled. readWatch (a read) still succeeds; the final rewriteWatch
+    // (a write) fails and is swallowed (C3) — the sweep as a whole must not
+    // throw.
+    const daemonDir = join(tmpDir, '.daemon');
+    await chmod(daemonDir, 0o555);
+    try {
+      await expect(
+        sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh }),
+      ).resolves.not.toThrow();
+    } finally {
+      // Restore permissions so afterEach's recursive rm can clean up.
+      await chmod(daemonDir, 0o755);
+    }
   });
 });
 

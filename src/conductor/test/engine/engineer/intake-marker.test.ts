@@ -144,6 +144,25 @@ describe('writeIntakeMarker', () => {
 });
 
 describe('runAuthoring intake marker (FR-1, FR-3)', () => {
+  let fakeHome: string;
+  let savedHome: string | undefined;
+
+  beforeEach(async () => {
+    // Isolate $HOME so owner resolution (born-owned at authoring, Task 1) is
+    // deterministic in CI rather than picking up the real dev machine's
+    // ~/.ai-conductor/config.yml spec_owner.
+    fakeHome = await mkdtemp(join(tmpdir(), 'intake-marker-home-'));
+    await mkdir(join(fakeHome, '.ai-conductor'), { recursive: true });
+    await writeFile(join(fakeHome, '.ai-conductor', 'config.yml'), 'spec_owner: fakeowner\n');
+    savedHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+  });
+
+  afterEach(async () => {
+    process.env.HOME = savedHome;
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
   it('commits .docs/intake/<slug>.md and discoverBacklog surfaces sourceRef after merge', async () => {
     const result = await runAuthoring(target(), 'dep bump', {
       decide: approvedDecide(),
@@ -161,10 +180,12 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
     expect(item?.sourceRef).toBe('acme/app#49');
   });
 
-  it('writes NO marker for a hand-authored spec (no sourceRef) — still discoverable', async () => {
+  it('writes a marker with Owner (born-owned) for a hand-authored spec (no sourceRef) — still discoverable', async () => {
     const result = await runAuthoring(target(), 'dep bump', { decide: approvedDecide() });
 
-    expect(await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`)).toBeNull();
+    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
+    expect(marker).toContain('Owner: fakeowner');
+    expect(marker ?? '').not.toContain('Source-Ref:');
 
     await git(['checkout', defaultBranch]);
     await git(['merge', '--no-ff', '-m', 'merge', result.branch]);
@@ -174,12 +195,14 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
     expect(item?.sourceRef).toBeUndefined();
   });
 
-  it('writes NO marker for a garbled sourceRef', async () => {
+  it('writes a marker with Owner (born-owned) for a garbled sourceRef', async () => {
     const result = await runAuthoring(target(), 'dep bump', {
       decide: approvedDecide(),
       sourceRef: 'not-a-valid-ref',
     });
-    expect(await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`)).toBeNull();
+    const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
+    expect(marker).toContain('Owner: fakeowner');
+    expect(marker ?? '').not.toContain('Source-Ref:');
   });
 });
 

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateKickbacks } from '../../src/engine/report-renderer.js';
 
 // Helper: build a JSONL line from event + timestamp offset in ms
 function makeEvent(event: Record<string, unknown>, ts: string): string {
@@ -44,6 +44,55 @@ describe('report-renderer', () => {
     expect(report).toContain('5000'); // ms
     expect(report).toContain('stories');
     expect(report).toContain('2500');
+  });
+
+  // ─── #647 D3: kickback_outcome discriminator surfaced by aggregateKickbacks ──
+
+  it('aggregateKickbacks surfaces kickback_outcome as kickbackOutcome when the event carries it', () => {
+    const events = parseEvents(
+      makeLines([
+        {
+          event: {
+            type: 'kickback',
+            from: 'architecture_review_as_built',
+            to: 'build',
+            evidence: 'test:as-built-gap→build',
+            count: 1,
+            kickback_outcome: 'did-work (commits abc1234..def5678 / resolved +1)',
+          },
+          ts: '2026-01-01T00:00:00.000Z',
+        },
+      ]),
+    );
+
+    const kickbacks = aggregateKickbacks(events);
+
+    expect(kickbacks).toHaveLength(1);
+    expect(kickbacks[0].kickbackOutcome).toBe(
+      'did-work (commits abc1234..def5678 / resolved +1)',
+    );
+  });
+
+  it('aggregateKickbacks omits kickbackOutcome when the event carries none', () => {
+    const events = parseEvents(
+      makeLines([
+        {
+          event: {
+            type: 'kickback',
+            from: 'conflict_check',
+            to: 'architecture_review',
+            evidence: 'missing seam',
+            count: 1,
+          },
+          ts: '2026-01-01T00:00:00.000Z',
+        },
+      ]),
+    );
+
+    const kickbacks = aggregateKickbacks(events);
+
+    expect(kickbacks).toHaveLength(1);
+    expect(kickbacks[0].kickbackOutcome).toBeUndefined();
   });
 
   it('sorts Step Durations table descending by duration', async () => {

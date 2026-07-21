@@ -5,7 +5,16 @@ import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
-import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.js';
+import {
+  dispatchAttributionVerifier,
+  runAttributionLane,
+  computeMemoKey,
+  readMemo,
+  writeMemo,
+  // Task 6 (RED) — not implemented until Task 7. Importing this makes the
+  // whole suite fail to load, which is the expected RED failure mode.
+  rekeyMemoAfterRebase,
+} from '../../src/engine/attribution-lane.js';
 
 // ── Fresh-session verifier dispatch (Task 7) ──────────────────────────────
 //
@@ -806,5 +815,406 @@ Implement task 3.
 
     // Invalidated verdicts should not produce retry hints
     expect(result.success).toBe(true);
+  });
+
+  // Story 5 (stale-anchor stays fail-closed) — in-cycle assertion.
+  //
+  // `dispatchAttributionVerifier` above only exercises the fresh-session
+  // dispatch path; the anchor-staleness guard itself lives inside
+  // `runAttributionLane` (attribution-lane.ts:419-429), which parses the
+  // verdict, coerces every result to `no-verdict` when `anchor.head` !=
+  // the current HEAD, and therefore passes an EMPTY `validated` array to
+  // `writeJudgedStamps`. This drives `runAttributionLane` directly (with a
+  // real temp `.pipeline` dir) so the guard is observed at the unit level:
+  // stampedTaskIds is empty and no evidence stamp lands on disk for the
+  // "satisfied"-labeled but stale-anchored verdict. Already covered
+  // end-to-end at the acceptance level in
+  // evidence-gate-validates-provenance-proxies-not-whe.acceptance.test.ts
+  // Section F ("a stale-anchor verdict ... invalidates the whole file").
+  it('stale anchor.head coerces all verdicts to no-verdict: empty validated, no stamps, gate does not advance', async () => {
+    const currentHeadSha = 'abc1234567890def1234567890def1234567890';
+    const staleAnchorHeadSha = '0'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: staleAnchorHeadSha, residue: ['1', '2'] }, // Stale — doesn't match currentHeadSha
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: 'abc123', rationale: 'looks satisfied but anchor is stale' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+        {
+          taskId: '2',
+          verdict: 'satisfied',
+          citations: [{ sha: 'def456', rationale: 'also looks satisfied but anchor is stale' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['1', '2'],
+      headSha: currentHeadSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    // Gate does not advance: no task is stamped from a stale-anchor verdict.
+    expect(result.stampedTaskIds).toEqual([]);
+
+    // No evidence stamp reaches the sidecar — writeJudgedStamps received an
+    // empty `validated` array (the guard coerced satisfied -> no-verdict
+    // before citation validation ever ran).
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    if (evidenceRaw !== null) {
+      const parsed = JSON.parse(evidenceRaw);
+      expect(parsed.evidenceStamps ?? {}).toEqual({});
+    }
+  });
+});
+
+// ── Whitewash + forged-citation guards under `**Type:** verification`
+// eligibility (no-diff-task-evidence-stamp plan, Task 3; FR-4, FR-5) ───────
+//
+// Task 2 of this plan widened `parsePlanTaskVerifyOnly` to treat a
+// `**Type:** verification` line as verify-only-eligible, in union with the
+// pre-existing `**Verify-only:** yes` marker. `runAttributionLane` reads
+// that same map (attribution-lane.ts ~line 505) to relax the path-overlap
+// check (Check 5) for eligible tasks ONLY — existence, ancestry, non-empty,
+// and not-bookkeeping (Checks 1-4) stay fully enforced regardless of which
+// marker made the task eligible. These tests re-assert the two adversarial
+// guards already covered for `**Verify-only:** yes` residue tasks
+// (`verify-only-prove-closed-task-evidence.acceptance.test.ts` and the
+// stale-anchor test above), but against a task marked eligible via
+// `**Type:** verification` specifically, so a regression that special-cases
+// the literal `Verify-only` marker (rather than the union the map encodes)
+// is caught here.
+describe('Type: verification eligibility gets the same adversarial guards as Verify-only: yes', () => {
+  let dir: string;
+  let planPath: string;
+  let pipelineDir: string;
+  let verdictPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-type-verification-'));
+    pipelineDir = join(dir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    verdictPath = join(pipelineDir, 'attribution-verdict.json');
+    planPath = join(dir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Plan
+
+## Task 2
+Implement the feature.
+
+**Files:** src/task2.ts
+
+## Task 4
+**Type:** verification
+
+Prove the feature is closed via a full-suite check.
+
+**Files:** src/task4.ts
+`,
+      'utf-8',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('a satisfied verdict citing a forged/non-ancestor sha is refused — no semantic-verified stamp — for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+    const forgedSha = 'f'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [{ sha: forgedSha, rationale: 'forged citation' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    // Reachable (cat-file -e passes) but NOT an ancestor of HEAD — the
+    // forged-citation shape: syntactically valid, never actually merged.
+    const gitRunner = vi.fn(async (args: string[]) => {
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    // Refused: the forged/non-ancestor citation never becomes a stamp, even
+    // though the task is eligible via Type: verification (path-overlap
+    // relaxation does not bypass ancestry).
+    expect(result.stampedTaskIds).toEqual([]);
+
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+
+  it('a satisfied verdict with an empty citation list coerces to refused (whitewash guard) for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+
+  it('a satisfied verdict with no testEvidence coerces to refused (whitewash guard) for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+    const citedSha = 'b'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [{ sha: citedSha, rationale: 'no test evidence attached' }],
+          // testEvidence deliberately absent.
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+});
+
+// ── Memo re-key after rebase (Task 6, RED — Story 4) ──────────────────────
+//
+// Per .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md Task 6
+// and adr-2026-07-12-rebase-evidence-stamp-translation.md: an unconflicted
+// rebase changes HEAD's sha, which orphans the attribution memo (keyed on the
+// old HEAD via `computeMemoKey`) even though every judged commit it cites
+// still exists post-rebase (just under new shas, per `buildRewriteMap`).
+// `rekeyMemoAfterRebase` must translate the memo's cached entry onto the new
+// HEAD (recomputing the key, translating `anchor.head`) so `readMemo` HITS
+// for the new HEAD instead of forcing an unnecessary re-judge.
+//
+// `rekeyMemoAfterRebase` does not exist yet (Task 7 implements it) — the
+// import above fails module resolution, which is the expected RED failure.
+describe('rekeyMemoAfterRebase (RED — not implemented until Task 7)', () => {
+  let dir: string;
+  let memoPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-memo-rekey-'));
+    memoPath = join(dir, '.pipeline', 'attribution-memo.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('re-keys an unconflicted rebase: readMemo hits on the new HEAD and anchor.head is translated', async () => {
+    const oldHead = 'a'.repeat(40);
+    const newHead = 'b'.repeat(40);
+    const judgedCommitOld = 'c'.repeat(40);
+    const judgedCommitNew = 'd'.repeat(40);
+    const residueIds = ['1', '2'];
+
+    // Existing memo entry written for the OLD head, citing a judged commit
+    // that survives the rebase (present as a map key -> not in residue).
+    const oldKey = computeMemoKey(oldHead, residueIds);
+    const cachedVerdict = {
+      schema: 1,
+      anchor: { head: oldHead, residue: residueIds },
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: judgedCommitOld, rationale: 'implements the sweep feature' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+    await writeMemo(memoPath, oldKey, JSON.stringify(cachedVerdict));
+
+    // Rewrite map from buildRewriteMap: judgedCommitOld -> judgedCommitNew,
+    // oldHead -> newHead. All judged commits cited in the memo are present
+    // as map keys, so nothing here is residue.
+    const map: Record<string, string> = {
+      [oldHead]: newHead,
+      [judgedCommitOld]: judgedCommitNew,
+    };
+
+    // No shas dropped by the rebase — the sha-residue set is empty.
+    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds, []);
+
+    // The NEW key must now HIT.
+    const newKey = computeMemoKey(newHead, residueIds);
+    const hit = await readMemo(memoPath, newKey);
+    expect(hit).toBeDefined();
+
+    const parsed = JSON.parse(hit as string);
+    expect(parsed.results[0].taskId).toBe('1');
+    expect(parsed.results[0].citations[0].sha).toBe(judgedCommitOld);
+
+    // The entry's verdictAnchor (anchor.head) is translated to the new HEAD.
+    expect(parsed.anchor.head).toBe(newHead);
+  });
+
+  it('leaves the memo untouched when a cited judged commit is itself in the sha-residue set (dropped/unmapped by the rebase)', async () => {
+    // Regression for the Task 7 rework finding: rekeyMemoAfterRebase must
+    // distinguish pending-task-ids (residueIds, used for computeMemoKey) from
+    // the actual sha-residue set (shaResidue, used for the safety guard).
+    // Previously both were satisfied by a single `residueIds` param — the
+    // caller passed task ids there, so `citedShas.some(residueSet.has)` could
+    // never match a 40-char sha and the guard was dead code.
+    const oldHead = 'a'.repeat(40);
+    const newHead = 'b'.repeat(40);
+    const droppedJudgedCommit = 'e'.repeat(40);
+    const residueIds = ['1', '2'];
+
+    const oldKey = computeMemoKey(oldHead, residueIds);
+    const cachedVerdict = {
+      schema: 1,
+      anchor: { head: oldHead, residue: residueIds },
+      results: [
+        {
+          taskId: '1',
+          verdict: 'satisfied',
+          citations: [{ sha: droppedJudgedCommit, rationale: 'implements the sweep feature' }],
+          testEvidence: { command: 'npm test', exit: 0 },
+        },
+      ],
+    };
+    await writeMemo(memoPath, oldKey, JSON.stringify(cachedVerdict));
+
+    // The rewrite map has no entry for droppedJudgedCommit (it was dropped by
+    // the rebase, e.g. squashed away or conflict-resolved out); it shows up
+    // in the sha-residue set instead.
+    const map: Record<string, string> = {
+      [oldHead]: newHead,
+    };
+    const shaResidue = [droppedJudgedCommit];
+
+    await rekeyMemoAfterRebase(dir, map, oldHead, newHead, residueIds, shaResidue);
+
+    // The memo must be left alone: the OLD key still reads back the
+    // untranslated entry, and the NEW key must miss.
+    const stillOld = await readMemo(memoPath, oldKey);
+    expect(stillOld).toBeDefined();
+    const stillOldParsed = JSON.parse(stillOld as string);
+    expect(stillOldParsed.anchor.head).toBe(oldHead);
+
+    const newKey = computeMemoKey(newHead, residueIds);
+    const miss = await readMemo(memoPath, newKey);
+    expect(miss).toBeUndefined();
   });
 });

@@ -16,7 +16,7 @@ import {
   hasInsufficientInfo,
   type Signal,
 } from './complexity.js';
-import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { findArtifactFiles } from './artifacts.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
@@ -41,6 +41,10 @@ const STEP_PROMPTS: Record<StepName, string> = {
   // the fresh-session assembly logic (see resolveRebaseConflict pattern),
   // not by invoking a literal `/build-review` skill.
   build_review: '/build-review',
+  // Engine-native (like complexity/rebase) — the completion predicate reads
+  // or computes the wiring-reachability evidence file directly; no skill
+  // dispatch. Present only to keep the Record<StepName, string> exhaustive.
+  wiring_check: '/conduct wiring-check',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',
   // Runs the architecture-review skill in its as-built compliance-gate mode.
@@ -369,9 +373,30 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     const prompt = STEP_PROMPTS[step];
-    const resume = this.sessionStarted;
+    // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
+    // present, overrides the runner's shared this.sessionId so the branch
+    // never touches (reads or mutates) the main conductor session — see
+    // adr-2026-07-10-concurrent-group-core.md. opts.resume then drives the
+    // dispatch directly instead of being derived from this.sessionStarted.
+    const branchSessionId = opts?.sessionId;
+    const resume = branchSessionId !== undefined ? (opts?.resume ?? false) : this.sessionStarted;
     const autonomous = AUTONOMOUS_STEPS.has(step);
-    const resolved = this.resolvedConfigFor(step, state.complexity_tier);
+    const baseResolved = this.resolvedConfigFor(step, state.complexity_tier);
+
+    // #188 retry-as-escalation: the conductor computes per-attempt model/effort
+    // overrides via escalateAttempt(base, attempt, escalate) and passes them
+    // here. Layer them over the resolved base without mutating it. The escalated
+    // model still flows through modelAvailability.effectiveModel() below (both
+    // the autonomous and interactive dispatch paths read resolved.model), so an
+    // escalated tier that is dead is substituted by the #186 availability ladder.
+    const resolved: ResolvedStepConfig =
+      opts?.modelOverride !== undefined || opts?.effortOverride !== undefined
+        ? {
+            ...baseResolved,
+            model: opts.modelOverride ?? baseResolved.model,
+            effort: opts.effortOverride ?? baseResolved.effort,
+          }
+        : baseResolved;
 
     const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
 
@@ -379,7 +404,7 @@ export class DefaultStepRunner implements StepRunner {
     // limits and stale sessions. Collaborative steps use invokeInteractive()
     // because the user is actively interacting via REPL.
     if (autonomous) {
-      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved);
+      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved, branchSessionId);
     }
 
     // Open a REPL when the step is designed for user conversation AND we're
@@ -449,6 +474,7 @@ export class DefaultStepRunner implements StepRunner {
     resume: boolean,
     systemPrompt: string,
     resolved: ResolvedStepConfig,
+    branchSessionId?: string,
   ): Promise<StepRunResult> {
     // Resolve to a live model up front (skipping any already known-dead
     // model in this process) so a single ladder-covered invocation doesn't
@@ -467,9 +493,14 @@ export class DefaultStepRunner implements StepRunner {
       invokeInteractive: (opts) => this.provider.invokeInteractive(opts),
     };
 
+    // Concurrent-group branch dispatch: use the branch-local session id
+    // when provided, and never mutate this.sessionId/this.sessionStarted —
+    // those belong exclusively to the shared main conductor session.
+    const dispatchSessionId = branchSessionId ?? this.sessionId;
+
     const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
       prompt,
-      sessionId: this.sessionId,
+      sessionId: dispatchSessionId,
       resume,
       dangerouslySkipPermissions: true,
       systemPrompt,
@@ -505,14 +536,19 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     if (result.success) {
-      this.sessionStarted = true;
-      if (this.pipelineDir) {
-        await this.ensurePipelineDir();
-        await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-        await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
-        // After successful first marker write, we know a session has been established.
-        // Mark that for future mid-run detection.
-        this.wasSessionMarkerFoundOnInit = true;
+      // Branch dispatches (branchSessionId set) never touch the shared
+      // main-conductor session state or its markers — see
+      // adr-2026-07-10-concurrent-group-core.md.
+      if (branchSessionId === undefined) {
+        this.sessionStarted = true;
+        if (this.pipelineDir) {
+          await this.ensurePipelineDir();
+          await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
+          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+          // After successful first marker write, we know a session has been established.
+          // Mark that for future mid-run detection.
+          this.wasSessionMarkerFoundOnInit = true;
+        }
       }
       return { success: true, output: result.output };
     }
@@ -711,6 +747,60 @@ export class DefaultStepRunner implements StepRunner {
 
     // Always report attempted: true — the success of the fix is determined by
     // whether the setup step subsequently passes.
+    return { attempted: true };
+  }
+
+  /**
+   * Dispatch a fix-session to attempt to resolve a CI failure on a shipped PR
+   * (ci-fix resolver autofix). Uses a fresh one-shot session (never resumes
+   * the main conductor session) with the failure hint in the prompt so
+   * Claude can diagnose and fix the root cause.
+   *
+   * Always returns `{ attempted: true }` — the method's role is to bootstrap
+   * the fix session. Whether the fix succeeds is determined by whether CI
+   * subsequently passes, not by this method's return value.
+   *
+   * Runs with cwd set to the worktreePath so any diagnostic/remediation
+   * commands operate in the right worktree context.
+   */
+  async resolveCiFailure(ctx: CiFailureContext): Promise<CiFailureAttempt> {
+    const resolved = this.resolvedConfigFor('build');
+
+    const systemPrompt =
+      'You are attempting to fix a CI failure on a shipped pull request.\n' +
+      `Worktree path: ${ctx.worktreePath}\n` +
+      `Pull request: ${ctx.prUrl}\n` +
+      `Feature slug: ${ctx.slug}\n\n` +
+      'Diagnose the failure and attempt to fix the root cause. Use the current ' +
+      'directory (the worktree) for any diagnostic or remediation commands.\n' +
+      'After making fixes, commit and push so CI can be retried automatically.';
+
+    const prompt =
+      'The CI failure hint is:\n' +
+      '```\n' +
+      `${ctx.hint}\n` +
+      '```\n\n' +
+      'Diagnose and fix the CI failure. Explain your diagnosis and the fixes you applied.';
+
+    // Use a fresh one-shot session — never contaminate the main conductor session.
+    const { v4: uuidv4 } = await import('uuid');
+    const sessionId = uuidv4();
+
+    // Walk the fallback ladder so the CI-failure resolver is not blocked by
+    // one model's unavailability.
+    await this.modelAvailability.invokeWithLadder(this.provider, {
+      prompt,
+      sessionId,
+      resume: false,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      model: this.modelAvailability.effectiveModel(resolved.model).model,
+      effort: resolved.effort,
+      cwd: ctx.worktreePath,
+    });
+
+    // Always report attempted: true — the success of the fix is determined by
+    // whether CI subsequently passes.
     return { attempted: true };
   }
 
