@@ -158,6 +158,7 @@ describe('operator-park dashboard precedence acceptance (FR-6): PARKED outranks 
 
     const rendered = renderDashboard(
       { ...state, parked } as InheritedState & { parked: string[] },
+      { includeCompleted: true },
     );
 
     // Correct end-state (fails today: no PARKED group, no exclusion logic).
@@ -215,12 +216,13 @@ describe('operator-park dashboard precedence acceptance (FR-6): PARKED outranks 
       discover: makeDiscover([{ slug: 'eligible-only' }], []),
     };
     const state = await scanInheritedState(deps);
-    const baseline = renderDashboard(state);
+    const baseline = renderDashboard(state, { includeCompleted: true });
 
     // No parked overlay at all — behavior for every existing group is
     // byte-identical to calling renderDashboard directly, unaugmented.
     const rendered = renderDashboard(
       { ...state, parked: [] } as InheritedState & { parked: string[] },
+      { includeCompleted: true },
     );
     expect(extractSection(rendered, 'HALTED')).toBe(extractSection(baseline, 'HALTED'));
     expect(extractSection(rendered, 'IN-PROGRESS')).toBe(extractSection(baseline, 'IN-PROGRESS'));

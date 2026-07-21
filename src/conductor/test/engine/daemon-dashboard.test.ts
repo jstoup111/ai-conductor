@@ -285,7 +285,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       ],
       processedCount: 2,
     };
-    const out = renderDashboard(state);
+    const out = renderDashboard(state, { includeCompleted: true });
     expect(out).toContain('HALTED (1)');
     expect(out).toContain(
       'h1 [L] @prd_audit — rebase conflict  → https://github.com/o/r/pull/7',
@@ -301,17 +301,41 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
   });
 
   it('zero-state renders all four groups at 0', () => {
-    const out = renderDashboard({
-      halted: [],
-      inProgress: [],
-      eligible: [],
-      processed: [],
-      processedCount: 0,
-    });
+    const out = renderDashboard(
+      {
+        halted: [],
+        inProgress: [],
+        eligible: [],
+        processed: [],
+        processedCount: 0,
+      },
+      { includeCompleted: true },
+    );
     expect(out).toContain('HALTED (0)');
     expect(out).toContain('IN-PROGRESS (0)');
     expect(out).toContain('ELIGIBLE (0)');
     expect(out).toContain('PROCESSED (0)');
+  });
+});
+
+describe('engine/daemon-dashboard — renderDashboard includeCompleted option', () => {
+  const state: InheritedState = {
+    halted: [],
+    inProgress: [],
+    eligible: [],
+    processed: [{ slug: 'p1' }],
+    processedCount: 1,
+  };
+
+  it('default call (no opts) omits the PROCESSED group', () => {
+    const out = renderDashboard(state);
+    expect(out).not.toContain('PROCESSED');
+  });
+
+  it('opts.includeCompleted: true includes the PROCESSED group', () => {
+    const out = renderDashboard(state, { includeCompleted: true });
+    expect(out).toContain('PROCESSED (1)');
+    expect(out).toContain('p1');
   });
 });
 
@@ -530,7 +554,7 @@ describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 
         },
       ],
     };
-    const out = renderDashboard(state);
+    const out = renderDashboard(state, { includeCompleted: true });
 
     const slugs = [
       'halted-slug',
@@ -615,7 +639,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
         ['e5', 'no-issue'],
       ]),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     expect(out).toContain('e1 [S] [high]');
     expect(out).toContain('e2 [medium]');
     expect(out).toContain('e3 [low]');
@@ -635,7 +659,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       processedCount: 0,
     };
     const resolution: PriorityResolution = { mode: 'fallback' };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     expect(out).toContain('(priority: chronological fallback)');
     expect(out).toContain('• e1');
     expect(out).toContain('• e2');
@@ -656,7 +680,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       mode: 'banded',
       bands: new Map(),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, { includeCompleted: true }, resolution);
     expect(out).toContain('ELIGIBLE (0)');
     expect(out).toContain('HALTED (0)');
     expect(out).toContain('IN-PROGRESS (0)');
@@ -679,7 +703,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       mode: 'banded',
       bands: new Map([['e1', 'high']]),
     };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, { includeCompleted: true }, resolution);
     // Check all four groups are present with correct structure
     expect(out).toContain('HALTED (1)');
     expect(out).toContain('h1');
@@ -704,7 +728,7 @@ describe('engine/daemon-dashboard — band annotations and fallback marker (Task
       processedCount: 0,
     };
     const resolution: PriorityResolution = { mode: 'fallback' };
-    const out = renderDashboard(state, resolution);
+    const out = renderDashboard(state, undefined, resolution);
     // Lines should exist without band annotations
     expect(out).toContain('• e1');
     expect(out).toContain('• e2');
