@@ -48,6 +48,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- README: "How the Pieces Fit Together" section with a mermaid component diagram
+  of the engineer / daemon / operator roles and how a feature flows from intake
+  issue to merged implementation PR.
+
 - Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
   enforcement**: priority + size + dependency-linking are stamped at every intake
   capture surface (a required-fields intake form + an isolated `intake-label-sync`
