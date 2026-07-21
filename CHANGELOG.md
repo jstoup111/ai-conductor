@@ -28,6 +28,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   that remains a manual, user-owned decision. Per ADR D3, the repo-local
   `.serena/` gitignore line is retained deliberately, since Serena caches may
   still exist locally regardless of harness install behavior.
+- Post-rebase gate re-verification is now delta-aware: `build_review`, `wiring_check`,
+  `manual_test`, `prd_audit`, and `architecture_review_as_built` are preserved (not
+  re-run) after a rebase whose delta doesn't touch that gate's declared surface, instead
+  of being unconditionally invalidated on every rebase. Falls back fail-closed to the
+  previous invalidate-everything behavior whenever the rebase delta or the feature's
+  claimed surface can't be computed. New audit events `rebase_gate_preserved` and
+  `rebase_gate_invalidated` record every preserve/re-run decision (#655).
 
 ## Migration
 
