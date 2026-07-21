@@ -257,6 +257,22 @@ describe('readSnapshot', () => {
     expect(snapshot.resolved).toBeLessThanOrEqual(snapshot.total);
     expect(snapshot.resolved).toBe(1);
   });
+
+  it('falls back to the task-status count without throwing when planPath points at a non-existent file', async () => {
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'completed' },
+        { id: '2', title: 'Second', status: 'pending' },
+      ],
+    });
+
+    const planPath = join(dir, '.docs/plans/does-not-exist.md');
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    expect(snapshot.resolved).toBe(1);
+    expect(snapshot.total).toBe(2);
+  });
 });
 
 describe('BuildProgressWatcher change-driven emission', () => {

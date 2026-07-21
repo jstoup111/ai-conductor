@@ -62,6 +62,13 @@ async function computeResolved(params: {
   if (!planPath) return fallback;
 
   try {
+    // deriveCompletion swallows a missing/unreadable plan file internally
+    // (returns `{}` rather than throwing), so an unresolvable planPath would
+    // otherwise silently derive 0 completed tasks instead of falling back —
+    // confirm the plan is actually readable first so that case degrades to
+    // the task-status count like every other derivation failure here.
+    await readFile(planPath, 'utf-8');
+
     const { deriveCompletion } = await import('./autoheal.js');
     const result = await deriveCompletion(projectRoot, planPath, undefined, undefined, undefined, {
       readOnly: true,
@@ -69,8 +76,9 @@ async function computeResolved(params: {
     const derived = Object.values(result).filter((entry) => entry.completed || entry.status === 'skipped').length;
     return Math.min(derived, total);
   } catch {
-    // Git-derived probe failed (not a repo, no commits, plan unparseable,
-    // etc) — degrade to the task-status-file count rather than throwing.
+    // Git-derived probe failed (not a repo, no commits, plan missing or
+    // unparseable, etc) — degrade to the task-status-file count rather than
+    // throwing.
     return fallback;
   }
 }
