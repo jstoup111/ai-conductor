@@ -153,6 +153,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   (effort, then model tier) rather than repeating an identical attempt, five
   identical retries were wasteful; 3 is the floor that still reaches the
   attempt-3 model-bump rung. `architecture_review` is out of scope and stays 5.
+- Owner-gate: an un-owned merged spec is **no longer silently skipped**. `decideSpecGate`
+  now returns `{ build: true, reason: 'unowned-defaulted' }` for a post-cutover or
+  indeterminate-merge-time un-owned arrival, and `daemon-backlog.ts` default-builds it
+  attributed to the daemon's own resolved owner, emitting a loud, actionable log line naming
+  the slug and defaulted owner and pointing at the remedy (add an explicit `Owner:` marker on
+  the default branch). `other-owner` (stamped with a different operator's identity) remains
+  the only skip reason; grandfathering via `owner_gate_cutover` is unchanged.
+- Owner-gate: intake markers are now **born owned**. `runAuthoring` falls back to machine
+  identity (`readMachineOwnerConfig()`, `spec_owner` → `gh` login) whenever no `ownerConfig`
+  is injected, so every DECIDE-phase write path stamps an `Owner:` marker at authoring time
+  by default instead of relying on the gate to compensate for un-owned arrivals later.
 
 ## Migration
 
