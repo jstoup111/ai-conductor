@@ -1113,6 +1113,41 @@ load:
   GitHub issue state on the next `closeIssue` call, not blindly re-closed or
   re-commented.
 
+#### `overlap-scan` — advisory unmerged-dependent-work scan (#523)
+
+Spec authoring (`/plan`, `/architecture-review`) used to be blind to unmerged sibling
+work: two features could independently plan changes to the same files, with the
+collision only surfacing at merge time. `conduct-ts overlap-scan` (CLI wiring in
+`src/cli.ts`, dispatch in `src/index.ts::detectOverlapScanCommand`) closes that gap as a
+**standalone, advisory, non-interactive** check — it enumerates unmerged sibling
+`spec/*`/PR branches, intersects their changed files against the candidate paths passed
+in, and separately sweeps a linked source-ref issue for open blockers.
+
+**CLI:** `conduct-ts overlap-scan [--files <list>] [--source-ref <owner/repo#N>] [--base <ref>] [--cwd <dir>]`
+
+| Flag | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `--files <list>` | no | — | Comma-separated candidate file paths to check for overlap |
+| `--source-ref <owner/repo#N>` | no | — | Linked issue ref to sweep for open blockers |
+| `--base <ref>` | no | origin default branch | Base branch to diff sibling branches against |
+| `--cwd <dir>` | no | `process.cwd()` | Repository directory to run the scan in |
+
+**Advisory only, always exits 0.** The scan never HALTs the caller and never fails the
+skill invoking it — an unresolvable base branch or other partial failure degrades to a
+skip note inside the rendered report rather than a thrown error (fail-open by design;
+see the orchestrator's per-branch try/catch isolation, mirroring the halt-issues sweep's
+per-entry isolation above). Its only observable effect is the printed report; nothing it
+finds gates plan authoring or the architecture-review verdict.
+
+**Wired into DECIDE (Tasks 8-9, #523):**
+- `skills/architecture-review/SKILL.md` (Medium/Large tier) invokes it before `/plan`
+  even runs, over the paths named in the review's `## Wiring Surface`.
+- `skills/plan/SKILL.md` (Step 8a) invokes it over the union of every task's
+  `**Files:**` paths — the authoritative Files set — before the plan is saved.
+
+Both call sites surface the rendered report to the author as-is and proceed regardless
+of what it reports.
+
 #### Content-aware shipped-work dedup (`.docs/shipped/<stem>.md`, #204, #205)
 
 Two bug reports (#204, #205) traced back to the same root cause: `.daemon/processed/` is a
