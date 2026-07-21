@@ -167,12 +167,15 @@ export function markDownstreamStale(
   state: ConductState,
   targetStep: StepName,
   allStepNames: StepName[],
+  preserve: readonly StepName[] = [],
 ): ConductState {
   const targetIndex = allStepNames.indexOf(targetStep);
   const updated = { ...state };
+  const preserveSet = new Set(preserve);
 
   for (let i = targetIndex + 1; i < allStepNames.length; i++) {
     const step = allStepNames[i];
+    if (preserveSet.has(step)) continue;
     if (updated[step] === 'done') {
       (updated as Record<string, unknown>)[step] = 'stale';
     }

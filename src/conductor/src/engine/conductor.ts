@@ -159,6 +159,7 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
   escalateBuildFailure as defaultEscalateBuildFailure,
@@ -253,9 +254,10 @@ export function navigateBack(
   state: ConductState,
   target: StepName,
   steps: StepDefinition[] = ALL_STEPS,
+  preserve: readonly StepName[] = [],
 ): { state: ConductState; index: number } {
   const allStepNames = steps.map((s) => s.name);
-  const updated = markDownstreamStale(state, target, allStepNames);
+  const updated = markDownstreamStale(state, target, allStepNames, preserve);
   (updated as Record<string, unknown>)[target] = 'pending';
   const index = steps.findIndex((s) => s.name === target);
   return { state: updated, index };
@@ -5325,6 +5327,24 @@ export class Conductor {
       // on a file-changing rebase (Task 11).
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
+        // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
+        // decided to PRESERVE (delta misses its declared surface) must not be
+        // swept `stale` by markDownstreamStale's blanket cascade just because
+        // an upstream gate (e.g. manual_test) was re-opened. Recompute the
+        // same preserved set the verdict-writing side (applyRebaseVerdicts,
+        // Task 6) used, and exclude it from every navigateBack call in this
+        // rebase-origin loop. Strictly scoped to kind === 'changed' (this
+        // branch only runs there) — never affects non-rebase kickbacks.
+        const outcome = this.lastRebaseOutcome;
+        const ranManualTest = getStepStatus(state, 'manual_test') !== 'skipped';
+        const preserved: StepName[] =
+          outcome.featureSurface !== undefined
+            ? (classifyGateInvalidation(
+                outcome.changedCodePaths,
+                outcome.featureSurface,
+                ranManualTest,
+              ).preserved as StepName[])
+            : [];
         for (const target of ['build', 'build_review', 'wiring_check', 'manual_test'] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
@@ -5335,8 +5355,9 @@ export class Conductor {
               evidence: v.kickback.evidence,
               count: 1,
             });
-            // Re-open the staled gate so the selector re-runs it.
-            const nav = navigateBack(state, target, steps);
+            // Re-open the staled gate so the selector re-runs it, without
+            // sweeping any preserved judged gate stale in the process.
+            const nav = navigateBack(state, target, steps, preserved);
             Object.assign(state, nav.state);
             await writeState(this.stateFilePath, state);
           }
