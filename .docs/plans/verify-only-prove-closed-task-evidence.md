@@ -58,7 +58,7 @@ marker; class-scoped arming of the existing judged attribution lane for marked r
 
 **Verify-only:** no
 **Dependencies:** none
-**Files likely touched:** src/conductor/src/engine/autoheal.ts, src/conductor/test/autoheal.test.ts
+**Files likely touched:** src/conductor/src/engine/autoheal.ts, src/conductor/test/engine/autoheal.test.ts
 
 RED: parser tests — a task block with `**Verify-only:** yes` yields `verifyOnly: true`;
 unmarked tasks yield false/absent; malformed values (`maybe`, empty) yield false (fail-closed);
@@ -70,7 +70,7 @@ Commit.
 
 **Verify-only:** no
 **Dependencies:** Task 1
-**Files likely touched:** src/conductor/test/autoheal.test.ts
+**Files likely touched:** src/conductor/test/engine/autoheal.test.ts
 
 RED→GREEN: regression test sweeping representative existing plan fixtures (no markers)
 asserting zero `verifyOnly: true` results and unchanged planTaskIds/paths output. Commit.
