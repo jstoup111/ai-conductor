@@ -13,17 +13,33 @@ describe('engine/manual-test-record-cli', () => {
     it('detects `manual-test-record --skip --reason <r> --pipeline-dir <d>`', () => {
       expect(
         detectManualTestRecordCommand(
-          argv('manual-test-record', '--skip', '--reason', 'r', '--pipeline-dir', 'd'),
+          argv('manual-test-record', '--skip', '--reason', 'r', '--pipeline-dir', '/abs/d'),
         ),
-      ).toEqual({ kind: 'skip', reason: 'r', pipelineDir: 'd' });
+      ).toEqual({ kind: 'skip', reason: 'r', pipelineDir: '/abs/d' });
     });
 
     it('detects `manual-test-record --results <p> --pipeline-dir <d>`', () => {
       expect(
         detectManualTestRecordCommand(
-          argv('manual-test-record', '--results', 'p', '--pipeline-dir', 'd'),
+          argv('manual-test-record', '--results', 'p', '--pipeline-dir', '/abs/d'),
         ),
-      ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: 'd' });
+      ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: '/abs/d' });
+    });
+
+    it('returns {kind:"guide"} when --pipeline-dir is relative (skip mode)', () => {
+      expect(
+        detectManualTestRecordCommand(
+          argv('manual-test-record', '--skip', '--reason', 'r', '--pipeline-dir', 'relative/dir'),
+        ),
+      ).toEqual({ kind: 'guide' });
+    });
+
+    it('returns {kind:"guide"} when --pipeline-dir is relative (results mode)', () => {
+      expect(
+        detectManualTestRecordCommand(
+          argv('manual-test-record', '--results', 'p', '--pipeline-dir', 'relative/dir'),
+        ),
+      ).toEqual({ kind: 'guide' });
     });
 
     it('returns null when argv[2] is not manual-test-record', () => {

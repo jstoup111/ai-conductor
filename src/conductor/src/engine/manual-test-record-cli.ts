@@ -3,7 +3,7 @@
 // — argv detection for the manual-test-record subcommand (flag parser
 // mirrors finish-record-cli.ts's `detectFinishRecordCommand`).
 
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { MANUAL_TEST_SKIP_SENTINEL } from './artifacts.js';
 
@@ -49,6 +49,10 @@ export function detectManualTestRecordCommand(argv: string[]): ManualTestRecordD
 
   if (skip && resultsPath !== undefined) return { kind: 'guide' };
   if (!pipelineDir) return { kind: 'guide' };
+  // --pipeline-dir must be an absolute path (mirrors detectFinishRecordCommand's
+  // dispatch-stage isAbsolute guard in finish-record-cli.ts) — a relative path
+  // refuses via guide dispatch rather than silently proceeding.
+  if (!isAbsolute(pipelineDir)) return { kind: 'guide' };
 
   if (skip) {
     if (!reason) return { kind: 'guide' };
