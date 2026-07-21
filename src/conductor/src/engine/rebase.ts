@@ -346,7 +346,7 @@ export async function writeHalt(
 
 export type RebaseOutcome =
   | { kind: 'noop' }
-  | { kind: 'changed'; changedCodePaths: string[] }
+  | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
   | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
@@ -432,7 +432,7 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
-    const outcome = await classifyClean(git, preTree);
+    const outcome = await classifyClean(git, preTree, mergeBase);
     // Every clean rebase that reaches here rewrites commit shas (the parent
     // changed), regardless of whether classifyClean's code-path heuristic
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
@@ -501,11 +501,19 @@ async function captureFeatureChangelog(
 async function classifyClean(
   git: GitRunner,
   preTree: string,
+  mergeBase?: string,
 ): Promise<RebaseOutcome> {
   const changed = await changedPathsBetween(git, preTree, 'HEAD');
   const codePaths = filterCodeOrTestPaths(changed);
   if (codePaths.length === 0) return { kind: 'noop' };
-  return { kind: 'changed', changedCodePaths: codePaths };
+  // F: the feature's own claimed surface — files the feature's commits
+  // touched, before the rebase (mergeBase..preTree). Threaded onto the
+  // outcome for the delta-aware gate-invalidation classifier (Task 6+);
+  // this task only computes and carries it through.
+  const featureSurface = mergeBase
+    ? await changedPathsBetween(git, mergeBase, preTree)
+    : undefined;
+  return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
 }
 
 /**

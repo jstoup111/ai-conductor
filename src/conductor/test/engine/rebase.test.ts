@@ -740,6 +740,35 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     }
   }, 20000);
 
+  it('Task 5: carries the feature claimed surface F (changedPathsBetween(mergeBase, preTree)) on the `changed` outcome', async () => {
+    const { performRebase, makeGitRunner, changedPathsBetween } = await import(
+      '../../src/engine/rebase.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    const mergeBase = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const preTree = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const git = makeGitRunner(repo);
+    const expectedFeatureSurface = await changedPathsBetween(git, mergeBase, preTree);
+    const outcome = await performRebase(git, repo, 'main');
+
+    expect(outcome.kind).toBe('changed');
+    if (outcome.kind === 'changed') {
+      expect(outcome.featureSurface).toEqual(expectedFeatureSurface);
+      expect(outcome.featureSurface).toContain('a.ts');
+    }
+  }, 20000);
+
   // Story 9 (amended, FR-9 remediation): classifyClean's `noop` is a code-path
   // heuristic for downstream re-verification, NOT the translation gate. A clean
   // rebase over a docs-only base advance reports `noop` yet still rewrites every
