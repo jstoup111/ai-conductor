@@ -177,6 +177,28 @@ export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapR
   return { seamOverlaps, blockers, indeterminate, skipNotes };
 }
 
-export function renderReport(_report: OverlapReport): string {
-  throw new Error('not implemented: renderReport (Task 6)');
+export function renderReport(report: OverlapReport): string {
+  const { seamOverlaps, blockers, indeterminate } = report;
+
+  if (seamOverlaps.length === 0 && blockers.length === 0 && indeterminate.length === 0) {
+    return 'No overlap detected; no open blockers. (Note: renames or name-only diffs may not be detected.)';
+  }
+
+  const lines: string[] = [];
+
+  for (const overlap of seamOverlaps) {
+    lines.push(`Overlap with ${overlap.branch}: ${overlap.files.join(', ')}`);
+  }
+
+  for (const blocker of blockers) {
+    lines.push(`Open blocker: ${blocker.repo}#${blocker.number}`);
+  }
+
+  for (const entry of indeterminate) {
+    lines.push(`Indeterminate: ${entry.detail}`);
+  }
+
+  lines.push('Note: renames or name-only diffs may not be detected by this scan.');
+
+  return lines.join('\n');
 }

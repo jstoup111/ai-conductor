@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan } from '../../src/engine/overlap-scan.js';
+import { enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan, renderReport } from '../../src/engine/overlap-scan.js';
+import type { OverlapReport } from '../../src/engine/overlap-scan.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 import type { BlockerResolver, BlockerVerdict } from '../../src/engine/blocker-resolver.js';
 
@@ -309,5 +310,62 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
     expect(result.seamOverlaps).toEqual([{ branch: 'spec/feature-a', files: ['src/foo.ts'] }]);
     expect(result.blockers).toEqual([]);
     expect(result.skipNotes.some((n) => n.toLowerCase().includes('blocker'))).toBe(true);
+  });
+});
+
+describe('engine/overlap-scan — renderReport (Task 6)', () => {
+  const emptyReport: OverlapReport = {
+    seamOverlaps: [],
+    blockers: [],
+    indeterminate: [],
+    skipNotes: [],
+  };
+
+  it('renders a single clean line and no prompt when the report is empty', () => {
+    const output = renderReport(emptyReport);
+
+    expect(output).toMatch(/no overlap/i);
+    expect(output).toMatch(/no open blocker/i);
+    expect(output.trim().split('\n')).toHaveLength(1);
+    expect(output.toLowerCase()).not.toContain('confirm');
+    expect(output.toLowerCase()).not.toContain('proceed?');
+  });
+
+  it('names branch and file for each seam overlap', () => {
+    const report: OverlapReport = {
+      ...emptyReport,
+      seamOverlaps: [
+        { branch: 'spec/feature-a', files: ['src/foo.ts', 'src/bar.ts'] },
+        { branch: 'origin/spec/feature-c', files: ['src/baz.ts'] },
+      ],
+    };
+
+    const output = renderReport(report);
+
+    expect(output).toContain('spec/feature-a');
+    expect(output).toContain('src/foo.ts');
+    expect(output).toContain('src/bar.ts');
+    expect(output).toContain('origin/spec/feature-c');
+    expect(output).toContain('src/baz.ts');
+  });
+
+  it('lists open blockers', () => {
+    const report: OverlapReport = {
+      ...emptyReport,
+      blockers: [{ repo: 'org/repo', number: 'A' }, { repo: 'org/repo', number: '12' }],
+    };
+
+    const output = renderReport(report);
+
+    expect(output).toContain('org/repo');
+    expect(output).toContain('A');
+    expect(output).toContain('12');
+  });
+
+  it('includes a rename/name-only-diff limitation note', () => {
+    const output = renderReport(emptyReport);
+
+    expect(output.toLowerCase()).toMatch(/rename/);
+    expect(output.toLowerCase()).toMatch(/may not (be )?detect/);
   });
 });
