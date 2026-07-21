@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -168,6 +168,69 @@ describe('readSnapshot', () => {
 
     expect(snapshot.resolved).toBe(1);
     expect(snapshot.total).toBe(2);
+  });
+
+  it('never writes task-evidence.json or task-status.json on disk during a planPath-driven derivation (read-only guard)', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    await writeStatus({
+      tasks: [
+        { id: '1', title: 'First', status: 'pending' },
+        { id: '2', title: 'Second', status: 'pending' },
+      ],
+    });
+    const evidencePath = join(dir, '.pipeline/task-evidence.json');
+    const statusPath = join(dir, '.pipeline/task-status.json');
+    await writeFile(
+      evidencePath,
+      JSON.stringify({
+        evidenceStamps: {},
+        noEvidenceAttempts: 0,
+        migrationGrandfather: [],
+      }),
+    );
+
+    const evidenceBefore = await readFile(evidencePath, 'utf-8');
+    const statusBefore = await readFile(statusPath, 'utf-8');
+    const evidenceMtimeBefore = (await stat(evidencePath)).mtimeMs;
+    const statusMtimeBefore = (await stat(statusPath)).mtimeMs;
+
+    const snapshot = await readSnapshot(dir, planPath);
+
+    // Sanity: the derivation actually ran and found the git-derived progress
+    // (proves this isn't a vacuously-passing no-op test).
+    expect(snapshot.resolved).toBe(1);
+    expect(snapshot.total).toBe(2);
+
+    const evidenceAfter = await readFile(evidencePath, 'utf-8');
+    const statusAfter = await readFile(statusPath, 'utf-8');
+    const evidenceMtimeAfter = (await stat(evidencePath)).mtimeMs;
+    const statusMtimeAfter = (await stat(statusPath)).mtimeMs;
+
+    expect(evidenceAfter).toBe(evidenceBefore);
+    expect(statusAfter).toBe(statusBefore);
+    expect(evidenceMtimeAfter).toBe(evidenceMtimeBefore);
+    expect(statusMtimeAfter).toBe(statusMtimeBefore);
   });
 
   it('falls back to the task-status count when deriveCompletion itself throws (not just a missing file)', async () => {
@@ -1128,5 +1191,82 @@ describe('BuildProgressWatcher settle()', () => {
     await tick(watcher);
 
     expect(emitSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('build-progress derivation never mutates disk state', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-readonly-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('readSnapshot with planPath leaves task-status.json and task-evidence.json byte-for-byte and mtime unchanged', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+    const bareDir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-readonly-origin-'));
+    await execa('git', ['init', '--bare'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
+
+    const planPath = join(dir, '.docs/plans/test-plan.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      planPath,
+      '# Test Plan\n\n### Task 1: First\nDo the first thing.\n\n### Task 2: Second\nDo the second thing.\n',
+    );
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
+
+    await writeFile(join(dir, 'first.txt'), 'content');
+    await execa('git', ['add', 'first.txt'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: first task\n\nTask: 1\n'], { cwd: dir });
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [
+          { id: '1', title: 'First', status: 'pending' },
+          { id: '2', title: 'Second', status: 'pending' },
+        ],
+      }),
+    );
+    // Pre-seed an evidence sidecar so we can prove derivation doesn't touch it either.
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({ tasks: {} }),
+    );
+
+    const statusPath = join(dir, '.pipeline/task-status.json');
+    const evidencePath = join(dir, '.pipeline/task-evidence.json');
+
+    const statusBefore = await readFile(statusPath, 'utf-8');
+    const evidenceBefore = await readFile(evidencePath, 'utf-8');
+    const statusMtimeBefore = (await stat(statusPath)).mtimeMs;
+    const evidenceMtimeBefore = (await stat(evidencePath)).mtimeMs;
+
+    // A small delay so any accidental write would produce an observably
+    // different mtime.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const snapshot = await readSnapshot(dir, planPath);
+    expect(snapshot.total).toBe(2);
+
+    const statusAfter = await readFile(statusPath, 'utf-8');
+    const evidenceAfter = await readFile(evidencePath, 'utf-8');
+    const statusMtimeAfter = (await stat(statusPath)).mtimeMs;
+    const evidenceMtimeAfter = (await stat(evidencePath)).mtimeMs;
+
+    expect(statusAfter).toBe(statusBefore);
+    expect(evidenceAfter).toBe(evidenceBefore);
+    expect(statusMtimeAfter).toBe(statusMtimeBefore);
+    expect(evidenceMtimeAfter).toBe(evidenceMtimeBefore);
   });
 });
