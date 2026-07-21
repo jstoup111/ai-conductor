@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
+  diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
+  without a mermaid fence; enforcement gap captured as #729).
+
 - Owner-gate: added the missing `Owner:` marker to `.docs/intake/intake-only-enforcement.md`
   (spec #719 merged un-owned, so the daemon skipped it forever), and a new integrity check
   fails the suite when any intake doc lacks an `Owner:` marker — un-owned specs can no
