@@ -224,6 +224,35 @@ It's invoked by the daemon's auto-mode finish step (`src/conductor/src/engine/st
 and can also be run manually in place of hand-editing the marker. See
 `src/conductor/README.md` for full detail.
 
+**Manual-test recording (`manual-test-record`, #385).** The daemon's auto-mode
+had no way to record a `manual_test` outcome — only an interactive operator
+could write the completion marker, so unattended builds HALTed at that step.
+A dedicated subcommand records the outcome instead:
+
+```bash
+conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <abs-path>
+conduct-ts manual-test-record --results <path> --pipeline-dir <abs-path>
+```
+
+- `--skip --reason <r>` writes a fresh `<!-- manual-test:skipped -->` SKIP
+  sentinel into the results file; `--results <path>` (or `--results -` for
+  stdin) appends an attempt section with the actual test results.
+- `--pipeline-dir <abs-path>` is required and must be an absolute, existing
+  directory.
+- **Fail-closed:** malformed flags (e.g. `--skip` paired with `--results`, a
+  missing `--reason`, a relative `--pipeline-dir`) refuse before any write.
+- The `manual_test` completion predicate accepts a **fresh** SKIP sentinel as
+  done, with FAIL-precedence (a FAIL row recorded after the sentinel always
+  wins) and anti-laundering guards (a stale or backdated sentinel does not
+  satisfy the gate) — see `src/conductor/README.md` for the predicate's full
+  ordering rules.
+- `manual_test` is now S-tier skippable: a skipped step satisfies downstream
+  `prd_audit` prerequisites the same way a completed one does.
+
+It's invoked by the daemon's auto-mode dispatch in place of hand-writing the
+marker, and can also be run manually. See `src/conductor/README.md` for full
+detail.
+
 **Finish-step engine completion machinery (#499, ADR D1-D5).** The finish step's
 presentation-branch gate now includes several deterministic engine-side mechanisms to repair
 stale PR state, verify draft-readiness, and handle surgical retries (all fail-open on errors):
