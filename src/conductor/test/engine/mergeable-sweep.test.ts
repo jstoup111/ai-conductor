@@ -456,13 +456,21 @@ describe('sweepMergeableLabels — Task 1: MAX_WATCH_ENTRIES cap', () => {
     for (const url of urls) {
       await enrollWatch(tmpDir, entry(url));
     }
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    const logs: string[] = [];
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) });
     const remaining = await readWatch(tmpDir);
     expect(remaining).toHaveLength(MAX_WATCH_ENTRIES);
     // The oldest (front) entries were dropped; survivors are the last
     // MAX_WATCH_ENTRIES of the seeded, append-ordered list.
     const expectedUrls = urls.slice(-MAX_WATCH_ENTRIES);
     expect(remaining.map((e) => e.prUrl)).toEqual(expectedUrls);
+    // Every dropped entry must be logged (no silent truncation).
+    const droppedUrls = urls.slice(0, urls.length - MAX_WATCH_ENTRIES);
+    for (const url of droppedUrls) {
+      expect(logs).toContainEqual(
+        `[mergeable-sweep] registry cap: dropping ${url} (slug ${entry(url).slug}) — over MAX_WATCH_ENTRIES`,
+      );
+    }
   });
 
   it('does not drop any entries when under the cap', async () => {

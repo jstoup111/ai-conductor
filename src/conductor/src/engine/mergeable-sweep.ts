@@ -516,6 +516,14 @@ export async function sweepMergeableLabels({
     // survivors is append-ordered oldest-first, so trim from the front.
     const trimmed =
       survivors.length > MAX_WATCH_ENTRIES ? survivors.slice(-MAX_WATCH_ENTRIES) : survivors;
+    if (trimmed !== survivors) {
+      const dropped = survivors.slice(0, survivors.length - MAX_WATCH_ENTRIES);
+      for (const entry of dropped) {
+        log?.(
+          `[mergeable-sweep] registry cap: dropping ${entry.prUrl} (slug ${entry.slug}) — over MAX_WATCH_ENTRIES`,
+        );
+      }
+    }
     await rewriteWatch(projectRoot, trimmed);
   } catch (err) {
     // Sweep-level exception: swallow so callers are never disrupted (FR-15).
