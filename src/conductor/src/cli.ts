@@ -212,6 +212,20 @@ export function createProgram(): Command {
     .option('--ledger <path>', 'Path to ledger.json file')
     .option('--gh-repo <repo>', 'GitHub repository (owner/name)');
 
+  // Overlap-scan subcommand (#523, Task 7). NON-INTERACTIVE: a standalone,
+  // advisory DECIDE-time scan for unmerged sibling `spec/*` work that touches
+  // the same candidate files as this feature, plus any open blockers on the
+  // linked source-ref. Dispatched in index.ts (detectOverlapScanCommand)
+  // before the pipeline boots; declared here so `--help` lists it. Never
+  // blocks — always exits 0.
+  program
+    .command('overlap-scan')
+    .description('Advisory scan for unmerged sibling-branch overlap on candidate files, plus open blockers on the source ref')
+    .option('--files <list>', 'Comma-separated candidate file paths to check for overlap')
+    .option('--source-ref <ref>', 'Linked issue ref (owner/repo#N) to sweep for open blockers')
+    .option('--base <ref>', 'Base branch to diff sibling branches against (default: origin default branch)')
+    .option('--cwd <dir>', 'Repository directory to run the scan in (default: process.cwd())');
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
