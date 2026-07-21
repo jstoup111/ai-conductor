@@ -5177,12 +5177,22 @@ export class Conductor {
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
       ) {
-        const reason = `loop exited without a terminal verdict (last step: ${resolveLastStep(
-          state,
-          this._breadcrumb,
-        )}) — no DONE/HALT marker was written; parking for inspection (last event: ${
-          this._breadcrumb.lastEventType ?? 'none'
-        }, exit index: ${this._breadcrumb.exitIndex ?? 'n/a'})`;
+        // Diagnostics assembly must never throw and strand the run without a
+        // marker — a corrupted/inaccessible breadcrumb (or a future throw
+        // inside resolveLastStep) must still produce a classifiable HALT, not
+        // an unhandled exception that skips the marker write below.
+        let reason: string;
+        try {
+          reason = `loop exited without a terminal verdict (last step: ${resolveLastStep(
+            state,
+            this._breadcrumb,
+          )}) — no DONE/HALT marker was written; parking for inspection (last event: ${
+            this._breadcrumb.lastEventType ?? 'none'
+          }, exit index: ${this._breadcrumb.exitIndex ?? 'n/a'})`;
+        } catch {
+          reason =
+            'loop exited without a terminal verdict — diagnostics assembly failed; parking for inspection';
+        }
         await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
         await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
           () => {},

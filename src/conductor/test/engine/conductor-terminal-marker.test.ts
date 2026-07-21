@@ -243,6 +243,98 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(emittedReason).toBe(halt.replace(/\n$/, ''));
   });
 
+  it('daemon: with no breadcrumb and no last event, the backstop still HALTs and names the absence', async () => {
+    // Task 5: when the finally backstop's diagnostics-assembly seams have
+    // nothing recorded at all (fresh _breadcrumb, no event ever emitted), the
+    // reason string must still name the absence explicitly rather than
+    // producing a blank/garbled reason — and a marker + event must still be
+    // produced.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'pending',
+    } as ConductState);
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    // Force the breadcrumb to look untouched by the time the finally backstop
+    // runs, by clearing it out the moment the loop emits its last event
+    // (gate_blocked) but before the early return unwinds into finally.
+    events.on('gate_blocked', () => {
+      (conductor as unknown as { _breadcrumb: Record<string, unknown> })._breadcrumb = {};
+    });
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt).toContain('no step recorded');
+    expect(halt).toContain('last event: none');
+    expect(haltEvents.some((r) => r.includes('no step recorded'))).toBe(true);
+  });
+
+  it('daemon: the backstop never throws even when diagnostics assembly itself throws', async () => {
+    // Task 5: if resolveLastStep/breadcrumb access throws while the finally
+    // backstop is building the HALT reason, the backstop must still park the
+    // run with a fixed fallback reason instead of propagating the throw
+    // (which would strand the worktree with no marker at all).
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'pending',
+    } as ConductState);
+
+    const haltEvents: string[] = [];
+    events.on('loop_halt', (e) => {
+      if (e.type === 'loop_halt') haltEvents.push(e.reason);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    // Corrupt the breadcrumb into a throwing accessor right before the early
+    // return unwinds into the finally backstop, so resolveLastStep(state,
+    // breadcrumb) and the breadcrumb field reads inside the reason template
+    // literal all throw.
+    events.on('gate_blocked', () => {
+      Object.defineProperty(conductor, '_breadcrumb', {
+        configurable: true,
+        get() {
+          throw new Error('breadcrumb access boom');
+        },
+      });
+    });
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(halt.trim().length).toBeGreaterThan(0);
+    expect(haltEvents.length).toBeGreaterThan(0);
+  });
+
   it('non-daemon (interactive): a blocked-gate early return writes NO marker', async () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
