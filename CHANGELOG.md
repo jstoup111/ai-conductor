@@ -33,6 +33,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Issue #695 — spec (DECIDE artifacts only) for **intake-only criteria
+  enforcement**: priority + size + dependency-linking are stamped at every intake
+  capture surface (a required-fields intake form + an isolated `intake-label-sync`
+  Action, a `bin/intake-file` filing helper, and a one-shot `bin/intake-backfill`)
+  so every issue is born complete, and the ~100-issue unsized backlog is completed
+  in one default-and-report pass. Per the operator directive "No failures — enforce
+  requirements at intake ONLY", the spec adds **zero** downstream failure modes: the
+  claim path (`dependency-claim.ts`/`ClaimOutcome`), daemon dispatch/build, pipeline
+  gates, and CI stay byte-identical and add no criteria check (a negative-path story
+  asserts this). Supersedes PR #696 (which enforced at claim time via a
+  `needs-criteria` deferral). Artifacts under
+  `.docs/{plans,stories,complexity,conflicts,architecture,decisions,intake}/intake-only-enforcement*`;
+  ADR `.docs/decisions/adr-2026-07-21-intake-only-enforcement.md`. Spec-only — no
+  implementation, no VERSION bump, no migration.
 - Issue #188 — retry-as-escalation ladder: a step's retry now escalates instead
   of repeating an identical attempt. A new pure `escalateAttempt` (with
   `EFFORT_ORDER`, `MODEL_TIER_ORDER`, `bumpEffort`, `bumpModel` in
