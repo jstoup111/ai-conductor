@@ -893,6 +893,208 @@ Implement task 3.
   });
 });
 
+// ── Whitewash + forged-citation guards under `**Type:** verification`
+// eligibility (no-diff-task-evidence-stamp plan, Task 3; FR-4, FR-5) ───────
+//
+// Task 2 of this plan widened `parsePlanTaskVerifyOnly` to treat a
+// `**Type:** verification` line as verify-only-eligible, in union with the
+// pre-existing `**Verify-only:** yes` marker. `runAttributionLane` reads
+// that same map (attribution-lane.ts ~line 505) to relax the path-overlap
+// check (Check 5) for eligible tasks ONLY — existence, ancestry, non-empty,
+// and not-bookkeeping (Checks 1-4) stay fully enforced regardless of which
+// marker made the task eligible. These tests re-assert the two adversarial
+// guards already covered for `**Verify-only:** yes` residue tasks
+// (`verify-only-prove-closed-task-evidence.acceptance.test.ts` and the
+// stale-anchor test above), but against a task marked eligible via
+// `**Type:** verification` specifically, so a regression that special-cases
+// the literal `Verify-only` marker (rather than the union the map encodes)
+// is caught here.
+describe('Type: verification eligibility gets the same adversarial guards as Verify-only: yes', () => {
+  let dir: string;
+  let planPath: string;
+  let pipelineDir: string;
+  let verdictPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'attribution-type-verification-'));
+    pipelineDir = join(dir, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    verdictPath = join(pipelineDir, 'attribution-verdict.json');
+    planPath = join(dir, 'plan.md');
+    await writeFile(
+      planPath,
+      `# Plan
+
+## Task 2
+Implement the feature.
+
+**Files:** src/task2.ts
+
+## Task 4
+**Type:** verification
+
+Prove the feature is closed via a full-suite check.
+
+**Files:** src/task4.ts
+`,
+      'utf-8',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('a satisfied verdict citing a forged/non-ancestor sha is refused — no semantic-verified stamp — for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+    const forgedSha = 'f'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [{ sha: forgedSha, rationale: 'forged citation' }],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    // Reachable (cat-file -e passes) but NOT an ancestor of HEAD — the
+    // forged-citation shape: syntactically valid, never actually merged.
+    const gitRunner = vi.fn(async (args: string[]) => {
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+        return { exitCode: 1, stdout: '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    // Refused: the forged/non-ancestor citation never becomes a stamp, even
+    // though the task is eligible via Type: verification (path-overlap
+    // relaxation does not bypass ancestry).
+    expect(result.stampedTaskIds).toEqual([]);
+
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+
+  it('a satisfied verdict with an empty citation list coerces to refused (whitewash guard) for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [],
+          testEvidence: { command: 'npx vitest run', exit: 0, summary: '1 passed' },
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+
+  it('a satisfied verdict with no testEvidence coerces to refused (whitewash guard) for a Type: verification task', async () => {
+    const headSha = 'a'.repeat(40);
+    const citedSha = 'b'.repeat(40);
+
+    const verdict = {
+      schema: 1,
+      anchor: { head: '', residue: ['4'] },
+      results: [
+        {
+          taskId: '4',
+          verdict: 'satisfied',
+          citations: [{ sha: citedSha, rationale: 'no test evidence attached' }],
+          // testEvidence deliberately absent.
+        },
+      ],
+    };
+
+    const dispatchVerifier = vi.fn(async () => {
+      await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
+      return { success: true, output: 'verdict written', exitCode: 0 };
+    });
+
+    const gitRunner = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }) as unknown as (
+      args: string[],
+    ) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+
+    const result = await runAttributionLane({
+      projectRoot: dir,
+      planPath,
+      residueIds: ['4'],
+      headSha,
+      cutoverArmed: true,
+      isZeroWorkProduct: false,
+      git: gitRunner,
+      dispatchVerifier,
+    });
+
+    expect(result.stampedTaskIds).toEqual([]);
+    const evidenceRaw = await readFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      'utf-8',
+    ).catch(() => null);
+    expect(evidenceRaw ?? '').not.toMatch(/semantic-verified/);
+  });
+});
+
 // ── Memo re-key after rebase (Task 6, RED — Story 4) ──────────────────────
 //
 // Per .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md Task 6

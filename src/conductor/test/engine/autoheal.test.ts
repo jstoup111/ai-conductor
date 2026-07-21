@@ -2675,6 +2675,72 @@ Work on the literal task-N form.
     const src = await readFile(join(process.cwd(), 'src/engine/autoheal.ts'), 'utf-8');
     expect(src).not.toMatch(/--reverse/);
   });
+
+  // Own-diff-before-lane ordering (no-diff-task-evidence-stamp plan, Task 3;
+  // re-asserts under `**Type:** verification` eligibility). A task with a
+  // real Task-trailered commit whose diff overlaps its declared paths is
+  // resolved HERE, in `deriveCompletion`'s mechanical trailer pass, before
+  // the judged-closure lane ever runs. `conductor.ts` derives its residue
+  // set as the task IDs where `derivedCompletion[id].completed` is false
+  // (~line 3267); a task stamped `completed: true` by this pass is therefore
+  // absent from residue regardless of whether it also carries a
+  // `**Type:** verification` (or `**Verify-only:** yes`) eligibility marker
+  // — the mechanical match takes precedence and the lane is never consulted
+  // for it. This holds independent of Task 2's widened eligibility parsing,
+  // since `deriveCompletion` does not consult `parsePlanTaskVerifyOnly` at
+  // all; the marker is orthogonal to own-diff resolution.
+  it('resolves a Type: verification task via the trailer path when its own diff overlaps declared paths — completed:true, evidenced by the trailer commit (own-diff-before-lane ordering)', async () => {
+    const autoheal = await loadAutoheal();
+    const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
+
+    const planPath = join(gitDir, '.docs/plans/test-plan.md');
+    await mkdir(join(gitDir, '.docs/plans'), { recursive: true });
+    const planContent = `# Test Plan
+
+### Task 7: GREEN + full-suite check
+**Type:** verification
+
+Prove the suite passes.
+
+- \`src/verify.ts\`
+`;
+    await writeFile(planPath, planContent);
+    await execa('git', ['add', '.docs/plans/test-plan.md'], { cwd: gitDir });
+    await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: gitDir });
+
+    // A REAL commit trailered to task 7 whose diff overlaps the task's own
+    // declared path — this is the own-diff shape, not a no-diff/verify-only
+    // shape, so it must resolve mechanically.
+    await mkdir(join(gitDir, 'src'), { recursive: true });
+    await writeFile(join(gitDir, 'src/verify.ts'), 'export const verify = 1;');
+    await execa('git', ['add', 'src/verify.ts'], { cwd: gitDir });
+    const commitSha = (
+      await execa('git', ['commit', '-m', 'test: verify\n\nTask: 7\n'], { cwd: gitDir })
+    ) && (await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir })).stdout.trim();
+
+    const commits = await autoheal.listCommitsWithTrailers(gitDir);
+    const evidence = await createTaskEvidence(gitDir);
+
+    const result = await autoheal.deriveCompletion(gitDir, planPath, '', commits, evidence);
+
+    // Type: verification eligibility does not block (or require) the
+    // mechanical trailer match — this task resolves like any other.
+    expect(result).toHaveProperty('7');
+    expect(result['7']).toHaveProperty('completed', true);
+    expect(result['7'].evidencedBy).toBe(commitSha);
+
+    // Stamped via the trailer path specifically (not a judged/semantic
+    // stamp) — confirming the lane was never consulted for this task.
+    expect(evidence.evidenceStamps.has('7')).toBe(true);
+    const stamp = evidence.evidenceStamps.get('7');
+    expect(stamp?.form).toBe('trailer');
+
+    // Own-diff-before-lane ordering: this task is therefore excluded from
+    // the residue set a caller (e.g. conductor.ts's gate-miss branch) would
+    // otherwise compute as `Object.keys(result).filter(id => !result[id].completed)`.
+    const residueIds = Object.keys(result).filter((id) => !result[id].completed);
+    expect(residueIds).not.toContain('7');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
