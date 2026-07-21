@@ -134,6 +134,40 @@ describe('conductor/terminal-marker-guarantee', () => {
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
   });
 
+  it('daemon: run-scoped breadcrumb records the last-advanced step and loop exit index', async () => {
+    // Task 1 (groundwork for the HALT-message fix in Task 4/5): the run()
+    // loop must track which step it last advanced into and at what index it
+    // exited, on a seam observable from outside the loop. Until Task 4 wires
+    // this into the finally backstop's message, we exercise the seam
+    // directly via the private `_breadcrumb` field the implementation
+    // stamps onto `this` for testability.
+    await writeState(statePath, {
+      complexity_tier: 'S',
+      build: 'pending',
+    } as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    await conductor.run();
+
+    const breadcrumb = (conductor as unknown as {
+      _breadcrumb?: { lastAdvancedStep?: string; exitIndex?: number };
+    })._breadcrumb;
+    expect(breadcrumb).toBeDefined();
+    expect(breadcrumb?.lastAdvancedStep).toBe('manual_test');
+    expect(typeof breadcrumb?.exitIndex).toBe('number');
+  });
+
   it('non-daemon (interactive): a blocked-gate early return writes NO marker', async () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.

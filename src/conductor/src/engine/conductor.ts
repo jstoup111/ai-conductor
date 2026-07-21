@@ -760,6 +760,8 @@ export class Conductor {
   private activeSandbox: SandboxBuildEnv | null = null;
   /** Guards the one-time skill relink so it runs before the first build only. */
   private relinkDone = false;
+  /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
+  private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
   private sleep: (ms: number) => Promise<void>;
   private onReviewArtifacts: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
   private onRecovery?: (
@@ -1879,9 +1881,12 @@ export class Conductor {
       return { action: 'return' };
     };
 
+    const breadcrumb = this._breadcrumb;
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
+        breadcrumb.lastAdvancedStep = step.name;
+        breadcrumb.exitIndex = i;
 
         // Skip already-completed work. Without this, re-invoking the conductor
         // against a project with existing `done` / `skipped` state (e.g. after
