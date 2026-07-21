@@ -378,6 +378,17 @@ describe('engine/steps', () => {
     it('returns empty for L tier', () => {
       expect(getSkippableSteps('L')).toEqual([]);
     });
+
+    it('locks the exact S-tier skippable-steps invariant (Task: T4)', () => {
+      expect(getSkippableSteps('S')).toEqual([
+        'architecture_diagram',
+        'architecture_review',
+        'conflict_check',
+        'acceptance_specs',
+        'architecture_review_as_built',
+        'retro',
+      ]);
+    });
   });
 
   // --- isCheckpointStep ---
