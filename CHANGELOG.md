@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
+  `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
+  the judged-closure lane (#733)
+
 - Architecture doc for intake-only-enforcement (#695): converted the ASCII-only
   diagram to a proper ```mermaid flowchart (the only recent non-Small arch doc
   without a mermaid fence; enforcement gap captured as #729).
