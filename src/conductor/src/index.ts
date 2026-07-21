@@ -71,6 +71,11 @@ import {
   makeProductionFinishRecordRunners,
 } from './engine/finish-record-cli.js';
 import {
+  detectManualTestRecordCommand,
+  dispatchManualTestRecord,
+  makeProductionManualTestRecordRunners,
+} from './engine/manual-test-record-cli.js';
+import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
 } from './engine/derive-feedback-cli.js';
@@ -440,6 +445,19 @@ async function main(): Promise<void> {
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
     const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
+    process.exit(code);
+  }
+
+  // Manual-test-record subcommand (`manual-test-record --skip --reason <r>
+  // --pipeline-dir <dir>` or `manual-test-record --results <path>
+  // --pipeline-dir <dir>`) runs NON-INTERACTIVELY and exits — records a
+  // manual-test attempt (skip sentinel or pasted results) into
+  // manual-test-results.md so /manual-test and the daemon's build step can
+  // observe attempt history. Detected before the pipeline fallthrough,
+  // mirroring the finish-record dispatch pattern above.
+  const mtRecordCmd = detectManualTestRecordCommand(process.argv);
+  if (mtRecordCmd) {
+    const code = await dispatchManualTestRecord(mtRecordCmd, process.cwd(), makeProductionManualTestRecordRunners());
     process.exit(code);
   }
 
