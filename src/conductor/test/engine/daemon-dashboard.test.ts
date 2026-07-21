@@ -614,6 +614,86 @@ describe('engine/daemon-dashboard — status output parity (FR-6, Task 17)', () 
   });
 });
 
+describe('engine/daemon-dashboard — ACTIVE groups unaffected by includeCompleted (Task 4 regression)', () => {
+  // Fixed representative state exercising every non-PROCESSED group. Proves the
+  // includeCompleted gating (Task 1) touches ONLY the PROCESSED section — every
+  // other group renders byte-identically whether opts is omitted, false, or true.
+  const representativeState: InheritedState = {
+    halted: [
+      {
+        slug: 'h1',
+        reason: 'rebase conflict',
+        step: 'prd_audit',
+        tier: 'L',
+        prUrl: 'https://github.com/o/r/pull/7',
+      },
+    ],
+    inProgress: [{ slug: 'ip1', step: 'build', tier: 'M' }],
+    eligible: [{ slug: 'e1', tier: 'S' }, { slug: 'e2' }],
+    processed: [
+      { slug: 'p1', prUrl: 'https://github.com/o/r/pull/3' },
+      { slug: 'p2' },
+    ],
+    processedCount: 2,
+    waiting: [
+      {
+        slug: 'w1',
+        verdict: { kind: 'blocked', blockers: [{ repo: 'o/r', number: '10' }] },
+      },
+    ],
+    gated: [
+      {
+        kind: 'spec',
+        slug: 'g1',
+        reason: 'other-owner',
+        otherOwner: 'alice',
+        remedy: 'ask alice',
+      },
+    ],
+    parked: [{ slug: 'pk1', provenance: 'operator', reason: 'manual' }],
+  };
+
+  /** Strip the PROCESSED section (header + member lines) out of a rendered dashboard. */
+  function withoutProcessedSection(out: string): string {
+    return out
+      .split('\n')
+      .filter((line) => !line.startsWith('PROCESSED') && !/^ {2}• p[12]\b/.test(line))
+      .join('\n');
+  }
+
+  it('active groups (PARKED/HALTED/IN-PROGRESS/GATED/WAITING/ELIGIBLE) are byte-identical with opts omitted vs. { includeCompleted: true }', () => {
+    const withoutOpts = renderDashboard(representativeState);
+    const withOpts = renderDashboard(representativeState, { includeCompleted: true });
+    expect(withoutProcessedSection(withoutOpts)).toEqual(withoutProcessedSection(withOpts));
+
+    // Sanity: the two DO differ (PROCESSED gating actually happened), and every
+    // active group's expected content is present.
+    expect(withoutOpts).not.toContain('PROCESSED');
+    expect(withOpts).toContain('PROCESSED (2)');
+    for (const out of [withoutOpts, withOpts]) {
+      expect(out).toContain('PARKED (1)');
+      expect(out).toContain('pk1');
+      expect(out).toContain('HALTED (1)');
+      expect(out).toContain('h1');
+      expect(out).toContain('IN-PROGRESS (1)');
+      expect(out).toContain('ip1');
+      expect(out).toContain('GATED (1)');
+      expect(out).toContain('g1');
+      expect(out).toContain('WAITING (1)');
+      expect(out).toContain('w1');
+      expect(out).toContain('ELIGIBLE (2)');
+      expect(out).toContain('e1');
+      expect(out).toContain('e2');
+    }
+  });
+
+  it('active groups are byte-identical with opts omitted vs. { includeCompleted: false }', () => {
+    const omitted = renderDashboard(representativeState);
+    const explicitFalse = renderDashboard(representativeState, { includeCompleted: false });
+    expect(omitted).toEqual(explicitFalse);
+  });
+});
+
 describe('engine/daemon-dashboard — band annotations and fallback marker (Task 14)', () => {
   it('ELIGIBLE group band annotations: lines in ELIGIBLE section gain [band] suffixes from item band field', () => {
     const state: InheritedState = {
