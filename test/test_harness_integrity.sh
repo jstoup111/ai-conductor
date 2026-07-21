@@ -611,6 +611,18 @@ else
   fi
 fi
 
+# ── Intake Owner markers (owner-gate) ────────────────────────────────────────
+# Every intake doc must carry an Owner: marker — an un-owned spec merged after
+# the owner_gate_cutover is skipped by the daemon forever (silent dead spec).
+echo ""
+echo "Checking intake Owner markers..."
+missing_owner=0
+for f in .docs/intake/*.md; do
+  [ -e "$f" ] || continue
+  grep -qE '^Owner:[[:space:]]*[^[:space:]]+' "$f" || { missing_owner=1; echo "    missing Owner: $f"; }
+done
+assert ".docs/intake/*.md all carry an Owner: marker" "$missing_owner"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
