@@ -119,6 +119,14 @@ function isCommented(line: string): boolean {
 }
 
 /**
+ * Precisely detect a real `-b <branch>` or `--initial-branch <branch>` flag token.
+ * Deliberately does NOT match on `--bare`, which merely contains `-b` as a substring.
+ */
+function hasInitialBranchFlag(line: string): boolean {
+  return /(^|\s|['"[,])(-b|--initial-branch)(\s|=|['"\]])/.test(line);
+}
+
+/**
  * Extract git init patterns from a line. Returns the init invocation if found, null otherwise.
  * Handles: execa, execFile, exec, and local git() calls.
  */
@@ -530,5 +538,14 @@ describe('Structural guard: tmp-outside-target-dir matcher (src/engine/**)', () 
       0,
       'Hardcoded /tmp paths must use os.tmpdir() or carry a // portability-ok: marker'
     );
+  });
+});
+
+describe('Structural guard: hasInitialBranchFlag matcher (git init --bare exemption)', () => {
+  it('detects presence/absence of an initial-branch flag in a git init argv literal', () => {
+    expect(hasInitialBranchFlag("['init', '--bare', '-q']")).toBe(false);
+    expect(hasInitialBranchFlag("['init', '--bare', '-b', 'main']")).toBe(true);
+    expect(hasInitialBranchFlag("['init', '--initial-branch', 'main']")).toBe(true);
+    expect(hasInitialBranchFlag("['init']")).toBe(false);
   });
 });
