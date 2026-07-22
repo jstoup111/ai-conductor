@@ -13,6 +13,7 @@ import {
   writeStallHalt,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
+import { CUSTOM_COMPLETION_PREDICATES } from '../../src/engine/artifacts.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -360,6 +361,18 @@ describe('task-progress', () => {
       // HALT should have first line of the original question
       expect(halt).toContain('First line question');
       expect(halt).toContain(detail);
+    });
+  });
+
+  // Task 16 (#773, verify-only): the demolition of the per-task
+  // evidence-ledger GATING apparatus (Tasks 10-14) and the repointing of
+  // resolved-count telemetry at Task:-trailered commits (Task 15, above)
+  // must leave the wiring_check gate — a same-named-but-unrelated gate,
+  // not part of the deleted evidence-ledger — completely untouched. This
+  // is a lock-in regression assertion, not new production behavior.
+  describe('Task 16: wiring_check gate survives the telemetry demotion (regression lock-in)', () => {
+    it('CUSTOM_COMPLETION_PREDICATES still registers wiring_check', () => {
+      expect(typeof CUSTOM_COMPLETION_PREDICATES.wiring_check).toBe('function');
     });
   });
 });
