@@ -1605,8 +1605,9 @@ export class Conductor {
     await writeState(this.stateFilePath, state);
 
     // Load task evidence sidecar for durable no-evidence counter (Task 12).
-    // The counter tracks consecutive gate misses with no task progress and
-    // persists across engine restarts. It feeds the auto-park trigger (Task 23).
+    // The counter is a durable telemetry record of consecutive gate misses
+    // with no task progress and persists across engine restarts. It no
+    // longer feeds any auto-park trigger (that trigger was removed by #773).
     this.taskEvidence = await createTaskEvidence(this.projectRoot);
 
     // Sweep stale per-session markers from prior invocations. A marker left
