@@ -1982,4 +1982,69 @@ describe('engine/daemon — runDaemon', () => {
       expect(dispatched).toBe(true);
     });
   });
+
+  // ── Task 14 (FR-6): one waiting condition, zero HALT markers ──────────────
+  // Pinning tests alongside the acceptance-shaped RED specs in
+  // test/engine/daemon-build-auth-gate.test.ts. These drive the same real
+  // `runDaemon` with an injected `isBuildAuthMissing` predicate and assert:
+  // (a) exactly one waiting-condition log entry across many idle polls with
+  // N>=2 queued features (transition-only, not per-tick spam), (b) zero
+  // dispatches the whole time, (c) zero HALT markers written — the gate skips
+  // picks entirely, so it never reaches the per-feature HALT-writing path at
+  // all (no `writeHalt`/`onHaltWritten` call is ever made for the gated
+  // features).
+  describe('build-auth credential gate — single waiting condition, no HALT cascade (Task 14, FR-6)', () => {
+    it('missing credential + 3 queued features across many idle polls -> exactly one log entry, zero HALT writes, zero dispatches', async () => {
+      const logs: string[] = [];
+      let haltWrites = 0;
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(3)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => true,
+        onHaltWritten: async () => {
+          haltWrites += 1;
+        },
+        log: (msg) => logs.push(msg),
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 2,
+        once: false,
+        maxIdlePolls: 8,
+      });
+
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+      expect(haltWrites).toBe(0);
+
+      const waitingLines = logs.filter((l) => /build.?auth|credential/i.test(l));
+      // Transition-only: one entry total, not one per idle poll (8 polls ran).
+      expect(waitingLines.length).toBe(1);
+    });
+
+    it('does not re-log the waiting condition after it clears and re-triggers (transition edges only, not a one-shot-forever latch)', async () => {
+      const logs: string[] = [];
+      // missing -> present -> missing again: expect a log on each missing-edge
+      // (2 total), never a log while the state is unchanged tick-to-tick.
+      const sequence = [true, true, true, false, false, true, true];
+      let call = 0;
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(2)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => sequence[Math.min(call++, sequence.length - 1)],
+        log: (msg) => logs.push(msg),
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps as DaemonDeps, {
+        concurrency: 2,
+        once: false,
+        maxIdlePolls: sequence.length,
+      });
+
+      const waitingLines = logs.filter((l) => /missing.*skip|credential missing/i.test(l));
+      expect(waitingLines.length).toBe(2);
+    });
+  });
 });
