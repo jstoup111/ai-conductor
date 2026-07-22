@@ -489,4 +489,51 @@ describe('DOCS_GUARD_HOOK', () => {
     });
     expect(result.status).toBe(2);
   });
+
+  it('blocks a .docs write with a generic reason when the marker is malformed/empty (no step/phase lines)', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'garbage not a marker\n',
+      payload: { tool_name: 'Edit', tool_input: { file_path: '.docs/plans/x.md' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/unknown/);
+    expect(result.stderr).not.toMatch(/phase:\s*$/m);
+  });
+
+  it('blocks a .docs write with a generic reason when the marker file is empty', () => {
+    const result = runDocsGuardHook({
+      markerContent: '',
+      payload: { tool_name: 'Edit', tool_input: { file_path: '.docs/plans/x.md' } },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/unknown/);
+  });
+
+  it('fails closed (exit 2) when the marker is active but the payload is unparseable JSON', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\n',
+      payload: '{ this is not valid json',
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(/could not be determined/);
+  });
+
+  it('fails closed (exit 2) when the marker is active but the payload carries no path', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\n',
+      payload: { tool_name: 'Edit', tool_input: {} },
+    });
+    expect(result.status).toBe(2);
+  });
+
+  it('blocks a NotebookEdit targeting a .docs notebook via notebook_path with no matching allow', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\n',
+      payload: {
+        tool_name: 'NotebookEdit',
+        tool_input: { notebook_path: '.docs/plans/x.ipynb' },
+      },
+    });
+    expect(result.status).toBe(2);
+  });
 });
