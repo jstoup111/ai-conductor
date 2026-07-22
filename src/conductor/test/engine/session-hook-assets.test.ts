@@ -437,4 +437,56 @@ describe('DOCS_GUARD_HOOK', () => {
       expect(result.stderr).toMatch(/rm \.pipeline\/phase-active/);
     }
   );
+
+  it('allows a write to an allowlisted retro prefix', () => {
+    const result = runDocsGuardHook({
+      markerContent:
+        'step: retro\nphase: SHIP\nallow: .docs/retros/\nallow: .docs/stories/\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/retros/x.md' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('allows a write to an allowlisted stories prefix', () => {
+    const result = runDocsGuardHook({
+      markerContent:
+        'step: retro\nphase: SHIP\nallow: .docs/retros/\nallow: .docs/stories/\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/stories/y.md' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('blocks an Edit to a non-allowlisted plan path even with other allow prefixes present', () => {
+    const result = runDocsGuardHook({
+      markerContent:
+        'step: retro\nphase: SHIP\nallow: .docs/retros/\nallow: .docs/stories/\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Edit', tool_input: { file_path: '.docs/plans/z.md' } },
+    });
+    expect(result.status).toBe(2);
+  });
+
+  it('allows a write to the always-allowed release-waivers prefix during BUILD with no per-step allows', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/release-waivers/stem.md' } },
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it('does not match a boundary-unsafe sibling directory (.docs/retros-evil/) against the .docs/retros/ allow prefix', () => {
+    const result = runDocsGuardHook({
+      markerContent:
+        'step: retro\nphase: SHIP\nallow: .docs/retros/\nallow: .docs/stories/\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/retros-evil/x.md' } },
+    });
+    expect(result.status).toBe(2);
+  });
+
+  it('does not match a boundary-unsafe sibling directory (.docs/release-waivers-evil/) against the .docs/release-waivers/ allow prefix', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      payload: { tool_name: 'Write', tool_input: { file_path: '.docs/release-waivers-evil/x.md' } },
+    });
+    expect(result.status).toBe(2);
+  });
 });
