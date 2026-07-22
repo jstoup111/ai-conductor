@@ -17,7 +17,8 @@ import {
   preflightCiFixInvocation,
   defaultCiFixProbe,
 } from './engine/ci-fix.js';
-import { resolveRebaseResolutionAttempts } from './engine/resolved-config.js';
+import { resolveRebaseResolutionAttempts, resolveSelfHostConfig } from './engine/resolved-config.js';
+import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -1224,6 +1225,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
       isPaused: () => isPaused(projectRoot),
+      // Task 13 (FR-6): gate new picks while the daemon's own build
+      // credential is missing/stale/unreadable. Resolved fresh each poll
+      // (mode + token path rarely change, but re-reading keeps this in sync
+      // with a config reload without requiring a daemon restart). API-key
+      // mode never consults the token file — the gate is inert there (FR-2).
+      isBuildAuthMissing: async () => {
+        const { buildAuthMode, buildAuthTokenPath } = resolveSelfHostConfig(config);
+        if (buildAuthMode !== 'daemon-token') return false;
+        const tokenState = await readDaemonBuildToken(buildAuthTokenPath);
+        return tokenState.state !== 'ok';
+      },
       rateLimitEpisode,
       // Task 20: record episode causality when the daemon parks a halted/error
       // outcome, and recover exactly those parks when the episode ends. The
