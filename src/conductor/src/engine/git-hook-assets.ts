@@ -72,17 +72,17 @@ export const PREPARE_COMMIT_MSG_HOOK = [
 
 /**
  * commit-msg hook
- * Validates Task: trailer id (must exist in task-status.json, never task-N format).
- * Rejects empty commits lacking a resolvable Evidence: satisfied-by <sha>.
- * Warns (never blocks) on bundling and subject-vs-trailer mismatch.
- * Chains to $GIT_COMMON_DIR/hooks/commit-msg if it exists.
  *
- * Exemption matrix (all short-circuit before the marker-based rejection):
- * merge commits, amend of a pre-enforcement commit, rebase replay,
- * CONDUCT_ENGINE_COMMIT=1 (engine bookkeeping), and an empty commit carrying
- * a resolvable Evidence: satisfied-by trailer. When the build-step-active
- * marker is absent entirely, enforcement is inactive and unattributed
- * content commits land unchanged (pre-feature behavior).
+ * Task 14 (#773): per-task commit attribution/evidence is demoted from a
+ * gate to telemetry. This hook no longer rejects commits for missing or
+ * unresolvable Task:/Evidence: trailers — that fail-closed behavior
+ * (formerly "Surface A", #505 Task 5/7) is retired.
+ *
+ * What remains: when a Task: trailer IS present, its FORMAT is still
+ * validated (rejects task-N naming drift; rejects an id not present in
+ * task-status.json). Warns (never blocks) on bundling and
+ * subject-vs-trailer mismatch. Chains to $GIT_COMMON_DIR/hooks/commit-msg
+ * if it exists.
  */
 export const COMMIT_MSG_HOOK = [
   '#!/bin/bash',
@@ -110,7 +110,6 @@ export const COMMIT_MSG_HOOK = [
   '# dispatched build step (removed in a finally); its presence already',
   '# encodes "build step running AND attribution enforcement cutover passed" —',
   '# this hook only checks for the file, it never parses config or YAML.',
-  'BUILD_STEP_MARKER="$WORKTREE_ROOT/.pipeline/build-step-active"',
   '',
   '# Exemption: merge commits legitimately lack a Task: trailer — MERGE_HEAD',
   '# is set by git itself for the duration of a merge commit.',
@@ -148,31 +147,12 @@ export const COMMIT_MSG_HOOK = [
   '  exit 0',
   'fi',
   '',
-  'if [[ -f "$BUILD_STEP_MARKER" ]] && [[ -z "$TASK_TRAILER" ]]; then',
-  '  if git diff-index --cached --quiet HEAD 2>/dev/null; then',
-  '    # Exemption (#505 Task 7): empty commit with a resolvable',
-  '    # Evidence: satisfied-by trailer — nothing is being smuggled in, and',
-  '    # the trailer proves the work is already accounted for elsewhere.',
-  '    # Exemption (#570-class): empty commit with Evidence: skipped <reason>',
-  '    # (non-empty reason) — same acceptance form the autoheal deriver',
-  '    # already treats as satisfying a task.',
-  '    if [[ -n "$EVIDENCE_TRAILER" ]] && git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
-  '      :',
-  '    elif [[ -n "$EVIDENCE_SKIPPED_REASON" ]]; then',
-  '      :',
-  '    else',
-  '      echo "commit-msg: rejected — unattributed empty build-step commit (no Task: trailer and no resolvable Evidence: satisfied-by or non-empty Evidence: skipped)" >&2',
-  '      exit 1',
-  '    fi',
-  '  else',
-  '    echo "commit-msg: rejected — unattributed build-step commit (no Task: trailer)" >&2',
-  '    echo "commit-msg: this commit was made while a dispatched build step was active, but the message carries no Task: <id> trailer." >&2',
-  '    echo "commit-msg: make this change from within a dispatched task — the session hooks stamp Task: <id> automatically — or add a Task: <id> trailer yourself before committing." >&2',
-  '    exit 1',
-  '  fi',
-  'fi',
+  '# Task 14 (#773): commit evidence rejection is retired — per-task',
+  '# attribution/evidence is now telemetry, not a gate. Missing Task:/',
+  '# Evidence: trailers on a build-step commit no longer block the commit.',
   '',
-  '# If there\'s a Task: trailer, validate it',
+  '# If there\'s a Task: trailer, validate its FORMAT (this is not gating on',
+  '# presence — it only fires when a trailer was actually supplied).',
   'if [[ -n "$TASK_TRAILER" ]]; then',
   '  # Reject task-N format (naming drift)',
   '  if [[ "$TASK_TRAILER" =~ ^task- ]]; then',
@@ -199,24 +179,9 @@ export const COMMIT_MSG_HOOK = [
   '    fi',
   '  fi',
   '',
-  '  # Check if this is an empty commit',
-  '  IS_EMPTY=$(git diff-index --cached --quiet HEAD 2>/dev/null && echo "yes" || echo "no")',
-  '  if [[ "$IS_EMPTY" == "yes" ]]; then',
-  '    # Empty commit must have either a resolvable Evidence: satisfied-by sha',
-  '    # or a non-empty Evidence: skipped <reason>.',
-  '    if [[ -z "$EVIDENCE_TRAILER" ]] && [[ -z "$EVIDENCE_SKIPPED_REASON" ]]; then',
-  '      echo "commit-msg: rejected — empty commit requires Evidence: satisfied-by <sha> or Evidence: skipped <reason>" >&2',
-  '      exit 1',
-  '    fi',
-  '',
-  '    # If a satisfied-by sha was provided, it must resolve. (An',
-  '    # Evidence: skipped reason alone, with no satisfied-by trailer, needs',
-  '    # no sha resolution.)',
-  '    if [[ -n "$EVIDENCE_TRAILER" ]] && ! git cat-file -e "$EVIDENCE_TRAILER^{commit}" 2>/dev/null; then',
-  '      echo "commit-msg: rejected — Evidence: satisfied-by $EVIDENCE_TRAILER not found in repository" >&2',
-  '      exit 1',
-  '    fi',
-  '  fi',
+  '  # Task 14 (#773): the empty-commit Evidence: requirement is retired —',
+  '  # evidence trailers are telemetry now, not a gate. An empty build-step',
+  '  # commit with a Task: trailer no longer needs an Evidence: trailer.',
   '',
   '  # Warn (don\'t block) on bundling check — best effort based on files mapping',
   '  if [[ -f "$TASK_STATUS_FILE" ]]; then',

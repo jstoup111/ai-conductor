@@ -220,12 +220,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       await rm(repoDir, { recursive: true, force: true });
     });
 
-    it('rejects a non-empty commit with no Task: trailer when the marker is present', async () => {
+    it('Task 14: accepts a non-empty commit with no Task: trailer even when the marker is present (rejection demoted to telemetry)', async () => {
       await writeMarker();
       const res = await commitFile('a.txt', 'a', 'feat: unattributed change');
-      expect(res.code).not.toBe(0);
-      expect(res.stderr).toMatch(/Task:/);
-      expect(res.stderr.toLowerCase()).toMatch(/dispatch|task/);
+      expect(res.code).toBe(0);
     });
 
     it('passes a commit stamped with a Task: trailer while the marker is present', async () => {
@@ -265,16 +263,15 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(body.stdout).not.toMatch(/^Task: 999$/m);
     });
 
-    it('rejects an unattributed commit made with git commit -m (direct form)', async () => {
+    it('Task 14: accepts an unattributed commit made with git commit -m (direct form)', async () => {
       await writeMarker();
       await writeFile(join(repoDir, 'd.txt'), 'd', 'utf-8');
       await git('add', 'd.txt');
       const res = await git('commit', '-m', 'feat: direct unattributed');
-      expect(res.code).not.toBe(0);
-      expect(res.stderr).toMatch(/Task:/);
+      expect(res.code).toBe(0);
     });
 
-    it('rejects an unattributed commit produced via an editor-driven (interactive-style) commit-msg file', async () => {
+    it('accepts an unattributed commit produced via an editor-driven (interactive-style) commit-msg file', async () => {
       await writeMarker();
       await writeFile(join(repoDir, 'e.txt'), 'e', 'utf-8');
       await git('add', 'e.txt');
@@ -290,13 +287,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
       const msgFile = join(repoDir, '.git-editmsg-test');
       await writeFile(msgFile, 'feat: interactive unattributed\n', 'utf-8');
       void absCommonDir;
-      try {
-        await execFileAsync(hookPath, [msgFile], { cwd: repoDir });
-        throw new Error('expected commit-msg hook to reject');
-      } catch (err) {
-        const e = err as { code?: number };
-        expect(e.code).not.toBe(0);
-      }
+      await expect(execFileAsync(hookPath, [msgFile], { cwd: repoDir })).resolves.toBeDefined();
     });
   });
 
@@ -370,11 +361,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
     });
 
-    it('still rejects a non-merge, non-amend, non-rebase commit without a trailer when the marker is present', async () => {
+    it('Task 14: accepts a non-merge, non-amend, non-rebase commit without a trailer when the marker is present', async () => {
       await writeMarker();
       const res = await commitFile('plain.txt', 'plain', 'feat: plain unattributed change');
-      expect(res.code).not.toBe(0);
-      expect(res.stderr).toMatch(/Task:/);
+      expect(res.code).toBe(0);
     });
   });
 
@@ -429,10 +419,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
     });
 
-    it('rejects an empty commit with the marker present, no Task: trailer, and no Evidence: satisfied-by trailer', async () => {
+    it('Task 14: accepts an empty commit with the marker present, no Task: trailer, and no Evidence: satisfied-by trailer', async () => {
       await writeMarker();
       const res = await git('commit', '--allow-empty', '-m', 'feat: empty and unattributed');
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
     });
 
     it('lands an empty commit with a Task: trailer plus Evidence: skipped <reason> and no Evidence: satisfied-by', async () => {
@@ -446,7 +436,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
     });
 
-    it('rejects an empty commit with Evidence: skipped and an empty/whitespace-only reason', async () => {
+    it('Task 14: accepts an empty commit with Evidence: skipped and an empty/whitespace-only reason (evidence no longer gates)', async () => {
       await writeMarker();
       const res = await git(
         'commit',
@@ -454,7 +444,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
         '-m',
         'feat: skipped with blank reason\n\nTask: 1\nEvidence: skipped    ',
       );
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
     });
 
     it('lands an empty commit with Evidence: skipped <reason> and no Task: trailer', async () => {
@@ -468,7 +458,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(res.code).toBe(0);
     });
 
-    it('still rejects an empty commit with an unresolvable Evidence: satisfied-by sha (unchanged behavior)', async () => {
+    it('Task 14: accepts an empty commit with an unresolvable Evidence: satisfied-by sha (evidence no longer gates)', async () => {
       await writeMarker();
       const res = await git(
         'commit',
@@ -476,7 +466,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
         '-m',
         'feat: unresolvable satisfied-by\n\nEvidence: satisfied-by 0000000000000000000000000000000000000000',
       );
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
     });
 
     it('lands a non-empty, trailer-less commit when CONDUCT_ENGINE_COMMIT=1 and the marker is present', async () => {

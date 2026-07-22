@@ -2494,11 +2494,21 @@ describe('engine/conductor', () => {
               join(dir, '.pipeline/halt-user-input-required'),
               `Stall ${buildAttemptCount}`,
             );
-            const tasks = Array.from({ length: buildAttemptCount }, (_, i) => ({
-              id: i + 1,
-              status: 'completed',
-            }));
-            tasks.push({ id: buildAttemptCount + 100, status: 'pending' });
+            // Task 1 (the plan's only task) stays pending across every
+            // attempt so the build predicate's plan-scoped completion check
+            // (artifacts.ts's `build` predicate only inspects rows whose id
+            // appears in the plan, #773 Task 10) never reports done — the
+            // extra, non-plan-referenced rows below exist solely to grow
+            // the resolved-task count and keep the durable no-evidence
+            // auto-park counter (a DIFFERENT mechanism) from firing first
+            // and masking the budget-exhaustion HALT this test is pinning.
+            const tasks = [
+              { id: 1, status: 'pending' },
+              ...Array.from({ length: buildAttemptCount }, (_, i) => ({
+                id: i + 101,
+                status: 'completed',
+              })),
+            ];
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
               JSON.stringify({ tasks }),

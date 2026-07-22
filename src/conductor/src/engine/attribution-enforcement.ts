@@ -180,17 +180,13 @@ export interface ZeroWorkDetectionParams {
  * (a fully-resolved plan is never "zero work", regardless of HEAD/dispatch
  * counts), and only then the actual zero-work condition.
  */
-export async function detectZeroWorkProduct(params: ZeroWorkDetectionParams): Promise<boolean> {
-  const { projectRoot, config, headBefore, headAfter, now } = params;
-
-  if (!isEnforcementConfigured(config, now)) return false;
-  if (await haltMarkerExists(projectRoot)) return false;
-  if (await areAllTasksComplete(projectRoot)) return false;
-
-  const dispatchCount = await readDispatchCount(projectRoot);
-  const headUnchanged = headBefore === headAfter;
-
-  return dispatchCount === 0 || headUnchanged;
+export async function detectZeroWorkProduct(_params: ZeroWorkDetectionParams): Promise<boolean> {
+  // Task 14 (#773): zero-work-product detection is demoted from a gate to
+  // telemetry — it must never trigger a build-step kickback/retry,
+  // regardless of `attribution_enforcement_cutover` config state. Pinned to
+  // `false` unconditionally rather than deleted, so callers (conductor.ts)
+  // keep a stable, typed call site if/when this becomes real telemetry.
+  return false;
 }
 
 // Task 3 (#671): unattributed-dispatch detection. Distinct from
@@ -216,6 +212,12 @@ export function detectUnattributedDispatch(
   attribution: DispatchAttribution,
   threshold = 3,
 ): UnattributedDispatchResult | null {
+  // Task 14 (#773): this detector only ever drives the loud
+  // `unattributed_dispatch` telemetry event (conductor.ts) — it does not
+  // gate, kick back, or auto-park anything, so it is unaffected by the
+  // enforcement-to-advisory demotion (that demotion targets blocking/
+  // parking behavior, e.g. detectZeroWorkProduct below). Detection logic
+  // stays live so the streak signal keeps firing.
   const { unattributed } = attribution;
   if (unattributed <= 0) return null;
   if (unattributed < threshold) return null;

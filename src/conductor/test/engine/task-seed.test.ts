@@ -66,6 +66,45 @@ Content with \`src/file3.ts\`
     });
   });
 
+  describe('Task 14: reseed no longer restores rows from evidence stamps', () => {
+    it('creates a plan task not present in task-status.json as pending, even when an evidence stamp exists for it', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      // No task-status.json yet — task-status.json is the sole source of
+      // truth (Task 10, #773); an evidence stamp must NOT resurrect a row
+      // as 'completed' out of nowhere.
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {
+            '1': { sha: 'abc123', form: 'commit' },
+          },
+          noEvidenceAttempts: 0,
+          migrationGrandfather: [],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: First Task
+Content
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf-8'));
+      const task1 = status.tasks.find((t: any) => t.id === '1');
+      expect(task1).toBeDefined();
+      expect(task1.status).toBe('pending');
+      expect(task1.commit).toBeUndefined();
+    });
+  });
+
   describe('preserve completed rows', () => {
     it('preserves completed rows with engine stamps during re-seed', async () => {
       // Setup: existing task-status.json with a completed task
@@ -422,7 +461,7 @@ Content
       expect(status.tasks).toHaveLength(2);
     });
 
-    it('restores wiped file with evidence preserved', async () => {
+    it('Task 14: wiped file re-seeds as pending, no longer restored from evidence sidecar', async () => {
       // Setup: task-status.json with completed task
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(
@@ -470,10 +509,12 @@ Content
       const secondContent = await fsPromises.readFile(statusPath, 'utf-8');
       const status = JSON.parse(secondContent);
 
-      // Task 1 should be restored as completed (evidence preserved)
+      // Task 1 is NOT restored from the evidence sidecar (Task 14, #773) —
+      // task-status.json is the sole source of truth, so a wipe re-seeds
+      // the row fresh as pending.
       const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('completed');
-      expect(task1.commit).toBe('abc123');
+      expect(task1.status).toBe('pending');
+      expect(task1.commit).toBeUndefined();
     });
   });
 

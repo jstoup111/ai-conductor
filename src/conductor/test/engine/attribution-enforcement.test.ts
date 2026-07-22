@@ -283,7 +283,7 @@ describe('detectZeroWorkProduct', () => {
     writeFileSync(join(root, '.pipeline', 'halt-user-input-required'), 'stalled\n', 'utf8');
   }
 
-  it('detects zero dispatches + unchanged HEAD + incomplete tasks + no halt marker + enforcement active', async () => {
+  it('Task 14: does NOT detect zero-work-product even with zero dispatches + unchanged HEAD + incomplete tasks + no halt marker (enforcement demoted to advisory)', async () => {
     writeIncompleteTaskStatus();
     const detected = await detectZeroWorkProduct({
       projectRoot: root,
@@ -291,7 +291,7 @@ describe('detectZeroWorkProduct', () => {
       headBefore: 'sha-a',
       headAfter: 'sha-a',
     });
-    expect(detected).toBe(true);
+    expect(detected).toBe(false);
   });
 
   it('does NOT detect when the halt marker is present', async () => {
@@ -306,7 +306,7 @@ describe('detectZeroWorkProduct', () => {
     expect(detected).toBe(false);
   });
 
-  it('detects when dispatches happened but zero commits (HEAD unchanged)', async () => {
+  it('Task 14: does NOT detect zero-work-product when dispatches happened but zero commits (HEAD unchanged) — advisory-only', async () => {
     writeIncompleteTaskStatus();
     writeDispatchCount(3);
     const detected = await detectZeroWorkProduct({
@@ -315,7 +315,7 @@ describe('detectZeroWorkProduct', () => {
       headBefore: 'sha-a',
       headAfter: 'sha-a',
     });
-    expect(detected).toBe(true);
+    expect(detected).toBe(false);
   });
 
   it('does NOT detect when dispatches happened and HEAD moved (real work)', async () => {
@@ -445,10 +445,6 @@ describe('detectUnattributedDispatch', () => {
   });
 
   it('triggers on default threshold for a mixed cycle that is NOT fully unattributed — rules out an all-unattributed-ratio interpretation', () => {
-    // attributed:1, unattributed:3 meets the same default threshold as the
-    // all-none (0/3) case above but is not a 100%-unattributed cycle. A
-    // ratio-based ("ALL dispatches unattributed") implementation would stay
-    // quiet here; the correct count-based implementation must still trigger.
     const result = detectUnattributedDispatch({ attributed: 1, unattributed: 3, taskIds: ['1'] });
     expect(result).toEqual({
       triggered: true,
@@ -639,7 +635,7 @@ describe('zero-work kickback (#505 TS-16)', () => {
     await writeFile(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
   }
 
-  it('increments noEvidenceAttempts with reason zero_work_product and injects a corrective preamble on the next dispatch', async () => {
+  it('Task 14: does NOT kick back a zero-work build attempt — enforcement demoted to advisory, so a single zero-work build attempt is left as-is', async () => {
     writeIncompleteTaskStatus();
     await seedStateAtBuild();
 
@@ -649,21 +645,14 @@ describe('zero-work kickback (#505 TS-16)', () => {
     });
 
     let buildCalls = 0;
-    let secondCallRetryReason: string | undefined;
+    const retryReasons: (string | undefined)[] = [];
     const runner: StepRunner = {
       run: async (step: StepName, _state, opts): Promise<StepRunResult> => {
         if (step === 'build') {
           buildCalls++;
-          if (buildCalls === 1) {
-            // First attempt: dispatched nothing, no commits — the
-            // detector's exact zero-work condition. Leave task-status
-            // incomplete so the completion gate misses.
-          } else {
-            secondCallRetryReason = opts?.retryReason;
-            // Second attempt resolves the task so the retry loop can exit
-            // cleanly instead of exhausting max_retries.
-            writeCompleteTaskStatus();
-          }
+          retryReasons.push(opts?.retryReason);
+          // Dispatched nothing, no commits — the (now-inert) detector's
+          // exact zero-work condition. Task-status stays incomplete.
         }
         return { success: true };
       },
@@ -680,19 +669,20 @@ describe('zero-work kickback (#505 TS-16)', () => {
 
     await conductor.run();
 
-    expect(buildCalls).toBeGreaterThanOrEqual(2);
-    expect(secondCallRetryReason).toMatch(/zero progress/i);
-    expect(secondCallRetryReason).toContain('Previous attempt made zero progress');
-
-    // #570 guard: the kickback path's own `zero_work_product` event must
-    // still fire post-fix — this is a wholly separate signal from the
-    // attribution judge-lane dispatch that #570 modified.
-    expect(emittedTypes).toContain('zero_work_product');
+    // No zero-work kickback: the detector never fires because
+    // isEnforcementConfigured is now pinned to false. Retries may still
+    // happen for unrelated reasons (e.g. incomplete task-status under
+    // verifyArtifacts), but never with a "zero progress" reason.
+    expect(emittedTypes).not.toContain('zero_work_product');
+    for (const reason of retryReasons) {
+      if (reason !== undefined) {
+        expect(reason).not.toMatch(/zero progress/i);
+      }
+    }
 
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
     const evidence = await createTaskEvidence(dir);
-    expect(evidence.noEvidenceAttempts).toBeGreaterThan(0);
-    expect(evidence.noEvidenceReasons).toContain('zero_work_product');
+    expect(evidence.noEvidenceReasons ?? []).not.toContain('zero_work_product');
   });
 
   it('#570 guard: a progress-making attempt resets the no-evidence counter and emits no zero_work_product event', async () => {

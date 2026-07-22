@@ -203,29 +203,12 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       existingStatus = { tasks: [] };
     }
 
-    // Load task evidence (sidecar)
+    // Load task evidence (sidecar). Task 14 (#773): no longer consulted to
+    // restore/derive task-status.json rows (see the plan-task upsert loop
+    // below) — loaded here only so its file continues to be maintained via
+    // `evidence.write()` for telemetry/downstream consumers that still read
+    // the sidecar directly (e.g. autoheal's derive step).
     const evidence = await createTaskEvidence(projectRoot);
-
-    // #636: canonical-aware stamp lookup. Evidence stamps may be keyed under
-    // either grammar (`T3` or `3`); fold both to the canonical key so a
-    // T-prefixed plan task finds a bare-keyed stamp and vice versa.
-    const stampFor = (id: string): { sha?: string } | undefined => {
-      const direct = evidence.evidenceStamps.get(id);
-      if (direct) return direct;
-      const canon = canonicalTaskId(id);
-      for (const [k, v] of evidence.evidenceStamps.entries()) {
-        if (canonicalTaskId(k) === canon) return v;
-      }
-      return undefined;
-    };
-    const hasGrandfather = (id: string): boolean => {
-      if (evidence.migrationGrandfather.has(id)) return true;
-      const canon = canonicalTaskId(id);
-      for (const k of evidence.migrationGrandfather) {
-        if (canonicalTaskId(k) === canon) return true;
-      }
-      return false;
-    };
 
     // Merge logic. The map is keyed by the CANONICAL task id (#636) so a plan
     // whose header is `### T<N>` and a pre-existing task-status.json that split
@@ -279,29 +262,17 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         existing.name = planTask.name;
         existing.status = 'pending';
       } else {
-        // Task doesn't exist in current status file. Check evidence to see if it should be restored.
-        const stamp = stampFor(taskId);
-        if (stamp) {
-          // Has evidence stamp — restore as completed
-          const restoredTask: TaskStatusRecord = {
-            id: taskId,
-            name: planTask.name,
-            status: 'completed',
-          };
-          // Copy commit info if available in evidence
-          if (stamp.sha) {
-            restoredTask.commit = stamp.sha;
-          }
-          taskMap.set(canonicalId, restoredTask);
-        } else {
-          // No evidence — create as pending
-          const newTask: TaskStatusRecord = {
-            id: taskId,
-            name: planTask.name,
-            status: 'pending',
-          };
-          taskMap.set(canonicalId, newTask);
-        }
+        // Task doesn't exist in current status file. Task 14 (#773): the
+        // evidence sidecar is no longer consulted to restore/derive rows —
+        // task-status.json rows are the sole source of truth (Task 10);
+        // re-deriving a row FROM the evidence ledger is backwards. Always
+        // create as pending.
+        const newTask: TaskStatusRecord = {
+          id: taskId,
+          name: planTask.name,
+          status: 'pending',
+        };
+        taskMap.set(canonicalId, newTask);
       }
     }
 
