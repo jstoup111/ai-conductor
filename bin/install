@@ -179,12 +179,6 @@ check_installation() {
   else
     warn "puppeteer MCP server not installed"
   fi
-  if command -v rtk &>/dev/null; then
-    ok "rtk installed (token usage reduction)"
-  else
-    warn "rtk not installed — token usage reduction unavailable"
-  fi
-
   # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
@@ -459,32 +453,6 @@ install_dependencies() {
   # Markdown viewer — handled by configure_md_viewer (below). Earlier versions
   # hard-installed glow here; the viewer is now user-selectable and installed
   # on-demand inside configure_md_viewer.
-
-  # rtk — reduces token usage in Claude Code sessions
-  if command -v rtk &>/dev/null; then
-    ok "rtk already installed"
-  else
-    info "Installing rtk (token usage reduction)..."
-    local rtk_installed=false
-    if command -v brew &>/dev/null; then
-      # `|| true`: a failed brew install must not abort the script under set -e
-      brew install rtk 2>/dev/null && rtk_installed=true || true
-    fi
-    if ! $rtk_installed && command -v cargo &>/dev/null; then
-      cargo install --git https://github.com/rtk-ai/rtk 2>/dev/null && rtk_installed=true || true
-    fi
-    # Fallback: official install script (installs to ~/.local/bin)
-    if ! $rtk_installed; then
-      if curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh 2>/dev/null | sh 2>/dev/null; then
-        rtk_installed=true
-      fi
-    fi
-    if $rtk_installed; then
-      ok "rtk installed"
-    else
-      warn "rtk not installed — install manually: https://github.com/rtk-ai/rtk"
-    fi
-  fi
 
   # @modelcontextprotocol/server-puppeteer — MCP server for browser automation
   if command -v node &>/dev/null; then
@@ -1078,20 +1046,6 @@ install() {
   local settings_file="${HOME}/.claude/settings.json"
   configure_permissions "$settings_file" || warn "Permissions configuration incomplete — continuing"
   configure_hooks "$settings_file" || warn "Hooks configuration incomplete — continuing"
-
-  # 4b. rtk init — (re)install Claude Code hook for transparent command rewriting.
-  # Runs on every install AND every --update (unlike install_dependencies, which
-  # is skipped on --update): the RTK binary bootstrap is one-time, but the hook
-  # itself can be dropped by an update and must be re-asserted every run. Idempotent
-  # — safe to call repeatedly — so no "already initialized" short-circuit is needed.
-  if command -v rtk &>/dev/null; then
-    info "Initializing rtk for Claude Code..."
-    if rtk init -g --auto-patch; then
-      ok "rtk initialized (restart Claude Code to activate)"
-    else
-      warn "rtk init failed — run 'rtk init -g' manually"
-    fi
-  fi
 
   # 5. Check PATH (pure bash — no external tools, so it can never abort)
   if [[ ":$PATH:" == *".local/bin"* ]]; then

@@ -37,6 +37,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Removed
 
+- RTK ("Rust Token Killer") removed completely from the harness install path.
+  `bin/install` no longer installs the `rtk` binary (the brew/cargo/curl bootstrap
+  block), no longer runs `rtk init -g --auto-patch` on every install *and* `--update`
+  (the source of RTK's Claude Code hook "keeps reinstalling" behavior — every daemon
+  restart re-ran the installer and re-asserted the hook), and the `--check` path no
+  longer reports on `rtk`. The harness neither installs nor uninstalls RTK; whether to
+  use RTK is now entirely a user-owned decision in their own global Claude Code config.
+  (Removing the harness's reinstall does not touch an operator's already-present RTK
+  hook — remove that manually if desired.)
 - Serena removed from the daemon's install path, bootstrap MCP registration,
   `HARNESS.md` guidance, and the `GITIGNORE_SKELETON` — Serena semantic-search
   tooling is out of scope for the daemon (#753, superseding #682/#728). Per
