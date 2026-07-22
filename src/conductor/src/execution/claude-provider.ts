@@ -414,21 +414,40 @@ export class ClaudeProvider implements LLMProvider {
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const args = this.buildArgs(options);
 
-    if (options.prompt) {
-      args.push('--print', '--output-format', 'text', '-p', options.prompt);
+    // Deliver the prompt on STDIN, never as a `-p <prompt>` command-line
+    // argument. A single argv string is capped at MAX_ARG_STRLEN (128 KiB on
+    // Linux); the build_review grader's prompt (plan + full diff) routinely
+    // exceeds that, and passing it as an argument makes exec() fail instantly
+    // with E2BIG ("Argument list too long") BEFORE claude starts — surfacing as
+    // an empty-output, non-zero exit that no classifier catches and that halts
+    // every large feature at build_review. `claude --print` reads the prompt
+    // from stdin when no positional prompt is given, which has no length limit.
+    const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
+    if (hasPrompt) {
+      args.push('--print', '--output-format', 'text');
     }
 
     // Stream stdout/stderr to terminal while also capturing for analysis.
-    // stdin is explicitly closed: without this, Claude's CLI waits ~3s for
-    // piped input on TTY and logs "no stdin data received in 3s" per call.
-    const result = await execa('claude', args, {
-      reject: false,
-      stdin: 'ignore',
-      stdout: ['pipe', 'inherit'],
-      stderr: ['pipe', 'inherit'],
-      env: this.buildEnv(options),
-      cwd: options.cwd,
-    });
+    // With a prompt, feed it on stdin (execa closes stdin after writing). With
+    // no prompt, stdin is explicitly closed: otherwise Claude's CLI waits ~3s
+    // for piped input on a TTY and logs "no stdin data received in 3s" per call.
+    const result = hasPrompt
+      ? await execa('claude', args, {
+          reject: false,
+          input: options.prompt,
+          stdout: ['pipe', 'inherit'],
+          stderr: ['pipe', 'inherit'],
+          env: this.buildEnv(options),
+          cwd: options.cwd,
+        })
+      : await execa('claude', args, {
+          reject: false,
+          stdin: 'ignore',
+          stdout: ['pipe', 'inherit'],
+          stderr: ['pipe', 'inherit'],
+          env: this.buildEnv(options),
+          cwd: options.cwd,
+        });
 
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;

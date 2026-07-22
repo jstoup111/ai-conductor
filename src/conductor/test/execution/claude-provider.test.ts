@@ -42,17 +42,44 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--resume');
     });
 
-    it('passes stdin: ignore to execa so Claude does not wait on piped stdin', async () => {
-      mockExeca.mockResolvedValue({
-        stdout: 'ok',
-        exitCode: 0,
-        failed: false,
-      } as any);
+    it('delivers the prompt on stdin (execa input), never as a `-p <prompt>` argv', async () => {
+      // A single argv string is capped at MAX_ARG_STRLEN (128 KiB on Linux);
+      // passing a large prompt as `-p <prompt>` makes exec() fail with E2BIG
+      // before claude starts. The prompt must go on stdin instead.
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
 
       await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
 
-      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      // Prompt is on stdin, print flags are set, and the prompt is NOT an argv.
+      expect(opts).toMatchObject({ input: 'Do the thing' });
+      expect(opts.stdin).toBeUndefined();
+      expect(args).toContain('--print');
+      expect(args).not.toContain('-p');
+      expect(args).not.toContain('Do the thing');
+    });
+
+    it('never puts a >128 KiB prompt into argv (E2BIG regression)', async () => {
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
+      const bigPrompt = 'x'.repeat(200_000); // over MAX_ARG_STRLEN
+
+      await provider.invoke({ ...baseOptions, prompt: bigPrompt, dangerouslySkipPermissions: true });
+
+      const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(opts).toMatchObject({ input: bigPrompt });
+      // No single argv element is anywhere near the 128 KiB single-arg ceiling.
+      for (const a of args) expect(a.length).toBeLessThan(1024);
+    });
+
+    it('closes stdin (stdin: ignore) when there is no prompt', async () => {
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({ ...baseOptions, prompt: undefined, dangerouslySkipPermissions: true });
+
+      const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({ stdin: 'ignore' });
+      expect(opts.input).toBeUndefined();
+      expect(args).not.toContain('--print');
     });
 
     it('builds correct args for resume call', async () => {

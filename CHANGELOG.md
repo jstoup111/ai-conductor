@@ -42,6 +42,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The `build_review` grader (and every autonomous `claude --print` dispatch) now delivers its
+  prompt on **stdin** instead of as a `-p <prompt>` command-line argument. A single argv string is
+  capped at `MAX_ARG_STRLEN` (128 KiB on Linux); the grader prompt embeds the plan **and the full
+  diff**, so any feature whose diff exceeds ~128 KiB made `exec()` fail instantly with E2BIG
+  ("Argument list too long") *before* `claude` started — an empty-output, non-zero exit that no
+  provider classifier catches, which then HALTed the build at `build_review`. It was silent and
+  size-dependent: small features graded fine, large ones could never pass. Piping the prompt via
+  stdin removes the length ceiling (verified: a 144 KiB prompt now dispatches and grades). The
+  no-prompt path still closes stdin so the CLI does not wait for input.
 - `build_review` (and any judged-gate grader) no longer collapses its entire retry ladder
   in milliseconds when the grader *subprocess could not run*. Previously a fast grader
   death with empty output slipped past a `??` fallback, so `lastError` became `''` and the
