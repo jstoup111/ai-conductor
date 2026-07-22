@@ -426,52 +426,6 @@ export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /**
- * Find the newest .md file in a directory (by mtime). Returns null if the
- * directory does not exist or contains no .md files.
- */
-async function findNewestFile(dir: string): Promise<string | null> {
-  try {
-    await access(dir);
-  } catch {
-    return null;
-  }
-
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  // Filter to markdown files only. Coerce e.name to string so the result is
-  // overload-independent (some @types/node versions type Dirent.name as Buffer).
-  const mdFiles = entries
-    .filter((e) => e.isFile() && String(e.name).endsWith('.md'))
-    .map((e) => join(dir, String(e.name)));
-
-  if (mdFiles.length === 0) return null;
-
-  // With a single file (the common case) return it directly; otherwise pick newest.
-  if (mdFiles.length === 1) return mdFiles[0];
-
-  // For multiple files, pick the one with the highest mtime.
-  let newest = mdFiles[0];
-  let newestMtime = 0;
-  for (const f of mdFiles) {
-    try {
-      const { mtimeMs } = await import('node:fs/promises').then((m) => m.stat(f));
-      if (mtimeMs > newestMtime) {
-        newestMtime = mtimeMs;
-        newest = f;
-      }
-    } catch {
-      // ignore stat errors; keep current best
-    }
-  }
-  return newest;
-}
-
-/**
  * List `.docs/decisions/adr-*.md` files (absolute paths). Returns [] when the
  * directory is absent or holds no ADR files.
  */
