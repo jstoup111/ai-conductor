@@ -2541,4 +2541,258 @@ Task 1 → Task 2
       expect(result.reason).toMatch(/FAILed: nope/);
     });
   });
+
+  describe('checkStepCompletion: prd_audit / architecture_review_as_built / manual_test code-validity on re-dispatch (Task 6, #817)', () => {
+    const OLD_MTIME = new Date(2000, 0, 1);
+
+    async function makeGitDir(): Promise<string> {
+      const d = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-6-'));
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: d });
+      await execa('git', ['config', 'user.email', 't@t.com'], { cwd: d });
+      await execa('git', ['config', 'user.name', 'T'], { cwd: d });
+      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: d });
+      await mkdir(join(d, '.pipeline'), { recursive: true });
+      await writeFile(join(d, '.gitignore'), '.pipeline/\n');
+      await execa('git', ['add', '.gitignore'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', 'chore: gitignore .pipeline'], { cwd: d });
+      return d;
+    }
+
+    async function commitFile(d: string, rel: string, content: string, message: string): Promise<string> {
+      await mkdir(join(d, dirname(rel)), { recursive: true });
+      await writeFile(join(d, rel), content);
+      await execa('git', ['add', '.'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', message], { cwd: d });
+      const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: d });
+      return r.stdout.trim();
+    }
+
+    /** Wires an `origin` remote with a real `refs/remotes/origin/HEAD`, so
+     * `deriveFeatureSurface` (feature-runtime gates) can compute a non-empty
+     * feature surface `F` in-fixture instead of failing open to `[]`. */
+    async function wireOrigin(d: string): Promise<void> {
+      const bare = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-6-origin-'));
+      await execa('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
+      await execa('git', ['remote', 'add', 'origin', bare], { cwd: d });
+      await execa('git', ['push', '-q', 'origin', 'main'], { cwd: d });
+      await execa('git', ['remote', 'set-head', 'origin', 'main'], { cwd: d });
+    }
+
+    function ctxFor(d: string): CompletionContext {
+      return {
+        sessionStartedAt: Date.now(),
+        attemptStartedAt: Date.now(),
+        getHeadSha: async () => {
+          const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: d });
+          return r.stdout.trim();
+        },
+      };
+    }
+
+    let gdir: string;
+    afterEach(async () => {
+      if (gdir) await rm(gdir, { recursive: true, force: true });
+    });
+
+    describe('prd_audit', () => {
+      const PATH = '.pipeline/prd-audit.md';
+      const SIDECAR = '.pipeline/prd-audit-code-stamp.json';
+      const ALIGNED = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+
+      async function writeReport(d: string): Promise<void> {
+        const p = join(d, PATH);
+        await writeFile(p, ALIGNED);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+        if (codeStamp === undefined) return;
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+      }
+
+      it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result.done).toBe(true);
+      });
+
+      it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline);
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+      });
+
+      it('falls through to mtime rejection (unchanged legacy behavior) when no sidecar/codeStamp is present', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+      });
+
+      it('a fresh-mtime un-ALIGNED report still blocks regardless of the sidecar codeStamp', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const unaligned = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | DIVERGED | scope | foo.ts:1 | — |\n';
+        await writeFile(join(gdir, PATH), unaligned);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/un-ALIGNED/);
+      });
+    });
+
+    describe('architecture_review_as_built', () => {
+      const PATH = '.pipeline/architecture-review-as-built.md';
+      const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
+      const APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
+
+      async function writeReport(d: string): Promise<void> {
+        const p = join(d, PATH);
+        await writeFile(p, APPROVED);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      async function writeSidecar(d: string, codeStamp: string | undefined): Promise<void> {
+        if (codeStamp === undefined) return;
+        await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp }, null, 2));
+      }
+
+      it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        expect(result.done).toBe(true);
+      });
+
+      it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+        await writeSidecar(gdir, baseline);
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+      });
+
+      it('falls through to mtime rejection (unchanged legacy behavior) when no sidecar/codeStamp is present', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeReport(gdir);
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+      });
+
+      it('a fresh-mtime BLOCKED report still blocks regardless of the sidecar codeStamp', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeFile(join(gdir, PATH), '# As-Built Review\n\nVerdict: BLOCKED\n');
+        await writeSidecar(gdir, baseline);
+
+        const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/BLOCKED/);
+      });
+    });
+
+    describe('manual_test', () => {
+      const RESULTS = '.pipeline/manual-test-results.md';
+      const MARKER = '.pipeline/manual-test-fail-evidence.json';
+      const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
+
+      async function writeResults(d: string): Promise<void> {
+        const p = join(d, RESULTS);
+        await writeFile(p, PASS_FILE);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      it('preserves a stale-mtime clean-PASS marker with a codeStamp when the surface since the stamp is unchanged', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeResults(gdir);
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const result = await checkStepCompletion(gdir, 'manual_test', ctxFor(gdir));
+        expect(result.done).toBe(true);
+      });
+
+      it('falls through to mtime rejection when the delta touches a runtime path since the stamp', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeResults(gdir);
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await commitFile(gdir, 'src/a.ts', 'a2\n', 'kickback fix');
+
+        const result = await checkStepCompletion(gdir, 'manual_test', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/stale/);
+      });
+
+      it('falls through to mtime rejection (unchanged legacy behavior) when the marker has no codeStamp', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeResults(gdir);
+
+        const result = await checkStepCompletion(gdir, 'manual_test', ctxFor(gdir));
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/stale/);
+      });
+
+      it('never launders an unresolved FAIL via the preserve check, even when the marker also carries a codeStamp', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        // Marker records BOTH an unresolved FAIL (headSha/failRows at the
+        // current HEAD) AND a codeStamp — a state that must never arise from
+        // this predicate's own writes, but the preserve-check must be robust
+        // against it (defense in depth against a corrupted/hand-edited
+        // marker): the whitewash guard must still fire, never short-circuit
+        // via the codeStamp preserve path.
+        await writeFile(
+          join(gdir, MARKER),
+          JSON.stringify(
+            { headSha: baseline, observedAt: Date.now(), failRows: ['| Bar | FAIL |'], codeStamp: baseline },
+            null,
+            2,
+          ),
+        );
+        // Fresh mtime (not backdated) — clean PASS file, HEAD unchanged
+        // since the recorded FAIL. A backdated results file would hit the
+        // ordinary staleness rejection first and never exercise the
+        // whitewash guard this test targets.
+        await writeFile(join(gdir, RESULTS), PASS_FILE);
+
+        const result = await checkStepCompletion(gdir, 'manual_test', {
+          ...ctxFor(gdir),
+          sessionStartedAt: 0,
+          attemptStartedAt: undefined,
+        });
+        expect(result.done).toBe(false);
+        expect(result.reason ?? '').toMatch(/no new commits|whitewash/i);
+      });
+    });
+  });
 });
