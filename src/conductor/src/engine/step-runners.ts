@@ -20,6 +20,7 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
+import { resolveGateCodeValidityConfig } from './config.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 
@@ -976,6 +977,11 @@ export class DefaultStepRunner implements StepRunner {
    * treated as "rerun" by the re-dispatch preservation check, Task 5/6).
    */
   private async stampBuildReviewVerdict(): Promise<void> {
+    if (!resolveGateCodeValidityConfig(this.config).enabled) {
+      // gate_code_validity disabled: restore pre-feature behavior exactly —
+      // no read-back, no codeStamp field, no git-diff calls.
+      return;
+    }
     const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
     let parsed: unknown;
     try {

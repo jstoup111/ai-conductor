@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import {
   DefaultStepRunner,
   parseTierFromOutput,
@@ -1369,6 +1370,32 @@ TIER: M`,
         const result = await runner.run('build_review', emptyState);
 
         expect(result.success).toBe(true);
+      });
+
+      // Rework (cycle 1): gate_code_validity.enabled=false must restore
+      // byte-identical pre-feature behavior — no codeStamp field written at
+      // all, not even null.
+      it('does not attach codeStamp when gate_code_validity.enabled is false', async () => {
+        initGitRepo(dir);
+        const verdictPath = join(dir, '.pipeline', 'build-review.json');
+        const invoke = vi.fn().mockImplementation(async () => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: {} }), 'utf-8');
+          return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+        });
+        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+          gitRunner: scriptedGit(),
+          planPath,
+          config: { gate_code_validity: { enabled: false } } as unknown as HarnessConfig,
+        });
+
+        const result = await runner.run('build_review', emptyState);
+
+        expect(result.success).toBe(true);
+        const written = JSON.parse(await readFile(verdictPath, 'utf-8'));
+        expect('codeStamp' in written).toBe(false);
+        expect(written.verdict).toBe('PASS');
       });
     });
   });
