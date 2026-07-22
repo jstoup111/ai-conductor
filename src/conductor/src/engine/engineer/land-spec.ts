@@ -194,8 +194,8 @@ export async function landSpec(
 
   // 4. C2: require stories + plan always; spec only on the product track.
   const specFile = await pickIdeaFile(specsDir, ideaFiles);
-  const storiesFile = await findNewestFile(storiesDir);
-  const planFile = await findNewestFile(plansDir);
+  const storiesFile = await pickIdeaFile(storiesDir, ideaFiles);
+  const planFile = await pickIdeaFile(plansDir, ideaFiles);
 
   if ((specRequired && !specFile) || !storiesFile || !planFile) {
     const missing: string[] = [];
@@ -244,15 +244,15 @@ export async function landSpec(
   //     spec can never reach the daemon missing conflict-check or architecture.
   const complexityDir = join(worktreePath, '.docs', 'complexity');
   const decisionsDir = join(worktreePath, '.docs', 'decisions');
-  const complexityFile = await findNewestFile(complexityDir);
+  const complexityFile = await pickIdeaFile(complexityDir, ideaFiles);
   const tier = complexityFile
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
 
   if (tier && tier !== 'S') {
-    const conflictsFile = await findNewestFile(join(worktreePath, '.docs', 'conflicts'));
-    const architectureFile = await findNewestFile(join(worktreePath, '.docs', 'architecture'));
-    const reviewFile = await findNewestFile(decisionsDir);
+    const conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
+    const architectureFile = await pickIdeaFile(join(worktreePath, '.docs', 'architecture'), ideaFiles);
+    const reviewFile = await pickIdeaFile(decisionsDir, ideaFiles);
     const missing: string[] = [];
     if (!conflictsFile) missing.push('conflicts');
     if (!architectureFile) missing.push('architecture');
