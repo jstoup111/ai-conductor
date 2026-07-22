@@ -416,4 +416,25 @@ describe('DOCS_GUARD_HOOK', () => {
     });
     expect(result.status).toBe(0);
   });
+
+  it.each([
+    '.docs/plans/x.md',
+    '.docs/stories/x.md',
+    '.docs/specs/x.md',
+    '.docs/decisions/adr-x.md',
+    '.docs/future-artifact-type/x.md',
+  ])(
+    'blocks a write to %s during BUILD with no allowlist (default-deny)',
+    (target) => {
+      const result = runDocsGuardHook({
+        markerContent: 'step: build\nphase: BUILD\n',
+        payload: { tool_name: 'Edit', tool_input: { file_path: target } },
+      });
+      expect(result.status).toBe(2);
+      expect(result.stderr).toMatch(/BUILD/);
+      expect(result.stderr).toMatch(/build/);
+      expect(result.stderr).toMatch(/\.pipeline\/phase-active/);
+      expect(result.stderr).toMatch(/rm \.pipeline\/phase-active/);
+    }
+  );
 });
