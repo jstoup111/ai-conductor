@@ -780,3 +780,55 @@ describe('Task 4: idea-scoped spec requirement on the product track (#488)', () 
     expect(diffNames.split('\n')).not.toContain('.docs/specs/legacy.md');
   });
 });
+
+describe('Task 7: idea-scoped resolution preserves content validation and the dirty-worktree guard', () => {
+  it('rejects the idea\'s own DRAFT-status stories (stories-not-approved), even though attribution/pickers resolve them cleanly', async () => {
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    // The idea's OWN stories artifact — untracked, correctly attributed and
+    // picked — but still DRAFT. Idea-scoped resolution must not skip content
+    // validation just because the file is unambiguously "the idea's own".
+    await writeFile(
+      join(dir, '.docs', 'stories', 'dep-bump.md'),
+      ['# Stories: dep bump', '', '**Status:** DRAFT', '', '## Story: bump', ''].join('\n'),
+    );
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/DRAFT.*not been approved|not approved/i);
+
+    const headAfter = await git(['rev-parse', 'HEAD'], dir);
+    expect(headAfter).toBe(headBefore);
+  });
+
+  it('dirty-worktree guard still rejects a tracked .docs file modified-but-uncommitted, before idea-scoped resolution ever runs', async () => {
+    const dir = await seedValidWorktree('dep bump');
+
+    // Commit the idea's own artifacts so they're tracked, then dirty one of
+    // them without committing — the dirty-tree guard must fire first,
+    // regardless of idea-scoped attribution/content validity.
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed idea artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES + '\nmore\n');
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/dirty|uncommitted/i);
+
+    const headAfter = await git(['rev-parse', 'HEAD'], dir);
+    expect(headAfter).toBe(headBefore);
+  });
+});
