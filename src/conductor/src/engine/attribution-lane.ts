@@ -12,6 +12,20 @@
  *
  * This is a separate module (not a DefaultStepRunner method) so it can be
  * invoked independently from dispatch orchestration.
+ *
+ * GATING REMOVED (feature #773): this module previously exposed an inert
+ * lane-orchestration stub that parsed the verifier's verdict, validated
+ * citations (attribution-validate.ts), and stamped
+ * `semantic-verified` evidence that let the build gate advance on an
+ * unearned verdict. Per-task commit-stamping has been demoted from a gate
+ * to telemetry — the build completion gate no longer derives from per-task
+ * evidence stamps at all (see artifacts.ts, Task 10). Citation quality
+ * sampling/telemetry now lives exclusively in the separate, non-blocking
+ * spot-audit path (attribution-audit.ts's `runSpotAudit`, wired post-green
+ * in conductor.ts). The inert stub itself has been deleted (#773, Task 5)
+ * as dead code; this module now retains only the memo/dispatch machinery
+ * below (`computeMemoKey`, `readMemo`, `writeMemo`, `rekeyMemoAfterRebase`,
+ * `dispatchAttributionVerifier`).
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -370,90 +384,3 @@ You are running the semantic attribution verification step. Your job is to match
 Complete this step, write the verdict to .pipeline/attribution-verdict.json, then exit.`;
 }
 
-/**
- * Lane dispatch result — stamped task IDs and dispatch status.
- */
-export interface AttributionLaneResult {
-  stampedTaskIds: string[];
-  dispatched: boolean;
-  error?: string;
-  /**
-   * Task ID → unsatisfied reason mapping for retry hints.
-   * Only populated when verdict was successfully parsed and validated.
-   * no-verdict and invalidated verdicts are excluded.
-   */
-  unsatisfiedReasons?: Map<string, string>;
-}
-
-/**
- * Lane orchestration options.
- */
-export interface RunAttributionLaneOptions {
-  projectRoot: string;
-  planPath: string;
-  residueIds: string[];
-  headSha: string;
-  cutoverArmed: boolean;
-  isZeroWorkProduct: boolean;
-  git: (args: string[]) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
-  dispatchVerifier: (inputs: { residueIds: string[] }) => Promise<unknown>;
-  bookkeepingCommits?: Set<string>;
-}
-
-/**
- * Run the attribution lane.
- *
- * GATING REMOVED (feature #773, Task 12): this lane previously parsed the
- * verifier's verdict, validated citations (attribution-validate.ts), and
- * stamped `semantic-verified` evidence that let the build gate advance on
- * an unearned verdict. Per-task commit-stamping has been demoted from a
- * gate to telemetry — the build completion gate no longer derives from
- * per-task evidence stamps at all (see artifacts.ts, Task 10). Citation
- * quality sampling/telemetry now lives exclusively in the separate,
- * non-blocking spot-audit path (attribution-audit.ts's `runSpotAudit`,
- * wired post-green in conductor.ts) — this function intentionally does
- * NOT parse verdicts, validate citations, or write stamps of any kind.
- * It is retained only as a thin, inert dispatch stub for any caller still
- * wired to its shape; it never gates and never stamps.
- *
- * @param opts - Lane orchestration options
- * @returns Lane result: always an empty stamped-task list; `dispatched`
- *   reflects whether the verifier dispatch was attempted.
- */
-export async function runAttributionLane(opts: RunAttributionLaneOptions): Promise<AttributionLaneResult> {
-  const { residueIds, cutoverArmed, isZeroWorkProduct, dispatchVerifier } = opts;
-
-  // If cutover is not armed, skip the lane entirely — gate-miss handling
-  // proceeds unchanged. This preserves byte-identical behavior when judge
-  // cutover is absent/future (Story 11: inert-by-default rollout).
-  if (!cutoverArmed) {
-    return { stampedTaskIds: [], dispatched: false };
-  }
-
-  // If the build detected zero work product, skip dispatch — kickback's
-  // signal (Story 15) takes precedence. Lane skipped, dispatch false,
-  // zero_work_product reason intact in task-evidence.noEvidenceReasons.
-  if (isZeroWorkProduct) {
-    return { stampedTaskIds: [], dispatched: false };
-  }
-
-  // No residue = nothing to judge. No dispatch needed.
-  if (residueIds.length === 0) {
-    return { stampedTaskIds: [], dispatched: false };
-  }
-
-  // Dispatch the verifier in a fresh session with isolated residue input
-  // (kept for callers relying on the verdict artifact for observability).
-  // The result is never parsed, validated, or turned into a stamp/gate here.
-  try {
-    await dispatchVerifier({ residueIds });
-  } catch (err) {
-    return {
-      stampedTaskIds: [],
-      dispatched: false,
-      error: `Verifier dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-
-  return { stampedTaskIds: [], dispatched: true };
-}

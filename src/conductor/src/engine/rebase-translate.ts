@@ -393,8 +393,8 @@ async function citingTaskIdsFor(
 
 /**
  * Best-effort derivation of the #520 attribution-lane `residueIds` (pending
- * task ids, per `attribution-lane.ts`'s `computeMemoKey`/`runAttributionLane`
- * usage) from the current `.pipeline/task-status.json`. Used only to attempt
+ * task ids, per `attribution-lane.ts`'s `computeMemoKey` usage) from the
+ * current `.pipeline/task-status.json`. Used only to attempt
  * a memo re-key onto the new HEAD (`rekeyMemoAfterRebase`) — if the derived
  * set does not match what the memo was originally keyed with, the re-key is
  * a graceful no-op (a cache miss, identical to pre-translation behavior),
