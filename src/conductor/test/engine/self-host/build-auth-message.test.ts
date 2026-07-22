@@ -33,7 +33,11 @@ describe('buildAuthRemediationMessage', () => {
 
   it('warns about file permissions issues', () => {
     const message = buildAuthRemediationMessage('/home/user/.daemon-token');
-    expect(message.toLowerCase()).toContain('permission');
+    const lower = message.toLowerCase();
+    expect(lower).toContain('permission');
+    expect(lower).toMatch(/not (be )?readable by other users/i);
+    expect(lower).toContain('chmod 600');
+    expect(lower).not.toMatch(/readable by the daemon/i);
   });
 
   it('does not contain any actual token material', () => {

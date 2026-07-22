@@ -20,7 +20,8 @@ import { DAEMON_BUILD_TOKEN_MINT_COMMAND } from './daemon-build-token.js';
  *   know exactly where the daemon expects the file
  * - three known pitfalls: mint output may only print in an interactive
  *   terminal (tty-only), trailing whitespace can end up in the stored
- *   token, and file permission issues can make an existing token unreadable
+ *   token, and overly permissive file permissions can leak the token to
+ *   other users on the host
  *
  * @param resolvedPath Absolute, resolved path to the daemon build token file.
  * @returns A remediation message string. Contains no token material.
@@ -41,9 +42,9 @@ export function buildAuthRemediationMessage(resolvedPath: string): string {
       'trailing whitespace or a stray newline appended by copy-paste; the ' +
       'daemon trims the file contents, but a corrupted or partial copy can ' +
       'still leave the token invalid.',
-    '  - File permissions: verify the token file is readable by the daemon ' +
-      'process (check owner/mode); a permission error will surface as an ' +
-      'unreadable token even when the file exists.',
+    '  - File permissions: the token file must not be readable by other ' +
+      'users — set restrictive permissions (chmod 600 <path>); a world- or ' +
+      'group-readable token file leaks the credential.',
     '',
     'Then configure the path in your harness config under:',
     '  harness_self_host.build_auth:',
