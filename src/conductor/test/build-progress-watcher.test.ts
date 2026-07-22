@@ -416,12 +416,14 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
 
   it('re-emits the current snapshot once per heartbeat period during a silent build', async () => {
     await writeTasks(5, 21);
+    let clock = 0;
     const watcher = new BuildProgressWatcher({
       projectRoot: dir,
       events: emitter,
       step: 'build',
       featureSlug: 'my-feature',
       config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => clock,
     });
     watcher.start();
 
@@ -430,13 +432,13 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     emitSpy.mockClear();
 
     // Nothing changes; less than one heartbeat period elapses — no emission.
-    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    clock += 4 * 60 * 1000;
     await tick(watcher);
     expect(buildProgressEvents()).toHaveLength(0);
 
     // Cross the heartbeat boundary — a re-emit of the current (unchanged)
     // snapshot fires.
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    clock += 2 * 60 * 1000;
     await tick(watcher);
     watcher.stop();
 
@@ -448,12 +450,14 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
 
   it('resets the heartbeat clock on a change-driven emission (no interleaved duplicates)', async () => {
     await writeTasks(5, 21);
+    let clock = 0;
     const watcher = new BuildProgressWatcher({
       projectRoot: dir,
       events: emitter,
       step: 'build',
       featureSlug: 'my-feature',
       config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => clock,
     });
     watcher.start();
 
@@ -461,7 +465,7 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     emitSpy.mockClear();
 
     // A change-driven emission 4 minutes in should reset the clock.
-    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    clock += 4 * 60 * 1000;
     await writeTasks(6, 21);
     await tick(watcher);
     expect(buildProgressEvents()).toHaveLength(1);
@@ -469,12 +473,12 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
 
     // Only 4 more minutes pass (8 total since baseline, but only 4 since the
     // reset) — heartbeat must NOT have fired yet.
-    await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+    clock += 4 * 60 * 1000;
     await tick(watcher);
     expect(buildProgressEvents()).toHaveLength(0);
 
     // Now cross the heartbeat threshold measured from the reset point.
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    clock += 2 * 60 * 1000;
     await tick(watcher);
     watcher.stop();
 
@@ -483,12 +487,14 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
 
   it('never emits a heartbeat after stop()', async () => {
     await writeTasks(5, 21);
+    let clock = 0;
     const watcher = new BuildProgressWatcher({
       projectRoot: dir,
       events: emitter,
       step: 'build',
       featureSlug: 'my-feature',
       config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => clock,
     });
     watcher.start();
 
@@ -499,6 +505,7 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     // Time passes well beyond the heartbeat window, but the watcher is
     // stopped — no tick should fire, and calling tick() directly must not be
     // exercised (stop() only guarantees the timer won't invoke tick again).
+    clock += 10 * 60 * 1000;
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
 
     expect(buildProgressEvents()).toHaveLength(0);
@@ -541,19 +548,21 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     return (watcher as unknown as { tick(): Promise<void> }).tick();
   }
 
-  function makeWatcher(): BuildProgressWatcher {
+  function makeWatcher(now: () => number): BuildProgressWatcher {
     return new BuildProgressWatcher({
       projectRoot: dir,
       events: emitter,
       step: 'build',
       featureSlug: 'my-feature',
       config: { build_progress: { quiet_minutes: 15 } },
+      now,
     });
   }
 
   it('emits build_no_progress exactly once once the quiet threshold is crossed, and not again while still quiet', async () => {
     await writeTasks(5, 21);
-    const watcher = makeWatcher();
+    let clock = 0;
+    const watcher = makeWatcher(() => clock);
     watcher.start();
 
     // Baseline tick — establishes lastChangeAt.
@@ -561,13 +570,13 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     emitSpy.mockClear();
 
     // Advance past the 15-minute quiet threshold with no task-status change.
-    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    clock += 16 * 60 * 1000;
     await tick(watcher);
 
     // Continued quiet — must not re-fire.
-    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    clock += 15 * 60 * 1000;
     await tick(watcher);
-    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    clock += 15 * 60 * 1000;
     await tick(watcher);
     watcher.stop();
 
@@ -582,24 +591,25 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
 
   it('re-arms after a change, firing again on a later quiet episode', async () => {
     await writeTasks(5, 21);
-    const watcher = makeWatcher();
+    let clock = 0;
+    const watcher = makeWatcher(() => clock);
     watcher.start();
 
     await tick(watcher);
     emitSpy.mockClear();
 
-    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    clock += 16 * 60 * 1000;
     await tick(watcher);
     expect(noProgressEvents()).toHaveLength(1);
 
     // Progress resumes — re-arms the episode.
-    await vi.advanceTimersByTimeAsync(60 * 1000);
+    clock += 60 * 1000;
     await writeTasks(6, 21);
     await tick(watcher);
     emitSpy.mockClear();
 
     // Quiet again past threshold — should fire again.
-    await vi.advanceTimersByTimeAsync(16 * 60 * 1000);
+    clock += 16 * 60 * 1000;
     await tick(watcher);
     watcher.stop();
 
@@ -608,25 +618,26 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
 
   it('a change one tick before threshold resets the quiet clock', async () => {
     await writeTasks(5, 21);
-    const watcher = makeWatcher();
+    let clock = 0;
+    const watcher = makeWatcher(() => clock);
     watcher.start();
 
     await tick(watcher);
     emitSpy.mockClear();
 
     // Just before threshold, progress happens — resets the clock.
-    await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+    clock += 14 * 60 * 1000;
     await writeTasks(6, 21);
     await tick(watcher);
     expect(noProgressEvents()).toHaveLength(0);
 
     // 14 more minutes pass since the reset — must not fire yet.
-    await vi.advanceTimersByTimeAsync(14 * 60 * 1000);
+    clock += 14 * 60 * 1000;
     await tick(watcher);
     expect(noProgressEvents()).toHaveLength(0);
 
     // Now past 15 minutes since the reset point.
-    await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+    clock += 2 * 60 * 1000;
     await tick(watcher);
     watcher.stop();
 
@@ -725,6 +736,86 @@ describe('BuildProgressWatcher settle()', () => {
     await tick(watcher);
 
     expect(emitSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('BuildProgressWatcher default clock (no now option)', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-default-clock-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  function buildProgressEvents(): Extract<ConductorEvent, { type: 'build_progress' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((e): e is Extract<ConductorEvent, { type: 'build_progress' }> => e.type === 'build_progress');
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  it('constructing without a `now` option does not throw and the watcher functions normally', async () => {
+    await writeTasks(1, 2);
+
+    expect(() => {
+      const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+      watcher.stop();
+    }).not.toThrow();
+  });
+
+  it('reads real wall-clock time when no `now` option is supplied (heartbeat waits for real elapsed time, not a frozen/undefined clock)', async () => {
+    await writeTasks(5, 21);
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+      config: { build_progress: { heartbeat_minutes: 0.01 } }, // 600ms
+    });
+    watcher.start();
+
+    // Baseline tick establishes lastEmitAt from the real clock.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // No real time has elapsed yet — the heartbeat must not fire immediately,
+    // which would be the case if `now` defaulted to something that always
+    // reports 0 elapsed (e.g. undefined coerced, or a frozen value).
+    await tick(watcher);
+    expect(buildProgressEvents()).toHaveLength(0);
+
+    // Let real wall-clock time pass beyond the heartbeat window.
+    await sleep(700);
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0].resolved).toBe(5);
+    expect(events[0].total).toBe(21);
   });
 });
 
