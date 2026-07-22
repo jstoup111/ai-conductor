@@ -181,14 +181,22 @@ export async function fileIntakeIssue(
       }
       if (ref) {
         try {
+          // The GitHub issue-dependencies API keys on the dependency issue's
+          // numeric database id, not its owner/repo#N ref, and the blocked_by
+          // link is created with POST (not PUT). Resolve the id, then link.
+          const { stdout: depIssueJson } = await deps.gh(
+            ['api', `repos/${parsed.repo}/issues/${parsed.number}`],
+            { cwd: deps.cwd },
+          );
+          const depId = (JSON.parse(depIssueJson) as { id: number }).id;
           await deps.gh(
             [
               'api',
               '--method',
-              'PUT',
+              'POST',
               `repos/${ref.repo}/issues/${ref.number}/dependencies/blocked_by`,
-              '-f',
-              `issue_id=${parsed.repo}#${parsed.number}`,
+              '-F',
+              `issue_id=${depId}`,
             ],
             { cwd: deps.cwd },
           );

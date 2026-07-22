@@ -190,6 +190,42 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
       expect(result.dependsOnDecision).toBe('linked');
       expect(result.linked).toContain('acme/app#42');
     });
+
+    it('records the blocked_by link via POST with the dependency issue\'s NUMERIC id (not owner/repo#N)', async () => {
+      // Regression guard: the GitHub issue-dependencies API keys on the numeric
+      // database id and uses POST — a prior version sent `PUT ... -f
+      // issue_id=owner/repo#N`, which 404s and silently degraded to a warning.
+      const fileIntakeIssue = requireFileIssueFn(await loadFileIssueModule());
+      const gh = makeFakeGh();
+
+      await fileIntakeIssue(
+        {
+          title: 'Has deps',
+          body: 'body',
+          size: 'S',
+          priority: 'low',
+          dependsOn: ['acme/app#42'],
+          interactive: false,
+        },
+        { gh: gh.run, cwd: '.' },
+      );
+
+      // The dependency's numeric id was resolved before linking.
+      const resolveCall = gh.calls.find((c) =>
+        c.args.some((a) => a === 'repos/acme/app/issues/42'),
+      );
+      expect(resolveCall).toBeDefined();
+
+      // The link is a POST carrying the numeric id the resolve returned (1000300).
+      const linkCall = gh.calls.find((c) =>
+        c.args.some((a) => a.includes('/dependencies/blocked_by')),
+      );
+      expect(linkCall).toBeDefined();
+      expect(linkCall!.args).toContain('POST');
+      expect(linkCall!.args).not.toContain('PUT');
+      expect(linkCall!.args.some((a) => a === 'issue_id=1000300')).toBe(true);
+      expect(linkCall!.args.some((a) => a.includes('#'))).toBe(false);
+    });
   });
 
   describe('Negative paths', () => {

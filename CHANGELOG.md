@@ -34,6 +34,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `bin/intake-file` is now functional. It previously `exec`'d a
+  `src/conductor/src/intake-file-cli.ts` that was never committed, so every
+  invocation died with `ERR_MODULE_NOT_FOUND`; the CLI wrapper is now added and
+  wires `--title/--body/--size/--priority/--depends-on/--repo` (plus TTY prompts
+  for a missing size/priority) to `fileIntakeIssue`. Additionally, `--depends-on`
+  link recording used the wrong GitHub call — `PUT .../dependencies/blocked_by`
+  with a string `issue_id=owner/repo#N` — which 404s and silently degraded to a
+  warning, so no dependency was ever linked. It now resolves the dependency
+  issue's numeric database id and `POST`s the `blocked_by` link. Regression test
+  in `test/acceptance/intake-file-completeness.test.ts` asserts the numeric-id
+  `POST`.
+
 - Resolved 12 baseline TypeScript errors in `src/conductor/src/engine/` so the new CI
   typecheck gate lands green: missing `.js` extensions on relative ESM/NodeNext imports
   (`acceptance-red-runner.ts`, `halt-issues/{closer,ledger,sweep}.ts`), a `writeSync`

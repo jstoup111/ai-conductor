@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# intake-file — one-shot, non-interactive sweep that stamps missing
-# size:/priority: labels onto open, assigned GitHub issues (Task 6, FR-3).
+# intake-file — one atomic filing of a criteria-complete intake issue.
 #
-# Reuses parseSizeLabel/parsePriorityLabels (src/conductor/src/engine/
-# backlog-priority.ts) to detect incomplete issues, infers values from the
-# issue body when possible, and otherwise defaults (size: M, priority:
-# medium). Applies labels via the gh REST API, auto-creating labels that
-# don't exist. Never HALTs and never prompts for confirmation.
+# Delegates to fileIntakeIssue (src/conductor/src/intake-file-cli.ts →
+# src/engine/engineer/intake/file-issue.ts): creates the GitHub issue,
+# resolves size/priority (given ▸ prompt-on-TTY ▸ infer ▸ default), applies
+# the priority:/size: labels, and records --depends-on blocked_by link(s).
+# Label/depends-on failures after a successful create are warnings (exit 0);
+# only a failed issue create is fatal.
 #
 # Usage:
-#   bin/intake-file --repo <owner/repo>
+#   bin/intake-file --title <t> --body <b> [--size S|M|L] \
+#     [--priority critical|high|medium|low] [--depends-on owner/repo#N ...] [--repo owner/repo]
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CONDUCTOR_DIR="${HARNESS_DIR}/src/conductor"
