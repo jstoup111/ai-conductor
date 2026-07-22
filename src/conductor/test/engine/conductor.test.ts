@@ -8674,7 +8674,20 @@ describe('engine/conductor', () => {
           // Simulate SHIP-phase skills writing their proof artifact during
           // the step. This makes the mtime fresh relative to the conductor's
           // session_started_at (set on Conductor.run() entry).
-          if (step === 'manual_test') {
+          if (step === 'build_review') {
+            // build_review is default-on (#773 Task 4) — simulate the
+            // grader writing a passing verdict so this artifact-happy-path
+            // fixture doesn't trip the build_review completion predicate.
+            await _mkdir(join(dir, '.pipeline'), { recursive: true });
+            await _wf(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'PASS',
+                reasons: [],
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: true },
+              }),
+            );
+          } else if (step === 'manual_test') {
             await _wf(
               join(dir, '.pipeline/manual-test-results.md'),
               '# Results\n\n| Story | Result |\n|---|---|\n| story-a | PASS |\n',

@@ -1028,7 +1028,14 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       // on a "next cycle" that will never run.
       maxRetries: 1,
       fromStep: 'build',
-      config: { attribution_judge_cutover: '2020-01-01T00:00:00Z' } as never,
+      // build_review is default-on (#773 Task 4); this test only exercises
+      // the `build` gate's attribution-judge rescue and its fake stepRunner
+      // has no build_review handling, so opt out explicitly to keep the
+      // scope unchanged.
+      config: {
+        attribution_judge_cutover: '2020-01-01T00:00:00Z',
+        build_review: { enabled: false },
+      } as never,
     });
 
     await conductor.run();

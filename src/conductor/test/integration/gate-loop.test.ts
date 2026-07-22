@@ -930,7 +930,21 @@ describe('integration/gate-loop', () => {
         },
       };
 
-      await conductorWith(runner).run();
+      // build_review is default-on (#773 Task 4) — "flag off" now requires
+      // an explicit opt-out rather than relying on the (former) default.
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: false } },
+      } as never);
+
+      await conductor.run();
 
       expect(ran.filter((s) => s === 'build_review')).toHaveLength(0);
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
@@ -951,7 +965,21 @@ describe('integration/gate-loop', () => {
         run: async (step) => satisfy(step),
       };
 
-      await conductorWith(runner).run();
+      // build_review is default-on (#773 Task 4) — "flag off" now requires
+      // an explicit opt-out rather than relying on the (former) default.
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: false } },
+      } as never);
+
+      await conductor.run();
 
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
       expect(finalState.build_review).toBe('skipped');

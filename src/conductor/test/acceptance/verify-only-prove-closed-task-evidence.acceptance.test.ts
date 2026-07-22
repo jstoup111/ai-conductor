@@ -305,6 +305,10 @@ describe('acceptance: verify-only residue dispatches the judged lane despite a d
       fromStep: 'build',
       // No attribution_judge_cutover key: global cutover is DARK. Only the
       // verify-only-marked residue task should arm the lane.
+      // build_review is default-on (#773 Task 4); this test only exercises
+      // the `build` gate and its fake stepRunner has no build_review
+      // handling, so opt out explicitly to keep scope unchanged.
+      config: { build_review: { enabled: false } } as never,
     });
 
     await conductor.run();
