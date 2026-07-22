@@ -3918,7 +3918,7 @@ export class Conductor {
                 // Re-read fresh from disk rather than writing the possibly-
                 // stale in-memory `this.taskEvidence` snapshot — stamps can
                 // be written directly to the sidecar by other pathways
-                // (autoheal reconciliation, writeJudgedStamps) between this
+                // (task-cli / trailer-stamping telemetry paths) between this
                 // Conductor's start and this exit, and blindly writing the
                 // stale snapshot would clobber them.
                 const freshEvidence = await createTaskEvidence(this.projectRoot);

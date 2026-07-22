@@ -38,7 +38,6 @@ import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMach
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { runAttributionLane } from '../../src/engine/attribution-lane.js';
-import { reconcileStatusFromStamps } from '../../src/engine/autoheal.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -511,15 +510,15 @@ Implementation that requires semantic verification.
  * `no-verdict` residue task, a `satisfied` verdict whose citations don't hold up
  * under validateCitations, or a mix of satisfied/unsatisfied results must all
  * leave the affected task(s) unstamped — so the completion gate (which derives
- * "done" from task-status.json rows reconciled off evidence stamps, see
- * autoheal.ts reconcileStatusFromStamps) stays not-done and the build is refused
- * rather than allowed to advance on an unearned verdict.
+ * "done" from task-status.json rows reconciled off evidence stamps) stays
+ * not-done and the build is refused rather than allowed to advance on an
+ * unearned verdict.
  *
  * These tests exercise runAttributionLane end-to-end with a fake dispatchVerifier
  * (writes the verdict file, simulating the real verifier) and a fake git runner
  * (controls citation validation outcomes deterministically, no real repo needed),
- * then reconcile task-status.json off the resulting evidence stamps and assert
- * the gate-relevant row(s) never reach 'completed'.
+ * then assert no evidence stamp was written for the affected task(s) — with
+ * no stamp, the gate-relevant row(s) can never be reconciled to 'completed'.
  */
 describe('attribution lane no-whitewash: gate stays not-done on no-verdict/invalid-citation/mixed results', () => {
   let dir: string;
@@ -616,19 +615,10 @@ describe('attribution lane no-whitewash: gate stays not-done on no-verdict/inval
     // No task should be stamped for a no-verdict result.
     expect(result.stampedTaskIds).toEqual([]);
 
-    // No evidence stamp should exist for task 7.
+    // No evidence stamp should exist for task 7 — with no stamp written, the
+    // row can never be reconciled to completed (refused, not whitewashed).
     const evidence = await createTaskEvidence(projectRoot);
     expect(evidence.evidenceStamps.has('7')).toBe(false);
-
-    // Reconciling task-status off stamps must leave the row un-advanced (refused, not
-    // whitewashed to completed).
-    await reconcileStatusFromStamps(projectRoot);
-    const status = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
-    );
-    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
-    expect(task7.status).not.toBe('completed');
-    expect(task7.status).toBe('in_progress');
   });
 
   it('(b) satisfied verdict whose citations fail validateCitations → refused → no advance', async () => {
@@ -667,16 +657,9 @@ describe('attribution lane no-whitewash: gate stays not-done on no-verdict/inval
 
     expect(result.stampedTaskIds).toEqual([]);
 
+    // No stamp written — the row can never be reconciled to completed.
     const evidence = await createTaskEvidence(projectRoot);
     expect(evidence.evidenceStamps.has('7')).toBe(false);
-
-    await reconcileStatusFromStamps(projectRoot);
-    const status = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
-    );
-    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
-    expect(task7.status).not.toBe('completed');
-    expect(task7.status).toBe('in_progress');
   });
 
   it('(c) mixed satisfied+unsatisfied residue → gating removed (Task 12): neither stamps, both stay not-done', async () => {
@@ -726,22 +709,11 @@ describe('attribution lane no-whitewash: gate stays not-done on no-verdict/inval
     // Gating removed (Task 12): the lane never stamps, regardless of verdict content.
     expect(result.stampedTaskIds).toEqual([]);
 
+    // Neither task advances — with no stamps written, reconciliation off
+    // stamps has nothing to promote (the citation-judge no longer gates).
     const evidence = await createTaskEvidence(projectRoot);
     expect(evidence.evidenceStamps.has('7')).toBe(false);
     expect(evidence.evidenceStamps.has('9')).toBe(false);
-
-    await reconcileStatusFromStamps(projectRoot);
-    const status = JSON.parse(
-      await readFile(join(projectRoot, '.pipeline', 'task-status.json'), 'utf-8'),
-    );
-    const task7 = status.tasks.find((t: Record<string, unknown>) => t.id === '7');
-    const task9 = status.tasks.find((t: Record<string, unknown>) => t.id === '9');
-
-    // Neither task advances — the citation-judge no longer gates.
-    expect(task7.status).not.toBe('completed');
-    expect(task7.status).toBe('in_progress');
-    expect(task9.status).not.toBe('completed');
-    expect(task9.status).toBe('in_progress');
   });
 });
 

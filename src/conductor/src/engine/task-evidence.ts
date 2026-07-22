@@ -172,66 +172,6 @@ function createInstance(
  *
  * PURPOSE:
  * Records validated verdicts from the attribution verifier as evidence stamps
- * with form='semantic-verified' and rich audit metadata (citedShas, verdictAnchor,
- * testEvidence). Pre-existing stamps are never modified; new stamps are merged.
- * Refused tasks (validation failures or abstentions) are omitted from output.
- *
- * CONTRACT:
- * - validated: array of {taskId, sha, citedShas, verdictAnchor, testEvidence}
- * - refused: array of task IDs that did not get stamps (validation failures)
- * - Output: new stamps are written; pre-existing entries remain byte-identical
- * - All optional fields serialize/deserialize correctly (round-trip safe)
- *
- * @param projectRoot The project root (contains .pipeline/)
- * @param validated Array of validated task entries, each gets a semantic-verified stamp
- * @param refused Array of task IDs that were refused (not stamped)
- */
-export async function writeJudgedStamps(
-  projectRoot: string,
-  validated: Array<{
-    taskId: string;
-    sha: string;
-    citedShas: string[];
-    verdictAnchor: string;
-    testEvidence: { command: string; exit: number; summary?: string };
-  }>,
-  refused: string[],
-): Promise<void> {
-  const evidence = await createTaskEvidence(projectRoot);
-
-  // Normalize task IDs to strings (Decision 7b from lane ADR)
-  const normalizedValidated = validated.map((v) => ({
-    ...v,
-    taskId: String(v.taskId),
-  }));
-
-  // Add new stamps for validated tasks
-  for (const task of normalizedValidated) {
-    evidence.evidenceStamps.set(task.taskId, {
-      sha: task.sha,
-      form: 'semantic-verified',
-      citedShas: task.citedShas,
-      verdictAnchor: task.verdictAnchor,
-      testEvidence: task.testEvidence,
-    });
-  }
-
-  // Refused tasks are explicitly NOT added to the sidecar
-  // (they remain unresolved, to be retried or manually addressed)
-
-  await evidence.write();
-
-  // Task 4: After stamping, reconcile task-status rows immediately so stamped
-  // rows become completed in the same call. Use dynamic import to avoid init
-  // cycles (autoheal already dynamically imports task-evidence).
-  try {
-    const autoheal = await import('./autoheal.js');
-    await autoheal.reconcileStatusFromStamps(projectRoot);
-  } catch {
-    // Reconciliation is fail-soft; errors don't propagate or change return value
-  }
-}
-
 /**
  * Increment the no-evidence attempts counter by 1 and persist to sidecar.
  * Returns the new counter value. An optional `reason` tag (e.g.
