@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   parsePlanTaskVerifyOnly,
   canonicalTaskId,
   listCommitsWithTrailers,
 } from './autoheal.js';
+import { normalizeTasks } from './task-progress.js';
 
 /**
  * Per-task work-happened floor (task 1 of the per-task-commit-floor plan):
@@ -41,6 +43,9 @@ export async function runPerTaskCommitFloor(args: {
     }
 
     const verifyOnly = parsePlanTaskVerifyOnly(planText);
+    const skippedCanonical = await readSkippedTaskIds(
+      args.taskStatusPath ?? join(args.projectRoot, '.pipeline/task-status.json'),
+    );
 
     const coveredTasks: string[] = [];
     const markedTasks: string[] = [];
@@ -48,7 +53,7 @@ export async function runPerTaskCommitFloor(args: {
 
     for (const id of planIds) {
       const covered = coveredCanonical.has(canonicalTaskId(id));
-      const marked = verifyOnly.get(id) === true;
+      const marked = verifyOnly.get(id) === true || skippedCanonical.has(canonicalTaskId(id));
       if (covered) coveredTasks.push(id);
       if (marked) markedTasks.push(id);
       if (!covered && !marked) gaps.push(id);
@@ -71,6 +76,34 @@ export async function runPerTaskCommitFloor(args: {
       skipNotes: [`per-task-commit-floor: ${message}`],
     };
   }
+}
+
+/**
+ * Canonical ids of `.pipeline/task-status.json` rows with `status ===
+ * 'skipped'`. Fail-soft: a missing/unreadable/malformed status file (or one
+ * `normalizeTasks` can't make sense of) yields an empty set — this is the
+ * ordinary "no data" case, not an error worth a skip note.
+ */
+async function readSkippedTaskIds(taskStatusPath: string): Promise<Set<string>> {
+  const skipped = new Set<string>();
+  let raw: string;
+  try {
+    raw = await readFile(taskStatusPath, 'utf-8');
+  } catch {
+    return skipped;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return skipped;
+  }
+  for (const task of normalizeTasks(parsed)) {
+    if (task.status === 'skipped' && task.id !== undefined) {
+      skipped.add(canonicalTaskId(task.id));
+    }
+  }
+  return skipped;
 }
 
 export function renderPerTaskFloorReport(report: PerTaskFloorReport): string[] {

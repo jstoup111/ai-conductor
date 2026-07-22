@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -86,5 +86,62 @@ describe('per-task-commit-floor', () => {
     expect(report.satisfied).toBe(true);
     expect(report.gaps).toEqual([]);
     expect(report.skipNotes.length).toBeGreaterThan(0);
+  });
+
+  it('does not count a skipped task-status.json row as a gap', async () => {
+    await writeFile(
+      planPath,
+      '### Task 1: First\n**Files:** a.ts\n\n### Task 2: Second\n**Files:** b.ts\n',
+    );
+    await writeFile(join(dir, 'a.ts'), 'x');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'work on task 1\n\nTask: 1'], { cwd: dir });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '2', status: 'skipped' }] }),
+    );
+
+    const report = await runPerTaskCommitFloor({ projectRoot: dir, planPath });
+
+    expect(report.satisfied).toBe(true);
+    expect(report.gaps).toEqual([]);
+    expect(report.markedTasks).toEqual(['2']);
+  });
+
+  it('behaves as before (existing gap) when task-status.json is missing', async () => {
+    await writeFile(
+      planPath,
+      '### Task 1: First\n**Files:** a.ts\n\n### Task 2: Second\n**Files:** b.ts\n',
+    );
+    await writeFile(join(dir, 'a.ts'), 'x');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'work on task 1\n\nTask: 1'], { cwd: dir });
+
+    const report = await runPerTaskCommitFloor({ projectRoot: dir, planPath });
+
+    expect(report.satisfied).toBe(false);
+    expect(report.gaps).toEqual(['2']);
+  });
+
+  it('matches a skipped task-status.json row via canonicalTaskId when id formats differ', async () => {
+    await writeFile(
+      planPath,
+      '### Task 6: First\n**Files:** a.ts\n\n### Task 7: Second\n**Files:** b.ts\n',
+    );
+    await writeFile(join(dir, 'a.ts'), 'x');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'work on task 7\n\nTask: 7'], { cwd: dir });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '6', status: 'skipped' }] }),
+    );
+
+    const report = await runPerTaskCommitFloor({ projectRoot: dir, planPath });
+
+    expect(report.satisfied).toBe(true);
+    expect(report.gaps).toEqual([]);
+    expect(report.markedTasks).toEqual(['6']);
   });
 });
