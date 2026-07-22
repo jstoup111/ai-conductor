@@ -727,3 +727,64 @@ describe('BuildProgressWatcher settle()', () => {
     expect(emitSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('BuildProgressWatcher injectable clock', () => {
+  let dir: string;
+  let emitter: ConductorEventEmitter;
+  let emitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-clock-test-'));
+    emitter = new ConductorEventEmitter();
+    emitSpy = vi.spyOn(emitter, 'emit');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function writeTasks(resolved: number, total: number): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const tasks = Array.from({ length: total }, (_, i) => ({
+      id: String(i + 1),
+      status: i < resolved ? 'completed' : 'pending',
+    }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  function buildProgressEvents(): Extract<ConductorEvent, { type: 'build_progress' }>[] {
+    return emitSpy.mock.calls
+      .map((call) => call[0] as ConductorEvent)
+      .filter((e): e is Extract<ConductorEvent, { type: 'build_progress' }> => e.type === 'build_progress');
+  }
+
+  function tick(watcher: BuildProgressWatcher): Promise<void> {
+    return (watcher as unknown as { tick(): Promise<void> }).tick();
+  }
+
+  it('uses the injected now() clock for heartbeat elapsed-time decisions instead of real time', async () => {
+    await writeTasks(5, 21);
+    let currentTime = 1_000_000;
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => currentTime,
+    });
+    watcher.start();
+
+    // Baseline tick — establishes lastEmitAt from the injected clock.
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // No real time passes at all, but the injected clock jumps forward past
+    // the heartbeat window — this only fires if the watcher reads elapsed
+    // time from the injected now(), not Date.now()/real wall-clock time.
+    currentTime += 6 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toHaveLength(1);
+  });
+});
