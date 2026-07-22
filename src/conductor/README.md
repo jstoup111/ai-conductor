@@ -3526,6 +3526,49 @@ the feature after fixing it — parking never happens in `api-key` mode.
 mint a token and wire it into an existing project's config without clobbering a token that's
 already present.
 
+**`build-auth-status` CLI verb (`engine/build-auth-cli.ts`, Task 8, FR-1).** `conduct-ts
+build-auth-status` resolves mode + token path via `resolveSelfHostConfig`, then reports a single
+status line:
+
+- `api-key` mode → `state=api-key` (no daemon-owned token to check), exit `0`.
+- `daemon-token` mode, token missing → `state=missing`, exit `1`, remediation printed
+  (`buildAuthRemediationMessage`).
+- `daemon-token` mode, token unreadable → `state=unreadable`, exit `1`, remediation printed.
+- `daemon-token` mode, token present → probes liveness (`verifyTokenLiveness`, Task 6, a real
+  `claude -p` CLI invocation with the token passed via environment only — never via argv or
+  disk artifact) and reports `state=valid` (exit `0`) or `state=invalid`/`state=unverifiable`
+  (exit `1`, remediation printed, with the liveness probe's `detail` appended when present).
+
+`bin/install --check` (Task 10) delegates its build-auth line entirely to this verb — bash
+formats the ok/fail line from the exit code and mirrors the existing "conduct-ts not on
+PATH" warning pattern; it derives no mode or token-path logic of its own.
+
+**Shared remediation message (`self-host/build-auth-message.ts`, Tasks 7/12).**
+`buildAuthRemediationMessage()` is the single source of the mint-command + token-path +
+config-key guidance shown by both the pre-flight HALT (`build-auth-preflight.ts`) and
+`build-auth-status`, so the two surfaces can't drift out of sync.
+
+**Daemon credential skip-picks gate (`daemon.ts`, Tasks 13-17, FR-6).** Beside `isPaused` and
+the episode/operator-park checks in the fill-pool gate, the daemon consults
+`isBuildAuthMissing()` — true while `daemon-token` mode is configured and the token file is
+missing/stale/unreadable (always `false` in `api-key` mode, where the gate is inert). While
+true, no *new* feature is picked or dispatched that cycle; features already dispatched keep
+running to completion/park untouched. The predicate is fail-closed on error (an
+unreadable/erroring credential must never look "present") and is re-polled every loop
+iteration, including idle ticks, so a credential restored mid-run resumes dispatch at the next
+loop boundary with no restart needed. Exactly one waiting-condition log line is emitted per
+missing→present transition (`isBuildAuthMissing` predicate recovered.../build credential
+missing...` — no repeated logging on a stuck-missing credential, no HALT marker ever written).
+`watchBuildAuthRestored` (Task 15) registers a single daemon-global token-path watcher (mirrors
+`watchHaltCleared`'s shape) that calls the waker on a restore, purely as an optimization — the
+per-iteration `isBuildAuthMissing` re-poll is the poll backstop, so an absent/no-op watcher
+degrades to poll-only auto-resume, never to no-resume. A whitespace-only write to the token
+file does not fire an early restore, and even if it did, `isBuildAuthMissing`'s own re-check
+remains the sole authority on whether the gate actually lifts. The gate composes as an
+independent sibling to the existing PAUSE, operator-park, and rate-limit-episode gates in the
+fill-pool check — it never touches in-flight work and never interacts with those other gates'
+state.
+
 ### Sandbox auth-expiry park-and-poll (self-host daemon builds)
 
 Headless/sandbox daemon builds run against an operator's credentials file (`~/.claude/.credentials.json`)
