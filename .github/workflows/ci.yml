@@ -78,15 +78,16 @@ jobs:
     if: always()
     steps:
       - env:
+          CHANGES: ${{ needs.changes.result }}
           INTEGRITY: ${{ needs.integrity.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           CONDUCTOR: ${{ needs.conductor.result }}
         run: |
-          for r in "$INTEGRITY" "$TYPECHECK" "$CONDUCTOR"; do
+          for r in "$CHANGES" "$INTEGRITY" "$TYPECHECK" "$CONDUCTOR"; do
             case "$r" in
               failure|cancelled)
-                echo "CI gate failed: integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR" >&2
+                echo "CI gate failed: changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR" >&2
                 exit 1 ;;
             esac
           done
-          echo "CI gate satisfied (integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR)"
+          echo "CI gate satisfied (changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR)"
