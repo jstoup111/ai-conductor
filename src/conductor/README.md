@@ -1436,6 +1436,13 @@ failure ("grader could not be dispatched: …") rather than the generic "retries
 operator can tell an infra failure apart from a real FAIL, and a healthy plan-complete build is not
 silently discarded by a transient grader-startup failure.
 
+**Prompt delivery (stdin, not argv).** The grader prompt embeds the plan *and the full diff*, so it
+routinely exceeds a single command-line argument's `MAX_ARG_STRLEN` ceiling (128 KiB on Linux). It is
+therefore delivered to `claude --print` on **stdin**, never as a `-p <prompt>` argument — otherwise
+`exec()` fails with E2BIG before `claude` starts, an empty-output failure that (pre-fix) HALTed every
+feature whose diff crossed ~128 KiB while smaller ones graded fine. This applies to all autonomous
+`ClaudeProvider.invoke` dispatches, not just build_review.
+
 **Cost note.** Because it must be an objective outside opinion rather than the same session
 grading its own work, `build_review` always dispatches on the Opus model tier (see the model
 selection table in `HARNESS.md`) in a fresh session — it is deliberately not cheap, and enabling
