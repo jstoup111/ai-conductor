@@ -42,7 +42,6 @@ import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
   resolveBuildProgressConfig,
-  isAttributionJudgeCutoverActive,
   BUILD_PROGRESS_HALT_DEFAULTS,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
@@ -57,7 +56,6 @@ import {
   detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
-import { runAttributionLane, type AttributionLaneResult, dispatchAttributionVerifier } from './attribution-lane.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -3354,129 +3352,16 @@ export class Conductor {
                 );
               }
 
-              // Task 12: Attribution lane integration. Runs after auto-heal
-              // completes, before gate-miss handling. Extracts residue from
-              // derived result, checks cutover armed, and dispatches the
-              // verifier. The lane dispatches on residue regardless of
-              // whether this attempt added new commits — inherited residue
-              // from a resumed build is judged too, not just residue newly
-              // produced this attempt. If the lane stamps tasks, those stamps
-              // take effect on the NEXT derivation cycle (same evaluation loop —
-              // no explicit re-derive here, as the lane runs inside the auto-heal
-              // block which already re-checks completion once healing fires).
-              if (derivedCompletion !== null) {
-                // Extract residue: task IDs where completion is not achieved
-                const residueIds = Object.keys(derivedCompletion).filter(
-                  (id) => !derivedCompletion[id]?.completed && derivedCompletion[id]?.status !== 'skipped',
-                );
-
-                const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-
-                const planPathOrNull = (await this.completionCtx(state)).planPath;
-
-                const cutoverActive = isAttributionJudgeCutoverActive(
-                  this.config.attribution_judge_cutover,
-                );
-
-                // Task 3 (verify-only-prove-closed-task-evidence): class-scoped
-                // lane arming. Even with the global cutover dark, residue tasks
-                // explicitly marked `**Verify-only:** yes` in the plan still
-                // arm the lane — but ONLY for that marked subset. Judging is
-                // never widened to unmarked residue when the class-scoped
-                // predicate alone armed the lane.
-                let verifyOnlyResidue: string[] = [];
-                if (residueIds.length > 0 && planPathOrNull) {
-                  const planText = await readFile(planPathOrNull, 'utf-8').catch(() => '');
-                  if (planText) {
-                    const verifyOnlyMap = parsePlanTaskVerifyOnly(planText);
-                    verifyOnlyResidue = residueIds.filter((id) => verifyOnlyMap.get(id) === true);
-                  }
-                }
-
-                const laneArmed =
-                  (cutoverActive && residueIds.length > 0) || verifyOnlyResidue.length > 0;
-
-                // Dispatch the lane if it's armed (full cutover, or class-scoped
-                // verify-only residue) and the plan/head guards are satisfied.
-                if (
-                  laneArmed &&
-                  planPathOrNull &&
-                  headShaAfterBuild
-                ) {
-                  const planPath: string = planPathOrNull;
-                  const headSha: string = headShaAfterBuild;
-                  // When cutover is active, judge the full residue (unchanged
-                  // behavior). When only the class-scoped predicate armed the
-                  // lane, narrow to ONLY the verify-only-marked subset.
-                  const effectiveResidueIds = cutoverActive ? residueIds : verifyOnlyResidue;
-                  const git = makeGitRunner(this.projectRoot);
-                  const laneResult: AttributionLaneResult = await runAttributionLane({
-                    projectRoot: this.projectRoot,
-                    planPath,
-                    residueIds: effectiveResidueIds,
-                    headSha,
-                    cutoverArmed: true, // Already gated by laneArmed above
-                    isZeroWorkProduct: false, // Already checked above
-                    git: (args) => git(args),
-                    dispatchVerifier: async (inputs) => {
-                      try {
-                        if (this.stepRunner.dispatchVerifier) {
-                          const result = await this.stepRunner.dispatchVerifier({
-                            residueIds: inputs.residueIds,
-                            planPath,
-                            projectRoot: this.projectRoot,
-                          });
-                          return {
-                            success: result.success,
-                            output: result.output ?? '',
-                          };
-                        }
-                        return { success: false, output: 'dispatchVerifier not available' };
-                      } catch (err) {
-                        return {
-                          success: false,
-                          output: String(err),
-                        };
-                      }
-                    },
-                  });
-
-                  // Task 13: Merge unsatisfied verdicts into pending retry hints.
-                  // Unsatisfied reasons sharpen the BUILD retry hint by naming tasks
-                  // that the verifier found unsatisfied. no-verdict and invalidated
-                  // verdicts contribute nothing (mechanical hint unchanged).
-                  if (laneResult.unsatisfiedReasons && laneResult.unsatisfiedReasons.size > 0) {
-                    const unsatisfiedByTask = Array.from(laneResult.unsatisfiedReasons.entries())
-                      .map(([taskId, reason]) => `task ${taskId}: ${reason}`)
-                      .join('; ');
-                    const verdictHint =
-                      `Semantic attribution judge found unsatisfied tasks:\n${unsatisfiedByTask}\n` +
-                      `These tasks lack sufficient evidence in commits and tests. Review the verifier's ` +
-                      `analysis and address the implementation gaps.`;
-                    pendingRetryHints.set('build', verdictHint);
-                  }
-
-                  // Story 1 GREEN: if the lane stamped any residue tasks with
-                  // satisfied verdicts, re-check completion NOW rather than
-                  // waiting for the next while-loop iteration. Without this,
-                  // `completion` still reflects the pre-lane snapshot and a
-                  // fully-covered build incorrectly falls into the gate-miss
-                  // path below even though the judge just cleared the residue.
-                  if (laneResult.stampedTaskIds.length > 0) {
-                    await emitTracked({
-                      type: 'auto_heal',
-                      step: 'build',
-                      healed: laneResult.stampedTaskIds.length,
-                      skipped: 0,
-                    });
-                    completion = await checkStepCompletion(
-                      this.projectRoot,
-                      step.name,
-                      await this.completionCtx(state),
-                    );
-                  }
-                }
-              }
+              // Attribution citation-judge GATING removed (feature #773,
+              // Task 12). The lane previously dispatched a semantic verifier
+              // here, validated its citations, and stamped residue tasks so
+              // the build gate could advance on the verdict. Per-task
+              // commit-stamping is demoted to telemetry — the build
+              // completion gate never derives from per-task evidence stamps
+              // (artifacts.ts, Task 10) and citation-quality sampling now
+              // lives exclusively in the separate, non-blocking spot-audit
+              // path (attribution-audit.ts's `runSpotAudit`, dispatched
+              // post-green below). Nothing to do here.
             }
 
             if (!completion.done) {
@@ -3487,22 +3372,6 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
-
-              // Task 5 (verify-only-prove-closed-task-evidence): the verdict
-              // hint queued into pendingRetryHints just above (Task 13) is
-              // seeded from the map only ONCE per retry-loop entry (top of
-              // this function), so it would otherwise sit unused until a
-              // future, separate dispatch of the 'build' step — never
-              // reaching the very next attempt inside THIS retry loop, where
-              // the abstain reason is actually needed. Consume it here,
-              // merging it into the mechanical completion-gate hint so the
-              // next attempt (still within this loop) names the unsatisfied
-              // verify-only task loudly instead of silently burning budget.
-              const queuedVerdictHint = pendingRetryHints.get('build');
-              if (queuedVerdictHint !== undefined) {
-                pendingRetryHints.delete('build');
-                retryHint = `${retryHint ?? ''}\n\n${queuedVerdictHint}`.trim();
-              }
 
               // #646: rerun-vs-route classifier. Generalizes the original
               // prd_audit-only short-circuit (retained verbatim below when

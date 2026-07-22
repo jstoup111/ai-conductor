@@ -24,10 +24,7 @@ import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
 import { buildAttributionPrompt } from './attribution-prompt.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { createTaskEvidence, writeJudgedStamps } from './task-evidence.js';
-import { parseAttributionVerdict } from './attribution-verdict.js';
-import { validateCitations } from './attribution-validate.js';
-import { parsePlanTaskPaths, parsePlanTaskVerifyOnly } from './autoheal.js';
+import { createTaskEvidence } from './task-evidence.js';
 
 /**
  * Verifier dispatch options.
@@ -404,30 +401,27 @@ export interface RunAttributionLaneOptions {
 }
 
 /**
- * Run the attribution lane: dispatch the verifier (if armed), parse the verdict,
- * validate citations, and apply semantic-verified stamps to residue tasks.
- * Returns the list of stamped task IDs and whether dispatch occurred.
+ * Run the attribution lane.
  *
- * Integrates into conductor.ts's build gate-miss branch (Task 12), gated by
- * cutoverArmed and isZeroWorkProduct. When cutover is inactive or the build
- * produced zero work, this lane is skipped entirely — the gate miss proceeds
- * to the counter/stall logic unchanged.
+ * GATING REMOVED (feature #773, Task 12): this lane previously parsed the
+ * verifier's verdict, validated citations (attribution-validate.ts), and
+ * stamped `semantic-verified` evidence that let the build gate advance on
+ * an unearned verdict. Per-task commit-stamping has been demoted from a
+ * gate to telemetry — the build completion gate no longer derives from
+ * per-task evidence stamps at all (see artifacts.ts, Task 10). Citation
+ * quality sampling/telemetry now lives exclusively in the separate,
+ * non-blocking spot-audit path (attribution-audit.ts's `runSpotAudit`,
+ * wired post-green in conductor.ts) — this function intentionally does
+ * NOT parse verdicts, validate citations, or write stamps of any kind.
+ * It is retained only as a thin, inert dispatch stub for any caller still
+ * wired to its shape; it never gates and never stamps.
  *
  * @param opts - Lane orchestration options
- * @returns Lane result: stamped task IDs and dispatch status
+ * @returns Lane result: always an empty stamped-task list; `dispatched`
+ *   reflects whether the verifier dispatch was attempted.
  */
 export async function runAttributionLane(opts: RunAttributionLaneOptions): Promise<AttributionLaneResult> {
-  const {
-    projectRoot,
-    planPath,
-    residueIds,
-    headSha,
-    cutoverArmed,
-    isZeroWorkProduct,
-    git,
-    dispatchVerifier,
-    bookkeepingCommits,
-  } = opts;
+  const { residueIds, cutoverArmed, isZeroWorkProduct, dispatchVerifier } = opts;
 
   // If cutover is not armed, skip the lane entirely — gate-miss handling
   // proceeds unchanged. This preserves byte-identical behavior when judge
@@ -448,8 +442,9 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     return { stampedTaskIds: [], dispatched: false };
   }
 
-  // Dispatch the verifier in a fresh session with isolated residue input.
-  // The verifier writes .pipeline/attribution-verdict.json itself.
+  // Dispatch the verifier in a fresh session with isolated residue input
+  // (kept for callers relying on the verdict artifact for observability).
+  // The result is never parsed, validated, or turned into a stamp/gate here.
   try {
     await dispatchVerifier({ residueIds });
   } catch (err) {
@@ -460,154 +455,5 @@ export async function runAttributionLane(opts: RunAttributionLaneOptions): Promi
     };
   }
 
-  // Task 12 GREEN: Parse verdict, validate citations, apply stamps, return stampedTaskIds.
-  // Read the verdict file written by the verifier.
-  const verdictPath = join(projectRoot, '.pipeline', 'attribution-verdict.json');
-  let unsatisfiedReasons: Map<string, string> | undefined;
-  const validated: Array<{
-    taskId: string;
-    sha: string;
-    citedShas: string[];
-    verdictAnchor: string;
-    testEvidence: { command: string; exit: number; summary?: string };
-  }> = [];
-  const refused: string[] = [];
-
-  try {
-    const verdictRaw = await readFile(verdictPath, 'utf-8');
-    const verdictData = JSON.parse(verdictRaw);
-
-    // Parse the verdict with fail-closed coercion. Validate anchor if provided
-    // (non-empty head). This ensures that if the verifier ran against a different
-    // HEAD (e.g., a stale verdict from a previous cycle), all verdicts are
-    // coerced to no-verdict (fail-closed guard).
-    const anchor = verdictData?.anchor as Record<string, unknown> | undefined;
-    const anchorHead = anchor?.head;
-    // Only validate anchor if it was explicitly set (non-empty); test fixtures
-    // may use empty anchors, which skip validation.
-    const shouldValidateAnchor = typeof anchorHead === 'string' && anchorHead.length > 0;
-    const verdictMap = parseAttributionVerdict(
-      verdictData,
-      residueIds,
-      shouldValidateAnchor ? headSha : undefined,
-      shouldValidateAnchor ? residueIds : undefined,
-    );
-
-    // Load the plan to extract task paths for citation validation
-    const planText = await readFile(planPath, 'utf-8');
-    const planTaskPaths = parsePlanTaskPaths(planText);
-    // Task 4 (verify-only-prove-closed-task-evidence): a verify-only task
-    // legitimately has no dedicated commit of its own — its citation proves
-    // closure via evidence that lives on a DIFFERENT task's files (that's
-    // the entire point of "prove closed"). Requiring the citation to
-    // overlap this task's own declared `Files:` lines would defeat the
-    // feature, so the path-overlap check (attribution-validate.ts Check 5)
-    // is relaxed ONLY for verify-only tasks by passing an empty paths set.
-    // Existence, ancestry, non-empty, and not-bookkeeping stay fully
-    // enforced (adr-2026-07-17-verify-only-judged-closure.md Decision 2:
-    // "existing + ancestry, reusing the lane's validation") — forged and
-    // non-ancestor citations are still refused (Task 5's adversarial scope
-    // is untouched).
-    const verifyOnlyMap = parsePlanTaskVerifyOnly(planText);
-
-    // Extract unsatisfied verdicts and their reasons
-    const unsatisfied = new Map<string, string>();
-    for (const entry of (verdictData?.results as unknown[]) || []) {
-      if (!entry || typeof entry !== 'object') continue;
-      const entryObj = entry as Record<string, unknown>;
-      const taskId = String(entryObj.taskId);
-      const verdict = verdictMap.get(taskId);
-
-      // Only include unsatisfied verdicts (not no-verdict, not invalidated)
-      if (verdict === 'unsatisfied' && typeof entryObj.reason === 'string') {
-        unsatisfied.set(taskId, entryObj.reason);
-      }
-
-      // Process satisfied verdicts: validate citations and collect stamps
-      if (verdict === 'satisfied') {
-        const verdictEntry = entryObj as Record<string, unknown>;
-        const citations = verdictEntry.citations as unknown[];
-        const testEvidence = verdictEntry.testEvidence as Record<string, unknown>;
-
-        // Validate citations against the task's declared paths
-        if (Array.isArray(citations) && citations.length > 0 && testEvidence) {
-          const taskPaths =
-            verifyOnlyMap.get(taskId) === true
-              ? new Set<string>()
-              : planTaskPaths.get(taskId) ?? new Set<string>();
-          const normalizedCitations = citations.map((c: unknown) => {
-            const cObj = c as Record<string, unknown>;
-            return { sha: String(cObj.sha), rationale: String(cObj.rationale ?? '') };
-          });
-          const validationResult = await validateCitations(
-            git,
-            { taskId, paths: taskPaths },
-            {
-              taskId,
-              verdict: 'satisfied',
-              citations: normalizedCitations,
-            },
-            headSha,
-            bookkeepingCommits,
-          );
-
-          if (validationResult.valid) {
-            // Collect validated task with its cited SHA and full metadata
-            const citedShas = normalizedCitations.map((c) => c.sha);
-            validated.push({
-              taskId,
-              sha: citedShas[0], // Primary SHA is the first citation
-              citedShas,
-              verdictAnchor: headSha,
-              testEvidence: {
-                command: String(testEvidence.command ?? ''),
-                exit: Number(testEvidence.exit ?? -1),
-                summary: testEvidence.summary ? String(testEvidence.summary) : undefined,
-              },
-            });
-          } else {
-            // Validation failed: add to refused list
-            refused.push(taskId);
-          }
-        } else {
-          // No valid citations or test evidence: add to refused list
-          refused.push(taskId);
-        }
-      } else {
-        // Unsatisfied, no-verdict, or undefined: add to refused list
-        refused.push(taskId);
-      }
-    }
-
-    if (unsatisfied.size > 0) {
-      unsatisfiedReasons = unsatisfied;
-    }
-  } catch (err) {
-    // Verdict file missing or unparseable — continue without retry hints
-    // (the verdict coercion itself already handles fail-closed behavior)
-    return {
-      stampedTaskIds: [],
-      dispatched: true,
-      error: `Failed to parse verdict or validate citations: ${err instanceof Error ? err.message : String(err)}`,
-      unsatisfiedReasons,
-    };
-  }
-
-  // Write the judged stamps to the sidecar
-  try {
-    await writeJudgedStamps(projectRoot, validated, refused);
-  } catch (err) {
-    return {
-      stampedTaskIds: [],
-      dispatched: true,
-      error: `Failed to write judged stamps: ${err instanceof Error ? err.message : String(err)}`,
-      unsatisfiedReasons,
-    };
-  }
-
-  return {
-    stampedTaskIds: validated.map((v) => v.taskId),
-    dispatched: true,
-    unsatisfiedReasons,
-  };
+  return { stampedTaskIds: [], dispatched: true };
 }
