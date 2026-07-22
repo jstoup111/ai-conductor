@@ -569,6 +569,8 @@ export interface MergeableAutoresolveConfig {
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: false (off, legacy topology). */
   enabled?: boolean;
+  /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
+  perTaskFloor?: boolean;
 }
 
 /**

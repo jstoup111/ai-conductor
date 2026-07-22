@@ -39,6 +39,33 @@ describe('engine/resolved-config', () => {
       const resolved = resolveBuildReviewConfig(config);
       expect(resolved.enabled).toBe(true);
     });
+
+    it('defaults perTaskFloor to true when field is absent', () => {
+      const config: HarnessConfig = { build_review: { enabled: true } } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.perTaskFloor).toBe(true);
+    });
+
+    it('defaults perTaskFloor to true when build_review block is absent entirely', () => {
+      const resolved = resolveBuildReviewConfig(undefined);
+      expect(resolved.perTaskFloor).toBe(true);
+    });
+
+    it('honors an explicit perTaskFloor: false opt-out', () => {
+      const config: HarnessConfig = {
+        build_review: { enabled: true, perTaskFloor: false },
+      } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.perTaskFloor).toBe(false);
+    });
+
+    it('fails open to true when perTaskFloor is malformed (wrong type)', () => {
+      const config = {
+        build_review: { enabled: true, perTaskFloor: 'nope' as unknown as boolean },
+      } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.perTaskFloor).toBe(true);
+    });
   });
 
   describe('default tables', () => {
