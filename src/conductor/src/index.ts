@@ -90,6 +90,7 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
 import {
   detectHaltIssuesSweepCommand,
   dispatchHaltIssuesSweep,
@@ -495,6 +496,15 @@ async function main(): Promise<void> {
   // --ledger ... --gh-repo ...`) runs NON-INTERACTIVELY and exits — orchestrates
   // the sweep pipeline for processing filed halt-monitor issues. Mirrors the
   // shipped-record dispatch pattern.
+  // `build-auth-status` (Task 8, FR-1) runs NON-INTERACTIVELY and exits —
+  // reports the resolved daemon build-auth mode/token state, mirroring the
+  // evidence/task-cli dispatch pattern.
+  const buildAuthStatusCmd = detectBuildAuthStatusCommand(process.argv);
+  if (buildAuthStatusCmd) {
+    const code = await dispatchBuildAuthStatus(buildAuthStatusCmd);
+    process.exit(code);
+  }
+
   const haltIssuesCmd = detectHaltIssuesSweepCommand(process.argv);
   if (haltIssuesCmd) {
     const code = await dispatchHaltIssuesSweep(haltIssuesCmd, process.cwd());
