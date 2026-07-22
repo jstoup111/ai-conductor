@@ -18,7 +18,8 @@ import {
 } from './complexity.js';
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { findArtifactFiles, resolveFeaturePlanPath } from './artifacts.js';
+import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from './artifacts.js';
+import { currentCommitSha } from './project-prelude.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 
@@ -934,6 +935,7 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: result.output, sessionExpired: true };
     }
     if (result.success) {
+      await this.stampBuildReviewVerdict();
       return { success: true, output: result.output };
     }
 
@@ -961,6 +963,37 @@ export class DefaultStepRunner implements StepRunner {
         ? result.output
         : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
     return { success: false, output: graderOutput, graderDispatchFailed: true };
+  }
+
+  /**
+   * Post-write augmentation of the grader-authored build-review.json: attach
+   * the HEAD SHA the verdict was formed against (gate-code-validity-on-
+   * redispatch, #817, Task 3). The engine cannot control what JSON the LLM
+   * grader writes, so this reads the file back after a successful dispatch
+   * and merges in `codeStamp` before the completion predicate ever reads it.
+   * Never fails the step: a missing/unparseable file is left untouched and
+   * silently skipped (an absent stamp is the safe fail-closed default —
+   * treated as "rerun" by the re-dispatch preservation check, Task 5/6).
+   */
+  private async stampBuildReviewVerdict(): Promise<void> {
+    const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
+    let parsed: unknown;
+    try {
+      const raw = await readFile(verdictPath, 'utf-8');
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (typeof parsed !== 'object' || parsed === null) {
+      return;
+    }
+    const codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
+    const stamped = { ...(parsed as Record<string, unknown>), codeStamp };
+    try {
+      await writeFile(verdictPath, JSON.stringify(stamped, null, 2), 'utf-8');
+    } catch {
+      // Best-effort augmentation only — never fail the step over a write error.
+    }
   }
 
   private async fileExists(path: string): Promise<boolean> {
