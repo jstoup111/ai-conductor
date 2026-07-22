@@ -43,8 +43,9 @@ import {
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
   readManualTestFailRows,
+  stampCode,
 } from '../../src/engine/artifacts.js';
-import type { CompletionResult } from '../../src/engine/artifacts.js';
+import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -2317,6 +2318,50 @@ Task 1 → Task 2
         rubric: {},
       });
       expect(result.ok).toBe(false);
+    });
+
+    it('accepts and round-trips a verdict carrying a codeStamp', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+        codeStamp: 'abc123def456',
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+        codeStamp: 'abc123def456',
+      });
+    });
+
+    it('accepts a stamp-less legacy verdict (codeStamp is purely additive)', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false },
+      });
+      expect(result.ok).toBe(true);
+      expect(result).not.toHaveProperty('codeStamp');
+    });
+  });
+
+  describe('stampCode', () => {
+    it('returns the SHA from ctx.getHeadSha() when present', async () => {
+      const ctx = { getHeadSha: async () => 'deadbeef1234' } as unknown as CompletionContext;
+      await expect(stampCode(ctx)).resolves.toBe('deadbeef1234');
+    });
+
+    it('returns null when ctx.getHeadSha is absent (non-git path)', async () => {
+      const ctx = {} as unknown as CompletionContext;
+      await expect(stampCode(ctx)).resolves.toBeNull();
+    });
+
+    it('returns null when ctx.getHeadSha rejects, never throwing', async () => {
+      const ctx = {
+        getHeadSha: async () => {
+          throw new Error('git not available');
+        },
+      } as unknown as CompletionContext;
+      await expect(stampCode(ctx)).resolves.toBeNull();
     });
   });
 });

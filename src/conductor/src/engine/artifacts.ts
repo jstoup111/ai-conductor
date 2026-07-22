@@ -481,6 +481,20 @@ export interface CompletionContext {
 export const MANUAL_TEST_FAIL_EVIDENCE = '.pipeline/manual-test-fail-evidence.json';
 
 /**
+ * Shape of `MANUAL_TEST_FAIL_EVIDENCE`. `codeStamp` is additive
+ * (gate-code-validity-on-redispatch, #817) — the HEAD SHA the surrounding
+ * manual_test verdict was formed against, written alongside (not in place
+ * of) the pre-existing `headSha` FAIL-laundering guard (#367). A marker
+ * written before this field existed still parses (codeStamp absent).
+ */
+export interface ManualTestFailEvidence {
+  observedAt?: number;
+  headSha?: string;
+  failRows?: string[];
+  codeStamp?: string | null;
+}
+
+/**
  * True when a fresh (this-session) fail-evidence marker (#367) at markerPath
  * records the SAME headSha as the one passed in. Used by the manual_test
  * SKIP-sentinel path to detect laundering: a later attempt's SKIP sentinel
@@ -887,6 +901,13 @@ export interface BuildReviewVerdict {
    * validation only guards the shape needed to route PASS vs FAIL safely). */
   reasons?: string[];
   rubric: BuildReviewRubric;
+  /** The HEAD SHA this verdict was formed against (gate-code-validity-on-
+   * redispatch, #817). Additive/optional — absent on legacy verdicts or when
+   * `stampCode` had no HEAD to record (non-git checkout). Written at judge
+   * dispatch (Task 3); consumed by the re-dispatch preservation check
+   * (Task 5) to decide whether a PASS verdict can be trusted without a
+   * re-run. Never required for a verdict to parse. */
+  codeStamp?: string | null;
 }
 
 /**
@@ -902,7 +923,13 @@ export interface BuildReviewVerdict {
 export function validateBuildReviewVerdict(
   ev: unknown,
 ):
-  | { ok: true; verdict: 'PASS' | 'FAIL'; reasons?: string[]; rubric: BuildReviewRubric }
+  | {
+      ok: true;
+      verdict: 'PASS' | 'FAIL';
+      reasons?: string[];
+      rubric: BuildReviewRubric;
+      codeStamp?: string | null;
+    }
   | { ok: false; reason: string } {
   if (typeof ev !== 'object' || ev === null) {
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
@@ -932,6 +959,7 @@ export function validateBuildReviewVerdict(
     verdict: 'PASS' | 'FAIL';
     reasons?: string[];
     rubric: BuildReviewRubric;
+    codeStamp?: string | null;
   } = {
     ok: true,
     verdict: e.verdict,
@@ -940,7 +968,42 @@ export function validateBuildReviewVerdict(
   if (Array.isArray(e.reasons)) {
     result.reasons = e.reasons as string[];
   }
+  if (typeof e.codeStamp === 'string' || e.codeStamp === null) {
+    result.codeStamp = e.codeStamp;
+  }
   return result;
+}
+
+/**
+ * Return the current HEAD SHA to stamp onto a freshly-written judged-gate
+ * verdict (gate-code-validity-on-redispatch, #817), or `null` when no HEAD
+ * is available (non-git checkout, or `ctx.getHeadSha` is absent/throws).
+ * Reuses the sanctioned HEAD-read (`CompletionContext.getHeadSha`, the same
+ * one `wiring_check` uses) rather than introducing a new git call site.
+ * Never throws — safe to call unconditionally at every verdict write point.
+ */
+export async function stampCode(ctx: CompletionContext): Promise<string | null> {
+  if (!ctx.getHeadSha) return null;
+  try {
+    return await ctx.getHeadSha();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sidecar code-stamp marker shape for `prd_audit` and
+ * `architecture_review_as_built` (gate-code-validity-on-redispatch, #817).
+ * Unlike `build_review` (a JSON verdict) or `manual_test` (which already has
+ * a `headSha`-bearing JSON marker), these two gates' verdicts live in
+ * markdown reports — so `codeStamp` is recorded in a small adjacent JSON
+ * sidecar rather than inline in the report text. Task 4 writes this at
+ * judge dispatch; Task 6 reads it on the completion check. Purely additive:
+ * absence of the sidecar (or of `codeStamp` within it) means "no stamp",
+ * which falls back to today's mtime-freshness behavior.
+ */
+export interface GateCodeStampMarker {
+  codeStamp?: string | null;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
