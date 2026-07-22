@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- CI runs the TypeScript type-check (`tsc --noEmit`) on every PR via a dedicated
+  `typecheck` job in `.github/workflows/ci.yml`; any type error now fails CI, preventing
+  new type regressions from landing on `main` (#789).
 - `conduct-ts overlap-scan` — an advisory, non-interactive DECIDE-time scan for unmerged
   sibling `spec/*`/PR branches touching the same candidate files as the feature being
   authored, plus open blockers on a linked source-ref issue. Never blocks (always exits
@@ -21,6 +24,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Resolved 12 baseline TypeScript errors in `src/conductor/src/engine/` so the new CI
+  typecheck gate lands green: missing `.js` extensions on relative ESM/NodeNext imports
+  (`acceptance-red-runner.ts`, `halt-issues/{closer,ledger,sweep}.ts`), a `writeSync`
+  overload and a non-existent `fs/promises.close` fd-close (`attribution-audit.ts` — the
+  latter was a latent fd leak, now closed via `closeSync`), a `runGit` return-type
+  mismatch (`finish-record-cli.ts`), and an `unknown`-collapsing error cast
+  (`push-evidence.ts`) (#789).
 - Sidecar evidence stamps (`Evidence: satisfied-by <sha>`) that cite a commit absent
   from history and never translated by a sanctioned engine rebase no longer
   permanently pin the task `completed` — the task is now demoted (audit entry +
