@@ -136,7 +136,7 @@ import {
   type ShouldEscalateKickbackResult,
 } from './kickback-escalation.js';
 import { WorktreeManager } from './worktree.js';
-import { deriveCompletion, applyDerivedCompletion, parsePlanTaskVerifyOnly } from './autoheal.js';
+import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -244,10 +244,6 @@ const MAX_KICKBACKS_PER_GATE = 2;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
-
-// Task 23 (auto-park): build-gate no-evidence misses tolerated before the
-// daemon parks the feature (durable sidecar counter — see daemon-auto-park.ts).
-const DAEMON_NO_EVIDENCE_THRESHOLD = 3;
 
 export interface NavigableStep {
   name: StepName;
@@ -2764,13 +2760,6 @@ export class Conductor {
         let attempt = 0;
         let lastError: string = '';
         let succeeded = false;
-        // Task 6 (#inherited-budget halt wording): snapshot the durable
-        // no-evidence counter BEFORE this dispatch cycle's attempts run, so
-        // a subsequent auto-park can distinguish "already exhausted at
-        // cycle start" (inherited from a prior halted run) from "crossed
-        // the threshold during this cycle" — pure arithmetic on the
-        // snapshot vs. the counter's value at park-check time.
-        const cycleStartNoEvidenceAttempts = this.taskEvidence?.noEvidenceAttempts ?? 0;
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
@@ -3510,41 +3499,6 @@ export class Conductor {
                   lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
                 }
 
-                // #569: snapshot the evidence sidecar's noEvidenceReasons
-                // BEFORE the durable-counter block below writes its own
-                // (possibly empty) in-memory `this.taskEvidence` back to
-                // disk — that write clobbers any reason tags a step runner
-                // wrote directly to task-evidence.json this attempt. The
-                // no_task_progress remediation-prompt synthesis further
-                // down needs the pre-clobber tags.
-                const noEvidenceReasonsSnapshotForStall = (
-                  await createTaskEvidence(this.projectRoot)
-                ).noEvidenceReasons;
-
-                // Task 12: Durable no-evidence counter. Increment on EVERY
-                // gate miss without progress (H7 — the counter accrues across
-                // attempts, runs, and re-kicks; gating it on the attempt>=2
-                // stall verdict would let single-attempt re-kick loops never
-                // reach the park threshold), reset when progress is detected.
-                if (this.taskEvidence) {
-                  if (resolvedTasksAfter > resolvedTasksBefore) {
-                    // Progress detected — reset counter and its reason tags
-                    this.taskEvidence.noEvidenceAttempts = 0;
-                    this.taskEvidence.noEvidenceReasons = [];
-                    await this.taskEvidence.write();
-                  } else {
-                    // No-evidence miss — increment the durable counter. #505
-                    // TS-16: tag the miss with `zero_work_product` when the
-                    // detector above fired, so the ledger records WHY this
-                    // attempt didn't count, not just that it didn't.
-                    this.taskEvidence.noEvidenceAttempts++;
-                    if (isZeroWork) {
-                      this.taskEvidence.noEvidenceReasons.push('zero_work_product');
-                    }
-                    await this.taskEvidence.write();
-                  }
-                }
-
                 // T4: within-dispatch progress-bypass gate. A completion-gate
                 // miss that nonetheless resolved at least one more task than
                 // the previous attempt is real forward progress, not a stall
@@ -3607,16 +3561,14 @@ export class Conductor {
                 }
 
                 // Task 23: daemon auto-park at the build gate layer (ADR
-                // "last resort" + H7 durable counter). Fires ONLY on a build
-                // gate miss: an empty/missing plan (the gate's own seed-time
-                // verdict — never re-derived here) parks immediately; a
-                // no-evidence counter at the threshold (durable in the
-                // sidecar, so it accrues ACROSS re-kicks and restarts) parks
-                // instead of looping. checkAndAutoPark is daemon-gated by
-                // construction — interactive runs keep the stall-REPL path
-                // below. A park is terminal for this run: the HALT marker
-                // satisfies the marker guarantee, while the park marker is
-                // what the re-kick sweep honors until an operator unparks.
+                // "last resort"). Fires ONLY on a build gate miss: an
+                // empty/missing plan (the gate's own seed-time verdict —
+                // never re-derived here) parks immediately. checkAndAutoPark
+                // is daemon-gated by construction — interactive runs keep
+                // the stall-REPL path below. A park is terminal for this
+                // run: the HALT marker satisfies the marker guarantee, while
+                // the park marker is what the re-kick sweep honors until an
+                // operator unparks.
                 if (this.daemon) {
                   const gateReason = completion.reason ?? '';
                   const parkCtx = await this.completionCtx(state);
@@ -3636,8 +3588,9 @@ export class Conductor {
                   // contradiction-check it against the run's own completion
                   // evidence (summary.json, task-evidence stamps, resolved
                   // tasks). A contradiction strips the immediate reason so
-                  // checkAndAutoPark falls back to the durable no-evidence
-                  // counter semantics instead of parking immediately.
+                  // this build gate miss falls through to the ordinary
+                  // stall/retry handling below instead of parking
+                  // immediately.
                   let effectiveEmptyPlan = emptyPlan;
                   if (emptyPlan) {
                     const contradiction = await detectParkContradiction(this.projectRoot, {
@@ -3659,44 +3612,14 @@ export class Conductor {
                     }
                   }
 
-                  // Task 7 (verify-only-prove-closed-task-evidence): when the
-                  // durable no-evidence counter parks (not the explicit
-                  // empty/missing-plan path above), name any unresolved
-                  // residue tasks that are marked `**Verify-only:** yes` in
-                  // the plan so the park reason surfaces them distinctly.
-                  // Defensive: a missing/unreadable plan file must never
-                  // throw here — fails closed to no ids (byte-identical old
-                  // behavior).
-                  const residueIdsForPark: string[] =
-                    derivedCompletion !== null
-                      ? Object.keys(derivedCompletion).filter(
-                          (id) =>
-                            !derivedCompletion[id]?.completed &&
-                            derivedCompletion[id]?.status !== 'skipped',
-                        )
-                      : [];
-                  let verifyOnlyUnresolvedIds: string[] = [];
-                  if (residueIdsForPark.length > 0 && parkCtx.planPath) {
-                    try {
-                      const planTextForPark = await readFile(parkCtx.planPath, 'utf-8');
-                      const verifyOnlyMap = parsePlanTaskVerifyOnly(planTextForPark);
-                      verifyOnlyUnresolvedIds = residueIdsForPark.filter(
-                        (id) => verifyOnlyMap.get(id) === true,
-                      );
-                    } catch {
-                      // Missing/unreadable plan file — fail closed to no ids.
-                    }
-                  }
-
-                  const parkResult = await checkAndAutoPark(this.projectRoot, slug, {
-                    maxAttempts: DAEMON_NO_EVIDENCE_THRESHOLD,
-                    daemon: this.daemon,
-                    cycleStartAttempts: cycleStartNoEvidenceAttempts,
-                    ...(effectiveEmptyPlan ? { reason: 'empty/missing plan' } : {}),
-                    ...(verifyOnlyUnresolvedIds.length > 0 ? { verifyOnlyUnresolvedIds } : {}),
-                    emit: (evt) =>
-                      void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
-                  });
+                  const parkResult = effectiveEmptyPlan
+                    ? await checkAndAutoPark(this.projectRoot, slug, {
+                        daemon: this.daemon,
+                        reason: 'empty/missing plan',
+                        emit: (evt) =>
+                          void this.events.emit(evt as Parameters<typeof this.events.emit>[0]),
+                      })
+                    : { parked: false };
                   if (parkResult.parked) {
                     // T7: stamp the ending resolved count on this park exit
                     // too — every build-step exit path records
@@ -3709,13 +3632,8 @@ export class Conductor {
                       freshEvidence.lastResolvedCount = resolvedTasksAfter;
                       await freshEvidence.write();
                     }
-                    const inheritedBudget =
-                      cycleStartNoEvidenceAttempts >= DAEMON_NO_EVIDENCE_THRESHOLD;
-                    const noEvidenceReason = inheritedBudget
-                      ? `no completion evidence — inherited an already-exhausted budget of ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`
-                      : `no completion evidence after ${DAEMON_NO_EVIDENCE_THRESHOLD} attempts`;
                     const reason =
-                      `auto-parked: ${effectiveEmptyPlan ? 'empty/missing plan' : noEvidenceReason}` +
+                      `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
                     await writeFile(
                       join(this.projectRoot, LOOP_HALT_MARKER),
@@ -3764,18 +3682,7 @@ export class Conductor {
                     const progressPart =
                       `Build stall: no forward progress (resolved ` +
                       `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
-                    // Use the pre-clobber snapshot captured earlier this
-                    // attempt (see `noEvidenceReasonsSnapshotForStall`
-                    // above) rather than the in-memory `this.taskEvidence`,
-                    // which is only ever populated once at construction
-                    // time and the on-disk file, which the durable-counter
-                    // write above may have already overwritten.
-                    const evidenceReasons = noEvidenceReasonsSnapshotForStall;
-                    const evidencePart =
-                      evidenceReasons && evidenceReasons.length > 0
-                        ? ` Evidence: ${evidenceReasons.join(', ')}.`
-                        : '';
-                    const synthesized = `${progressPart} ${reasonPart}.${evidencePart}`;
+                    const synthesized = `${progressPart} ${reasonPart}.`;
                     effectiveQuestion = await writeStallQuestionEvidence(
                       this.projectRoot,
                       synthesized,
@@ -3799,8 +3706,8 @@ export class Conductor {
                     // Task 8: Budget exhausted — fail-safe HALT with question
                     // #569: a zero-work (no_task_progress) stall never
                     // terminal-HALTs on budget exhaustion from this block —
-                    // it falls through to the existing retry/durable
-                    // no-evidence-counter/auto-park path instead.
+                    // it falls through to the existing retry/auto-park path
+                    // instead.
                     if (!isZeroWorkStall && remediationRounds >= MAX_KICKBACKS_PER_GATE) {
                       const haltContent =
                         effectiveQuestion +
@@ -3849,7 +3756,7 @@ export class Conductor {
                       console.error('build-stall remediation dispatch threw:', err);
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/durable no-evidence-counter/auto-park path.
+                      // retry/auto-park path.
                       if (!isZeroWorkStall) {
                         const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
                         await mkdir(join(this.projectRoot, '.pipeline'), {
@@ -3901,7 +3808,7 @@ export class Conductor {
                       // question to signal the human that remediation is broken.
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/durable no-evidence-counter/auto-park path.
+                      // retry/auto-park path.
                       if (!isZeroWorkStall) {
                         const detail =
                           `misrouted to '${outcome.target}': build stall answers must be ` +
@@ -3933,7 +3840,7 @@ export class Conductor {
                       // first line the human sees.
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/durable no-evidence-counter/auto-park path.
+                      // retry/auto-park path.
                       if (!isZeroWorkStall) {
                         const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
                         await mkdir(join(this.projectRoot, '.pipeline'), {
@@ -3960,7 +3867,7 @@ export class Conductor {
                       // so human can investigate why remediation failed.
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
-                      // retry/durable no-evidence-counter/auto-park path.
+                      // retry/auto-park path.
                       if (!isZeroWorkStall) {
                         const haltContent =
                           effectiveQuestion +
@@ -3995,17 +3902,13 @@ export class Conductor {
                   // so we fall straight through to the (auto) failure handling.
                   //
                   // Daemon + no_task_progress (not halt_marker) is the
-                  // exception: there is no human to hand off to, AND the
-                  // durable no-evidence counter (checked via checkAndAutoPark
-                  // above, every attempt) already owns the halt decision for
-                  // this exact condition. Breaking the retry loop here
-                  // unconditionally capped the counter at 2 increments per
-                  // run — the park threshold (3) could only ever be reached
-                  // by a SEPARATE re-kicked run, never within one generous
-                  // (e.g. maxRetries: 10) run. Falling through instead lets
-                  // the normal retry accounting keep going so the counter can
-                  // reach its threshold, or the step's own maxRetries budget,
-                  // within a single run.
+                  // exception: there is no human to hand off to, AND falling
+                  // through here (instead of breaking) lets the normal retry
+                  // accounting keep going so a no_task_progress stall gets
+                  // multiple remediation attempts within a single generous
+                  // (e.g. maxRetries: 10) run, up to the step's own
+                  // maxRetries budget, instead of capping at one stall
+                  // detection per run.
                   if (!(this.daemon && stalled === 'no_task_progress')) {
                     if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
                       await this.stepRunner.runInteractive(step.name);
@@ -4018,14 +3921,6 @@ export class Conductor {
                     if (recheck.done) {
                       succeeded = true;
                       successOutput = result.output;
-
-                      // Task 12: If the interactive REPL resolved the issue and the gate
-                      // now passes, reset the counter since progress was made.
-                      if (this.taskEvidence) {
-                        this.taskEvidence.noEvidenceAttempts = 0;
-                        this.taskEvidence.noEvidenceReasons = [];
-                        await this.taskEvidence.write();
-                      }
                     }
                     break;
                   }
