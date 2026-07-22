@@ -683,6 +683,37 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
   });
 });
 
+describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', () => {
+  it('rejects a worktree whose .docs/plans/ holds only a legacy plan committed on main', async () => {
+    // Legacy plan committed on `main` BEFORE the worktree is created — not
+    // attributable to the idea. The idea authors valid stories/complexity but
+    // never writes its own plan.
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    const legacyPlanPath = join(repoPath, '.docs', 'plans', 'legacy.md');
+    await writeFile(legacyPlanPath, PLAN_WITH_DEPS);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+
+    // Touch the legacy plan to be newest-by-mtime — a corpus-wide picker
+    // would wrongly treat it as satisfying the plan requirement.
+    const newDate = new Date();
+    await utimes(legacyPlanPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/\bplan\b/);
+  });
+});
+
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
   it('rejects a product-track worktree whose .docs/specs/ holds only a legacy spec committed on main', async () => {
     // Legacy spec committed on `main` BEFORE the worktree is created — not
