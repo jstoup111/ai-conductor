@@ -34,6 +34,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `build_review` (and any judged-gate grader) no longer collapses its entire retry ladder
+  in milliseconds when the grader *subprocess could not run*. Previously a fast grader
+  death with empty output slipped past a `??` fallback, so `lastError` became `''` and the
+  retries rendered as "no reason recorded" while burning all three attempts back-to-back in
+  ~118 ms — spuriously HALTing a healthy, plan-complete build with an undiagnosable reason.
+  Now a grader-dispatch failure is flagged distinctly from a grader that *ran and returned a
+  not-PASS verdict* (which still routes as a normal kickback to build): each retry
+  re-dispatches the grader with an exponential backoff, an empty runner output can never
+  produce a blank reason, and the terminal HALT names the infrastructure failure
+  ("grader could not be dispatched: …") instead of the generic "retries exhausted" (#814).
 - `bin/intake-file` is now functional. It previously `exec`'d a
   `src/conductor/src/intake-file-cli.ts` that was never committed, so every
   invocation died with `ERR_MODULE_NOT_FOUND`; the CLI wrapper is now added and
