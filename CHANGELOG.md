@@ -40,6 +40,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   gate build-step completion. Attribution enforcement is demoted to advisory-only: it can
   no longer block a commit or park the daemon (#773).
 
+- Judged gate-step completion (`build_review`, `prd_audit`, `architecture_review_as_built`,
+  `manual_test`) now validates a recorded `PASS` verdict against current code state instead of
+  purely the evidence file's mtime: each verdict is stamped with the HEAD SHA it was judged
+  against, and a re-dispatch/resume preserves the verdict (skips a redundant re-judge) when the
+  code under that gate's declared surface (`GATE_SURFACE`) is unchanged since — falling back to
+  today's mtime-only behavior when the stamped baseline is missing, unreachable, or the delta is
+  uncomputable. Governed by the new additive `gate_code_validity.enabled` config flag
+  (default: `true`); setting it `false` restores exact pre-feature mtime-only behavior (#817).
+
 ### Fixed
 
 - The `build_review` grader (and every autonomous `claude --print` dispatch) now delivers its
