@@ -293,6 +293,77 @@ else
   fi
 fi
 
+# ── 5c. Docs-guard generated-hook drift gate ─────────────────────────────────
+# bin/generate-docs-guard-hook --check validates that the committed
+# hooks/claude/docs-guard.sh artifact matches what the TypeScript source
+# (src/conductor/src/engine/session-hook-assets.ts, via
+# src/conductor/src/tools/generate-docs-guard-hook.ts) would produce. Mirrors
+# check 5a's exit-code contract and node_modules-absent warn/skip behavior.
+#
+# Exit codes (see bin/generate-docs-guard-hook / generate-docs-guard-hook.ts):
+#   0 - no drift (PASS)
+#   1 - drift detected (FAIL, remediation text on stderr/stdout)
+#   2 - environment error, e.g. missing tsx binary (FAIL, env error message)
+
+echo ""
+echo -e "${BOLD}5c. Docs-guard generated-hook drift gate${NC}"
+
+if [ ! -d "$conductor_node_modules" ]; then
+  warn_check "src/conductor/node_modules absent — skipping docs-guard hook drift check" 1
+else
+  set +e
+  docs_guard_hook_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
+  docs_guard_hook_exit=$?
+  set -e
+
+  case "$docs_guard_hook_exit" in
+    0)
+      assert "bin/generate-docs-guard-hook --check — hooks/claude/docs-guard.sh matches source (no drift)" 0
+      ;;
+    1)
+      echo -e "  ${RED}FAIL${NC} bin/generate-docs-guard-hook --check — drift detected in hooks/claude/docs-guard.sh"
+      echo "$docs_guard_hook_output" | sed 's/^/    /'
+      assert "bin/generate-docs-guard-hook --check — drift detected in hooks/claude/docs-guard.sh (remediation: run 'bin/generate-docs-guard-hook' to regenerate)" 1
+      ;;
+    2)
+      echo -e "  ${RED}FAIL${NC} bin/generate-docs-guard-hook --check — environment error"
+      echo "$docs_guard_hook_output" | sed 's/^/    /'
+      assert "bin/generate-docs-guard-hook --check — environment error (exit 2)" 1
+      ;;
+    *)
+      echo -e "  ${RED}FAIL${NC} bin/generate-docs-guard-hook --check — unexpected exit code ${docs_guard_hook_exit}"
+      echo "$docs_guard_hook_output" | sed 's/^/    /'
+      assert "bin/generate-docs-guard-hook --check — unexpected exit code ${docs_guard_hook_exit}" 1
+      ;;
+  esac
+
+  # Fixture sub-test: prove --check CAN detect drift. Back up the committed
+  # artifact, corrupt the working copy in place, run --check (expect exit 1),
+  # then restore byte-for-byte — via trap so a failed assertion still restores.
+  docs_guard_hook_path="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
+  docs_guard_hook_backup="$(mktemp)"
+  cp "$docs_guard_hook_path" "$docs_guard_hook_backup"
+
+  _restore_docs_guard_hook() {
+    cp "$docs_guard_hook_backup" "$docs_guard_hook_path"
+    rm -f "$docs_guard_hook_backup"
+  }
+  trap _restore_docs_guard_hook EXIT
+
+  printf '\n# deliberately corrupted for drift-detection fixture test\n' >> "$docs_guard_hook_path"
+
+  set +e
+  docs_guard_hook_fixture_output=$("${HARNESS_DIR}/bin/generate-docs-guard-hook" --check 2>&1)
+  docs_guard_hook_fixture_exit=$?
+  set -e
+
+  _restore_docs_guard_hook
+  trap - EXIT
+
+  assert "bin/generate-docs-guard-hook --check — fixture: corrupted hook correctly detected as drift (exit 1)" \
+    "$([ "$docs_guard_hook_fixture_exit" -eq 1 ] && echo 0 || echo 1)"
+fi
+
 # ── 6. Template references ──────────────────────────────────────────────────
 
 echo ""
