@@ -67,6 +67,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   uncomputable. Governed by the new additive `gate_code_validity.enabled` config flag
   (default: `true`); setting it `false` restores exact pre-feature mtime-only behavior (#817).
 
+### Removed
+
+- Removed the retired `docs/runbooks/evidence-backfill-recovery.md` runbook — it documented
+  the per-task evidence gate deleted in #773; builds can no longer halt on missing task
+  evidence, so the manual backfill procedure (hand-authoring `Evidence: satisfied-by <sha>`
+  trailer commits) no longer applies. Completion authority is now `build_review`'s
+  completeness rubric (#467, mooted by #773).
+
 ### Fixed
 
 - The `build_review` grader (and every autonomous `claude --print` dispatch) now delivers its
