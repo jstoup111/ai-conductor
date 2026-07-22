@@ -1,17 +1,14 @@
 /**
- * RED acceptance specs for jstoup111/ai-conductor#535
+ * Acceptance specs for jstoup111/ai-conductor#535
  * (rebase-orphans-every-sha-anchored-evidence-citatio).
  *
  * Stories: `.docs/stories/rebase-orphans-every-sha-anchored-evidence-citatio.md`
  * Plan:    `.docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md`
  *
- * Nothing under this feature exists yet — `rebase-translate.ts` is not
- * written, and `performRebase` does not call it. Per this project's
- * writing-system-tests convention for a headless engine, these specs drive
- * the REAL production call sites — `runRebaseStep` (via a real
- * `Conductor.run({ fromStep: 'rebase' })`, mirroring
+ * These specs drive the REAL production call sites — `runRebaseStep` (via a
+ * real `Conductor.run({ fromStep: 'rebase' })`, mirroring
  * `test/engine/merged-pr-guard-rebase.test.ts`) and `resumeRebaseFirst`
- * (mirroring `test/engine/daemon-rekick.test.ts`) — never the new
+ * (mirroring `test/engine/daemon-rekick.test.ts`) — never the
  * `translateAfterRebase`/`buildRewriteMap`/`resolveThroughMap` primitives
  * directly. That guards against an orphaned primitive: a new module that is
  * unit-tested but never wired into `performRebase`.
@@ -20,13 +17,13 @@
  * patch-id correspondence is a real git plumbing operation
  * (`git patch-id --stable`) that only a real rebase can exercise.
  *
- * Every assertion below is expected to FAIL today: `.pipeline/rebase-rewrites.json`
- * and `.pipeline/rebase-residue.json` are never written, the sidecar/status
- * stores are never rewritten, and `validateCitations` has no map to resolve
- * through — so a citation to a rewritten commit still fails ancestry. That is
- * the correct RED signal (missing artifacts / unmet assertions), not a
- * module-resolution error, because this spec deliberately only imports real,
- * already-shipped entry points.
+ * `validateCitations`/`attribution-validate.ts` was deleted (#773, evidence
+ * gate removal); the read-time-citation-resolution specs that exercised it
+ * as a "real read-time consumer" of `.pipeline/rebase-rewrites.json` were
+ * removed with it. This file now covers only the write/rewrite side of
+ * #535: `.pipeline/rebase-rewrites.json` / `.pipeline/rebase-residue.json`
+ * production and sidecar/status-store rewriting via the real `performRebase`
+ * path, which remain live machinery.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -44,7 +41,6 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
-import { validateCitations } from '../../src/engine/attribution-validate.js';
 
 const execFile = promisify(execFileCb);
 
@@ -279,91 +275,6 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       const statusAfter = await readJson(join(repo, '.pipeline/task-status.json'));
       const t2 = statusAfter.tasks.find((t: { id: string }) => t.id === 'T2');
       expect(t2.commit).toBe(newC1Sha.slice(0, 7));
-    },
-    20000,
-  );
-
-  it(
-    'Story 5: a satisfied-by citation to a rewritten commit resolves against the new HEAD (validateCitations, real read-time consumer)',
-    async () => {
-      const scratch = await buildTranslationRepo();
-      repo = scratch.repo;
-      const { c1Sha, c2Sha } = scratch;
-      await seedStores(repo, c1Sha, c2Sha);
-
-      await runFinishTimeRebase(repo);
-
-      const git = makeGitRunner(repo);
-      const newHead = (await git(['rev-parse', 'feat'])).stdout.trim();
-
-      // Today the OLD sha is dangling/off-branch after the rebase, so
-      // validateCitations' ancestry check refuses it — this is the RED
-      // signal. Once translation is wired the citation resolves through
-      // .pipeline/rebase-rewrites.json before the ancestry check and this
-      // flips to valid.
-      const result = await validateCitations(
-        git,
-        { taskId: 'T1', paths: new Set() },
-        { taskId: 'T1', verdict: 'satisfied', citations: [{ sha: c2Sha, rationale: 'work' }] },
-        newHead,
-      );
-      expect(result.valid).toBe(true);
-      expect(result.reasons).toEqual([]);
-    },
-    20000,
-  );
-
-  it(
-    'Story 8: a never-on-branch (forged) citation is still refused after translation runs (no laundering)',
-    async () => {
-      const scratch = await buildTranslationRepo();
-      repo = scratch.repo;
-      const { c1Sha, c2Sha } = scratch;
-      await seedStores(repo, c1Sha, c2Sha);
-
-      // A commit from a totally unrelated repo history — never a pre-image
-      // commit of THIS branch; stale/forged per Story 8.
-      const forgedRepo = await mkdtemp(join(tmpdir(), 'rebase-xlate-forged-'));
-      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: forgedRepo });
-      await execFile('git', ['config', 'user.email', 't@t.com'], { cwd: forgedRepo });
-      await execFile('git', ['config', 'user.name', 'T'], { cwd: forgedRepo });
-      await writeFile(join(forgedRepo, 'x.ts'), 'x\n');
-      await execFile('git', ['add', '.'], { cwd: forgedRepo });
-      await execFile('git', ['commit', '-q', '-m', 'unrelated history'], { cwd: forgedRepo });
-      const forgedSha = (
-        await execFile('git', ['rev-parse', 'HEAD'], { cwd: forgedRepo })
-      ).stdout.trim();
-      await rm(forgedRepo, { recursive: true, force: true });
-
-      await runFinishTimeRebase(repo);
-
-      const git = makeGitRunner(repo);
-      const newHead = (await git(['rev-parse', 'feat'])).stdout.trim();
-
-      // The legitimate citation must resolve — this is the failing half
-      // today (no translation wired yet), and is what makes this spec RED
-      // even though the forged-refusal half below already holds unimplemented.
-      const legit = await validateCitations(
-        git,
-        { taskId: 'T1', paths: new Set() },
-        { taskId: 'T1', verdict: 'satisfied', citations: [{ sha: c2Sha, rationale: 'work' }] },
-        newHead,
-      );
-      expect(legit.valid).toBe(true);
-
-      // No-laundering: a citation sha that was never a pre-image commit on
-      // this branch must remain refused post-translation.
-      const forged = await validateCitations(
-        git,
-        { taskId: 'T9', paths: new Set() },
-        { taskId: 'T9', verdict: 'satisfied', citations: [{ sha: forgedSha, rationale: 'forged' }] },
-        newHead,
-      );
-      expect(forged.valid).toBe(false);
-
-      const rewritesPath = join(repo, '.pipeline/rebase-rewrites.json');
-      const rewrites = await readJson(rewritesPath).catch(() => ({}));
-      expect(Object.keys(rewrites)).not.toContain(forgedSha);
     },
     20000,
   );
