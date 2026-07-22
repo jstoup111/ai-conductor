@@ -31,7 +31,13 @@ const SESSION_IN_USE_RE = /\balready in use\b|\b(session|conversation)\b[^\n]{0,
 // - "Not logged in" — no stored token
 // - "Invalid API key" — malformed or revoked token
 // - "Please run /login" — interactive prompt to re-authenticate
-export const AUTH_FAILURE_RE = /not logged in|invalid api key|please run \/login/i;
+// - "Failed to authenticate" / "Invalid bearer token" / "API Error: 401" —
+//   observed rejected-credential shapes from the underlying API (FR-4,
+//   task 1). These are anchored to specific phrasing so a bare "401"
+//   appearing in unrelated prose (e.g. "expects a 401 response") does not
+//   false-positive.
+export const AUTH_FAILURE_RE =
+  /not logged in|invalid api key|please run \/login|failed to authenticate|invalid bearer token|api error:\s*401/i;
 
 // Signatures indicating the requested model itself is unavailable — not
 // entitled, deprecated, or unrecognized by the CLI/API — as opposed to a

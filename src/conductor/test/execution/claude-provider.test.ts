@@ -416,6 +416,42 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    it('detects auth failure from observed "Failed to authenticate. API Error: 401 Invalid bearer token" (text mode)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Failed to authenticate. API Error: 401 Invalid bearer token',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects auth failure from "Failed to authenticate. API Error: 401 Invalid bearer token" embedded in longer output', async () => {
+      mockExeca.mockResolvedValue({
+        stdout:
+          'Starting session...\nConnecting to API...\nFailed to authenticate. API Error: 401 Invalid bearer token\nExiting with error.',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('does not flag authFailure on a bare "401" mentioned in prose', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'The mock server expects a 401 response for this case',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBeUndefined();
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',
