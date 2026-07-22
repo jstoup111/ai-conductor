@@ -56,3 +56,27 @@ export function removePhaseMarker(root: string): void {
     rmSync(path, { force: true });
   }
 }
+
+/**
+ * Per-step .docs write-allowlist entries, keyed by step name. Entries here
+ * are in ADDITION to `DOCS_WRITE_ALWAYS_ALLOWED`.
+ */
+export const DOCS_WRITE_ALLOWLIST: Record<string, string[]> = {
+  retro: ['.docs/retros/', '.docs/stories/'],
+};
+
+/**
+ * Path prefixes always exempt from the .docs write-guard, regardless of
+ * which step is currently dispatched.
+ */
+export const DOCS_WRITE_ALWAYS_ALLOWED: string[] = ['.docs/release-waivers/'];
+
+/**
+ * Resolve the full .docs write-allowlist for a given step name: the
+ * always-allowed prefixes, followed by any step-specific prefixes. Unknown
+ * step names resolve to just the always-allowed list.
+ */
+export function resolveDocsAllowlist(stepName: string): string[] {
+  const perStep = DOCS_WRITE_ALLOWLIST[stepName] ?? [];
+  return [...DOCS_WRITE_ALWAYS_ALLOWED, ...perStep];
+}

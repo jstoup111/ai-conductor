@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { phaseMarkerPath, writePhaseMarker, removePhaseMarker } from '../../src/engine/phase-marker.js';
+import { phaseMarkerPath, writePhaseMarker, removePhaseMarker, resolveDocsAllowlist } from '../../src/engine/phase-marker.js';
 
 // #788: phase-active marker — the session-hook-visible signal for which
 // step/phase is currently dispatched, so a write-guard hook can tell
@@ -67,5 +67,21 @@ describe('phase-marker', () => {
     expect(existsSync(phaseMarkerPath(root))).toBe(false);
     expect(() => removePhaseMarker(root)).not.toThrow();
     expect(() => removePhaseMarker(root)).not.toThrow();
+  });
+
+  it('resolveDocsAllowlist merges always-allowed with per-step entries for retro', () => {
+    expect(resolveDocsAllowlist('retro')).toEqual([
+      '.docs/release-waivers/',
+      '.docs/retros/',
+      '.docs/stories/',
+    ]);
+  });
+
+  it('resolveDocsAllowlist returns only always-allowed for manual_test', () => {
+    expect(resolveDocsAllowlist('manual_test')).toEqual(['.docs/release-waivers/']);
+  });
+
+  it('resolveDocsAllowlist returns only always-allowed for an unknown step', () => {
+    expect(resolveDocsAllowlist('some_unknown_step')).toEqual(['.docs/release-waivers/']);
   });
 });
