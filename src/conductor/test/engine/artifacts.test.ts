@@ -2447,4 +2447,98 @@ Task 1 → Task 2
       await expect(stampCode(ctx)).resolves.toBeNull();
     });
   });
+
+  describe('checkStepCompletion: build_review code-validity on re-dispatch (Task 5, #817)', () => {
+    const OLD_MTIME = new Date(2000, 0, 1);
+
+    async function makeGitDir(): Promise<string> {
+      const d = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-'));
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: d });
+      await execa('git', ['config', 'user.email', 't@t.com'], { cwd: d });
+      await execa('git', ['config', 'user.name', 'T'], { cwd: d });
+      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: d });
+      await mkdir(join(d, '.pipeline'), { recursive: true });
+      await writeFile(join(d, '.gitignore'), '.pipeline/\n');
+      await execa('git', ['add', '.gitignore'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', 'chore: gitignore .pipeline'], { cwd: d });
+      return d;
+    }
+
+    async function commitFile(d: string, rel: string, content: string, message: string): Promise<string> {
+      await mkdir(join(d, dirname(rel)), { recursive: true });
+      await writeFile(join(d, rel), content);
+      await execa('git', ['add', '.'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', message], { cwd: d });
+      const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: d });
+      return r.stdout.trim();
+    }
+
+    async function writeVerdict(d: string, verdict: 'PASS' | 'FAIL', codeStamp?: string): Promise<void> {
+      const p = join(d, '.pipeline/build-review.json');
+      const body: Record<string, unknown> = { verdict, rubric: {} };
+      if (codeStamp !== undefined) body.codeStamp = codeStamp;
+      await writeFile(p, JSON.stringify(body, null, 2));
+      await utimes(p, OLD_MTIME, OLD_MTIME);
+    }
+
+    function ctxFor(d: string): CompletionContext {
+      return {
+        sessionStartedAt: Date.now(),
+        attemptStartedAt: Date.now(),
+        getHeadSha: async () => {
+          const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: d });
+          return r.stdout.trim();
+        },
+      };
+    }
+
+    let gdir: string;
+    afterEach(async () => {
+      if (gdir) await rm(gdir, { recursive: true, force: true });
+    });
+
+    it('preserves a stale-mtime PASS verdict with a codeStamp when the surface since the stamp is unchanged', async () => {
+      gdir = await makeGitDir();
+      const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      await writeVerdict(gdir, 'PASS', baseline);
+
+      const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
+      expect(result.done).toBe(true);
+    });
+
+    it('falls through to mtime rejection when the surface since the stamp changed (code diff)', async () => {
+      gdir = await makeGitDir();
+      const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      await writeVerdict(gdir, 'PASS', baseline);
+      await commitFile(gdir, 'src/a.ts', 'a2\n', 'kickback fix');
+
+      const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
+      expect(result.done).toBe(false);
+      expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+    });
+
+    it('falls through to mtime rejection (unchanged legacy behavior) when the PASS verdict has no codeStamp', async () => {
+      gdir = await makeGitDir();
+      await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      await writeVerdict(gdir, 'PASS', undefined);
+
+      const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
+      expect(result.done).toBe(false);
+      expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+    });
+
+    it('a fresh-mtime FAIL verdict still FAILs regardless of codeStamp (existing behavior unaffected)', async () => {
+      gdir = await makeGitDir();
+      const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      const p = join(gdir, '.pipeline/build-review.json');
+      await writeFile(
+        p,
+        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: {}, codeStamp: baseline }, null, 2),
+      );
+      // Fresh mtime (not backdated) — never touches the preserve path anyway.
+      const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAILed: nope/);
+    });
+  });
 });

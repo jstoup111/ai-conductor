@@ -83,6 +83,14 @@ async function makeRepo(): Promise<Scratch> {
   await g(['config', 'user.name', 'T']);
   await g(['config', 'commit.gpgsign', 'false']);
   await mkdir(join(repo, '.pipeline'), { recursive: true });
+  // `.pipeline/` holds run evidence (gate verdicts, this feature's own
+  // codeStamp sidecar), not code — every real consumer project gitignores
+  // it. Without this, `commit()`'s `git add .` sweeps the just-written
+  // evidence file itself into the delta being tested, self-invalidating a
+  // surface-miss scenario the test is trying to construct.
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await execFile('git', ['add', '.gitignore'], { cwd: repo });
+  await execFile('git', ['commit', '-q', '-m', 'chore: gitignore .pipeline'], { cwd: repo });
   return { repo, g };
 }
 

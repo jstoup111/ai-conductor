@@ -8,6 +8,9 @@ import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
+import type { GitRunner } from './rebase.js';
+import { makeGitRunner } from './rebase.js';
+import { gateVerdictStillValid } from './gate-code-validity.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -470,6 +473,16 @@ export interface CompletionContext {
    * (fail-closed "evidence not found" when no fixture exists).
    */
   wiringProbe?: () => Promise<WiringEvidence>;
+  /**
+   * Injectable git runner for the gate-code-validity-on-redispatch decision
+   * (`gateVerdictStillValid`, #817): a judged gate's stamped PASS verdict can
+   * be preserved across re-dispatch when the code hasn't changed in its
+   * surface since the stamp. Absent → predicates default to
+   * `makeGitRunner(dir)` (same convention as `Conductor`'s own call sites,
+   * e.g. `conductor.ts`'s `const git = makeGitRunner(this.projectRoot);`),
+   * so real callers need not wire this; tests inject a scratch-repo runner.
+   */
+  git?: GitRunner;
 }
 
 /**
@@ -1567,6 +1580,36 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const floor = verdictFreshnessFloor(ctx);
     const cmpFloor = verdictFreshnessComparand(ctx);
     const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
+
+    // gate-code-validity-on-redispatch (#817): before falling into the
+    // mtime-freshness check below, see if a stamped PASS verdict can be
+    // trusted as-is because the code hasn't changed in its surface since it
+    // was formed — this is what lets a re-dispatched feature skip a
+    // completed build_review whose evidence predates the current attempt
+    // but whose stamped code is still current. Read regardless of mtime
+    // freshness; only a valid stamped PASS can preserve, everything else
+    // (missing file, parse failure, FAIL, no codeStamp) falls through
+    // unchanged to the existing mtime-based logic (invariant C2).
+    try {
+      const raw = await readFile(path, 'utf-8');
+      const parsed: unknown = JSON.parse(raw);
+      const preCheck = validateBuildReviewVerdict(parsed);
+      if (preCheck.ok && preCheck.verdict === 'PASS' && preCheck.codeStamp) {
+        const git = ctx.git ?? makeGitRunner(dir);
+        const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'build_review', preCheck.codeStamp);
+        if (validity === 'preserve') {
+          const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+          return {
+            done: true,
+            verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+          };
+        }
+      }
+    } catch {
+      // No file, unreadable, or unparseable — fall through to the existing
+      // mtime-based logic, which handles all of those cases itself.
+    }
+
     if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.
