@@ -1034,7 +1034,11 @@ describe('integration/gate-loop', () => {
     }
 
     async function runWithGraderVerdicts(
-      verdicts: Array<{ verdict: 'FAIL' | 'PASS'; reasons: string[] }>,
+      verdicts: Array<{
+        verdict: 'FAIL' | 'PASS';
+        reasons: string[];
+        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
+      }>,
     ): Promise<{
       buildRuns: number;
       retryReasons: string[];
@@ -1063,7 +1067,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: v.verdict,
                 reasons: v.reasons,
-                rubric: { tautology: false, scope: false, rootCause: false },
+                rubric: v.rubric ?? { tautology: false, scope: false, rootCause: false },
               }),
             );
             return { success: true };
@@ -1152,6 +1156,32 @@ describe('integration/gate-loop', () => {
       expect(result.retryReasons.join('\n')).toMatch(
         /grader returned FAIL without reasons/,
       );
+    });
+
+    // Task 6 (#773): a FAIL driven SOLELY by rubric.completeness (all other
+    // rubric items PASS) must flow through this same kickback mechanism —
+    // no new routing code, per Task 5's finding that the predicate treats a
+    // completeness-only FAIL identically to any other rubric-item FAIL.
+    it('FAIL-completeness (rubric.completeness only) kicks back to build with the grader evidence, then PASS converges', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'FAIL',
+          reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        },
+        {
+          verdict: 'PASS',
+          reasons: [],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
+      expect(result.retryReasons.join('\n')).toContain(
+        'implementation addresses only part of the declared scope',
+      );
+      expect(result.completed).toBe(true);
     });
   });
 
