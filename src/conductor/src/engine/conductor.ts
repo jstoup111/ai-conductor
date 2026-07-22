@@ -7,7 +7,7 @@ import {
   unlink as unlinkFile,
   stat,
 } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
+import { constants as fsConstants, existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -681,19 +681,16 @@ export async function checkAttributionMachineryIntact(
   // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
   // fresh conductor run whose earlier steps haven't created it) is not
   // "broken" — there's nothing to attribute against yet. The guard only
-  // fires once `.pipeline/` has actually been initialized (worktree-prepare
-  // provisions `.pipeline/session-hooks/` as part of that init) but is
-  // missing the machinery a build dispatch depends on.
+  // fires once `.pipeline/` exists but is missing the machinery a build
+  // dispatch depends on.
   //
-  // #788: checked via `session-hooks/` rather than bare `.pipeline/`
-  // existence, because the phase-active marker (written for every BUILD/SHIP
-  // step, not just `build`) creates `.pipeline/` as a side effect via
-  // `mkdirSync` ahead of a real worktree-prepare init — an empty
-  // marker-only `.pipeline/` must still read as "not yet initialized" here.
-  const pipelineInitialized = await accessFile(join(pipelineDir, 'session-hooks'))
-    .then(() => true)
-    .catch(() => false);
-  if (!pipelineInitialized) {
+  // #788: the phase-active marker (written for every BUILD/SHIP step, not
+  // just `build`) creates `.pipeline/` via `mkdirSync` ahead of any real
+  // init, but `removePhaseMarker` also removes the directory again if it
+  // ends up empty (see phase-marker.ts) — so a project this guard has never
+  // otherwise touched still presents as un-initialized here.
+  const pipelineDirExists = await accessFile(pipelineDir).then(() => true).catch(() => false);
+  if (!pipelineDirExists) {
     return null;
   }
 
@@ -1690,6 +1687,28 @@ export class Conductor {
   }
 
   async run(): Promise<void> {
+    // #788 regression guard: the phase-active marker creates `.pipeline/`
+    // via `mkdirSync` as a side effect ahead of any real init (worktree-
+    // prepare provisioning session-hooks/, task-status.json, etc). Recorded
+    // once, before the loop touches anything, so the marker's own cleanup
+    // (below) can tell "I created this directory, remove it again once
+    // empty" from "this project already had a real `.pipeline/` — leave it
+    // alone" — otherwise an empty leftover `.pipeline/` makes an
+    // uninitialized project falsely present as initialized to unrelated
+    // `.pipeline/`-existence checks (e.g. checkAttributionMachineryIntact).
+    const pipelineDirPreexisted = existsSync(join(this.projectRoot, '.pipeline'));
+    const cleanupEmptyPipelineDirIfNotPreexisting = () => {
+      if (pipelineDirPreexisted) return;
+      const pipelineDir = join(this.projectRoot, '.pipeline');
+      try {
+        if (existsSync(pipelineDir) && readdirSync(pipelineDir).length === 0) {
+          rmdirSync(pipelineDir);
+        }
+      } catch {
+        // Best-effort cleanup only.
+      }
+    };
+
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
 
@@ -2044,6 +2063,7 @@ export class Conductor {
         // marker can survive into a later DECIDE-phase step's dispatch and
         // mask the write-guard's view of which phase is actually active.
         removePhaseMarker(this.projectRoot);
+        cleanupEmptyPipelineDirIfNotPreexisting();
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
 
@@ -2877,6 +2897,7 @@ export class Conductor {
               // per-step dispatch's finally — this round is done (all-green,
               // halted, or kicked back) either way.
               removePhaseMarker(this.projectRoot);
+              cleanupEmptyPipelineDirIfNotPreexisting();
             }
           }
         }
@@ -3224,6 +3245,7 @@ export class Conductor {
             // since the phase-active marker is written for any BUILD/SHIP
             // step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
+            cleanupEmptyPipelineDirIfNotPreexisting();
             // currentAttemptStartedAt stays set through the completion check
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
