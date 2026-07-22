@@ -1533,6 +1533,22 @@ selection table in `HARNESS.md`) in a fresh session — it is deliberately not c
 it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
 cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
 
+#### Per-task work-happened floor (advisory, `build_review`)
+
+Separate from — and much lighter than — `build_review`'s completeness rubric above,
+`runPerTaskCommitFloor` (`engine/per-task-commit-floor.ts`) is a non-blocking advisory check
+run as part of the `build_review` step. For each plan task id it checks: is the task covered
+by at least one commit carrying a matching `Task:` trailer, marked `**Verify-only:** yes` in
+the plan, or recorded with `status: 'skipped'` in `.pipeline/task-status.json`? A task
+satisfying none of these is a "gap." Gaps never block, kick back, or HALT the build — there
+is no path/SHA corroboration, unlike the completeness rubric — they are simply written to
+`.pipeline/per-task-floor.json` and prepended as `WARNING` advisory lines ahead of the normal
+grader output, for an operator to notice. Controlled by `build_review.perTaskFloor` (default
+`true`); any internal failure (missing plan, git error, malformed task-status) degrades
+fail-soft to "satisfied, no gaps" rather than fabricating a warning. Author a legitimately
+no-commit task as `**Verify-only:** yes` (see `skills/plan/SKILL.md` §5d) to keep it out of
+the gap list.
+
 #### Wiring reachability gate (`wiring_check`)
 
 `wiring_check` is a **gating**, always-on built-in that sits strictly between `build_review`

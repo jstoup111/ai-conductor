@@ -64,6 +64,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   both daemon-provisioned worktrees (`worktree-prepare.ts`) and primary checkouts
   (`bin/install`, via the generated `hooks/claude/docs-guard.sh` /
   `bin/generate-docs-guard-hook`).
+- Per-task work-happened floor in `build_review` (`engine/per-task-commit-floor.ts`,
+  `runPerTaskCommitFloor`) — a non-blocking, advisory telemetry check that confirms every
+  plan task id is covered by at least one commit carrying a matching `Task:` trailer, OR is
+  marked `**Verify-only:** yes` in the plan, OR has a `status: 'skipped'` row in
+  `.pipeline/task-status.json`. Uncovered, unmarked tasks are "gaps": never blocking (no
+  path/SHA corroboration, no kickback, no HALT), just recorded to
+  `.pipeline/per-task-floor.json` and prepended as WARNING lines to the `build_review` step
+  output. Controlled by an optional `build_review.perTaskFloor` config flag (default `true`);
+  fail-soft on any error (missing plan, git failure, malformed input) so it never fabricates
+  a gap it couldn't verify.
 - CI runs the TypeScript type-check (`tsc --noEmit`) on every PR via a dedicated
   `typecheck` job in `.github/workflows/ci.yml`; any type error now fails CI, preventing
   new type regressions from landing on `main` (#789).
