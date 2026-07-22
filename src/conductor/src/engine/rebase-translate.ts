@@ -228,28 +228,6 @@ export async function applyMapToStores(
 }
 
 /**
- * Loads the persisted rewrite map from `.pipeline/rebase-rewrites.json`.
- * Returns an empty map if the file is missing, unreadable, or corrupt —
- * read-time consumers (attribution-validate, autoheal) treat "no map" the
- * same as "no rewrites happened," so `resolveThroughMap` is always safe to
- * call unconditionally with the result.
- */
-export async function loadRewriteMap(projectRoot: string): Promise<Record<string, string>> {
-  const rewritesPath = join(projectRoot, '.pipeline', 'rebase-rewrites.json');
-
-  try {
-    const raw = await readFile(rewritesPath, 'utf-8');
-    const parsed = JSON.parse(raw) as Record<string, string>;
-    if (parsed && typeof parsed === 'object') {
-      return parsed;
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-/**
  * Persists `map` to `.pipeline/rebase-rewrites.json`, merging transitively
  * with any existing persisted map: if the file already has `old -> mid` and
  * this call adds `mid -> new`, the persisted result repoints `old -> new`
@@ -296,9 +274,8 @@ export async function persistRewriteMap(
   await mkdir(pipelineDir, { recursive: true });
 
   // Persisted directly as the flat old-sha -> new-sha map (no wrapper
-  // object): read-time consumers (`loadRewriteMap`) and every direct-file
-  // acceptance/consumer assertion index the file by sha key at the top
-  // level.
+  // object): direct-file acceptance/consumer assertions index the file by
+  // sha key at the top level.
   const serialized: Record<string, string> = closed;
 
   const tempFile = join(
@@ -393,8 +370,8 @@ async function citingTaskIdsFor(
 
 /**
  * Best-effort derivation of the #520 attribution-lane `residueIds` (pending
- * task ids, per `attribution-lane.ts`'s `computeMemoKey`/`runAttributionLane`
- * usage) from the current `.pipeline/task-status.json`. Used only to attempt
+ * task ids, per `attribution-lane.ts`'s `computeMemoKey` usage) from the
+ * current `.pipeline/task-status.json`. Used only to attempt
  * a memo re-key onto the new HEAD (`rekeyMemoAfterRebase`) — if the derived
  * set does not match what the memo was originally keyed with, the re-key is
  * a graceful no-op (a cache miss, identical to pre-translation behavior),
