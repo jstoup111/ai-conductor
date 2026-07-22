@@ -647,10 +647,36 @@ export async function stampShaReachable(
 ): Promise<string | null> {
   const sha = resolveThroughMap(citedSha, rewriteMap);
 
-  const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
-    cwd: projectRoot,
-    reject: false,
-  });
+  // A failure to even invoke git, or a projectRoot that isn't a functioning
+  // git repository at all (e.g. a stub .git dir in a test fixture), means
+  // reachability is indeterminate, not refuted — fail open rather than
+  // demoting on an environment/tooling hiccup unrelated to whether the cited
+  // commit is actually gone from real history.
+  let repoCheck;
+  try {
+    repoCheck = await execa('git', ['rev-parse', '--git-dir'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+  } catch {
+    return sha;
+  }
+  if (!repoCheck || typeof repoCheck.exitCode !== 'number' || repoCheck.exitCode !== 0) {
+    return sha;
+  }
+
+  let shaCheck;
+  try {
+    shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
+      cwd: projectRoot,
+      reject: false,
+    });
+  } catch {
+    return sha;
+  }
+  if (!shaCheck || typeof shaCheck.exitCode !== 'number') {
+    return sha;
+  }
 
   let isAncestor = false;
   if (shaCheck.exitCode === 0) {
