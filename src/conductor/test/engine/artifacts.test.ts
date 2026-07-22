@@ -3026,4 +3026,154 @@ Task 1 → Task 2
       });
     });
   });
+
+  // Task 13 (gate-step-completion-validates-against-code-state-, #817):
+  // characterization/regression coverage proving wiring_check, acceptance_specs,
+  // and the build (task-status.json resume) predicate are byte-identical to
+  // their pre-#817 behavior — the code-validity preserve mechanism
+  // (gateVerdictStillValid / codeStamp sidecars) was scoped to build_review,
+  // prd_audit, architecture_review_as_built, and manual_test ONLY (Tasks 1-9).
+  // These tests would FAIL if a future change accidentally wired the preserve
+  // mechanism into any of these three untouched gates.
+  describe('Task 13: wiring_check / acceptance_specs / build stay byte-identical (#817 out-of-scope gates)', () => {
+    describe('structural regression guard: predicate source never references the preserve mechanism', () => {
+      let artifactsSource: string;
+
+      beforeEach(async () => {
+        artifactsSource = await readFile(
+          join(__dirname, '../../src/engine/artifacts.ts'),
+          'utf-8',
+        );
+      });
+
+      function extractPredicateBody(name: string): string {
+        // Predicates are defined as `<name>: async (dir, ctx): Promise<CompletionResult> => {`
+        // (or a variant with an explicit `dir: string` param). Extract from the
+        // predicate's opening brace to its matching closing brace via simple
+        // depth counting — good enough for this file's consistent formatting.
+        const re = new RegExp(`\\n  ${name}: async \\([^)]*\\)[^{]*\\{`);
+        const match = re.exec(artifactsSource);
+        expect(match, `could not locate predicate "${name}" in artifacts.ts`).not.toBeNull();
+        const start = match!.index + match![0].length;
+        let depth = 1;
+        let i = start;
+        while (depth > 0 && i < artifactsSource.length) {
+          if (artifactsSource[i] === '{') depth++;
+          else if (artifactsSource[i] === '}') depth--;
+          i++;
+        }
+        return artifactsSource.slice(start, i);
+      }
+
+      it('wiring_check predicate body does not reference gateVerdictStillValid or codeStamp', () => {
+        const body = extractPredicateBody('wiring_check');
+        expect(body).not.toMatch(/gateVerdictStillValid/);
+        expect(body).not.toMatch(/codeStamp/);
+      });
+
+      it('acceptance_specs predicate body does not reference gateVerdictStillValid or codeStamp', () => {
+        const body = extractPredicateBody('acceptance_specs');
+        expect(body).not.toMatch(/gateVerdictStillValid/);
+        expect(body).not.toMatch(/codeStamp/);
+      });
+
+      it('build predicate body does not reference gateVerdictStillValid or codeStamp', () => {
+        const body = extractPredicateBody('build');
+        expect(body).not.toMatch(/gateVerdictStillValid/);
+        expect(body).not.toMatch(/codeStamp/);
+      });
+    });
+
+    describe('wiring_check: HEAD-anchored preserve is unaffected — stale (prior-HEAD) evidence is still rejected', () => {
+      async function writeWiringEvidence(headSha: string) {
+        await createFile(
+          '.pipeline/wiring-evidence.json',
+          JSON.stringify({
+            schema: 1,
+            base: 'aaa111',
+            head: headSha,
+            tasks: [],
+            layer2: { applicable: false, reason: 'no layer2 targets' },
+            waivers: [],
+          }),
+        );
+      }
+
+      it('rejects evidence recorded at a prior HEAD, even though that evidence is a clean PASS (no gaps)', async () => {
+        await writeWiringEvidence('stale-sha-111');
+        const ctx = { getHeadSha: async () => 'current-sha-222' };
+        const result = await checkStepCompletion(dir, 'wiring_check', ctx);
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/stale/);
+      });
+
+      it('accepts evidence recorded at the current HEAD with no gaps (pre-existing HEAD-anchored behavior, unchanged)', async () => {
+        await writeWiringEvidence('current-sha-222');
+        const ctx = { getHeadSha: async () => 'current-sha-222' };
+        const result = await checkStepCompletion(dir, 'wiring_check', ctx);
+        expect(result).toEqual({ done: true });
+      });
+    });
+
+    describe('acceptance_specs: content-validate / RED self-heal behavior is unaffected', () => {
+      it('still fails when RED execution evidence is entirely absent (no codeStamp-based preserve short-circuits this)', async () => {
+        await createFile('spec/some_feature_spec.rb', 'x');
+        const result = await checkStepCompletion(dir, 'acceptance_specs', {
+          config: { acceptance_spec_globs: ['spec/**/*'] },
+        });
+        expect(result.done).toBe(false);
+      });
+
+      it('still passes on fresh spec files plus valid RED evidence (unchanged pre-#817 behavior)', async () => {
+        await createFile('spec/some_feature_spec.rb', 'x');
+        await createFile(
+          '.pipeline/acceptance-specs-red.json',
+          JSON.stringify({
+            command: 'bundle exec rspec spec',
+            targetSpecs: ['spec/some_feature_spec.rb'],
+            executed: 1,
+            passed: 0,
+            failed: 1,
+            skipped: 0,
+            errors: 0,
+          }),
+        );
+        const result = await checkStepCompletion(dir, 'acceptance_specs', {
+          config: { acceptance_spec_globs: ['spec/**/*'] },
+        });
+        expect(result).toEqual({ done: true });
+      });
+    });
+
+    describe('build: task-status.json resume is unaffected — no codeStamp/gateVerdictStillValid involvement', () => {
+      it('resumes correctly from prior task-status.json state with mixed completed/pending rows (no preserve short-circuit)', async () => {
+        await createFile(
+          '.pipeline/task-status.json',
+          JSON.stringify({
+            tasks: [
+              { id: 'T1', status: 'completed' },
+              { id: 'T2', status: 'pending' },
+            ],
+          }),
+        );
+        const result = await checkStepCompletion(dir, 'build');
+        expect(result.done).toBe(false);
+        expect(result.reason).toMatch(/pending|not completed/i);
+      });
+
+      it('resumes correctly and passes once every prior-session row reads completed/skipped (unchanged pre-#817 behavior)', async () => {
+        await createFile(
+          '.pipeline/task-status.json',
+          JSON.stringify({
+            tasks: [
+              { id: 'T1', status: 'completed' },
+              { id: 'T2', status: 'skipped' },
+            ],
+          }),
+        );
+        const result = await checkStepCompletion(dir, 'build');
+        expect(result).toEqual({ done: true });
+      });
+    });
+  });
 });
