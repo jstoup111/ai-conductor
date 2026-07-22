@@ -89,7 +89,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/test/execution/claude-provider.test.ts — precedence fixtures
 - src/conductor/src/execution/claude-provider.ts — only if ordering fix needed
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** 1
 
 ### Task 3: Bare-401-in-prose does not classify
@@ -108,7 +108,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/test/execution/claude-provider.test.ts — non-match fixture
 - src/conductor/src/execution/claude-provider.ts — only if tightening needed
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** 1
 
 ### Task 4: group-core routes authFailure to park, not the retry ladder
