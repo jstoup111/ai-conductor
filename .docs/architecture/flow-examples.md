@@ -78,16 +78,16 @@ throwaway root.
 
 ```mermaid
 flowchart TD
-  op([operator]) -->|./flow.sh [tier]| script[examples/&lt;flow&gt;.sh]
-  script --> common[lib/common.sh]
-  common -->|resolve_prompt| prompt[prompts/&lt;tier&gt;.md]
-  common -->|sandbox_up| sandbox[(throwaway HOME + registry\n+ engineer dir + git repo)]
-  script -->|headless| run[conduct-ts &lt;flow&gt;]
-  run --> checkpoint{completion\ncheckpoint?}
-  checkpoint -->|yes| pass[PASS flow/tier — exit 0]
-  checkpoint -->|no| fail[FAIL flow/tier: reason — exit != 0]
-  script -->|interactive| repl[exec conduct-ts --interactive\nstdio inherited]
-  common -->|EXIT trap: sandbox_down| teardown[remove throwaway root]
+  op(["operator"]) -->|"./flow.sh [tier]"| script["examples/&lt;flow&gt;.sh"]
+  script --> common["lib/common.sh"]
+  common -->|"resolve_prompt"| prompt["prompts/&lt;tier&gt;.md"]
+  common -->|"sandbox_up"| sandbox[("throwaway HOME + registry<br/>+ engineer dir + git repo")]
+  script -->|"headless"| run["conduct-ts &lt;flow&gt;"]
+  run --> checkpoint{"completion<br/>checkpoint?"}
+  checkpoint -->|"yes"| pass["PASS flow/tier — exit 0"]
+  checkpoint -->|"no"| fail["FAIL flow/tier: reason — exit != 0"]
+  script -->|"interactive"| repl["exec conduct-ts --interactive<br/>stdio inherited"]
+  common -->|"EXIT trap: sandbox_down"| teardown["remove throwaway root"]
 ```
 
 ## Non-goals (this spec)
