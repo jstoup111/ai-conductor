@@ -558,10 +558,11 @@ none of them decide build completion; `build_review`'s completeness rubric does.
   `attribution-memo.json` (including its `verdictAnchor` and its
   `${headSha}:${residueIds}` memo key) are rewritten in place through this map
   immediately after the rebase. Satisfied-by trailer text in commit messages is
-  never rewritten (that would require re-rewriting commits); instead, citation
-  consumers (`validateCitations` in `attribution-validate.ts`, and the autoheal
-  satisfied-by resolver) resolve every cited sha through the persisted map
-  before doing ancestry checks.
+  never rewritten (that would require re-rewriting commits); instead, the
+  autoheal satisfied-by resolver resolves every cited sha through the
+  persisted map before doing ancestry checks. (`validateCitations` and
+  `attribution-validate.ts` were removed per the #773 demotion — citation
+  quality checks now live only in the non-blocking spot-audit path.)
 - **`.pipeline/rebase-residue.json`** — commits from the pre-rebase history that
   couldn't be matched by patch-id (dropped during the rebase, or conflict-
   modified so their diff changed) are written here with the citing task ids and
