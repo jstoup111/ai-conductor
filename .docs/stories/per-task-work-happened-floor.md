@@ -74,10 +74,16 @@ non-blocking advisory computed inside the `build_review` step.
 **So that** a transient failure never produces a false "work didn't happen" advisory.
 
 - **Given** a project dir where `listCommitsWithTrailers` errors (non-repo / no commits)
-  or the plan/`task-status.json` is missing or malformed,
+  or the plan is missing or malformed,
   **When** the floor runs,
   **Then** it records the reason in `skipNotes`, returns `satisfied: true` with `gaps: []`,
   emits no WARNING, and never throws — `build_review` proceeds normally.
+- **Given** `.pipeline/task-status.json` is missing or malformed,
+  **When** the floor runs,
+  **Then** it is treated as an empty skip-marker overlay (no task is considered
+  marked-skipped) with no `skipNotes` entry for it, the floor still computes normally
+  from commits and the plan, and may still report real `gaps` — this is the ordinary
+  "no overlay present" case, not an error, and the floor never throws.
 
 ## Story 6 — Kill-switch disables emission (negative/config path)
 
