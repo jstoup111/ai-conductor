@@ -383,6 +383,23 @@ describe('engine/steps', () => {
     });
   });
 
+  // --- Task 19: D5 S-tier manual_test skip must not leak to M/L or downgrade enforcement ---
+
+  describe('D5 skip does not leak beyond S-tier (Task 19 regression)', () => {
+    it('manual_test is NOT skippable for M or L tier — it still runs and gates normally', () => {
+      expect(shouldSkipForTier('manual_test', 'M')).toBe(false);
+      expect(shouldSkipForTier('manual_test', 'L')).toBe(false);
+      expect(getSkippableSteps('M')).not.toContain('manual_test');
+      expect(getSkippableSteps('L')).not.toContain('manual_test');
+    });
+
+    it('manual_test enforcement stays gating for M/L (the D5 skip is tier-scoped, not an enforcement downgrade)', () => {
+      const s = getStepDefinition('manual_test');
+      expect(s.enforcement).toBe('gating');
+      expect(s.skippableForTiers).toEqual(['S']);
+    });
+  });
+
   // --- isCheckpointStep ---
 
   describe('isCheckpointStep', () => {
