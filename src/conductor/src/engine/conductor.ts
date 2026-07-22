@@ -681,10 +681,19 @@ export async function checkAttributionMachineryIntact(
   // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
   // fresh conductor run whose earlier steps haven't created it) is not
   // "broken" — there's nothing to attribute against yet. The guard only
-  // fires once `.pipeline/` exists but is missing the machinery a build
-  // dispatch depends on.
-  const pipelineDirExists = await accessFile(pipelineDir).then(() => true).catch(() => false);
-  if (!pipelineDirExists) {
+  // fires once `.pipeline/` has actually been initialized (worktree-prepare
+  // provisions `.pipeline/session-hooks/` as part of that init) but is
+  // missing the machinery a build dispatch depends on.
+  //
+  // #788: checked via `session-hooks/` rather than bare `.pipeline/`
+  // existence, because the phase-active marker (written for every BUILD/SHIP
+  // step, not just `build`) creates `.pipeline/` as a side effect via
+  // `mkdirSync` ahead of a real worktree-prepare init — an empty
+  // marker-only `.pipeline/` must still read as "not yet initialized" here.
+  const pipelineInitialized = await accessFile(join(pipelineDir, 'session-hooks'))
+    .then(() => true)
+    .catch(() => false);
+  if (!pipelineInitialized) {
     return null;
   }
 
