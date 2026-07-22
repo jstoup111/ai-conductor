@@ -4,195 +4,152 @@
 
 Technical track. Acceptance criteria are stated as observable engine behavior (Given/When/Then).
 Source of truth: `adr-2026-07-21-demote-task-stamping-to-telemetry` (demotion) and
-`adr-2026-07-21-build-end-plan-completeness-gate` (replacement gate).
+`adr-2026-07-21-completeness-as-build-review-rubric` (replacement — folds a default-on completeness
+rubric item into the existing `build_review` judgement gate; supersedes the new-step ADR).
 
 ---
 
-## Story: New `build_completeness` gating step runs after build
+## Story: build_review gains a default-on completeness rubric item
 
-**Requirement:** ADR-build-end-plan-completeness-gate (new step)
+**Requirement:** ADR-completeness-as-build-review-rubric (rubric extension + default-on)
 
-As the conductor build loop, I want a `build_completeness` gating step immediately after `build`
-and before `build_review`, so that build completion is judged holistically instead of by per-task
-stamps.
+As the conductor build loop, I want the existing `build_review` judgement gate to also judge whether
+all planned work was implemented, so completion is judged holistically without a per-task stamp gate.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature whose `build` step has run, when the pipeline advances, then `build_completeness`
-  is the next step, with `enforcement: 'gating'`, `loopGate: true`, `prerequisites: ['build']`, and
-  `kickbackTarget: 'build'`, and it is dispatched by the same engine step runner that dispatches
-  `build_review`.
-- Given `build_completeness` is registered, when the ordered step list is resolved, then it sits
-  strictly between `build` and `build_review` in `ALL_STEPS`.
+- Given `build_review` runs at the build → manual_test seam, when it grades a diff, then its rubric
+  includes a 4th item — **Completeness: every planned task's work is present in the diff** — under
+  the existing all-items-or-FAIL rule, and the verdict schema's `rubric` object carries a
+  `completeness` field.
+- Given a fresh project with no build_review opt-in, when a build runs, then the completeness rubric
+  item is active by DEFAULT (it does not require enabling `build_review` per-project) — it is the
+  replacement completion authority for the deleted evidence gate.
 
 #### Negative Paths
-- Given a Small-tier feature that skips other gating steps, when the pipeline resolves steps, then
-  `build_completeness` still follows the tier's skip rules consistently (it does not silently
-  vanish for a tier where `build` runs) — its `skippable*` config is explicit, not implicit.
-- Given the step is misordered (e.g. registered after `build_review`), when integrity/step tests
-  run, then the ordering assertion fails loudly rather than passing.
+- Given a plan with a task whose work is absent from the diff, when build_review grades, then the
+  completeness item FAILs and the overall verdict is FAIL (all-or-FAIL).
+- Given build_review's diff-honesty items (tautology/scope/rootCause) are configured off/tunable,
+  when a build runs, then the completeness item STILL runs (completeness is unconditional even if the
+  diff-honesty dial is off) — the step no longer silently `skipped`-defaults out of existence.
 
 ### Done When
-- [ ] `build_completeness` `StepDefinition` exists in `steps.ts` with the flags above and a
-      `StepName` union member added in `types/index.ts`.
-- [ ] Resolving the BUILD phase yields order `... build → build_completeness → build_review ...`.
-- [ ] It is dispatched through the existing engine grader-dispatch path (no bespoke runner).
+- [ ] `build-review-prompt.ts` rubric includes a `completeness` item; verdict `rubric.completeness`
+      field validated.
+- [ ] build_review's completeness dimension is default-on (resolver default / skip idiom adjusted);
+      model/effort/retry maps + HARNESS.md model table updated if activation changed.
+- [ ] A test asserts completeness runs on a fresh project with no explicit build_review opt-in.
 
 ---
 
-## Story: Completeness predicate is fail-closed on its verdict artifact
+## Story: build_review verdict stays fail-closed with the completeness item
 
-**Requirement:** ADR-build-end-plan-completeness-gate (predicate)
+**Requirement:** ADR-completeness-as-build-review-rubric (fail-closed predicate reused)
 
-As the completion checker, I want a deterministic predicate that reads a `.pipeline` verdict
-artifact and passes ONLY on a fresh explicit PASS, so that judgement is fail-closed like
-`build_review`/`prd_audit`.
+As the completion checker, I want the existing fail-closed `build_review` predicate to gate on the
+extended rubric, so judgement remains fail-closed.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `.pipeline/build-completeness.json` written this session with `verdict: "PASS"`, when the
-  `build_completeness` predicate runs, then it returns `{ done: true }`.
+- Given `.pipeline/build-review.json` written this session with `verdict: "PASS"` (all four rubric
+  items pass), when the `build_review` predicate runs, then it returns `{ done: true }`.
 
 #### Negative Paths
-- Given no verdict artifact exists, when the predicate runs, then it returns `done: false` (not-done),
-  never `done: true`.
-- Given a verdict artifact written in a PRIOR session (stale per the session freshness floor), when
-  the predicate runs, then it returns `done: false`.
-- Given a malformed/unparseable verdict artifact, when the predicate runs, then it returns
-  `done: false` (tolerant parse → not-done, never a crash and never a pass).
-- Given a verdict artifact with `verdict: "FAIL"`, when the predicate runs, then it returns
-  `done: false` with a `routeClass` set so gaps can be routed.
+- Given no verdict artifact exists, when the predicate runs, then it returns `done: false`.
+- Given a verdict written in a PRIOR session (stale), when the predicate runs, then `done: false`.
+- Given a malformed/unparseable verdict, when the predicate runs, then `done: false` (tolerant parse,
+  never a crash, never a pass).
+- Given `verdict: "FAIL"` because the completeness item failed, when the predicate runs, then
+  `done: false` and the build_review kickback path is armed.
 
 ### Done When
-- [ ] Predicate registered in `CUSTOM_COMPLETION_PREDICATES` and invoked by `checkStepCompletion`.
-- [ ] Only a fresh exact `PASS` yields `done:true`; missing/stale/malformed/`FAIL` all yield
-      `done:false` — covered by unit tests.
-- [ ] Freshness is enforced against `sessionStartedAt`/`attemptStartedAt` like the other verdict gates.
+- [ ] No change to the fail-closed contract: only a fresh exact `PASS` yields `done:true`;
+      missing/stale/malformed/`FAIL` all yield `done:false` — existing tests still pass, extended for
+      the completeness-driven FAIL.
 
 ---
 
-## Story: Grader judges plan-vs-diff holistically and emits named gaps
+## Story: Grader judges plan-vs-diff completeness holistically (no stamp reasoning)
 
-**Requirement:** ADR-build-end-plan-completeness-gate (grader)
+**Requirement:** ADR-completeness-as-build-review-rubric (grader)
 
-As the completeness grader, I want to compare the plan's task set against the actual build diff and
-judge whether all planned work is present, so that unimplemented planned work is caught — without
-per-task SHA/reachability/corroboration reasoning.
+As the build_review grader, I want to judge completeness by comparing the plan's task set against the
+diff it already receives, so unimplemented planned work is caught — without per-task stamp reasoning.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a plan whose every task's intended work is present in the build diff, when the grader runs,
-  then it writes `verdict: "PASS"` to `.pipeline/build-completeness.json`.
-- Given a plan with a task whose work is absent from the diff, when the grader runs, then it writes
-  `verdict: "FAIL"` with a `RemediationGap` (`disposition: "build"`, non-empty `tasks[]` naming the
-  missing work, and a `rationale`).
+- Given the grader already receives `{ diff, planBody }`, when it evaluates completeness, then it
+  judges whether every planned task's work is present in the diff and reports a one-line
+  `rubric.completeness` reason.
+- Given every planned task's work is present, when the grader runs, then the completeness item passes.
 
 #### Negative Paths
-- Given a build diff that touches files unrelated to a planned task while the task's own work is
-  missing, when the grader runs, then it still reports that task as a gap (presence of *some* diff
-  does not mask a missing task) — i.e. it does NOT infer completion from mere file activity.
-- Given the grader prompt, when it reasons about completion, then it does NOT cite/pin a specific
-  SHA, check commit reachability, or path-corroborate a stamp (the wedge-class reasoning is
-  explicitly excluded) — verified by the prompt contract and a test asserting a gap is reported on
-  missing work even when a `Task:`-trailered commit exists for that id.
+- Given a diff that touches unrelated files while a planned task's work is missing, when the grader
+  runs, then completeness still FAILs (file activity does not mask a missing task).
+- Given the grader prompt, when it reasons about completeness, then it does NOT pin/cite a SHA, check
+  commit reachability, or path-corroborate a stamp — a test proves a `Task:`-trailered-but-
+  unimplemented task is still reported as incomplete.
 - Given a task marked verify-only / no-code-change in the plan, when the grader runs, then absence of
-  a diff for it is NOT reported as a gap (holistic judgement respects intent without a per-task
-  evidence stamp).
+  a diff for it is NOT a completeness gap (holistic judgement respects intent, no per-task marker).
 
 ### Done When
-- [ ] A grader inputs/prompt module (or skill) exists, dispatched like the `build_review` grader,
-      writing `.pipeline/build-completeness.json`.
-- [ ] FAIL verdicts carry `RemediationGap` objects shaped exactly for `readRemediationPlan`
-      (`disposition: 'build'`, `tasks: {id,title}[]`, `rationale`).
-- [ ] The prompt forbids per-task SHA/reachability/corroboration reasoning; a test proves a
-      trailered-but-unimplemented task is still flagged as a gap.
+- [ ] `build-review-prompt.ts` completeness rubric text forbids per-task SHA/reachability/
+      corroboration reasoning; a test proves a trailered-but-unimplemented task fails completeness.
+- [ ] No new grader inputs are required (the diff + plan build_review already receives suffice).
 
 ---
 
-## Story: FAIL gaps route through existing remediation and re-dispatch build
+## Story: A completeness FAIL kicks back to build via build_review's self-heal
 
-**Requirement:** ADR-build-end-plan-completeness-gate (routing)
+**Requirement:** ADR-completeness-as-build-review-rubric (routing reuses build_review kickback)
 
-As the conductor, I want completeness gaps to flow through the existing remediation machinery, so no
-new routing code is introduced.
+As the conductor, I want a completeness FAIL to reuse build_review's existing kickback, so no new
+routing is introduced.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a FAIL verdict with named gaps, when the conductor handles the gate miss, then it invokes the
-  existing `planRemediation`/`appendRemediationTasks` path, appends `rem-*` tasks to the plan,
-  re-seeds task-status, and navigates back to `build`.
+- Given a FAIL driven by the completeness item under the kickback cap, when the conductor handles it,
+  then it uses the existing `buildReviewSelfHeals` block: seeds `pendingRetryHints.set('build',
+  <grader reasons naming the missing work>)`, `navigateBack('build')`, downstream stale.
 
 #### Negative Paths
-- Given a FAIL verdict whose gaps carry a non-`build` disposition (e.g. `plan`) in daemon mode, when
-  routing runs, then a DECIDE-phase target HALTs for the operator (does not silently self-route),
-  matching existing remediation behavior.
-- Given a FAIL verdict with an empty `tasks[]`, when routing runs, then it does not append zero tasks
-  and silently pass — it is treated as a malformed gap (not-done / surfaced), never a spurious PASS.
+- Given repeated completeness FAILs at the kickback cap (`MAX_KICKBACKS_PER_GATE` = 2), when it FAILs
+  a third time, then the loop writes `LOOP_HALT_MARKER` and emits `loop_halt` — it does not spin.
+- Given build re-entry after kickback, when tasks are re-derived, then completion is re-derived from
+  plan + git trailers (non-destructive re-entry), and build_review re-grades.
 
 ### Done When
-- [ ] Completeness FAIL reuses `planRemediation` → `appendRemediationTasks` (no bespoke routing).
-- [ ] Appended tasks use the deterministic `rem-<source>-<gapId>` id scheme and re-seed the plan.
-- [ ] After remediation, the loop re-dispatches `build`, then re-runs `build_completeness`.
-
----
-
-## Story: The completeness gate cannot wedge
-
-**Requirement:** ADR-build-end-plan-completeness-gate (wedge-proof bounding)
-
-As the operator, I want the new gate bounded so a false-negative loop HALTs for a human instead of
-spinning forever, so it never becomes a new wedge source.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given the gate has been re-opened by kickback fewer than `MAX_KICKBACKS_PER_GATE` (2) times, when
-  it FAILs again, then remediation runs and the loop re-attempts build.
-
-#### Negative Paths
-- Given the gate has already been re-opened `MAX_KICKBACKS_PER_GATE` (2) times, when it FAILs a third
-  time, then the loop writes the loop-halt marker and emits `loop_halt` (operator-surfaced) — it does
-  NOT loop again.
-- Given repeated FAILs, when the kickback counter is inspected, then it is per-gate and increments
-  monotonically (no reset that would allow unbounded spinning).
-
-### Done When
-- [ ] `build_completeness` participates in the existing `kickbackCounts` / `MAX_KICKBACKS_PER_GATE`
-      accounting exactly like `manual_test`.
-- [ ] A test drives ≥3 consecutive FAILs and asserts a HALT (loop-halt marker) on the 3rd, not a 4th
-      attempt.
+- [ ] Completeness FAIL reuses `buildReviewSelfHeals` (no new kickbackTarget, no new routing).
+- [ ] A test drives ≥3 completeness FAILs and asserts HALT on the 3rd, not a 4th attempt.
 
 ---
 
 ## Story: Fail-closed on LLM unavailability
 
-**Requirement:** ADR-build-end-plan-completeness-gate (unavailability)
+**Requirement:** ADR-completeness-as-build-review-rubric (unavailability)
 
-As the operator, I want the gate to block rather than pass when the grader cannot reach a model, so
-unavailability never green-lights an unverified build.
+As the operator, I want build_review to block rather than pass when the grader cannot reach a model,
+so unavailability never green-lights an unverified build.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given the grader dispatches via the availability ladder and succeeds on a fallback model, when it
-  completes, then it writes a normal PASS/FAIL verdict.
+  completes, then it writes a normal PASS/FAIL verdict (including the completeness item).
 
 #### Negative Paths
-- Given the model fallback ladder is exhausted (all unavailable), when the grader dispatch fails,
-  then NO `PASS` verdict is written, the predicate stays `done:false`, and the existing
-  `RateLimitEpisode`/HALT-park path handles it (daemon parks / interactive HALTs) — never advances.
+- Given the model fallback ladder is exhausted, when the grader dispatch fails, then NO `PASS` verdict
+  is written, the predicate stays `done:false`, and the existing `RateLimitEpisode`/HALT-park path
+  handles it (independent of the deleted no-evidence counter) — never advances.
 - Given a rate-limit / session-expired / auth-failure during dispatch, when the conductor handles it,
-  then it uses the existing distinct rate-limit/session/auth handling (not the deleted no-evidence
-  counter) and never advances the gate.
+  then it uses the existing distinct handling, never the deleted no-evidence counter.
 
 ### Done When
 - [ ] Grader dispatch uses `invokeWithLadder`; exhaustion writes no passing verdict.
-- [ ] Unavailability routes to the existing `RateLimitEpisode`/park/HALT path, independent of any
-      evidence counter (which no longer exists).
 - [ ] A test simulating ladder exhaustion asserts not-done + park/HALT, never `done:true`.
 
 ---
@@ -209,7 +166,7 @@ become structurally impossible.
 #### Happy Path
 - Given a build whose tasks lack per-task evidence stamps but whose planned work is present, when the
   pipeline runs, then the `build` step no longer blocks on `evidence.evidenceStamps.has(id)` — build
-  completion is decided by `build_completeness` + the outcome gates, not by stamps.
+  completion is decided by build_review (incl. completeness) + the outcome gates, not by stamps.
 
 #### Negative Paths
 - Given the codebase after the change, when searched, then `deriveCompletion`/`deriveCompletionInternal`,
@@ -226,7 +183,7 @@ become structurally impossible.
 ### Done When
 - [ ] The named gating symbols/paths are deleted (grep-verified absent from production code).
 - [ ] The `build` completion predicate no longer keys on `evidenceStamps.has(id)`.
-- [ ] The full suite passes with the gating removed and the new gate in place.
+- [ ] The full suite passes with the gating removed and build_review completeness in place.
 
 ---
 
@@ -351,25 +308,26 @@ keeping trailer grammar validation, so stamps never block per #773.
 
 **Requirement:** ADR (sequencing condition)
 
-As the operator, I want the new completeness gate to be in force before the old stamp predicate is
-removed, so no build can complete unjudged during the change.
+As the operator, I want build_review's completeness dimension to be in force before the old stamp
+predicate is removed, so no build can complete unjudged during the change.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the plan's task order, when tasks are executed, then the `build_completeness` gate is wired
-  and enforcing BEFORE the task that removes the `evidenceStamps.has(id)` build check runs.
+- Given the plan's task order, when tasks are executed, then build_review's completeness rubric is
+  wired and enforcing (default-on) BEFORE the task that removes the `evidenceStamps.has(id)` build
+  check runs.
 
 #### Negative Paths
-- Given a hypothetical intermediate state where the stamp check is removed but the new gate is not yet
+- Given a hypothetical intermediate state where the stamp check is removed but completeness is not yet
   enforcing, when the plan is inspected, then no such ordering exists (the dependency is explicit in
   the plan's task dependency graph).
 
 ### Done When
-- [ ] The plan's task dependency graph orders "add build_completeness gate" strictly before "remove
-      build stamp predicate."
+- [ ] The plan's task dependency graph orders "add build_review completeness (default-on)" strictly
+      before "remove build stamp predicate."
 - [ ] At no committed intermediate state can `build` reach done with neither the stamp gate nor the
-      completeness gate enforcing.
+      completeness rubric enforcing.
 
 ---
 
@@ -378,24 +336,26 @@ removed, so no build can complete unjudged during the change.
 **Requirement:** Docs-track-features convention + Release gates
 
 As a reader of the harness docs, I want the evidence-gate documentation to describe telemetry-only
-stamps + outcome-gate completion, so docs match behavior.
+stamps + build_review completeness completion, so docs match behavior.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given the change ships, when README.md, src/conductor/README.md, CLAUDE.md, and HARNESS.md are
   read, then passages describing the evidence gate as blocking/parking/deriving-completion are
-  updated to telemetry + the new `build_completeness` gate, and `CHANGELOG.md` `[Unreleased]` carries
-  a Changed/Removed entry describing the demotion.
+  updated to telemetry + build_review's completeness rubric (and its default-on activation), and
+  `CHANGELOG.md` `[Unreleased]` carries a Changed/Removed entry describing the demotion.
 
 #### Negative Paths
 - Given the PR diff, when checked, then no doc still asserts "task completion is derived from the
   evidence gate" as current behavior; historical CHANGELOG release entries are left intact (not
-  rewritten).
-- Given the harness integrity suite, when run, then it passes (VERSION semver, `[Unreleased]` present,
-  model table, skill frontmatter) with the doc updates.
+  rewritten); `VERSION` is NOT bumped (locked until the v1 cut).
+- Given the harness integrity suite, when run, then it passes (VERSION semver unchanged,
+  `[Unreleased]` present, model table regenerated for the build_review activation change, skill
+  frontmatter) with the doc updates.
 
 ### Done When
-- [ ] README / src/conductor/README / CLAUDE.md / HARNESS.md updated for telemetry + completeness gate.
-- [ ] `CHANGELOG.md` `[Unreleased]` has a Changed/Removed entry; history untouched.
-- [ ] `test/test_harness_integrity.sh` passes.
+- [ ] README / src/conductor/README / CLAUDE.md / HARNESS.md updated for telemetry + build_review
+      completeness (default-on).
+- [ ] `CHANGELOG.md` `[Unreleased]` has a Changed/Removed entry; history untouched; VERSION unchanged.
+- [ ] `test/test_harness_integrity.sh` passes (model table regenerated if activation changed).

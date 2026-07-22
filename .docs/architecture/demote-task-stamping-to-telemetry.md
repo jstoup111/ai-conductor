@@ -57,12 +57,12 @@ graph TD
 graph TD
     subgraph BUILDA["BUILD step completion (redefined)"]
         STRUCT["structural advance<br/>(no per-task stamp check)"]
-        COMPLETE["plan-completeness gate (NEW)<br/>LLM: plan tasks vs build diff<br/>same class as build_review/prd_audit"]
+        COMPLETE["build_review + completeness rubric (DEFAULT-ON)<br/>existing gate, +4th item:<br/>every planned task's work present in diff"]
     end
 
     subgraph OUTCOME["Outcome gates (sole completion authority) — UNCHANGED"]
         ACC["acceptance_specs RED→GREEN"]
-        BREV["build_review"]
+        BREV["build_review diff-honesty items<br/>(tautology/scope/rootCause)"]
         WIRE["wiring_check (export reachability)"]
         MAN["manual_test"]
         PRD["prd_audit (product track)"]
@@ -83,9 +83,9 @@ graph TD
     end
 
     STRUCT --> COMPLETE
-    COMPLETE -->|named gaps| REMED["remediation kickback<br/>(bounded by KB / ladder)"]
+    COMPLETE -->|FAIL: reasons name missing work| REMED["buildReviewSelfHeals kickback → build<br/>(bounded by KB / ladder)"]
     REMED --> STRUCT
-    COMPLETE -->|complete| OUTCOME
+    COMPLETE -->|PASS| OUTCOME
     OUTCOME --> DONE2["build/SHIP done"]
     BOUNDS -.bounds.-> COMPLETE
     BOUNDS -.bounds.-> REMED
@@ -104,7 +104,7 @@ graph TD
 sequenceDiagram
     participant C as conductor (build loop)
     participant B as build step
-    participant J as plan-completeness gate (LLM)
+    participant J as build_review + completeness rubric (LLM)
     participant R as remediation
     participant O as outcome gates
     participant T as telemetry (trailers/progress/spot-audit)
