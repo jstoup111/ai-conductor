@@ -118,6 +118,18 @@ describe('task-progress', () => {
       // untouched pending — expect exactly 2, not 0 (old code) and not 4.
       expect(await countResolvedTasks(dir)).toBe(2);
     });
+
+    it('#773 Task 16: telemetry survives the gating demolition — countResolvedTasks is a pure read with no side effects (no writes, no throw) even against an empty/uninitialized project dir', async () => {
+      // Tasks 10-14 deleted the per-task evidence-ledger GATING apparatus
+      // (build predicate, citation judge, park counter, reseed/commit-msg
+      // rejection). Task 15 repointed this counter at Task: trailers +
+      // task-status.json as pure telemetry. This locks in that the read
+      // path never mutates project state (no .pipeline writes) and never
+      // throws, confirming it cannot itself gate or block a build.
+      await expect(countResolvedTasks(dir)).resolves.toBe(0);
+      const { readdir } = await import('node:fs/promises');
+      await expect(readdir(dir)).resolves.toEqual([]);
+    });
   });
 
   describe('halt marker', () => {
