@@ -228,7 +228,7 @@ None — pure additions; no migrations, no new dependencies.
 - src/conductor/src/tools/generate-docs-guard-hook-main.ts — direct-execution entry point
 - hooks/claude/docs-guard.sh — generated artifact (committed)
 
-**Wired-into:** bin/install#harness_hooks (consumed by Task 12's entry), src/conductor/src/tools/generate-docs-guard-hook-main.ts#runGenerateDocsGuardHookCli
+**Wired-into:** src/conductor/src/tools/generate-docs-guard-hook-main.ts#runGenerateDocsGuardHookCli, bin/install#harness_hooks
 **Dependencies:** Task 5
 
 ### Task 11: Integrity-suite drift check for the generated hook
