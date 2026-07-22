@@ -11,7 +11,7 @@
  * 5. Body with DIFFERENT slug marker → no edit, `lastError` conflict, excluded from close
  */
 
-import { LedgerEntry } from './ledger';
+import { LedgerEntry } from './ledger.js';
 
 /**
  * GitHub abstraction interface for dependency injection

@@ -10,7 +10,7 @@
  * to guarantee the rename is atomic within the same filesystem.
  */
 
-import { VerdictEntry } from './verdict-parser';
+import { VerdictEntry } from './verdict-parser.js';
 import path from 'path';
 import { randomBytes } from 'crypto';
 
