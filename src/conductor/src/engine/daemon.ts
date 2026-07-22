@@ -272,6 +272,23 @@ export interface DaemonDeps {
    */
   isBuildAuthMissing?: () => Promise<boolean>;
   /**
+   * Task 15 (FR-6): event-driven wake for the build-auth credential gate.
+   * Mirrors `watchHaltCleared`'s shape and lifecycle exactly — registered
+   * once (not per-slug, since the gate is daemon-global, not per-feature),
+   * called with a callback the daemon wires to `waker.wake()`, and disposed
+   * on daemon exit alongside the other watchers. Purely an optimization: the
+   * `isBuildAuthMissing` re-poll every loop iteration (including each idle
+   * tick) is the poll backstop that already covers filesystems where
+   * file-change events are unreliable, so an absent/no-op dep degrades to
+   * poll-only auto-resume, never to no-resume (optimization-never-authority).
+   * Production wires the real token-path watcher (reusing the
+   * `readDaemonBuildToken` freshness classifier — no semantic change to it);
+   * a whitespace-only write must NOT fire `onRestored` early, but even if it
+   * did, `isBuildAuthMissing`'s own re-check is the sole authority on
+   * whether the gate actually lifts.
+   */
+  watchBuildAuthRestored?: (onRestored: () => void) => () => void;
+  /**
    * Optional rate-limit episode coordinator (optimization-never-authority).
    * If provided and active, gates new dispatch to avoid thundering herd.
    * If undefined or inactive, behaves as today (no change to existing code path).
@@ -632,6 +649,14 @@ export async function runDaemon(
 
   const waker = Waker();
   const watchers = new Map<string, () => void>();
+
+  // Task 15 (FR-6): register the build-auth credential watcher once (daemon-
+  // global, not per-slug — mirrors `watchHaltCleared`'s wake-the-waker
+  // mechanism but has no per-feature identity to key on). Absent dep ->
+  // undefined dispose, a no-op at shutdown.
+  const disposeBuildAuthWatcher = deps.watchBuildAuthRestored?.(() => {
+    waker.wake();
+  });
 
   // Task 9: per-spec dispatch-ceiling bound on `isProgressReKickEligible`.
   // Defaults to 20 (same numeric value as the prior hardcoded interim cap —
@@ -1211,6 +1236,9 @@ export async function runDaemon(
     dispose();
   }
   watchers.clear();
+  // Task 15 (FR-6): dispose the build-auth credential watcher too — no leak
+  // on daemon exit/shutdown, same lifecycle discipline as the HALT watchers.
+  disposeBuildAuthWatcher?.();
 
   return { processed, stoppedReason: stopReason ?? 'backlog_drained' };
 }

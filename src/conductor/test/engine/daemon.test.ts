@@ -2047,4 +2047,146 @@ describe('engine/daemon — runDaemon', () => {
       expect(waitingLines.length).toBe(2);
     });
   });
+
+  // ── Task 15 (FR-6): auto-resume via credential watcher + waker ─────────────
+  // Mirrors the `watchHaltCleared` event-driven wake tests above, but for the
+  // daemon-global build-auth credential watcher (`watchBuildAuthRestored`).
+  describe('auto-resume via credential watcher + waker (Task 15, FR-6)', () => {
+    it('storing a fresh token arms the waker and the NEXT loop iteration dispatches, no operator action', async () => {
+      // Simulates: file watcher fires onRestored() the instant a valid token
+      // lands, and the daemon's own isBuildAuthMissing re-check (not the
+      // watcher) is what actually confirms the gate is clear before dispatch.
+      let missing = true;
+      const events: string[] = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          events.push('dispatch');
+          return { slug: it.slug, status: 'done' };
+        },
+        isBuildAuthMissing: async () => missing,
+        watchBuildAuthRestored: (onRestored) => {
+          // Fire shortly after registration, simulating the token file being
+          // written mid-idle-wait (no operator un-park, no restart).
+          setTimeout(() => {
+            missing = false;
+            events.push('watcher:fired');
+            onRestored();
+          }, 5);
+          return () => {
+            events.push('watcher:disposed');
+          };
+        },
+        sleep: async () => {
+          events.push('sleep:started');
+          // Dummy sleep never resolves — only the waker (armed by the
+          // watcher firing) can unblock the idle race, per the existing
+          // watchHaltCleared precedent (commit a9963d73).
+          await new Promise(() => {});
+        },
+      };
+
+      const res = await Promise.race([
+        // maxIdlePolls: 1 mirrors the existing watchHaltCleared precedent
+        // above: one idle encounter while gated, the watcher-armed waker
+        // unblocks dispatch, then the idle-poll counter trips on the NEXT
+        // idle encounter (nothing left in the backlog) to end the run.
+        runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 1 }),
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('daemon timeout')), 500),
+        ),
+      ]);
+
+      expect(events).toContain('watcher:fired');
+      expect(events).toContain('dispatch');
+      expect(events.indexOf('dispatch')).toBeGreaterThan(events.indexOf('watcher:fired'));
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+
+    it('a whitespace-only write does NOT lift the gate: the watcher firing alone never dispatches without isBuildAuthMissing confirming clear', async () => {
+      // The freshness classifier (readDaemonBuildToken) rejects whitespace-only
+      // content as still-missing — a real fs event can fire (e.g. debounced
+      // partial write) while isBuildAuthMissing correctly keeps reporting true.
+      // The gate must stay engaged: the watcher is not itself authoritative.
+      const events: string[] = [];
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => true, // whitespace-only still classifies as missing
+        watchBuildAuthRestored: (onRestored) => {
+          setTimeout(() => {
+            events.push('watcher:fired-on-whitespace');
+            onRestored(); // fs event fired, but the token is whitespace-only
+          }, 5);
+          return () => {};
+        },
+        sleep: async (ms) => {
+          events.push('sleep:started');
+          // Real (short) delay so the setTimeout above gets a chance to fire
+          // mid-run, same as the fs-event race in the "fresh token" test above.
+          await new Promise((r) => setTimeout(r, 10));
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      expect(events).toContain('watcher:fired-on-whitespace');
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('the watcher is disposed on daemon exit/shutdown — no leak', async () => {
+      let disposeCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => false,
+        watchBuildAuthRestored: () => {
+          return () => {
+            disposeCalled = true;
+          };
+        },
+      };
+
+      const res = await runDaemon(deps, { concurrency: 1, once: true });
+
+      expect(res.processed).toHaveLength(1);
+      expect(disposeCalled).toBe(true);
+    });
+
+    it('poll backstop: the gate re-checks periodically even without a watcher event (no watchBuildAuthRestored dep provided)', async () => {
+      // No event-driven watcher at all — the credential clears purely because
+      // the daemon re-polls isBuildAuthMissing every idle tick (the existing
+      // poll cadence IS the backstop for filesystems where fs-change events
+      // are unreliable).
+      let missing = true;
+      let pollCount = 0;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        isBuildAuthMissing: async () => {
+          pollCount += 1;
+          return missing;
+        },
+        // watchBuildAuthRestored intentionally absent
+        sleep: async () => {
+          // Simulate the token landing after a couple of idle polls, entirely
+          // independent of any file-watch event.
+          if (pollCount >= 2) missing = false;
+        },
+      };
+
+      const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 5 });
+
+      expect(pollCount).toBeGreaterThanOrEqual(2);
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+  });
 });
