@@ -3021,7 +3021,7 @@ A task that will be completed by aliased evidence form.
     expect(stamp!.form).toBe('evidence:satisfied-by');
   });
 
-  it('preserves completed status when evidence commit is removed (never-demote pinned)', async () => {
+  it('demotes completed status when evidence commit is truly unreachable, no rewrite translation (#766)', async () => {
     const autoheal = await loadAutoheal();
     const { createTaskEvidence } = await import('../../src/engine/task-evidence.js');
 
@@ -3071,10 +3071,13 @@ A task that will be pinned by evidence.
 
     const result2 = await autoheal.deriveCompletion(gitDir, planPath, '', commits2, evidence2);
 
-    // Task should remain completed despite evidence commit being removed
+    // The stamp cites a commit that is genuinely gone from history (no
+    // rewrite-map translation, i.e. not a sanctioned rebase) — the
+    // reachability gate (#766) must demote rather than pin forever.
     expect(result2).toHaveProperty('12');
-    expect(result2['12']).toHaveProperty('completed', true);
-    expect(result2['12'].completed).toBe(true);
+    expect(result2['12']).toHaveProperty('completed', false);
+    expect(result2['12'].status).not.toBe('completed');
+    expect(result2['12'].auditEntry).toContain(evidenceCommitSha.slice(0, 7));
   });
 });
 

@@ -625,6 +625,83 @@ export interface DeriveCompletionResult {
 }
 
 /**
+ * Resolve a cited evidence-stamp sha through the rewrite map and confirm it
+ * is a reachable ancestor of HEAD.
+ *
+ * Existence alone is too soft: a pruned/dangling sha that happens to still
+ * resolve via a stale ref must not pass. A sha that was never a rewrite-map
+ * key (unrelated/forged) resolves to itself via resolveThroughMap, so this
+ * can never launder an off-branch citation.
+ *
+ * @param projectRoot - Root of the git repository
+ * @param citedSha - The sha text cited in the evidence stamp (pre-rewrite)
+ * @param rewriteMap - Persisted rewrite map (Task 9,
+ *   adr-2026-07-12-rebase-evidence-stamp-translation.md) for translating
+ *   shas moved by a sanctioned engine rebase
+ * @returns The resolved sha if it exists and is an ancestor of HEAD, else null
+ */
+export async function stampShaReachable(
+  projectRoot: string,
+  citedSha: string,
+  rewriteMap: Record<string, string>,
+): Promise<string | null> {
+  const sha = resolveThroughMap(citedSha, rewriteMap);
+
+  // A failure to even invoke git, or a projectRoot that isn't a functioning
+  // git repository at all (e.g. a stub .git dir in a test fixture), means
+  // reachability is indeterminate, not refuted — fail open rather than
+  // demoting on an environment/tooling hiccup unrelated to whether the cited
+  // commit is actually gone from real history.
+  let repoCheck;
+  try {
+    repoCheck = await execa('git', ['rev-parse', '--git-dir'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+  } catch {
+    return sha;
+  }
+  if (!repoCheck || typeof repoCheck.exitCode !== 'number' || repoCheck.exitCode !== 0) {
+    return sha;
+  }
+
+  let shaCheck;
+  try {
+    shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
+      cwd: projectRoot,
+      reject: false,
+    });
+  } catch {
+    return sha;
+  }
+  if (!shaCheck || typeof shaCheck.exitCode !== 'number') {
+    return sha;
+  }
+
+  let isAncestor = false;
+  if (shaCheck.exitCode === 0) {
+    const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (headCheck.exitCode === 0) {
+      const headSha = headCheck.stdout.trim();
+      const ancestorCheck = await execa('git', ['merge-base', '--is-ancestor', sha, headSha], {
+        cwd: projectRoot,
+        reject: false,
+      });
+      isAncestor = ancestorCheck.exitCode === 0;
+    }
+  }
+
+  if (shaCheck.exitCode === 0 && isAncestor) {
+    return sha;
+  }
+
+  return null;
+}
+
+/**
  * Derive task completion from git trailers.
  * Trailer-first: checks for Task: <id> trailers in commit bodies.
  * Evidence forms: Evidence: satisfied-by <sha> and Evidence: skipped <reason>
@@ -700,34 +777,17 @@ async function deriveCompletionInternal(
         // Validate the (resolved) sha both exists AND is an ancestor of
         // HEAD — existence alone is too soft: a pruned/dangling sha that
         // happens to still resolve via a stale ref must not pass.
-        const shaCheck = await execa('git', ['rev-parse', '--verify', `${sha}^{commit}`], {
-          cwd: projectRoot,
-          reject: false,
-        });
+        const reachableSha = await stampShaReachable(projectRoot, citedSha, rewriteMap);
 
-        let isAncestor = false;
-        if (shaCheck.exitCode === 0) {
-          const headCheck = await execa('git', ['rev-parse', 'HEAD'], {
-            cwd: projectRoot,
-            reject: false,
-          });
-          if (headCheck.exitCode === 0) {
-            const headSha = headCheck.stdout.trim();
-            const ancestorCheck = await execa(
-              'git',
-              ['merge-base', '--is-ancestor', sha, headSha],
-              { cwd: projectRoot, reject: false },
-            );
-            isAncestor = ancestorCheck.exitCode === 0;
-          }
-        }
-
-        if (shaCheck.exitCode === 0 && isAncestor) {
+        if (reachableSha) {
           // Valid sha: mark task completed
           result[taskId].completed = true;
-          result[taskId].evidencedBy = sha;
+          result[taskId].evidencedBy = reachableSha;
           result[taskId].status = 'completed';
-          evidence.evidenceStamps.set(taskId, { sha, form: 'evidence:satisfied-by' });
+          evidence.evidenceStamps.set(taskId, {
+            sha: reachableSha,
+            form: 'evidence:satisfied-by',
+          });
           continue;
         }
 
@@ -773,14 +833,36 @@ async function deriveCompletionInternal(
     if (matchingCommits.length === 0) {
       // No current evidence found; check if task has a pinned evidence stamp in sidecar
       if (evidence.evidenceStamps.has(taskId)) {
-        // Task was previously completed and evidenced; preserve that status to prevent demotion
-        result[taskId].completed = true;
-        result[taskId].status = 'completed';
         const stamp = evidence.evidenceStamps.get(taskId);
-        result[taskId].evidencedBy = stamp?.sha;
+        const pinRewriteMap = await loadRewriteMap(projectRoot);
+        const reachableSha = stamp
+          ? await stampShaReachable(projectRoot, stamp.sha, pinRewriteMap)
+          : null;
+
+        if (reachableSha) {
+          // Task was previously completed and evidenced, and the cited
+          // commit is still reachable (or was rewrite-translated to a
+          // reachable one): preserve that status to prevent demotion.
+          result[taskId].completed = true;
+          result[taskId].status = 'completed';
+          result[taskId].evidencedBy = reachableSha;
+          warnOnce(
+            `${projectRoot}:demotion:${taskId}:${stamp?.sha ?? ''}`,
+            `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
+          );
+          continue;
+        }
+
+        // Stamp's cited commit is gone and was never rewrite-translated to a
+        // reachable sha — do NOT pin. Demote loudly so the task re-runs
+        // instead of wedging into an uncreditable-undemotable state (#766).
+        const demotionEntry = `Task ${taskId}: sidecar stamp cites unreachable commit ${stamp?.sha.slice(0, 7)} (no rebase translation); demoted`;
+        result[taskId].auditEntry = result[taskId].auditEntry
+          ? `${result[taskId].auditEntry}; ${demotionEntry}`
+          : demotionEntry;
         warnOnce(
-          `${projectRoot}:demotion:${taskId}:${stamp?.sha ?? ''}`,
-          `[autoheal] Task ${taskId}: no current evidence in history but sidecar has evidence stamp (pinned completed); preventing demotion`,
+          `${projectRoot}:unreachable-demotion:${taskId}:${stamp?.sha ?? ''}`,
+          `[autoheal] Task ${taskId}: sidecar evidence stamp cites unreachable commit ${stamp?.sha.slice(0, 7)}; demoting (task will re-run)`,
         );
         continue;
       }

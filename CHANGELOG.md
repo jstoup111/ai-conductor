@@ -19,6 +19,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
 
+### Fixed
+
+- Sidecar evidence stamps (`Evidence: satisfied-by <sha>`) that cite a commit absent
+  from history and never translated by a sanctioned engine rebase no longer
+  permanently pin the task `completed` — the task is now demoted (audit entry +
+  distinct `warnOnce` log) so it re-runs instead of wedging the build into an
+  uncreditable-undemotable state. The reachable-ancestor check (existence + `git
+  merge-base --is-ancestor HEAD`) is now a single shared helper,
+  `stampShaReachable`, used by both the pin branch and the satisfied-by derivation
+  path (#766).
+- `stampShaReachable` no longer crashes (and silently drops evidence for every task
+  in the run) when git can't be invoked or `projectRoot` isn't a functioning git
+  repository — an indeterminate reachability check now fails open (preserves the
+  pin) instead of throwing, fixing a regression that broke unrelated gate-loop,
+  conductor, and evidence-cli test suites relying on placeholder shas.
+
 ### Removed
 
 - Serena removed from the daemon's install path, bootstrap MCP registration,
