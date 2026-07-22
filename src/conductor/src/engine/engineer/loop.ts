@@ -45,6 +45,7 @@ import { createJsonlLessonStore, selectLessons } from './lesson-store.js';
 import { buildAuthoringPrompt, runAuthoring } from './authoring.js';
 import type { DecideResult, DecideStep, AssessComplexityResult } from './authoring.js';
 import type { ComplexityTier } from '../../types/index.js';
+import { tierFromSizeLabels } from '../complexity.js';
 import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
@@ -532,6 +533,12 @@ async function processIdea(
         assessComplexityFn({ recommended, idea, project: target.name, prompt: authoringPrompt })
     : undefined;
   const sourceRef = intake?.envelope.sourceRef;
+  // Deterministic tier seed (ADR D5, adr-2026-07-21-s-tier-pipeline-knobs): a
+  // GitHub size label on the intake envelope short-circuits the LLM signal walk.
+  // Absent/unparsable → null (unchanged assessComplexity(null) behavior).
+  const recommended = intake?.envelope.labels
+    ? tierFromSizeLabels(intake.envelope.labels) ?? null
+    : null;
 
   // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec resolves
   // ITS owner from the MACHINE config (~/.ai-conductor/config.yml), so stamp the
@@ -563,6 +570,7 @@ async function processIdea(
   const { branch } = await runAuthoring(target, idea, {
     decide,
     assessComplexity,
+    recommended,
     sourceRef,
     ownerConfig,
     gh: deps.gh,

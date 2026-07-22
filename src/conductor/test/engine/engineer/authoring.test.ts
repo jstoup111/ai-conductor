@@ -498,6 +498,35 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     expect(tracked).toMatch(/\.docs\/plans\//);
   });
 
+  it('deps.recommended is passed through to the assessComplexity seam', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const seen: Array<'S' | 'M' | 'L' | null> = [];
+    const assessComplexity = async (recommended: 'S' | 'M' | 'L' | null) => {
+      seen.push(recommended);
+      return { approved: true, tier: 'S' as const };
+    };
+    await runAuthoring(target, 'CSV export', {
+      decide: fullDecide(),
+      assessComplexity,
+      recommended: 'S',
+    });
+    expect(seen).toEqual(['S']);
+  });
+
+  it('assessComplexity is called with null when deps.recommended is absent', async () => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const seen: Array<'S' | 'M' | 'L' | null> = [];
+    const assessComplexity = async (recommended: 'S' | 'M' | 'L' | null) => {
+      seen.push(recommended);
+      return { approved: true, tier: 'S' as const };
+    };
+    await runAuthoring(target, 'CSV export', {
+      decide: fullDecide(),
+      assessComplexity,
+    });
+    expect(seen).toEqual([null]);
+  });
+
   it('Small tier skips conflict-check + architecture (only explore/prd/stories/plan run)', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];

@@ -71,3 +71,16 @@ export function tierFromSizeLabel(label: string): ComplexityTier | undefined {
   if (!m) return undefined;
   return m[1].toUpperCase() as ComplexityTier;
 }
+
+/**
+ * Scan an array of GitHub label names (e.g. an Envelope's `labels`) for a
+ * `size: <S|M|L>` label and return its parsed tier. Returns `undefined` when
+ * no label matches — callers fall back to the existing assessTier signal walk.
+ */
+export function tierFromSizeLabels(labels: string[]): ComplexityTier | undefined {
+  for (const label of labels) {
+    const tier = tierFromSizeLabel(label);
+    if (tier) return tier;
+  }
+  return undefined;
+}

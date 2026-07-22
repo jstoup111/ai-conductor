@@ -4,6 +4,7 @@ import {
   assessTier,
   hasInsufficientInfo,
   tierFromSizeLabel,
+  tierFromSizeLabels,
 } from '../../src/engine/complexity.js';
 import { escalateAttempt } from '../../src/engine/escalation.js';
 import type { ComplexityTier } from '../../src/types/index.js';
@@ -169,6 +170,20 @@ describe('complexity', () => {
       expect(tier).toBe('S');
       const result = escalateAttempt('sonnet', 'low', 2, true);
       expect(result.effort).toBe('medium');
+    });
+  });
+
+  describe('tierFromSizeLabels', () => {
+    it('finds the size label among unrelated labels', () => {
+      expect(tierFromSizeLabels(['size: S', 'bug'])).toBe('S');
+    });
+
+    it('returns undefined when no label matches', () => {
+      expect(tierFromSizeLabels(['bug'])).toBeUndefined();
+    });
+
+    it('returns undefined for an empty array', () => {
+      expect(tierFromSizeLabels([])).toBeUndefined();
     });
   });
 });

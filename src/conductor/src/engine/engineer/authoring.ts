@@ -295,6 +295,13 @@ export interface RunAuthoringDeps {
    * the seam and fails closed if it is missing.
    */
   assessComplexity?: (recommended: ComplexityTier | null) => Promise<AssessComplexityResult>;
+  /**
+   * Deterministic tier seed (ADR D5, adr-2026-07-21-s-tier-pipeline-knobs) derived
+   * from a GitHub size label, passed through as the `recommended` argument to the
+   * `assessComplexity` seam. Absent/null → seam is called with `null` (unchanged
+   * behavior).
+   */
+  recommended?: ComplexityTier | null;
   spawn?: (...args: any[]) => any;
   /**
    * Originating intake reference (`owner/repo#N`). When present and valid, a
@@ -408,7 +415,7 @@ export async function runAuthoring(
   // preserving the lightweight explore→stories→plan flow. Production supplies a real seam.
   const assessComplexity =
     deps.assessComplexity ?? (async () => ({ approved: true, tier: 'S' as const }));
-  const complexity = await assessComplexity(null);
+  const complexity = await assessComplexity(deps.recommended ?? null);
   if (!complexity.approved) {
     throw new Error(
       `runAuthoring: complexity assessment was not approved. Authoring blocked — no artifacts written.`,
