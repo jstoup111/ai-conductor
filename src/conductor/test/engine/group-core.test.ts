@@ -484,6 +484,37 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
   });
 
+  it("group-core: authFailure parks without consuming retry/escalation budget (FR-4 concurrent path)", async () => {
+    // Regression pin for the group JOIN behavior (conductor.ts's
+    // `noVerdictIdx !== -1` branch, adr-2026-07-04-auth-failure-park-and-poll.md):
+    // this branch-level unit test asserts the invariants runGroupBranch itself
+    // owns — (a) the retry counter is never consumed by an authFailure result
+    // (a single call against a maxRetries=3 budget produces exactly one
+    // dispatch, not a burned attempt), and (b) group-core has no escalation
+    // primitive of its own to invoke for this outcome — so an authFailure never
+    // burns budget OR triggers escalation at the branch layer. The actual
+    // park-then-resume ROUTING (not "retries exhausted") is a JOIN-level
+    // concern proven end-to-end by
+    // test/acceptance/build-auth-token-check-and-classify.acceptance.test.ts,
+    // since a unit test against runGroupBranch alone cannot observe the join's
+    // HALT-vs-park decision (see that file's header for why).
+    const runner = spyRunner([{ success: false, authFailure: true, output: "401 unauthorized" }]);
+    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    // (a) retry budget not consumed: exactly one dispatch occurred even
+    // though maxRetries allowed up to 3 — the branch did not burn the
+    // remaining budget looping on its own.
+    expect(runner.calls).toHaveLength(1);
+
+    // (c) distinguishable from a generic "retries exhausted" no-verdict: the
+    // reason is preserved verbatim so the join can special-case it.
+    expect(classifyOutcome(outcome)).toBe("no-verdict");
+    expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
+    expect(outcome).not.toEqual({ kind: "no-verdict", reason: "retries exhausted" });
+  });
+
   it("a sessionExpired result re-mints a fresh session id and retries with resume:false, without burning retry budget", async () => {
     const runner = spyRunner([
       { success: false, sessionExpired: true },

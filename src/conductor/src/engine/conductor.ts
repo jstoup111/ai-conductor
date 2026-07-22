@@ -1073,6 +1073,95 @@ export class Conductor {
   }
 
   /**
+   * Shared park-and-poll for an `authFailure` result, factored out of the
+   * SERIAL loop's inline branch (~3082) so the concurrent-group JOIN (Task 4,
+   * .docs/plans/build-auth-token-check-and-classify.md) can reuse the exact
+   * same credential-source semantics (daemon-token / operator-OAuth / api-key
+   * modes) instead of re-implementing them. Mirrors adr-2026-07-04-auth-
+   * failure-park-and-poll.md: never retries/escalates on its own — it only
+   * waits for the credential source to change (or times out) and reports the
+   * outcome; the caller decides what "resume" or "halt" means for its own
+   * loop shape.
+   */
+  private async parkOnAuthFailure(): Promise<{ timedOut: boolean; haltReason: string }> {
+    const shPark = resolveSelfHostConfig(this.config);
+
+    if (this.selfHost && shPark.buildAuthMode === 'api-key') {
+      return {
+        timedOut: true,
+        haltReason:
+          `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
+          `is missing, invalid, or has insufficient permissions.\n` +
+          `Please set ANTHROPIC_API_KEY and re-queue this feature.`,
+      };
+    }
+
+    if (this.selfHost && shPark.buildAuthMode === 'daemon-token') {
+      const tokenPath = shPark.buildAuthTokenPath;
+      const daemonTokenClassifier = createDaemonTokenContentClassifier();
+
+      await this.events.emit({
+        type: 'credentials_park',
+        reason: 'daemon build token expired or invalid — waiting for refresh',
+      });
+
+      const parkResult = await waitForCredentialsChange({
+        initialState: 'expired',
+        credentialsPath: tokenPath,
+        globalConfigDir: '',
+        timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+        sleep: this.sleep,
+        now: () => Date.now(),
+        contentClassifier: daemonTokenClassifier,
+      });
+
+      if (parkResult.type === 'timeout') {
+        return {
+          timedOut: true,
+          haltReason:
+            `Daemon build token expired and refresh timed out.\n` +
+            `Token file: ${tokenPath}\n` +
+            `Please run: ${(await import('./self-host/daemon-build-token.js')).DAEMON_BUILD_TOKEN_MINT_COMMAND}\n` +
+            `Then re-queue this feature.`,
+        };
+      }
+      return { timedOut: false, haltReason: '' };
+    }
+
+    // Operator credentials mode (backward compatibility)
+    const operatorConfigDir = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+    const credPath = join(operatorConfigDir, '.credentials.json');
+    const credState = await readOperatorCredentialsState(operatorConfigDir, Date.now());
+
+    await this.events.emit({
+      type: 'credentials_park',
+      reason: 'operator OAuth token expired or invalid — waiting for refresh',
+    });
+
+    const parkResult = await waitForCredentialsChange({
+      initialState: credState,
+      credentialsPath: credPath,
+      globalConfigDir: operatorConfigDir,
+      timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+      sleep: this.sleep,
+      now: () => Date.now(),
+    });
+
+    if (parkResult.type === 'timeout') {
+      const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
+      return {
+        timedOut: true,
+        haltReason:
+          `Operator credentials expired and refresh timed out.\n` +
+          `Credentials file: ${parkResult.credentialsPath}\n` +
+          `Expires at: ${expiresAtStr}\n` +
+          `Please refresh your OAuth token and re-queue this feature.`,
+      };
+    }
+    return { timedOut: false, haltReason: '' };
+  }
+
+  /**
    * Pre-flight credential expiry check (TR-2). Called before sandbox provisioning
    * for self-host builds. If operator credentials are expired:
    * - If auth_park_timeout_minutes <= 0: HALT immediately with credentials-specific reason
@@ -2156,51 +2245,101 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
+            const dispatchGroupRound = (members: typeof membership.dispatchable) =>
+              runWithConcurrency(
+                members.map((member) => () =>
+                  runGroupBranch(
+                    member,
+                    state,
+                    {
+                      stepRunner: this.stepRunner,
+                      // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
+                      // gate_code_validity kill-switch is honored on this
+                      // parallel-branch sweep path too.
+                      config: this.config,
+                      // Shared rate-limit episode: a rate-limited branch waits
+                      // on the coordinator WITHOUT blocking its siblings'
+                      // dispatch (acceptance flow E) and without burning its
+                      // own retry budget.
+                      rateLimitEpisode: this.rateLimitEpisode,
+                      // Record each member's completion into the pending
+                      // side-channel as soon as ITS OWN branch resolves — not
+                      // `state` itself, and not a disk write (that stays the
+                      // join's exclusive job, Task 17's single-writer
+                      // invariant). A SIGINT/SIGTERM/SIGHUP landing while
+                      // siblings are still in flight merges this into `state`
+                      // via the signal handlers above; a clean round below
+                      // clears it before any halt/allGreen/kickback branching
+                      // runs, so those paths are entirely unaffected.
+                      onMemberEvent: (event) => {
+                        if (event.phase === 'result' && event.outcome === 'verdict:pass') {
+                          const syntheticKey = `${builtinGroup.name}__${event.member}`;
+                          inFlightGroupCompletions![event.member] = 'done';
+                          inFlightGroupCompletions![syntheticKey] = 'done';
+                        }
+                      },
+                    },
+                    1,
+                  ),
+                ),
+                cap,
+              );
+
             // Task 27: reset the pending-completions side-channel for THIS
             // round only — never touched by any path outside this fan-out
             // and the signal handlers above.
             inFlightGroupCompletions = {};
-            const outcomes = await runWithConcurrency(
-              membership.dispatchable.map((member) => () =>
-                runGroupBranch(
-                  member,
-                  state,
-                  {
-                    stepRunner: this.stepRunner,
-                    // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
-                    // gate_code_validity kill-switch is honored on this
-                    // parallel-branch sweep path too.
-                    config: this.config,
-                    // Shared rate-limit episode: a rate-limited branch waits
-                    // on the coordinator WITHOUT blocking its siblings'
-                    // dispatch (acceptance flow E) and without burning its
-                    // own retry budget.
-                    rateLimitEpisode: this.rateLimitEpisode,
-                    // Record each member's completion into the pending
-                    // side-channel as soon as ITS OWN branch resolves — not
-                    // `state` itself, and not a disk write (that stays the
-                    // join's exclusive job, Task 17's single-writer
-                    // invariant). A SIGINT/SIGTERM/SIGHUP landing while
-                    // siblings are still in flight merges this into `state`
-                    // via the signal handlers above; a clean round below
-                    // clears it before any halt/allGreen/kickback branching
-                    // runs, so those paths are entirely unaffected.
-                    onMemberEvent: (event) => {
-                      if (event.phase === 'result' && event.outcome === 'verdict:pass') {
-                        const syntheticKey = `${builtinGroup.name}__${event.member}`;
-                        inFlightGroupCompletions![event.member] = 'done';
-                        inFlightGroupCompletions![syntheticKey] = 'done';
-                      }
-                    },
-                  },
-                  1,
-                ),
-              ),
-              cap,
-            );
+            let outcomes = await dispatchGroupRound(membership.dispatchable);
             // Round settled (whatever the outcome) — the pending side-channel
             // must never leak into the halt/allGreen/kickback paths below.
             inFlightGroupCompletions = undefined;
+
+            // Task 4 (build-auth-token-check-and-classify, FR-4): an
+            // `authFailure` no-verdict is NOT the ordinary "exhausted its
+            // retries" infra failure the block below halts loudly on — it is
+            // the SAME park-and-poll condition the serial loop already
+            // handles (adr-2026-07-04-auth-failure-park-and-poll.md), just
+            // surfaced one layer up (group branch instead of serial step).
+            // Park on the credential source, then redispatch ONLY the
+            // auth-failed member(s) — siblings that already produced a
+            // verdict are never re-run, so this never burns retry/escalation
+            // budget and never spins the retry ladder.
+            for (;;) {
+              const authFailureIdxs = outcomes
+                .map((o, i) => (o.kind === 'no-verdict' && o.reason === 'authFailure' ? i : -1))
+                .filter((i) => i !== -1);
+              if (authFailureIdxs.length === 0) break;
+
+              const park = await this.parkOnAuthFailure();
+              if (park.timedOut) {
+                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                  () => {},
+                );
+                await writeFile(
+                  join(this.projectRoot, LOOP_HALT_MARKER),
+                  park.haltReason + '\n',
+                  'utf-8',
+                ).catch(() => {
+                  /* best-effort marker */
+                });
+                await writeState(this.stateFilePath, state);
+                const prUrl = await this.surfaceRemediationPr(park.haltReason);
+                await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
+                process.off('SIGINT', sigintHandler);
+                if (!this.daemon) {
+                  process.off('SIGTERM', sigterm);
+                }
+                return;
+              }
+
+              const retryMembers = authFailureIdxs.map((i) => membership.dispatchable[i]!);
+              inFlightGroupCompletions = {};
+              const retryOutcomes = await dispatchGroupRound(retryMembers);
+              inFlightGroupCompletions = undefined;
+              authFailureIdxs.forEach((idx, k) => {
+                outcomes[idx] = retryOutcomes[k]!;
+              });
+            }
 
             // A branch outcome of `verdict: pass` only means the skill
             // dispatch itself succeeded — necessary but NOT sufficient for
