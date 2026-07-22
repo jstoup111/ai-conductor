@@ -10,8 +10,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { readFile, writeFile, chmod } from 'node:fs/promises';
-import { dirname, resolve as resolvePath } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DOCS_GUARD_HOOK } from '../engine/session-hook-assets.js';
 
 export const EXIT_OK = 0;
@@ -61,42 +59,6 @@ export async function runGenerateDocsGuardHookCli(opts: CliOptions): Promise<Cli
   return { exitCode: EXIT_OK };
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Direct-execution entry point — invoked by `bin/generate-docs-guard-hook` via
-// `tsx`. Resolves the repo-root hooks/claude/docs-guard.sh path relative to
-// this source file's location (src/conductor/src/tools/ ->
-// ../../../../hooks/claude/docs-guard.sh), runs the CLI against the real
-// filesystem, and exits with the resulting code.
-//
-// Guarded so importing this module (e.g. from tests) never triggers process
-// exit / stdio side effects — only running it directly does.
-// ────────────────────────────────────────────────────────────────────────────
-
-function defaultOutPath(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolvePath(here, '../../../../hooks/claude/docs-guard.sh');
-}
-
-function parseArgs(argv: string[]): CliMode {
-  return argv.includes('--check') ? 'check' : 'write';
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const outPath = process.env.GENERATE_DOCS_GUARD_HOOK_OUT ?? defaultOutPath();
-  const mode = parseArgs(process.argv.slice(2));
-  runGenerateDocsGuardHookCli({ outPath, mode })
-    .then((result) => {
-      if (result.message) {
-        if (result.exitCode === EXIT_OK) {
-          console.log(result.message);
-        } else {
-          console.error(result.message);
-        }
-      }
-      process.exit(result.exitCode);
-    })
-    .catch((err) => {
-      console.error('generate-docs-guard-hook: fatal:', err instanceof Error ? err.message : err);
-      process.exit(EXIT_ERROR);
-    });
-}
+// Direct-execution entry point lives in `generate-docs-guard-hook-main.ts` —
+// `bin/generate-docs-guard-hook` execs that file via `tsx`, keeping this
+// module free of process-exit/stdio side effects on import.

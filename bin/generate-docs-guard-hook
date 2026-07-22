@@ -19,7 +19,7 @@ BIN_DIR="$(dirname "$REAL_PATH")"
 REPO_ROOT="${BIN_DIR}/.."
 CONDUCTOR_DIR="${REPO_ROOT}/src/conductor"
 TSX="${CONDUCTOR_DIR}/node_modules/.bin/tsx"
-TOOL="${CONDUCTOR_DIR}/src/tools/generate-docs-guard-hook.ts"
+TOOL="${CONDUCTOR_DIR}/src/tools/generate-docs-guard-hook-main.ts"
 
 if [ ! -x "$TSX" ]; then
   echo "generate-docs-guard-hook: missing ${TSX}" >&2

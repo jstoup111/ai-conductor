@@ -65,7 +65,7 @@ None — pure additions; no migrations, no new dependencies.
 - src/conductor/src/engine/phase-marker.ts — new module
 - src/conductor/src/engine/phase-marker.test.ts — new tests
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/conductor.ts#run
 **Dependencies:** none
 
 ### Task 2: Two-part allowlist table + resolver
@@ -137,7 +137,7 @@ None — pure additions; no migrations, no new dependencies.
 - src/conductor/src/engine/session-hook-assets.ts — DOCS_GUARD_HOOK export
 - src/conductor/src/engine/session-hook-assets.test.ts — hook execution tests
 
-**Wired-into:** none (inert until src/conductor/src/engine/worktree-prepare.ts)
+**Wired-into:** src/conductor/src/engine/worktree-prepare.ts#writeSessionHooks
 **Dependencies:** Task 1
 
 ### Task 6: Docs-guard block path — default-deny with actionable rejection
@@ -225,9 +225,10 @@ None — pure additions; no migrations, no new dependencies.
 
 **Files likely touched:**
 - bin/generate-docs-guard-hook — new generator
+- src/conductor/src/tools/generate-docs-guard-hook-main.ts — direct-execution entry point
 - hooks/claude/docs-guard.sh — generated artifact (committed)
 
-**Wired-into:** bin/install#harness_hooks (consumed by Task 12's entry)
+**Wired-into:** bin/install#harness_hooks (consumed by Task 12's entry), src/conductor/src/tools/generate-docs-guard-hook-main.ts#runGenerateDocsGuardHookCli
 **Dependencies:** Task 5
 
 ### Task 11: Integrity-suite drift check for the generated hook
