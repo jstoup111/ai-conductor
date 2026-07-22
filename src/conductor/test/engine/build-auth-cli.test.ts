@@ -11,7 +11,11 @@ import {
 } from '../../src/engine/build-auth-cli.js';
 import type { TokenLivenessResult } from '../../src/engine/self-host/token-liveness.js';
 import type { DaemonBuildTokenResult } from '../../src/engine/self-host/daemon-build-token.js';
-import type { ResolvedSelfHostConfig } from '../../src/engine/resolved-config.js';
+import {
+  resolveSelfHostConfig,
+  DEFAULT_BUILD_AUTH_MODE,
+  type ResolvedSelfHostConfig,
+} from '../../src/engine/resolved-config.js';
 
 function baseSelfHost(overrides: Partial<ResolvedSelfHostConfig> = {}): ResolvedSelfHostConfig {
   return {
@@ -55,7 +59,7 @@ describe('dispatchBuildAuthStatus', () => {
       async (): Promise<TokenLivenessResult> => ({ verdict: 'valid' }),
     );
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -69,6 +73,7 @@ describe('dispatchBuildAuthStatus', () => {
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/valid/i);
     expect(output).not.toMatch(/mint/i); // no remediation message
+    expect(exitCode).toBe(0);
   });
 
   it('token missing: prints missing state + remediation, no probe attempted', async () => {
@@ -76,7 +81,7 @@ describe('dispatchBuildAuthStatus', () => {
     const readToken = vi.fn(async (): Promise<DaemonBuildTokenResult> => ({ state: 'missing' }));
     const probeLiveness = vi.fn();
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -90,6 +95,7 @@ describe('dispatchBuildAuthStatus', () => {
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/missing/i);
     expect(output).toMatch(/mint/i);
+    expect(exitCode).not.toBe(0);
   });
 
   it('token present but probe returns invalid: prints invalid state + remediation', async () => {
@@ -101,7 +107,7 @@ describe('dispatchBuildAuthStatus', () => {
       async (): Promise<TokenLivenessResult> => ({ verdict: 'invalid', detail: 'api_error_status 401' }),
     );
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -115,6 +121,7 @@ describe('dispatchBuildAuthStatus', () => {
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/invalid/i);
     expect(output).toMatch(/mint/i);
+    expect(exitCode).not.toBe(0);
   });
 
   it('token unreadable (fs error): prints unreadable state + remediation, no probe attempted', async () => {
@@ -127,7 +134,7 @@ describe('dispatchBuildAuthStatus', () => {
     );
     const probeLiveness = vi.fn();
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -141,6 +148,7 @@ describe('dispatchBuildAuthStatus', () => {
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/unreadable/i);
     expect(output).toMatch(/mint/i);
+    expect(exitCode).not.toBe(0);
   });
 
   it('probe returns unverifiable: prints unverifiable state + remediation', async () => {
@@ -155,7 +163,7 @@ describe('dispatchBuildAuthStatus', () => {
       }),
     );
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -169,6 +177,9 @@ describe('dispatchBuildAuthStatus', () => {
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/unverifiable/i);
     expect(output).toMatch(/mint/i);
+    // Strict: unverifiable is NOT a pass — the operator must be able to
+    // script on this exit code, so it must be non-zero, same as invalid.
+    expect(exitCode).not.toBe(0);
   });
 
   it('api-key mode: prints api-key state, no probe attempted, no remediation', async () => {
@@ -176,7 +187,7 @@ describe('dispatchBuildAuthStatus', () => {
     const readToken = vi.fn();
     const probeLiveness = vi.fn();
 
-    await dispatchBuildAuthStatus(
+    const exitCode = await dispatchBuildAuthStatus(
       { kind: 'status' },
       {
         print,
@@ -190,5 +201,54 @@ describe('dispatchBuildAuthStatus', () => {
     expect(probeLiveness).not.toHaveBeenCalled();
     const output = print.mock.calls.map((c) => c[0]).join('\n');
     expect(output).toMatch(/api-key/i);
+    expect(exitCode).toBe(0);
+  });
+
+  it('api-key mode: exit code 0 even when no token file exists at all (readToken would report missing)', async () => {
+    const print = vi.fn();
+    // Even if invoked, readToken reporting "missing" must not affect the
+    // api-key-mode result — but it should never be invoked in the first
+    // place (asserted below).
+    const readToken = vi.fn(async (): Promise<DaemonBuildTokenResult> => ({ state: 'missing' }));
+    const probeLiveness = vi.fn();
+
+    const exitCode = await dispatchBuildAuthStatus(
+      { kind: 'status' },
+      {
+        print,
+        resolveSelfHostConfig: () => baseSelfHost({ buildAuthMode: 'api-key' }),
+        readDaemonBuildToken: readToken,
+        verifyTokenLiveness: probeLiveness,
+      },
+    );
+
+    expect(readToken).not.toHaveBeenCalled();
+    expect(probeLiveness).not.toHaveBeenCalled();
+    expect(exitCode).toBe(0);
+  });
+
+  it('no self-host config present at all: defaults to daemon-token mode at the default token path', async () => {
+    const print = vi.fn();
+    const readToken = vi.fn(async (): Promise<DaemonBuildTokenResult> => ({ state: 'ok', token: 'sk-live' }));
+    const probeLiveness = vi.fn(async (): Promise<TokenLivenessResult> => ({ verdict: 'valid' }));
+
+    // Real resolveSelfHostConfig with no config block supplied — exercises
+    // the actual default-resolution path, not a stubbed baseSelfHost().
+    const resolved = resolveSelfHostConfig(undefined);
+    expect(resolved.buildAuthMode).toBe(DEFAULT_BUILD_AUTH_MODE);
+    expect(resolved.buildAuthMode).toBe('daemon-token');
+
+    const exitCode = await dispatchBuildAuthStatus(
+      { kind: 'status' },
+      {
+        print,
+        resolveSelfHostConfig: () => resolved,
+        readDaemonBuildToken: readToken,
+        verifyTokenLiveness: probeLiveness,
+      },
+    );
+
+    expect(readToken).toHaveBeenCalledWith(resolved.buildAuthTokenPath);
+    expect(exitCode).toBe(0);
   });
 });
