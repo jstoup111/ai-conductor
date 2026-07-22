@@ -252,3 +252,68 @@ describe('dispatchBuildAuthStatus', () => {
     expect(exitCode).toBe(0);
   });
 });
+
+describe('Task 11: credential confidentiality sweep', () => {
+  const TOKEN_FIXTURE = 'zqx9RmTt7pLk3vEwYbNcGhJdSfAoXu2M';
+
+  async function capturedOutput(
+    readToken: () => Promise<DaemonBuildTokenResult>,
+    probeLiveness: () => Promise<TokenLivenessResult>,
+    mode: ResolvedSelfHostConfig['buildAuthMode'] = 'daemon-token',
+  ): Promise<string> {
+    const print = vi.fn();
+    await dispatchBuildAuthStatus(
+      { kind: 'status' },
+      {
+        print,
+        resolveSelfHostConfig: () => baseSelfHost({ buildAuthMode: mode }),
+        readDaemonBuildToken: readToken,
+        verifyTokenLiveness: probeLiveness,
+      },
+    );
+    return print.mock.calls.map((c) => c[0]).join('\n');
+  }
+
+  it('valid state: printed output never contains the token', async () => {
+    const output = await capturedOutput(
+      async () => ({ state: 'ok', token: TOKEN_FIXTURE }),
+      async () => ({ verdict: 'valid' }),
+    );
+    expect(output).not.toContain(TOKEN_FIXTURE);
+  });
+
+  it('invalid state: printed output never contains the token', async () => {
+    const output = await capturedOutput(
+      async () => ({ state: 'ok', token: TOKEN_FIXTURE }),
+      async () => ({ verdict: 'invalid', detail: 'api_error_status 401' }),
+    );
+    expect(output).not.toContain(TOKEN_FIXTURE);
+  });
+
+  it('missing state: printed output never contains the token', async () => {
+    const output = await capturedOutput(
+      async () => ({ state: 'missing' }),
+      async () => ({ verdict: 'valid' }),
+    );
+    expect(output).not.toContain(TOKEN_FIXTURE);
+  });
+
+  it('unreadable state: printed output never contains the token', async () => {
+    const output = await capturedOutput(
+      async () => ({
+        state: 'error',
+        detail: `cannot read daemon build token: /path (${TOKEN_FIXTURE})`,
+      }),
+      async () => ({ verdict: 'valid' }),
+    );
+    expect(output).not.toContain(TOKEN_FIXTURE);
+  });
+
+  it('unverifiable state: printed output never contains the token', async () => {
+    const output = await capturedOutput(
+      async () => ({ state: 'ok', token: TOKEN_FIXTURE }),
+      async () => ({ verdict: 'unverifiable', detail: 'liveness probe timed out' }),
+    );
+    expect(output).not.toContain(TOKEN_FIXTURE);
+  });
+});

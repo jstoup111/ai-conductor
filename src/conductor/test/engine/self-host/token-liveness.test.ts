@@ -151,6 +151,50 @@ describe('verifyTokenLiveness', () => {
     expect(Object.values(env).some((v) => v === TOKEN)).toBe(true);
   });
 
+  it('Task 11: no unverifiable-path detail string contains the token substring', async () => {
+    const TOKEN_FIXTURE = 'zqx9RmTt7pLk3vEwYbNcGhJdSfAoXu2M';
+
+    const spawnerCases: LivenessSpawner[] = [
+      // timeout
+      async () => ({ exitCode: null, stdout: '', timedOut: true }),
+      // spawn error whose message happens to include env-flavored text
+      async () => {
+        throw new Error(`spawn failed near token ${TOKEN_FIXTURE}`);
+      },
+      // unparseable envelope that echoes the token in raw stdout
+      async () => ({ exitCode: 1, stdout: `not json ${TOKEN_FIXTURE} {{{`, timedOut: false }),
+      // unexpected status envelope embedding the token in an extraneous field
+      async () => ({
+        exitCode: 1,
+        stdout: JSON.stringify({ is_error: true, api_error_status: 500, extra: TOKEN_FIXTURE }),
+        timedOut: false,
+      }),
+    ];
+
+    for (const spawner of spawnerCases) {
+      const result = await verifyTokenLiveness({ token: TOKEN_FIXTURE, spawner });
+      expect(result.verdict).toBe('unverifiable');
+      expect(JSON.stringify(result)).not.toContain(TOKEN_FIXTURE);
+    }
+  });
+
+  it('Task 11: spawner argv never contains any substring of the token', async () => {
+    const TOKEN_FIXTURE = 'zqx9RmTt7pLk3vEwYbNcGhJdSfAoXu2M';
+    const { spawner, calls } = makeSpawner({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false }),
+      timedOut: false,
+    });
+
+    await verifyTokenLiveness({ token: TOKEN_FIXTURE, spawner });
+
+    expect(calls).toHaveLength(1);
+    const { argv } = calls[0];
+    for (const arg of argv) {
+      expect(arg).not.toContain(TOKEN_FIXTURE);
+    }
+  });
+
   it('never returns valid without an explicit positive signal — default/unknown cases stay unverifiable', async () => {
     const cases: LivenessSpawnResult[] = [
       { exitCode: 0, stdout: '', timedOut: false },
