@@ -33,7 +33,7 @@ import {
   type WiredIntoParseResult,
   type WiredIntoSite,
 } from './wired-into.js';
-import { parsePlanTaskPaths } from './autoheal.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { WiringEvidence, WiringGap, WiringGapKind, WiringTaskResult } from './artifacts.js';
 
