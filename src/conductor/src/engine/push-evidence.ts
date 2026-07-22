@@ -75,7 +75,7 @@ export async function headPushedToUpstream(
     } catch (err) {
       // Check if this is the "not an ancestor" case (exit code 1)
       // Node's child_process module sets error.code to the exit code
-      const exitCode = (err as { code?: number } | unknown).code;
+      const exitCode = (err as { code?: number }).code;
       if (exitCode === 1) {
         // exit 1 from merge-base --is-ancestor means HEAD is NOT an ancestor
         return false;

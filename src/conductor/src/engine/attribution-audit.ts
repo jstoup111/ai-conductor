@@ -73,7 +73,7 @@
 
 import * as crypto from 'node:crypto';
 import { access, mkdir, readFile } from 'node:fs/promises';
-import { openSync, writeSync } from 'node:fs';
+import { openSync, writeSync, closeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { TaskEvidence, EvidenceStamp } from './task-evidence.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
@@ -166,12 +166,14 @@ export async function appendAccuracyLedger(ledgerPath: string, record: AccuracyL
   try {
     // Write the complete line in a single operation
     // This is atomic at the OS level due to O_APPEND
-    writeSync(fd, line, 'utf-8');
+    writeSync(fd, line, null, 'utf-8');
   } finally {
     // Close the file descriptor
-    import('node:fs/promises').then((m) => m.close(fd)).catch(() => {
+    try {
+      closeSync(fd);
+    } catch {
       // Ignore close errors
-    });
+    }
   }
 }
 

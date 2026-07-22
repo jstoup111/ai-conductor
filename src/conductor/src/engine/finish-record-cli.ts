@@ -69,7 +69,7 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 /** Injectable spawn points so tests can assert zero gh/git invocations on refusal. */
 export interface FinishRecordRunners {
   runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
-  runGit: (args: string[], opts?: { cwd: string }) => Promise<unknown>;
+  runGit: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string }>;
 }
 
 const noopRunners: FinishRecordRunners = {

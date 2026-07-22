@@ -19,10 +19,10 @@
  * - No writes in dryRun mode
  */
 
-import { parseVerdicts } from './verdict-parser';
-import { Ledger, LedgerFs, Clock } from './ledger';
-import { stampIssue, closeIssue } from './closer';
-import { resolveEntry, FsAbstraction } from './resolution';
+import { parseVerdicts } from './verdict-parser.js';
+import { Ledger, LedgerFs, Clock } from './ledger.js';
+import { stampIssue, closeIssue } from './closer.js';
+import { resolveEntry, FsAbstraction } from './resolution.js';
 
 /**
  * GitHub abstraction interface (from closer.ts)
