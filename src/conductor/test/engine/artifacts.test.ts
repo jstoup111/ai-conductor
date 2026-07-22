@@ -2795,4 +2795,194 @@ Task 1 → Task 2
       });
     });
   });
+
+  describe('sweepStaleReviewArtifacts: code-validity preserve before delete (Task 7, #817)', () => {
+    const OLD_MTIME = new Date(2000, 0, 1);
+
+    async function makeGitDir(): Promise<string> {
+      const d = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-7-'));
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: d });
+      await execa('git', ['config', 'user.email', 't@t.com'], { cwd: d });
+      await execa('git', ['config', 'user.name', 'T'], { cwd: d });
+      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: d });
+      await mkdir(join(d, '.pipeline'), { recursive: true });
+      await writeFile(join(d, '.gitignore'), '.pipeline/\n');
+      await execa('git', ['add', '.gitignore'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', 'chore: gitignore .pipeline'], { cwd: d });
+      return d;
+    }
+
+    async function commitFile(d: string, rel: string, content: string, message: string): Promise<string> {
+      await mkdir(join(d, dirname(rel)), { recursive: true });
+      await writeFile(join(d, rel), content);
+      await execa('git', ['add', '.'], { cwd: d });
+      await execa('git', ['commit', '-q', '-m', message], { cwd: d });
+      const r = await execa('git', ['rev-parse', 'HEAD'], { cwd: d });
+      return r.stdout.trim();
+    }
+
+    /** Wires an `origin` remote with a real `refs/remotes/origin/HEAD`, so
+     * `deriveFeatureSurface` (feature-runtime gates) can compute a non-empty
+     * feature surface `F` in-fixture instead of failing open to `[]`. */
+    async function wireOrigin(d: string): Promise<void> {
+      const bare = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-7-origin-'));
+      await execa('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
+      await execa('git', ['remote', 'add', 'origin', bare], { cwd: d });
+      await execa('git', ['push', '-q', 'origin', 'main'], { cwd: d });
+      await execa('git', ['remote', 'set-head', 'origin', 'main'], { cwd: d });
+    }
+
+    let gdir: string;
+    afterEach(async () => {
+      if (gdir) await rm(gdir, { recursive: true, force: true });
+    });
+
+    describe('prd_audit', () => {
+      const PATH = '.pipeline/prd-audit.md';
+      const SIDECAR = '.pipeline/prd-audit-code-stamp.json';
+      const ALIGNED =
+        '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+
+      async function writeStaleReport(d: string): Promise<void> {
+        const p = join(d, PATH);
+        await writeFile(p, ALIGNED);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      it('spares a stale report whose codeStamp sidecar surface is unchanged', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
+
+        expect(removed).toEqual([]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(ALIGNED);
+      });
+
+      it('deletes a stale report whose codeStamp sidecar surface HAS changed', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
+
+        expect(removed).toEqual([join(gdir, PATH)]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
+      });
+
+      it('deletes a stale report with no codeStamp sidecar at all (legacy, unchanged regression)', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now());
+
+        expect(removed).toEqual([join(gdir, PATH)]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
+      });
+
+      it('keeps a FRESH report untouched regardless of the sidecar codeStamp (existing early-continue behavior)', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        const p = join(gdir, PATH);
+        await writeFile(p, ALIGNED); // fresh mtime — not backdated
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const sessionStart = Date.now() - 60_000; // predates the fresh write above
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', sessionStart);
+
+        expect(removed).toEqual([]);
+        await expect(readFile(p, 'utf-8')).resolves.toBe(ALIGNED);
+      });
+    });
+
+    describe('architecture_review_as_built', () => {
+      const PATH = '.pipeline/architecture-review-as-built.md';
+      const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
+      const APPROVED = '# As-Built Review\n\nVerdict: APPROVED\n';
+
+      async function writeStaleReport(d: string): Promise<void> {
+        const p = join(d, PATH);
+        await writeFile(p, APPROVED);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      it('spares a stale report whose codeStamp sidecar surface is unchanged', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'architecture_review_as_built', Date.now());
+
+        expect(removed).toEqual([]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(APPROVED);
+      });
+
+      it('deletes a stale report whose codeStamp sidecar surface HAS changed', async () => {
+        gdir = await makeGitDir();
+        await wireOrigin(gdir);
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await commitFile(gdir, 'featureA.ts', 'f2\n', 'feat: change featureA');
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'architecture_review_as_built', Date.now());
+
+        expect(removed).toEqual([join(gdir, PATH)]);
+      });
+    });
+
+    describe('manual_test', () => {
+      const RESULTS = '.pipeline/manual-test-results.md';
+      const MARKER = '.pipeline/manual-test-fail-evidence.json';
+      const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
+
+      async function writeStaleResults(d: string): Promise<void> {
+        const p = join(d, RESULTS);
+        await writeFile(p, PASS_FILE);
+        await utimes(p, OLD_MTIME, OLD_MTIME);
+      }
+
+      it('spares a stale clean-PASS marker whose codeStamp surface is unchanged', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeStaleResults(gdir);
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'manual_test', Date.now());
+
+        expect(removed).toEqual([]);
+        await expect(readFile(join(gdir, RESULTS), 'utf-8')).resolves.toBe(PASS_FILE);
+      });
+
+      it('deletes a stale results file whose codeStamp surface HAS changed', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeStaleResults(gdir);
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
+        await commitFile(gdir, 'src/a.ts', 'a2\n', 'kickback fix');
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'manual_test', Date.now());
+
+        expect(removed).toEqual([join(gdir, RESULTS)]);
+      });
+
+      it('deletes a stale results file with no fail-evidence marker at all (legacy, unchanged regression)', async () => {
+        gdir = await makeGitDir();
+        await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+        await writeStaleResults(gdir);
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'manual_test', Date.now());
+
+        expect(removed).toEqual([join(gdir, RESULTS)]);
+      });
+    });
+  });
 });

@@ -321,6 +321,84 @@ const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 ]);
 
 /**
+ * True when `step`'s already-stamped verdict is still preserve-worthy per
+ * `gateVerdictStillValid` (gate-code-validity-on-redispatch, #817) — the SAME
+ * check `CUSTOM_COMPLETION_PREDICATES` uses to decide whether to skip a
+ * re-run (Task 5/6). Called by the sweep BELOW `sweepStaleReviewArtifacts`
+ * before it deletes a stale artifact: without this check the sweep would
+ * unconditionally delete a still-valid verdict before the completion
+ * predicate ever gets a chance to preserve it, silently defeating the whole
+ * feature on the resume/kickback path this sweep guards (invariant C5 —
+ * sweep and predicate must never disagree about validity, or you get a
+ * self-contradicting state).
+ *
+ * Reads the SAME codeStamp source each predicate reads for its step
+ * (`manual_test`'s fail-evidence marker, `prd_audit`/
+ * `architecture_review_as_built`'s sidecar) — never re-derives it. Missing/
+ * unreadable/unparseable source, or no `codeStamp`, → false (delete as
+ * today). `build_review` and other non-sweep steps are never asked (the
+ * caller only calls this for `STALE_SWEEP_STEPS`).
+ */
+async function sweptArtifactStillValid(
+  dir: string,
+  step: StepName,
+): Promise<boolean> {
+  const git = makeGitRunner(dir);
+  const ctx = { projectRoot: dir, git };
+
+  try {
+    if (step === 'manual_test') {
+      const raw = await readFile(join(dir, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8');
+      const marker = JSON.parse(raw) as ManualTestFailEvidence;
+      // Mirrors the predicate's own cleanPass guard (Task 6): a marker
+      // carrying failRows/headSha (the whitewash-guard's unresolved-FAIL
+      // shape, #367) must never be spared here, or a laundering marker
+      // could bypass the guard.
+      const cleanPass =
+        marker.codeStamp != null &&
+        marker.headSha === undefined &&
+        (marker.failRows === undefined || marker.failRows.length === 0);
+      if (!cleanPass) return false;
+      return (
+        (await gateVerdictStillValid(ctx, 'manual_test', marker.codeStamp)) === 'preserve'
+      );
+    }
+    if (step === 'prd_audit') {
+      const raw = await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf-8');
+      const marker = JSON.parse(raw) as GateCodeStampMarker;
+      if (!marker.codeStamp) return false;
+      const validity = await gateVerdictStillValid(ctx, 'prd_audit', marker.codeStamp);
+      if (validity !== 'preserve') return false;
+      // Mirrors the predicate's own premise re-check (Task 6): the sidecar's
+      // presence signals "last recorded verdict was a PASS", but the report
+      // about to be swept can diverge from what it was stamped from — never
+      // spare a report that does not itself currently read clean.
+      return findUnalignedFrRows(await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8')).length === 0;
+    }
+    if (step === 'architecture_review_as_built') {
+      const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
+      const marker = JSON.parse(raw) as GateCodeStampMarker;
+      if (!marker.codeStamp) return false;
+      const validity = await gateVerdictStillValid(
+        ctx,
+        'architecture_review_as_built',
+        marker.codeStamp,
+      );
+      if (validity !== 'preserve') return false;
+      // Mirrors the predicate's own premise re-check (Task 6).
+      const verdict = parseAsBuiltVerdict(
+        await readFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'utf-8'),
+      );
+      return verdict !== null && /^APPROVED\b/i.test(verdict);
+    }
+  } catch {
+    // No sidecar/marker, unreadable, or unparseable — fall through to false
+    // (delete as today).
+  }
+  return false;
+}
+
+/**
  * Before a freshness-gated re-review step (re)runs, delete its `.pipeline/`
  * run-evidence artifact(s) when they predate this session, so the step CANNOT be
  * satisfied by reusing a stale artifact the agent declined to rewrite. With the
@@ -335,8 +413,12 @@ const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
  *
  * No-op for non-sweep steps, when `sessionStartedAt` is undefined (legacy state
  * / opt-out — fail open), and for artifacts already fresh this session (e.g. a
- * within-session retry must not lose attempt 1's output). Returns the paths
- * removed, for logging. Best-effort: an unlink race is swallowed.
+ * within-session retry must not lose attempt 1's output). A stale artifact
+ * whose codeStamp still validates (gate-code-validity-on-redispatch, #817 —
+ * `sweptArtifactStillValid` above) is also SPARED, so the completion predicate
+ * can preserve it (Story 7 / invariant C5) instead of forcing a needless
+ * re-run. Returns the paths removed, for logging. Best-effort: an unlink race
+ * is swallowed.
  */
 export async function sweepStaleReviewArtifacts(
   dir: string,
@@ -347,6 +429,7 @@ export async function sweepStaleReviewArtifacts(
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
+    if (await sweptArtifactStillValid(dir, step)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);
