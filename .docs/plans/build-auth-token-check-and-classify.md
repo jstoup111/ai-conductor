@@ -69,7 +69,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/execution/claude-provider.ts — pattern extension
 - src/conductor/test/execution/claude-provider.test.ts — fixtures
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** none
 
 ### Task 2: Precedence preserved over new patterns
