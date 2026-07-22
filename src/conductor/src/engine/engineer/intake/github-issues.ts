@@ -196,6 +196,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
       hintRepo: repo.name,
       status: 'pending',
       receivedAt: now(),
+      labels: labelNames(issue),
     });
   }
 
@@ -253,6 +254,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
             hintRepo: ghRepo,
             status: 'pending',
             receivedAt: now(),
+            labels: labelNames(issue),
           });
           await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
           out.push(envelope);

@@ -29,6 +29,8 @@ export interface Envelope {
   status: EnvelopeStatus;
   /** ISO 8601 timestamp of when the envelope entered the system. */
   receivedAt: string;
+  /** Optional GitHub label names, e.g. for size-label based complexity seeding. */
+  labels?: string[];
 }
 
 // ─── EmptyEnvelopeTextError ───────────────────────────────────────────────────

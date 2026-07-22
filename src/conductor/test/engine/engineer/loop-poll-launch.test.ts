@@ -92,6 +92,15 @@ function envelope(sourceRef: string, text: string, receivedAt: string): Envelope
   return { id: sourceRef, source: 'github-issues', sourceRef, text, hintRepo: 'alpha', status: 'pending', receivedAt };
 }
 
+function envelopeWithLabels(
+  sourceRef: string,
+  text: string,
+  receivedAt: string,
+  labels: string[],
+): Envelope {
+  return { ...envelope(sourceRef, text, receivedAt), labels };
+}
+
 async function initRepo(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
   await exec('git', ['init', '-b', 'main'], { cwd: dir });
@@ -254,5 +263,82 @@ describe('FR-31 chat fallback when the inbox is empty after poll', () => {
     const a = await queue.claim();
     const b = await queue.claim();
     expect([a?.sourceRef, b?.sourceRef].sort()).toEqual(['o/a#2', 'o/a#3']);
+  });
+});
+
+// ADR D5 (adr-2026-07-21-s-tier-pipeline-knobs): a `size: <S|M|L>` label on the
+// polled envelope must seed the deterministic `recommended` tier passed through
+// to runAuthoring's assessComplexity seam, short-circuiting the LLM signal walk.
+describe('D5: envelope size label seeds the recommended tier', () => {
+  it('an envelope with a size: S label results in assessComplexity called with recommended "S"', async () => {
+    const repo = join(workDir, 'alpha');
+    await initRepo(repo);
+    await writeRegistry([project(repo, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { route } = makeProvider('alpha');
+    const { gh } = makeGh('https://example.invalid/alpha/pull/9');
+    const { io } = scriptedIo(['y', 'exit']);
+
+    const queue = createFileQueue(join(workDir, 'inbox'));
+    const { source } = fakeIntake([
+      envelopeWithLabels('o/a#1', 'labeled idea', '2026-06-27T00:00:01.000Z', ['size: S', 'bug']),
+    ]);
+
+    const seenRecommended: Array<'S' | 'M' | 'L' | null> = [];
+    const assessComplexity = async (ctx: { recommended: 'S' | 'M' | 'L' | null }) => {
+      seenRecommended.push(ctx.recommended);
+      return { approved: true, tier: 'S' as const };
+    };
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      decide: makeTestDecide(),
+      assessComplexity,
+      engineerDir,
+      sources: [source],
+      queue,
+    });
+
+    expect(summary.ideasProcessed).toBe(1);
+    expect(seenRecommended).toEqual(['S']);
+  });
+
+  it('an envelope with no matching size label results in assessComplexity called with recommended null', async () => {
+    const repo = join(workDir, 'alpha');
+    await initRepo(repo);
+    await writeRegistry([project(repo, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { route } = makeProvider('alpha');
+    const { gh } = makeGh('https://example.invalid/alpha/pull/10');
+    const { io } = scriptedIo(['y', 'exit']);
+
+    const queue = createFileQueue(join(workDir, 'inbox'));
+    const { source } = fakeIntake([
+      envelopeWithLabels('o/a#1', 'unlabeled idea', '2026-06-27T00:00:01.000Z', ['bug']),
+    ]);
+
+    const seenRecommended: Array<'S' | 'M' | 'L' | null> = [];
+    const assessComplexity = async (ctx: { recommended: 'S' | 'M' | 'L' | null }) => {
+      seenRecommended.push(ctx.recommended);
+      return { approved: true, tier: 'S' as const };
+    };
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      decide: makeTestDecide(),
+      assessComplexity,
+      engineerDir,
+      sources: [source],
+      queue,
+    });
+
+    expect(summary.ideasProcessed).toBe(1);
+    expect(seenRecommended).toEqual([null]);
   });
 });
