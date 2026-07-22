@@ -12,6 +12,7 @@ import {
   PRE_DISPATCH_HOOK,
   POST_DISPATCH_HOOK,
   MUTATION_GATE_HOOK,
+  DOCS_GUARD_HOOK,
 } from '../../src/engine/session-hook-assets.js';
 
 function assertValidBash(name: string, script: string): void {
@@ -71,6 +72,7 @@ describe('session-hook-assets', () => {
     ['PRE_DISPATCH_HOOK', PRE_DISPATCH_HOOK],
     ['POST_DISPATCH_HOOK', POST_DISPATCH_HOOK],
     ['MUTATION_GATE_HOOK', MUTATION_GATE_HOOK],
+    ['DOCS_GUARD_HOOK', DOCS_GUARD_HOOK],
   ];
 
   it.each(hooks)('%s is a non-empty string', (_name, script) => {
@@ -353,5 +355,65 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/Task: <id>/);
     expect(result.stderr).toMatch(/Task: none/);
+  });
+});
+
+function runDocsGuardHook(opts: {
+  markerContent?: string;
+  payload?: unknown;
+}): RunResult {
+  const dir = mkdtempSync(join(tmpdir(), 'docs-guard-hook-'));
+  try {
+    const scriptPath = join(dir, 'docs-guard.sh');
+    writeFileSync(scriptPath, DOCS_GUARD_HOOK, 'utf-8');
+    mkdirSync(join(dir, '.pipeline'), { recursive: true });
+    if (opts.markerContent !== undefined) {
+      writeFileSync(join(dir, '.pipeline', 'phase-active'), opts.markerContent, 'utf-8');
+    }
+    const payloadStr =
+      opts.payload === undefined
+        ? undefined
+        : typeof opts.payload === 'string'
+          ? opts.payload
+          : JSON.stringify(opts.payload);
+    try {
+      const stdout = execFileSync('bash', [scriptPath], {
+        cwd: dir,
+        // Omitting `input` when there's no payload lets us prove the
+        // marker-absent fast path never reads stdin: if the script blocked
+        // reading, execFileSync would hang/timeout rather than return.
+        input: payloadStr,
+        timeout: 5000,
+        stdio: 'pipe',
+      });
+      return { status: 0, stderr: '', stdout: stdout.toString('utf-8') };
+    } catch (err) {
+      const e = err as { status?: number; stderr?: Buffer; stdout?: Buffer };
+      return {
+        status: e.status ?? -1,
+        stderr: (e.stderr ?? Buffer.from('')).toString('utf-8'),
+        stdout: (e.stdout ?? Buffer.from('')).toString('utf-8'),
+      };
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('DOCS_GUARD_HOOK', () => {
+  it('exits 0 with no stdin read when the phase-active marker is absent', () => {
+    // No `input` provided at all — if the script attempted to read stdin
+    // before checking the marker, execFileSync would block until the
+    // 5s timeout and this test would fail/hang rather than return quickly.
+    const result = runDocsGuardHook({});
+    expect(result.status).toBe(0);
+  });
+
+  it('passes through a non-.docs Edit target when the marker is present', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/plans/foo.md\n',
+      payload: { tool_name: 'Edit', tool_input: { file_path: 'src/foo.ts' } },
+    });
+    expect(result.status).toBe(0);
   });
 });

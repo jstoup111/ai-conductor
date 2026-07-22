@@ -406,3 +406,82 @@ export const MUTATION_GATE_HOOK = [
   '    ;;',
   'esac',
 ].join('\n');
+
+/**
+ * PreToolUse phase-scoped .docs write-guard (#788). Wired with matcher
+ * `Edit|Write|NotebookEdit`. Blocks mutation of spec/plan artifacts under
+ * `.docs/` while a build phase is active, unless the phase marker's
+ * allowlist explicitly permits the target path.
+ *
+ * - `.pipeline/phase-active` marker ABSENT → enforcement inactive, exit 0
+ *   WITHOUT reading stdin at all (must never block waiting on payload
+ *   delivery when inert).
+ * - Marker present + target path outside `.docs/` → exit 0 (Task 5 scope).
+ * - Marker present + target under `.docs/` → block/allow logic added in
+ *   Tasks 6-8; this task lands only the inert fast paths above.
+ * - Unparseable payload → fail-open (exit 0), matching MUTATION_GATE_HOOK's
+ *   degradation rule.
+ */
+export const DOCS_GUARD_HOOK = [
+  '#!/bin/bash',
+  'set -e',
+  '',
+  'MARKER_PATH=".pipeline/phase-active"',
+  '',
+  '# Enforcement inactive (no build phase in flight) — pass through WITHOUT',
+  '# reading stdin, so this never blocks waiting on payload delivery.',
+  'if [ ! -f "$MARKER_PATH" ]; then',
+  '  exit 0',
+  'fi',
+  '',
+  '# Bound stdin read to 1MiB to avoid hanging or OOMing on a runaway payload.',
+  '# timeout 3: never hang the session if the host holds hook stdin open —',
+  '# a timed-out (empty/partial) payload falls through the fail-open path.',
+  'PAYLOAD="$(timeout 3 head -c 1048576 2>/dev/null || true)"',
+  '',
+  '# Extract the target path (Edit/Write use tool_input.file_path,',
+  '# NotebookEdit uses tool_input.notebook_path) via a bounded node JSON',
+  '# parse. A malformed/unparseable payload yields an empty PARSED, which',
+  '# falls through to the fail-open branch below.',
+  'TARGET="$(printf \'%s\' "$PAYLOAD" | node -e \'',
+  'let data = "";',
+  'process.stdin.on("data", (chunk) => { data += chunk; });',
+  'process.stdin.on("end", () => {',
+  '  try {',
+  '    const payload = JSON.parse(data);',
+  '    const input = payload && payload.tool_input ? payload.tool_input : {};',
+  '    const target =',
+  '      typeof input.file_path === "string"',
+  '        ? input.file_path',
+  '        : typeof input.notebook_path === "string"',
+  '          ? input.notebook_path',
+  '          : "";',
+  '    process.stdout.write(target);',
+  '  } catch (err) {',
+  '    // Malformed/unparseable payload — fail open: emit a diagnostic on',
+  '    // stderr and nothing on stdout, so the caller falls through to the',
+  '    // fail-open branch (exit 0) rather than blocking the mutation.',
+  '    process.stderr.write(',
+  '      "docs-guard-hook: unparseable payload, passing through: " + String(err && err.message) + "\\n"',
+  '    );',
+  '  }',
+  '});',
+  '\' || true)"',
+  '',
+  '# Fail-open: an empty TARGET means the payload was unparseable or carried',
+  '# no path — no signal to gate on, so pass through quietly.',
+  'if [ -z "$TARGET" ]; then',
+  '  exit 0',
+  'fi',
+  '',
+  'case "$TARGET" in',
+  '  .docs/*|.docs)',
+  '    # Task 5 scope ends here: block/allow logic against the marker\'s',
+  '    # phase/step/allowlist fields lands in Tasks 6-8.',
+  '    exit 0',
+  '    ;;',
+  '  *)',
+  '    exit 0',
+  '    ;;',
+  'esac',
+].join('\n');
