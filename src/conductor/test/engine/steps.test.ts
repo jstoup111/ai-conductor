@@ -342,9 +342,11 @@ describe('engine/steps', () => {
     // Invariant-locking test (Task: T6): the BUILD/SHIP evidence-gate core
     // must never be skippable for S tier, regardless of future edits to
     // sSkippable above. No production change expected — this pins the set.
+    // manual_test is intentionally excluded (ADR D5, #775): S-tier features
+    // legitimately skip manual testing.
     it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
       const evidenceGateCore: StepName[] = [
-        'build', 'build_review', 'wiring_check', 'manual_test', 'rebase', 'finish',
+        'build', 'build_review', 'wiring_check', 'rebase', 'finish',
       ];
       for (const step of evidenceGateCore) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -400,6 +402,7 @@ describe('engine/steps', () => {
         'architecture_review',
         'conflict_check',
         'acceptance_specs',
+        'manual_test',
         'architecture_review_as_built',
         'retro',
       ]);
