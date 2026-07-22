@@ -1618,6 +1618,22 @@ export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'valida
   return override;
 }
 
+/**
+ * Resolves the `gate_code_validity` kill-switch (#817, Task 8) to a total
+ * `{ enabled: boolean }`. Mirrors `resolveBuildProgressConfig`'s defensive
+ * shape: absent block, absent `enabled`, or a non-boolean `enabled` all
+ * resolve to `enabled: true` (feature ON by default) — never throws.
+ */
+export function resolveGateCodeValidityConfig(
+  config: Pick<HarnessConfig, 'gate_code_validity'> | undefined,
+): { enabled: boolean } {
+  const block = config?.gate_code_validity;
+  if (!block || typeof block.enabled !== 'boolean') {
+    return { enabled: true };
+  }
+  return { enabled: block.enabled };
+}
+
 export function resolveBuildProgressConfig(
   config: Pick<HarnessConfig, 'build_progress'>,
 ): ResolvedBuildProgressConfig {

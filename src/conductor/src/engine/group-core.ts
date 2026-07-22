@@ -21,6 +21,7 @@ import type { StepName, ConductState } from "../types/index.js";
 import type { StepRunResult, StepRunOptions } from "./conductor.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
 import type { ConductorEvent } from "../types/events.js";
+import type { HarnessConfig } from "../types/config.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -341,6 +342,14 @@ export interface BranchExecutorDeps {
    */
   sessionStartedAt?: number;
   /**
+   * Task 8 (gate-code-validity-on-redispatch, #817): resolved project config,
+   * threaded through to `sweepStaleReviewArtifacts` so its `gate_code_validity`
+   * kill-switch is honored on the parallel-branch sweep path — mirrors the
+   * SERIAL loop's `this.config` pass-through (conductor.ts). Optional: when
+   * absent, `sweepStaleReviewArtifacts` resolves the flag to its default (on).
+   */
+  config?: HarnessConfig;
+  /**
    * Task 25: per-branch step-event attribution. Invoked once with
    * `phase: 'dispatch'` immediately before each `stepRunner.run` call, and
    * once with `phase: 'result'` (carrying the classified outcome) right
@@ -405,7 +414,7 @@ async function runGroupBranchInner(
   // the member's step is outside STALE_SWEEP_STEPS / the artifact is fresh
   // (see sweepStaleReviewArtifacts, artifacts.ts).
   if (deps.projectRoot !== undefined) {
-    await sweepStaleReviewArtifacts(deps.projectRoot, member.name as StepName, deps.sessionStartedAt);
+    await sweepStaleReviewArtifacts(deps.projectRoot, member.name as StepName, deps.sessionStartedAt, deps.config);
   }
 
   let lastOutput = "";

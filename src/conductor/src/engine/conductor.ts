@@ -2166,6 +2166,10 @@ export class Conductor {
                   state,
                   {
                     stepRunner: this.stepRunner,
+                    // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
+                    // gate_code_validity kill-switch is honored on this
+                    // parallel-branch sweep path too.
+                    config: this.config,
                     // Shared rate-limit episode: a rate-limited branch waits
                     // on the coordinator WITHOUT blocking its siblings'
                     // dispatch (acceptance flow E) and without burning its
@@ -2755,6 +2759,7 @@ export class Conductor {
             this.projectRoot,
             step.name,
             state.session_started_at,
+            this.config,
           );
         }
 

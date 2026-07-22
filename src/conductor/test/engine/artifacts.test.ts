@@ -2540,6 +2540,33 @@ Task 1 → Task 2
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/FAILed: nope/);
     });
+
+    it('gate_code_validity.enabled: false restores pure mtime-freshness — rejects a stale-mtime PASS verdict with an unchanged-surface codeStamp (Task 8, #817)', async () => {
+      gdir = await makeGitDir();
+      const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      await writeVerdict(gdir, 'PASS', baseline);
+
+      const ctx: CompletionContext = {
+        ...ctxFor(gdir),
+        config: { gate_code_validity: { enabled: false } },
+      };
+      const result = await checkStepCompletion(gdir, 'build_review', ctx);
+      expect(result.done).toBe(false);
+      expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
+    });
+
+    it('gate_code_validity.enabled: true (default-equivalent) still preserves a stale-mtime PASS verdict with an unchanged-surface codeStamp (Task 8, #817)', async () => {
+      gdir = await makeGitDir();
+      const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
+      await writeVerdict(gdir, 'PASS', baseline);
+
+      const ctx: CompletionContext = {
+        ...ctxFor(gdir),
+        config: { gate_code_validity: { enabled: true } },
+      };
+      const result = await checkStepCompletion(gdir, 'build_review', ctx);
+      expect(result.done).toBe(true);
+    });
   });
 
   describe('checkStepCompletion: prd_audit / architecture_review_as_built / manual_test code-validity on re-dispatch (Task 6, #817)', () => {
@@ -2859,6 +2886,20 @@ Task 1 → Task 2
 
         expect(removed).toEqual([]);
         await expect(readFile(join(gdir, PATH), 'utf-8')).resolves.toBe(ALIGNED);
+      });
+
+      it('gate_code_validity.enabled: false restores pure mtime-freshness — deletes a stale report even when the codeStamp sidecar surface is unchanged (Task 8, #817)', async () => {
+        gdir = await makeGitDir();
+        const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
+        await writeStaleReport(gdir);
+        await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));
+
+        const removed = await sweepStaleReviewArtifacts(gdir, 'prd_audit', Date.now(), {
+          gate_code_validity: { enabled: false },
+        });
+
+        expect(removed).toEqual([join(gdir, PATH)]);
+        await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
       });
 
       it('deletes a stale report whose codeStamp sidecar surface HAS changed', async () => {
