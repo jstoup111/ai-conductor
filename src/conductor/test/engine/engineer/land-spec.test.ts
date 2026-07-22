@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
@@ -371,5 +371,34 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     const logCountAfter = (await git(['log', '--oneline'], dir)).split('\n').filter(Boolean).length;
     expect(headAfter).toBe(headBefore);
     expect(logCountAfter).toBe(logCountBefore);
+  });
+});
+
+describe('resolveIdeaFiles (Task 1: idea-scoped artifact attribution)', () => {
+  it('returns exactly the committed + untracked idea artifacts, excluding a legacy file on main', async () => {
+    // Seed a legacy artifact committed on `main` BEFORE the worktree is created.
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'plans', 'legacy.md'), '# legacy plan\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    // One artifact committed on the idea's spec/<slug> branch.
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'idea plan'], dir);
+
+    // Another artifact left untracked in the worktree.
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+
+    const ideaFiles = await resolveIdeaFiles(dir, repoPath);
+
+    expect(ideaFiles).toEqual(new Set(['.docs/plans/dep-bump.md', '.docs/stories/dep-bump.md']));
+    expect(ideaFiles.has('.docs/plans/legacy.md')).toBe(false);
   });
 });

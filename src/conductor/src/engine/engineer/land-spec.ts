@@ -40,6 +40,7 @@ import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
 import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
+import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
@@ -304,6 +305,121 @@ export async function landSpec(
   );
 
   return { slug, branch, repoPath: worktreePath };
+}
+
+// ── Idea-scoped attribution (foundational helper; wired in later tasks) ───────
+
+/**
+ * Resolve the set of `.docs/`-relative paths attributable to THIS idea's worktree
+ * — the union of artifacts committed on the idea's branch (since it diverged from
+ * the target's default branch) and artifacts left untracked in the worktree.
+ *
+ * This is the attribution universe later pickers (Tasks 2-3) filter candidates
+ * against, so a corpus-wide directory scan can never pick up a legacy file that
+ * merely happens to live on `main`.
+ *
+ * @param worktreePath - cwd for all git ops (shares the target repo's object store).
+ * @param canonicalPath - the target's registry canonical path, used to derive the
+ *   default branch the same way the worktree primitive did at creation time.
+ */
+export async function resolveIdeaFiles(
+  worktreePath: string,
+  canonicalPath: string,
+): Promise<Set<string>> {
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+
+  const { stdout: baseOut } = await execFile(
+    'git',
+    ['merge-base', 'HEAD', defaultBranch],
+    { cwd: worktreePath },
+  );
+  const base = baseOut.trim();
+
+  const { stdout: diffOut } = await execFile(
+    'git',
+    ['diff', '--name-only', base, 'HEAD'],
+    { cwd: worktreePath },
+  );
+  const committed = diffOut.trim() === '' ? [] : diffOut.trim().split('\n');
+
+  const { stdout: porcelainOut } = await execFile(
+    'git',
+    ['status', '--porcelain', '--untracked-files=all'],
+    { cwd: worktreePath },
+  );
+  const porcelainLines = porcelainOut.trim() === '' ? [] : porcelainOut.trim().split('\n');
+  const untracked = porcelainLines
+    .filter((line) => line.slice(0, 2) === '??')
+    .map((line) => line.slice(3).trim().replace(/^"(.*)"$/, '$1'));
+
+  const all = [...committed, ...untracked];
+  const ideaFiles = new Set<string>();
+  for (const p of all) {
+    if (p.startsWith('.docs/') || p.startsWith('.docs\\')) {
+      ideaFiles.add(p);
+    }
+  }
+  return ideaFiles;
+}
+
+/**
+ * Pick the artifact `.md` file in `dir` to use, restricted to files ALSO present
+ * in `ideaFiles` (the attribution universe from `resolveIdeaFiles`). Zero matching
+ * candidates → `null` (missing-artifact semantics, unchanged from `findNewestFile`).
+ * Multiple candidates → newest mtime, but ONLY among the idea's own candidates —
+ * mtime is never used to compare against a legacy file outside the attribution set.
+ */
+export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise<string | null> {
+  try {
+    await access(dir);
+  } catch {
+    return null;
+  }
+
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  // ideaFiles paths are `.docs/...`-relative to the worktree root. `dir` is an
+  // absolute path somewhere under `<worktreeRoot>/.docs/...`, so recover each
+  // candidate's `.docs/`-relative path by slicing from the last `.docs` segment.
+  const docsRel = (abs: string): string | null => {
+    const normalized = abs.split('\\').join('/');
+    const idx = normalized.lastIndexOf('/.docs/');
+    if (idx === -1) return null;
+    return normalized.slice(idx + 1);
+  };
+
+  const matches: string[] = [];
+  for (const e of entries) {
+    if (!e.isFile() || !String(e.name).endsWith('.md')) continue;
+    const abs = join(dir, String(e.name));
+    const rel = docsRel(abs);
+    if (rel !== null && ideaFiles.has(rel)) {
+      matches.push(abs);
+    }
+  }
+
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  let newest = matches[0];
+  let newestMtime = 0;
+  for (const m of matches) {
+    try {
+      const { mtimeMs } = await import('node:fs/promises').then((mod) => mod.stat(m));
+      if (mtimeMs > newestMtime) {
+        newestMtime = mtimeMs;
+        newest = m;
+      }
+    } catch {
+      // ignore stat errors; keep current best
+    }
+  }
+  return newest;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
