@@ -149,6 +149,23 @@ check_installation() {
     warn "conduct-ts bundle not built — run ./bin/install (needs Node >=20.5)"
   fi
 
+  # Check build-auth state (FR-1/FR-3). Delegates entirely to
+  # `conduct-ts build-auth-status` — no token path/mode derivation logic
+  # here, bash just formats the ok/fail line from the exit code and mirrors
+  # the conduct-ts-absent warning pattern above.
+  if command -v conduct-ts &>/dev/null; then
+    local build_auth_line build_auth_exit
+    build_auth_line=$(conduct-ts build-auth-status 2>&1 | head -1) && build_auth_exit=0 || build_auth_exit=$?
+    if [ "$build_auth_exit" -eq 0 ]; then
+      ok "${build_auth_line}"
+    else
+      fail "${build_auth_line}"
+      all_ok=false
+    fi
+  else
+    warn "build-auth check skipped — conduct-ts not on PATH"
+  fi
+
   # Check dependencies
   echo ""
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
