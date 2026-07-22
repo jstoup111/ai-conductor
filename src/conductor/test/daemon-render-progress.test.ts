@@ -47,7 +47,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
 
     expect(line).toBeDefined();
     expect(line).toContain('build');
-    expect(line).toContain('20/21');
+    expect(line).toContain('21/21');
     expect(line).toContain('Wire watcher into conductor');
     expect(line).toContain('emit-intra-step-build-progress-and-stall-as-events');
   });
@@ -55,6 +55,42 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
   it('renders a minimal build_progress event (no currentTaskName/featureSlug) without throwing', () => {
     const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21 });
     expect(line).toContain('5/21');
+  });
+
+  it('renders the first in-progress task as 1/N, never 0/N (Story 1.1)', () => {
+    const [line] = lines({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 0,
+      total: 18,
+      currentTaskId: '1',
+    });
+    expect(line).toContain('1/18');
+    expect(line).not.toContain('0/18');
+  });
+
+  it('renders an all-done build as N/N, not N+1/N, when there is no current task (Story 2.1)', () => {
+    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 18, total: 18 });
+    expect(line).toContain('18/18');
+    expect(line).not.toContain('19/18');
+  });
+
+  it('renders a plain resolved count unincremented when there is no current task (Story 2.2)', () => {
+    const [line] = lines({ type: 'build_progress', step: 'build', resolved: 5, total: 21 });
+    expect(line).toContain('5/21');
+  });
+
+  it('does not mutate the input event object (Story 2.3)', () => {
+    const event: ConductorEvent = {
+      type: 'build_progress',
+      step: 'build',
+      resolved: 0,
+      total: 18,
+      currentTaskId: '1',
+    };
+    const originalResolved = event.resolved;
+    lines(event);
+    expect(event.resolved).toBe(originalResolved);
   });
 
   it('renders build_no_progress as a visually distinct warning line with quiet minutes', () => {
@@ -78,8 +114,21 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
 
     expect(noProgressLine).toBeDefined();
     expect(noProgressLine).toContain('15');
-    expect(noProgressLine).toContain('20/21');
+    expect(noProgressLine).toContain('21/21');
     expect(noProgressLine).not.toBe(progressLine);
+  });
+
+  it('renders build_no_progress with a 1-based parenthetical count when a current task is set (Story 1.4)', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 0,
+      total: 18,
+      currentTaskId: '1',
+    });
+    expect(line).toContain('1/18');
+    expect(line).not.toContain('0/18');
   });
 
   it('marks build_no_progress with a distinct warning glyph under color', () => {
