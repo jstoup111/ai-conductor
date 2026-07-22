@@ -31,7 +31,7 @@ describe('buildGraderPrompt', () => {
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/PASS only if all three rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 
   it('includes the exact JSON schema for .pipeline/build-review.json', () => {
@@ -39,7 +39,7 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ verdict: 'PASS' | 'FAIL', reasons: string[], rubric: { tautology: string, scope: string, rootCause: string } }",
+      "{ verdict: 'PASS' | 'FAIL', reasons: string[], rubric: { tautology: string, scope: string, rootCause: string, completeness: string } }",
     );
   });
 
@@ -48,6 +48,22 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toMatch(/scoped tests?/i);
     expect(prompt).not.toMatch(/run the project's (full |entire )?test suite/i);
+  });
+
+  it('includes the completeness rubric item and forbids per-task reasoning', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toContain(
+      'Completeness: every planned task\'s work is present in the diff',
+    );
+    expect(prompt).toMatch(
+      /completeness .*(judg(e|ed|ement)|assess(ed)?) holistically/i,
+    );
+    expect(prompt).toMatch(
+      /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
+    );
+    expect(prompt).toMatch(/rubric\.completeness/);
+    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 
   it('includes the diff and plan body', () => {
