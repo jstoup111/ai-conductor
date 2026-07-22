@@ -212,7 +212,7 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
   // Covers: Story 5 — abstention composes with the #509 gate into a loud,
   // fixable rejection
   describe('Story 5: abstain -> reject -> self-stamp -> accept composes end to end', () => {
-    it('rejects an unattributed commit under an active build step, then accepts the same change once retried with a valid Task: trailer', async () => {
+    it('accepts an unattributed commit under an active build step (Task 14/#773: commit rejection is retired), and a subsequent commit with a valid Task: trailer is also accepted', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'pending' },
@@ -221,28 +221,22 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
 
       await writeFile(join(dir, 'work.txt'), 'work', 'utf-8');
       await git('add', 'work.txt');
-      const rejected = await git('commit', '-m', 'feat: unattributed build-step work');
-      expect(rejected.code).not.toBe(0);
-      expect(rejected.stderr).toMatch(/Task:/);
+      const unattributed = await git('commit', '-m', 'feat: unattributed build-step work');
+      expect(unattributed.code).toBe(0);
 
-      const retried = await git('commit', '-m', 'feat: unattributed build-step work\n\nTask: 2');
-      expect(retried.code).toBe(0);
+      const stamped = await commitFile('work2.txt', 'work2', 'feat: unattributed build-step work\n\nTask: 2');
+      expect(stamped.code).toBe(0);
       expect(await lastCommitMessage()).toMatch(/^Task: 2$/m);
     });
 
-    it('rejects the retry again when the self-stamped id is not a real seeded id', async () => {
+    it('still rejects a present Task: trailer whose id is not a real seeded id (format validation survives)', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'pending' },
       ]);
       await writeBuildStepMarker();
 
-      await writeFile(join(dir, 'work.txt'), 'work', 'utf-8');
-      await git('add', 'work.txt');
-      const rejected = await git('commit', '-m', 'feat: unattributed build-step work');
-      expect(rejected.code).not.toBe(0);
-
-      const badRetry = await git('commit', '-m', 'feat: unattributed build-step work\n\nTask: 99');
+      const badRetry = await commitFile('work.txt', 'work', 'feat: unattributed build-step work\n\nTask: 99');
       expect(badRetry.code).not.toBe(0);
       expect(badRetry.stderr).toMatch(/not found in task-status\.json/);
     });
