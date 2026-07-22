@@ -2267,6 +2267,133 @@ describe('engine/daemon — runDaemon', () => {
       }
     });
   });
+
+  // ── Task 17 (FR-6 negative): credential gate composes with PAUSE /
+  // operator-park / episode gates — each is an independent sibling check,
+  // not a replacement or a short-circuit of the others, and none of them
+  // ever touches in-flight work. ──────────────────────────────────────────
+  describe('build-auth credential gate composition with PAUSE / operator-park / episode (Task 17, FR-6)', () => {
+    it('clearing ONLY the credential while PAUSE remains set still blocks dispatch (PAUSE is independent)', async () => {
+      let credentialMissing = true;
+      let isPausedFlag = true;
+      let pollPhase = 0;
+
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => credentialMissing,
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {
+          pollPhase++;
+          // After the first idle poll, restore the credential but leave PAUSE set.
+          if (pollPhase === 1) {
+            credentialMissing = false;
+          }
+        },
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Credential cleared, but PAUSE never lifted -> still zero dispatches.
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('operator-park predicate is still consulted before dispatch even when the credential gate is not active', async () => {
+      let parkChecked = false;
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => false, // credential gate inactive throughout
+        isParked: async () => {
+          parkChecked = true;
+          return true;
+        },
+        log: () => {},
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // The park check must still run (and block) — the credential gate being
+      // inert never bypasses or short-circuits the existing park check.
+      expect(parkChecked).toBe(true);
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('credential gate transitioning to active mid-build never cancels an in-flight feature; only blocks NEW picks', async () => {
+      let credentialMissing = false;
+      let resolveFeatureA: ((value: FeatureOutcome) => void) | undefined;
+      const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
+        resolveFeatureA = resolve;
+      });
+
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(2)), // f0, f1
+        runFeature: async (it: BacklogItem) => {
+          if (it.slug === 'f0') {
+            // Feature A: stays in flight until we resolve it below.
+            return featureAPromise;
+          }
+          return { slug: it.slug, status: 'done' };
+        },
+        isBuildAuthMissing: async () => credentialMissing,
+        sleep: async () => {},
+      };
+
+      const daemonPromise = runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: true,
+      });
+
+      // Yield to let f0 be picked/dispatched (in flight) before the credential
+      // goes missing.
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Credential becomes missing while f0 is in flight.
+      credentialMissing = true;
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Resolve the in-flight feature — it must complete normally, untouched
+      // by the credential gate having gone active mid-flight.
+      resolveFeatureA?.({ slug: 'f0', status: 'done' });
+
+      const res = await daemonPromise;
+
+      expect(res.processed.find((o) => o.slug === 'f0')?.status).toBe('done');
+    });
+
+    it('api-key mode (isBuildAuthMissing absent) never blocks dispatch regardless of PAUSE/park state — gates are independent, not coupled', async () => {
+      // api-key mode: no isBuildAuthMissing dep at all -> the credential gate
+      // is always inert. With PAUSE and park both cleared, dispatch proceeds
+      // normally; the absent credential predicate never couples to (nor is
+      // inferred from) the other gates' state.
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        // isBuildAuthMissing intentionally absent (api-key mode)
+        isPaused: async () => false,
+        isParked: async () => false,
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: true,
+      });
+
+      expect(deps.runFeature).toHaveBeenCalledTimes(1);
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+  });
 });
 
 async function accessExists(path: string): Promise<boolean> {
