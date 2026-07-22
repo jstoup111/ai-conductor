@@ -9,7 +9,8 @@
 import { writeFile, access as accessFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { HALT_MARKER } from '../halt-marker.js';
-import { readDaemonBuildToken, DAEMON_BUILD_TOKEN_MINT_COMMAND } from './daemon-build-token.js';
+import { readDaemonBuildToken } from './daemon-build-token.js';
+import { buildAuthRemediationMessage } from './build-auth-message.js';
 import type { StepRunResult } from '../conductor.js';
 
 /**
@@ -39,17 +40,13 @@ export async function preflightBuildAuthCheck(
     return undefined;
   }
 
-  // Token is missing or unreadable — HALT with mint instructions
-  let haltReason = 'The daemon must mint a build-auth token before this dispatch can proceed.\n\n';
-  haltReason += `Command: ${DAEMON_BUILD_TOKEN_MINT_COMMAND}\n`;
-  haltReason += `This creates a token at: ${buildAuthTokenPath}\n\n`;
-  haltReason += 'Then configure the path in your harness config under:\n';
-  haltReason += '  harness_self_host.build_auth:\n';
-  haltReason += '    token_path: <your_path>\n';
+  // Token is missing or unreadable — HALT with the shared remediation message
+  // (Task 12: renders buildAuthRemediationMessage output, not a separately-assembled string)
+  let haltReason = buildAuthRemediationMessage(buildAuthTokenPath);
 
   // If token is in error state (unreadable), add diagnostic detail
   if (tokenState.state === 'error') {
-    haltReason += `\nDiagnostic: ${tokenState.detail}\n`;
+    haltReason += `\n\nDiagnostic: ${tokenState.detail}\n`;
   }
 
   // Only write the HALT marker if it doesn't already exist (preserve on retry).
