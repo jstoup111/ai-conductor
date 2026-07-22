@@ -81,6 +81,26 @@ echo "  rm -rf <project>/.serena/            # per-project semantic-index caches
   instructs running `bin/intake-file`, but only `src/conductor/bin/intake-file`
   existed; sibling `bin/intake-backfill` had a wrapper). Convention DECIDE
   captured as #742.
+- Auto-mode HALT on `manual_test` (#385): the daemon's unattended dispatch had
+  no way to record a manual-test outcome, so auto-mode builds stalled forever
+  waiting on a marker only an interactive operator could write. Added the
+  `conduct-ts manual-test-record` CLI (`--skip --reason <r>` and `--results
+  <path>` modes, `--pipeline-dir <abs-path>` required) as the only supported
+  way to record a manual-test outcome — it verifies its preconditions and
+  refuses (exit 1, no writes) rather than recording anything it cannot prove,
+  mirroring `finish-record`'s fail-closed contract.
+- `manual_test` completion predicate now accepts a fresh `<!-- manual-test:skipped
+  -->` SKIP sentinel (written only by `manual-test-record --skip`) as done,
+  with FAIL-precedence (a FAIL row in a subsequent results file always wins
+  over an earlier SKIP) and anti-laundering guards (a stale/backdated sentinel
+  never satisfies the gate).
+
+### Changed
+
+- D5: `manual_test` is now S-tier skippable — a skipped manual-test step
+  (via the new SKIP sentinel) satisfies downstream `prd_audit` prerequisites
+  the same way a completed one does.
+
 - no-diff verification/skip tasks no longer auto-park with `no_task_progress` —
   `Evidence: skipped` commits are stamped and `Type: verification` tasks arm
   the judged-closure lane (#733)

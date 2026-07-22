@@ -481,6 +481,34 @@ export interface CompletionContext {
 export const MANUAL_TEST_FAIL_EVIDENCE = '.pipeline/manual-test-fail-evidence.json';
 
 /**
+ * True when a fresh (this-session) fail-evidence marker (#367) at markerPath
+ * records the SAME headSha as the one passed in. Used by the manual_test
+ * SKIP-sentinel path to detect laundering: a later attempt's SKIP sentinel
+ * must not be honored as done while a FAIL recorded earlier at the current
+ * HEAD sha is still outstanding (no fix commits exist yet).
+ */
+async function hasFreshFailEvidenceAtHead(
+  markerPath: string,
+  headSha: string,
+  sessionStartedAt: number | undefined,
+): Promise<boolean> {
+  let marker: { observedAt?: unknown; headSha?: unknown } | null = null;
+  try {
+    marker = JSON.parse(await readFile(markerPath, 'utf-8')) as {
+      observedAt?: unknown;
+      headSha?: unknown;
+    };
+  } catch {
+    return false;
+  }
+  if (!marker || typeof marker.headSha !== 'string') return false;
+  const fresh =
+    sessionStartedAt === undefined ||
+    (typeof marker.observedAt === 'number' && marker.observedAt >= sessionStartedAt);
+  return fresh && marker.headSha === headSha;
+}
+
+/**
  * The region of a manual-test results file that carries the CURRENT verdict.
  * Append-only per-attempt files (#367) record one `## Attempt N — <ts>` section
  * per run; only the newest section's rows count, so a fixed old FAIL cannot
@@ -508,7 +536,25 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
-  return latestAttemptRegion(content).split('\n').filter(isManualTestFailRow);
+  const rows = latestAttemptRegion(content).split('\n').filter(isManualTestFailRow);
+  if (rows.length > 0) return rows;
+
+  // Whitewash guard (#367): the latest attempt itself carries no FAIL rows
+  // (e.g. a SKIP sentinel appended after a FAIL, without a fix), but the
+  // fail-evidence marker still records the FAIL rows observed earlier. Fall
+  // back to the marker so the manual_test→build kickback path retains
+  // concrete bug evidence rather than seeing a laundered "clean" result.
+  try {
+    const marker = JSON.parse(
+      await readFile(join(dir, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8'),
+    ) as { failRows?: unknown };
+    if (Array.isArray(marker.failRows)) {
+      return marker.failRows.filter((r): r is string => typeof r === 'string');
+    }
+  } catch {
+    /* no marker — nothing to fall back to */
+  }
+  return [];
 }
 
 /**
@@ -523,6 +569,24 @@ function isManualTestFailRow(line: string): boolean {
     .split('|')
     .map((cell) => cell.trim())
     .some((cell) => /^FAIL$/i.test(cell));
+}
+
+/**
+ * Fixed, greppable sentinel marking a manual-test attempt section as
+ * deliberately SKIPPED (auto mode, no endpoint/UI stories to exercise) rather
+ * than a normal PASS/FAIL verdict. Written on its own line inside the
+ * section so `isSkipAttempt` can detect it without parsing table rows.
+ */
+export const MANUAL_TEST_SKIP_SENTINEL = '<!-- manual-test:skipped -->';
+
+/**
+ * True when a manual-test attempt section was deliberately skipped (auto
+ * mode, no endpoint/UI stories) rather than carrying a PASS/FAIL table.
+ */
+export function isSkipAttempt(section: string): boolean {
+  return section
+    .split('\n')
+    .some((line) => line.trim() === MANUAL_TEST_SKIP_SENTINEL);
 }
 
 /**
@@ -1153,7 +1217,42 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
     const region = latestAttemptRegion(content);
+
+    // FAIL rows in the latest attempt always take precedence over the SKIP
+    // sentinel: an attempt that carries both (e.g. a sentinel left over from
+    // scaffolding alongside a real FAIL table row) must not be treated as
+    // done just because the sentinel is present (Task 9 — sentinel/FAIL
+    // ordering bug). Compute/check FAIL rows BEFORE honoring the sentinel.
     const failRows = region.split('\n').filter(isManualTestFailRow);
+
+    // Auto-mode SKIP sentinel (#748): the latest attempt was deliberately
+    // skipped (no endpoint/UI stories to exercise) rather than carrying a
+    // PASS/FAIL table. Treat it as done once it's fresh for this session —
+    // same freshness bar as a real PASS/FAIL attempt — so auto mode does not
+    // hang the gate forever waiting for a results table that will never be
+    // written. Only applies when there are no FAIL rows in this attempt.
+    //
+    // Whitewash guard (#367) applies here too: a SKIP sentinel appended in a
+    // LATER attempt must not launder a FAIL recorded in an earlier attempt at
+    // the same HEAD sha (no fix commits means no fix). Check the fail-evidence
+    // marker BEFORE honoring the sentinel — a fresh marker at the current HEAD
+    // sha means the gate is still blocked; fall through to the whitewash-guard
+    // done:false path below instead of returning done:true here.
+    if (failRows.length === 0 && isSkipAttempt(region)) {
+      if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
+        return {
+          done: false,
+          reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+        };
+      }
+      const laundered = headSha ? await hasFreshFailEvidenceAtHead(markerPath, headSha, ctx.sessionStartedAt) : false;
+      if (!laundered) {
+        return { done: true };
+      }
+      // Fall through: a fresh FAIL marker exists at the current HEAD sha, so
+      // the whitewash-guard block below fires with its standard reason.
+    }
+
     if (failRows.length > 0) {
       // Record the whitewash-guard evidence: the sha this FAIL was observed at.
       // A later FAIL-free file is only accepted once HEAD moves past it.

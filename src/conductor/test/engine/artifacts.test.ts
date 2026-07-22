@@ -40,6 +40,9 @@ import {
   planStem,
   planHasDependencyTree,
   validateBuildReviewVerdict,
+  isSkipAttempt,
+  MANUAL_TEST_SKIP_SENTINEL,
+  readManualTestFailRows,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult } from '../../src/engine/artifacts.js';
 
@@ -1541,6 +1544,19 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('isSkipAttempt', () => {
+    it('is true when the section contains the manual-test SKIP sentinel', () => {
+      const section =
+        '<!-- manual-test:skipped -->\n**Result:** SKIPPED — no endpoint/UI stories';
+      expect(isSkipAttempt(section)).toBe(true);
+    });
+
+    it('is false for a normal PASS/FAIL table section', () => {
+      const section = '| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n';
+      expect(isSkipAttempt(section)).toBe(false);
+    });
+  });
+
   describe('checkStepCompletion: manual_test whitewash guard + attempt sections (#367)', () => {
     const RESULTS = '.pipeline/manual-test-results.md';
     const MARKER = '.pipeline/manual-test-fail-evidence.json';
@@ -1652,6 +1668,80 @@ describe('engine/artifacts', () => {
       );
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result).toEqual({ done: true });
+    });
+
+    it('passes when the latest attempt is a fresh SKIP sentinel (auto mode, no stories to exercise)', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('passes when an earlier attempt was PASS but the LATEST attempt is a SKIP sentinel', async () => {
+      await createFile(
+        RESULTS,
+        '## Attempt 1 — 2026-07-21T00:00:00Z\n' +
+          '| Story | Result |\n|---|---|\n| Foo | PASS |\n' +
+          `## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails when the latest attempt is a SKIP sentinel but the file is stale (mtime predates sessionStartedAt)', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-20T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const past = new Date(Date.now() - 60_000);
+      await utimes(join(dir, RESULTS), past, past);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: Date.now(),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/stale/i);
+    });
+
+    it('fails when the latest attempt contains both a SKIP sentinel and a FAIL row — FAIL wins', async () => {
+      await createFile(
+        RESULTS,
+        `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n\n` +
+          '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/FAIL/);
+    });
+
+    it('a later fresh SKIP attempt cannot launder a FAIL recorded earlier at the same HEAD sha', async () => {
+      // Attempt 1 records a real FAIL — this writes the fail-evidence marker
+      // (headSha: aaa111).
+      await createFile(RESULTS, FAIL_FILE);
+      const firstResult = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(firstResult.done).toBe(false);
+
+      // Attempt 2 is appended as a fresh SKIP section — HEAD has NOT moved
+      // (no fix commits), so this must not launder the recorded FAIL.
+      await createFile(
+        RESULTS,
+        FAIL_FILE + `\n## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
+      );
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/whitewash|no new commits/i);
+
+      // The FAIL rows from attempt 1 must remain readable so the
+      // manual_test→build kickback path still has concrete bug evidence.
+      const failRows = await readManualTestFailRows(dir);
+      expect(failRows.join('\n')).toMatch(/Bar.*FAIL/);
     });
   });
 

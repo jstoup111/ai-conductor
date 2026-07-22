@@ -20,11 +20,13 @@ import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
 // Drives the gate-driven tail (build…finish) with verifyArtifacts on. The front
 // half is pre-marked done and the loop is started at `build` (fromStep), so each
-// test exercises the selector-driven tail directly. Small (S) tier so the tail
-// is build → manual_test → (retro tier-skipped) → finish.
+// test exercises the selector-driven tail directly. Medium (M) tier so
+// manual_test still runs (S-tier now legitimately skips manual_test per D5;
+// see steps.ts skippableForTiers) — the tail is build → manual_test →
+// (retro tier-skipped only at S, so it runs at M too) → finish.
 
 const FRONT_DONE: ConductState = {
-  complexity_tier: 'S',
+  complexity_tier: 'M',
   feature_desc: 'add foo',
   worktree: 'done',
   memory: 'done',
@@ -178,7 +180,7 @@ describe('integration/gate-loop', () => {
     expect(ran).toContain('build');
     expect(ran).toContain('manual_test');
     expect(ran).toContain('finish');
-    expect(ran).not.toContain('retro'); // tier-skipped for Small
+    expect(ran).toContain('retro'); // M tier: retro is not tier-skipped
     expect(completed).toBe(true);
     expect(converged).toBe(true); // loop_converged event emitted
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
@@ -705,7 +707,11 @@ describe('integration/gate-loop', () => {
     for (const name of ['build', 'manual_test', 'retro', 'finish']) delete state[name];
     await writeState(statePath, {
       ...(state as unknown as ConductState),
-      complexity_tier: 'S', // retro tier-skipped → tail is build, manual_test, finish
+      // M tier: S-tier now skips manual_test too (D5), which would collapse
+      // the tail to just build/finish and defeat this test's purpose of
+      // proving every tail step gets a fresh session. M tier keeps
+      // build, manual_test, retro, and finish all running.
+      complexity_tier: 'M',
     });
 
     const resetSession = vi.fn(async () => {});
@@ -723,8 +729,9 @@ describe('integration/gate-loop', () => {
     });
     await conductor.run();
 
-    // build, manual_test, finish ran (retro tier-skipped) → one reset each.
-    expect(resetSession).toHaveBeenCalledTimes(3);
+    // build, manual_test, retro, finish all ran (M tier, nothing skipped in
+    // the tail) → one reset each.
+    expect(resetSession).toHaveBeenCalledTimes(4);
   });
 
   describe('manual-test FAIL routing end-to-end with a real repo (#367)', () => {
@@ -866,8 +873,10 @@ describe('integration/gate-loop', () => {
         if (e.type === 'step_failed' && e.step === 'manual_test') stepErrors.push(e.error);
       });
       let halted = false;
-      events.on('loop_halt', () => {
+      let haltReason = '';
+      events.on('loop_halt', (e) => {
         halted = true;
+        if (e.type === 'loop_halt') haltReason = e.reason;
       });
       let completed = false;
       events.on('feature_complete', () => {
@@ -876,10 +885,19 @@ describe('integration/gate-loop', () => {
 
       await daemonConductor(runner).run();
 
-      // The guard refused the no-commit PASS rewrite and the run HALTed.
+      // The guard refused the no-commit PASS rewrite and the run HALTed. As
+      // of #367's whitewash-guard-marker fallback in readManualTestFailRows,
+      // the group-join's manual_test FAIL detector sees the stale marker's
+      // FAIL rows (the current attempt is a laundered PASS with zero fix
+      // commits) and routes through the D2 no-op re-entry guard rather than
+      // the raw predicate rejection — the HALT reason text changed, but the
+      // outcome (HALT, never completes, evidence marker preserved) is the
+      // same safety property this test asserts. stepErrors stays empty here
+      // because the D2 path halts directly via loop_halt without emitting a
+      // step_failed for manual_test.
       expect(halted).toBe(true);
       expect(completed).toBe(false);
-      expect(stepErrors.join('\n')).toMatch(/whitewash|no new commits/i);
+      expect(haltReason).toMatch(/whitewash|no new commits|no head or resolved-count movement/i);
       // The FAIL evidence survives for the human who inspects the HALT.
       await expect(
         access(join(dir, '.pipeline/manual-test-fail-evidence.json')),

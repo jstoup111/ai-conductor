@@ -175,7 +175,8 @@ export const ALL_STEPS: StepDefinition[] = [
     // enforcement the manual-test SKILL.md frontmatter has always declared.
     enforcement: 'gating',
     prerequisites: ['wiring_check'],
-    skippableForTiers: [],
+    // ADR D5: Small-tier features skip manual testing.
+    skippableForTiers: ['S'],
     isCheckpoint: true,
     skillName: 'manual-test',
     loopGate: true,

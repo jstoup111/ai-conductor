@@ -73,7 +73,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // the loop returns without writing a marker. The finally backstop must
     // convert that into a HALT.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -143,7 +143,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // directly via the private `_breadcrumb` field the implementation
     // stamps onto `this` for testability.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -177,7 +177,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // and emits `gate_blocked` immediately before the loop's early return, so
     // that must be the last recorded event type.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -207,7 +207,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // the bare 'unknown' placeholder. The marker file and the emitted
     // loop_halt event must carry the IDENTICAL string.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -251,7 +251,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // producing a blank/garbled reason — and a marker + event must still be
     // produced.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 
@@ -343,7 +343,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // the "no breadcrumb" test above). resolveLastStep must reconstruct
     // 'manual_test' as the furthest-progressed done step in ALL_STEPS order.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'done',
       manual_test: 'done',
     } as ConductState);
@@ -385,7 +385,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // means resolveLastStep has nothing to reconstruct from and must fall
     // back to the explicit 'no step recorded' sentinel rather than 'unknown'.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
     } as ConductState);
 
     const haltEvents: string[] = [];
@@ -440,7 +440,7 @@ describe('conductor/terminal-marker-guarantee', () => {
     // The same blocked-gate exit in a non-daemon run must stay markerless —
     // interactive runs don't use DONE/HALT and the daemon never reads them.
     await writeState(statePath, {
-      complexity_tier: 'S',
+      complexity_tier: 'M',
       build: 'pending',
     } as ConductState);
 

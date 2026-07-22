@@ -1354,6 +1354,59 @@ refuses (exit 1, **no writes**) rather than recording anything it cannot prove:
 Implementation: `engine/finish-record-cli.ts` (`detectFinishRecordCommand`,
 `dispatchFinishRecord`); wired into the `conduct-ts` entrypoint in `src/index.ts`.
 
+#### `manual-test-record` subcommand — fail-closed manual-test recording (#385)
+
+`conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <abs-path>`
+`conduct-ts manual-test-record --results <path> --pipeline-dir <abs-path>`
+is the only supported way to record a `manual_test` outcome. It exists because
+the daemon's unattended auto-mode dispatch has no interactive operator to write
+`.pipeline/manual-test-results.md` by hand — before this command existed,
+auto-mode builds HALTed forever at `manual_test` waiting on a marker only a
+human could produce.
+
+- `--skip` (requires `--reason <r>`; must **not** be paired with `--results`):
+  writes a fresh `MANUAL_TEST_SKIP_SENTINEL` (`<!-- manual-test:skipped -->`)
+  line into the results file, recording the reason.
+- `--results <path>` (requires a path, or `-` to read stdin; must **not** be
+  paired with `--skip`): appends an attempt section to the results file with
+  the supplied content rather than overwriting prior attempts.
+- `--pipeline-dir <abs-path>` is **required** and must be an absolute path to
+  an existing directory.
+- **Fail-closed refusal semantics:** malformed argv (both `--skip` and
+  `--results` given, `--skip` without `--reason`, missing/relative
+  `--pipeline-dir`) is detected by `detectManualTestRecordCommand` and returns
+  a `guide` dispatch (usage text, exit 1) — never a partial or ambiguous write.
+
+**Completion predicate (`manual_test` in `engine/artifacts.ts`).** The
+`manual_test` step's completion check accepts a SKIP sentinel as done, subject
+to ordering rules that prevent laundering a stale skip into a false pass:
+
+- **FAIL-precedence** — if a results file contains both a SKIP sentinel and a
+  later FAIL row (from a subsequent `--results` invocation), the FAIL always
+  wins; the step is not considered done.
+- **Freshness / anti-laundering guard** — a SKIP sentinel must be the one
+  written by the *current* `manual-test-record --skip` invocation for the
+  current attempt; a sentinel left over from a stale or backdated results file
+  does not satisfy the gate.
+
+**D5: S-tier skip.** `manual_test` is now S-tier skippable — a skipped
+manual-test step (via the SKIP sentinel above) satisfies downstream
+`prd_audit` prerequisites the same way a fully completed manual-test step
+does, so a skipped manual test no longer blocks the rest of the pipeline.
+
+**Who invokes it:**
+- **Daemon auto-mode manual-test step** — dispatches `manual-test-record`
+  instead of relying on an operator to write the marker, closing the
+  auto-mode HALT (#385).
+- **Manual/interactive use** — an operator or the `/manual-test` skill can run
+  either mode directly from the CLI in place of hand-editing the results file.
+
+Implementation: `engine/manual-test-record-cli.ts`
+(`detectManualTestRecordCommand`, `MANUAL_TEST_RECORD_USAGE`); wired into the
+`conduct-ts` entrypoint in `src/index.ts`; completion logic in
+`engine/artifacts.ts` (`MANUAL_TEST_SKIP_SENTINEL` and the `manual_test`
+completion evaluator).
+
 #### Finish-step engine completion machinery (#499, ADR D1-D5)
 
 The finish gate employs several deterministic engine-side mechanisms to handle presentation

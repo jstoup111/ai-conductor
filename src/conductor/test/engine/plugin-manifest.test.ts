@@ -1,9 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { validateManifest, loadManifestFromFile, PluginManifestError } from '../../src/engine/plugin-manifest.js';
 import { PluginVersionError } from '../../src/types/plugin.js';
-import { writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Read the current harness VERSION directly rather than hardcoding it, so
+// this test doesn't go stale every time VERSION is bumped (plugin-manifest.ts
+// resolves the SAME file at runtime via resolveHarnessVersion()).
+const HARNESS_VERSION = readFileSync(join(__dirname, '../../../../VERSION'), 'utf-8').trim();
+const HARNESS_MAJOR_MINOR = HARNESS_VERSION.split('.').slice(0, 2).join('.');
 
 describe('validateManifest', () => {
   describe('required fields', () => {
@@ -125,19 +134,19 @@ describe('validateManifest', () => {
       } catch (err) {
         expect((err as any).name).toBe('PluginVersionError');
         expect(String(err)).toMatch(/2\.0\.0/);
-        expect(String(err)).toMatch(/0\.99/);
+        expect(String(err)).toContain(HARNESS_VERSION);
       }
     });
 
-    it('passes validation when harness_version is compatible (^0.99.0)', () => {
+    it(`passes validation when harness_version is compatible (^${HARNESS_MAJOR_MINOR}.0)`, () => {
       const manifest = {
         kind: 'llm_provider',
         name: 'test',
         entrypoint: 'index.ts',
-        harness_version: '^0.99.0',
+        harness_version: `^${HARNESS_MAJOR_MINOR}.0`,
       };
       const result = validateManifest(manifest);
-      expect(result.harness_version).toBe('^0.99.0');
+      expect(result.harness_version).toBe(`^${HARNESS_MAJOR_MINOR}.0`);
     });
 
     it('passes validation when harness_version is compatible (>=0.99.0 <1.0.0)', () => {
@@ -213,7 +222,7 @@ entrypoint: index.ts`;
       const validYaml = `kind: ui_renderer
 name: my-renderer
 entrypoint: src/index.ts
-harness_version: ^0.99.0
+harness_version: ^${HARNESS_MAJOR_MINOR}.0
 capabilities:
   async: true`;
       writeFileSync(tmpFile, validYaml, 'utf-8');
@@ -222,7 +231,7 @@ capabilities:
         expect(result.kind).toBe('ui_renderer');
         expect(result.name).toBe('my-renderer');
         expect(result.entrypoint).toBe('src/index.ts');
-        expect(result.harness_version).toBe('^0.99.0');
+        expect(result.harness_version).toBe(`^${HARNESS_MAJOR_MINOR}.0`);
         expect(result.capabilities?.async).toBe(true);
       } finally {
         unlinkSync(tmpFile);

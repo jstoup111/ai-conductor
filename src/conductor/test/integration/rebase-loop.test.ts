@@ -25,9 +25,10 @@ import {
 // infrastructure here — we exercise it for real (NO `vi.mock('execa')`). The
 // loop's tail steps (build/manual_test/finish) are satisfied by a mock
 // StepRunner + per-step artifacts (the `satisfy()` helper), exactly like
-// gate-loop.test.ts. We start the loop at `build` with complexity tier 'S' so
-// the gate-driven tail is:  build → manual_test → (retro tier-skipped) →
-// [rebase, once implemented] → finish.
+// gate-loop.test.ts. We start the loop at `build` with complexity tier 'M' so
+// the gate-driven tail runs manual_test (S-tier now legitimately skips
+// manual_test per D5 — see steps.ts skippableForTiers):  build → manual_test →
+// retro → [rebase, once implemented] → finish.
 //
 // The `rebase` loopGate step is NOT yet implemented, so the tail today is
 // build → manual_test → finish with no rebase. Every assertion below encodes a
@@ -42,7 +43,7 @@ const execFileAsync = promisify(execFile);
 const BASE = 'main';
 
 const FRONT_DONE: ConductState = {
-  complexity_tier: 'S',
+  complexity_tier: 'M',
   feature_desc: 'add foo',
   worktree: 'done',
   memory: 'done',

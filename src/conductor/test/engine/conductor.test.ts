@@ -4125,11 +4125,12 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(6);
+    expect(tierSkipEvents.length).toBe(7);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('manual_test');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review_as_built');
     expect(tierSkipEvents.map((e) => e.step)).toContain('retro');
     // All events should have tier 'S'
@@ -4608,10 +4609,17 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
+      // D5 made manual_test S-tier skippable too, so S tier + technical track
+      // now resolves to width 0 (all three members skip), not width 1. Use an
+      // M-tier feature with architecture_review already skipped instead:
+      // architecture_review_as_built cascades to skipped, prd_audit skips for
+      // the technical track, and manual_test (not S-tier-skippable at M) is
+      // the sole dispatchable member — width 1.
       await writeState(statePath, {
         ...VALIDATION_GROUP_PREREQS,
-        complexity_tier: 'S',
+        complexity_tier: 'M',
         track: 'technical',
+        architecture_review: 'skipped',
       } as ConductState);
 
       const runner = createMockStepRunner();
@@ -4634,11 +4642,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // S tier + technical track resolve to width 1 (only manual_test
-      // dispatchable — prd_audit and architecture_review_as_built both
-      // skip). No fan-out ceremony event should fire: the event stream for
-      // manual_test must be byte-for-byte equivalent to the pre-Task-14
-      // serial baseline for that single member.
+      // M tier + technical track + upstream-skipped architecture_review
+      // resolve to width 1 (only manual_test dispatchable — prd_audit and
+      // architecture_review_as_built both skip). No fan-out ceremony event
+      // should fire: the event stream for manual_test must be byte-for-byte
+      // equivalent to the pre-Task-14 serial baseline for that single member.
       expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
       expect(observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test')).toBe(
         true,
@@ -6028,15 +6036,20 @@ describe('engine/conductor', () => {
       expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
     });
 
-    it('width 1: S tier + technical track skip both prd_audit and architecture_review_as_built', () => {
+    it('width 0: S tier + technical track skip manual_test, prd_audit, and architecture_review_as_built', () => {
+      // D5: manual_test is now also S-tier skippable (steps.ts skippableForTiers),
+      // so an S-tier + technical-track feature skips all three validation-group
+      // members — the group resolves to zero dispatchable members.
       const state = { complexity_tier: 'S' } as ConductState;
       const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
 
-      expect(result.allSkipped).toBe(false);
-      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+      expect(result.allSkipped).toBe(true);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([]);
 
+      const manualTest = result.members.find((m) => m.name === 'manual_test')!;
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
       const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
+      expect(manualTest.outcome).toEqual({ kind: 'skipped' });
       expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
       expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
     });
@@ -8926,6 +8939,22 @@ describe('buildRetryHint', () => {
   it('directs to plan for zero tasks in task-status.json', () => {
     const hint = buildRetryHint('build', 'no tasks in task-status.json');
     expect(hint).toContain('.docs/plans');
+  });
+
+  it('cites manual-test-record for a missing manual_test marker', () => {
+    const hint = buildRetryHint(
+      'manual_test',
+      '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/FAIL results before exiting',
+    );
+    expect(hint).toContain('conduct-ts manual-test-record');
+  });
+
+  it('does not mention --skip for a manual_test FAIL-reason miss', () => {
+    const hint = buildRetryHint(
+      'manual_test',
+      '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
+    );
+    expect(hint).not.toContain('--skip');
   });
 });
 
