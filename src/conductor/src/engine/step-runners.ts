@@ -18,7 +18,7 @@ import {
 } from './complexity.js';
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { findArtifactFiles } from './artifacts.js';
+import { findArtifactFiles, resolveFeaturePlanPath } from './artifacts.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 
@@ -855,15 +855,28 @@ export class DefaultStepRunner implements StepRunner {
   private async runBuildReview(): Promise<StepRunResult> {
     const resolved = this.resolvedConfigFor('build_review');
 
+    // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
+    // sort()[last] guess (#407): with several features in flight the shared plans
+    // directory holds many files, and picking the alphabetically-last one graded
+    // the diff against an entirely unrelated feature's plan, so build_review FAILed
+    // on a spurious scope/completeness mismatch while the build step (which uses
+    // resolveFeaturePlanPath) built the correct feature. Mirror the build step:
+    // prefer the caller's override, else the slug-scoped resolver, which fails
+    // closed on ambiguity rather than grading someone else's plan.
     let planPath = this.planPathOverride;
     if (!planPath) {
-      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
-      planPath = planFiles.sort().at(-1);
+      planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
     }
     if (!planPath) {
+      const planFiles = await findArtifactFiles(this.projectDir, 'plan');
+      const detail =
+        planFiles.length === 0
+          ? 'no .docs/plans/*.md present'
+          : `could not scope this feature's plan among ${planFiles.length} in .docs/plans/ ` +
+            `(feature_desc="${this.featureDesc}")`;
       return {
         success: false,
-        output: 'no .docs/plans/*.md present — build_review has no plan to grade the diff against',
+        output: `${detail} — build_review has no plan to grade the diff against`,
       };
     }
 
