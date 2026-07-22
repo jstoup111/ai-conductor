@@ -28,6 +28,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   diagrams are present but cannot be validated (`mmdc` missing), so an unvalidated diagram never
   lands. The `/architecture-diagram` skill documents that this is machinery-enforced, not a
   reminder.
+- Phase-scoped `.docs/` write-guard (#788): a new `docs-guard.sh` `PreToolUse` hook
+  (matcher `Edit|Write|NotebookEdit`) blocks edits to spec/plan artifacts under
+  `.docs/` while the conductor has a BUILD/SHIP phase step in flight, catching an
+  agent editing frozen spec artifacts mid-build instead of only the code they were
+  dispatched to write. A `.pipeline/phase-active` marker (written/cleared at every
+  step entry by `conductor.ts`) carries the active `step`, `phase`
+  (`BUILD`/`SHIP`), and a resolved allowlist of `.docs/` prefixes exempt from the
+  block: `.docs/release-waivers/` is always allowed (any step), plus per-step
+  allowances such as the `retro` step's `.docs/retros/`/`.docs/stories/`
+  (`resolveDocsAllowlist`/`DOCS_WRITE_ALLOWLIST`/`DOCS_WRITE_ALWAYS_ALLOWED` in
+  `src/conductor/src/engine/phase-marker.ts`). No marker present (DECIDE phase, or
+  outside a conductor-driven step) → the hook is inert and exits before reading
+  stdin. An unparseable/undeterminable target path while a phase marker IS present
+  fails **closed** (blocks), matching the write-surface degradation rule; wired into
+  both daemon-provisioned worktrees (`worktree-prepare.ts`) and primary checkouts
+  (`bin/install`, via the generated `hooks/claude/docs-guard.sh` /
+  `bin/generate-docs-guard-hook`).
 - CI runs the TypeScript type-check (`tsc --noEmit`) on every PR via a dedicated
   `typecheck` job in `.github/workflows/ci.yml`; any type error now fails CI, preventing
   new type regressions from landing on `main` (#789).
@@ -237,6 +254,24 @@ echo "Optional manual cleanup (NOT run automatically):"
 echo "  uv tool uninstall serena-agent   # if you don't use Serena elsewhere"
 echo "  pkill -f 'serena start-mcp-server'   # stop stray servers from old sessions"
 echo "  rm -rf <project>/.serena/            # per-project semantic-index caches"
+```
+
+**Phase-scoped `.docs/` write-guard: new `PreToolUse` hook wiring (#788).** Existing
+primary checkouts already have `~/.claude/settings.json` merged by a prior `bin/install`
+run and will not pick up the new `docs-guard.sh` hook entry automatically — re-run the
+settings merge to add it:
+
+```bash migration
+# Re-run the harness installer's settings merge so the new docs-guard.sh
+# PreToolUse hook (Edit|Write|NotebookEdit matcher) is added to
+# ~/.claude/settings.json. Safe to re-run: bin/install's settings merge is
+# idempotent (matches on hook command path, does not duplicate entries).
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+./bin/install --update
+echo "docs-guard.sh is now wired as a PreToolUse hook in ~/.claude/settings.json."
+echo "Daemon-provisioned worktrees pick this up automatically on next"
+echo "worktree-prepare (no action needed there); restart any running daemon"
+echo "to have it re-provision worktrees created going forward."
 ```
 
 ### Fixed
