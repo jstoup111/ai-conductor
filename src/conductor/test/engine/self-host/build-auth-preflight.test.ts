@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { preflightBuildAuthCheck } from '../../../src/engine/self-host/build-auth-preflight.js';
 import { HALT_MARKER } from '../../../src/engine/halt-marker.js';
 import { DAEMON_BUILD_TOKEN_MINT_COMMAND } from '../../../src/engine/self-host/daemon-build-token.js';
+import { buildAuthRemediationMessage } from '../../../src/engine/self-host/build-auth-message.js';
 
 // Task 6 (TR-3, TR-2): fail-closed pre-flight — missing daemon token HALTs with mint instructions
 
@@ -38,8 +39,9 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
       const haltPath = join(projectRoot, HALT_MARKER);
       const haltContent = await readFile(haltPath, 'utf-8');
 
-      // HALT reason should contain all required information
-      expect(haltContent).toContain('daemon must mint a build-auth token');
+      // HALT reason should be built from the shared remediation message builder
+      // (Task 12: preflight adopts the shared message, not a separately-assembled string)
+      expect(haltContent).toContain(buildAuthRemediationMessage(tokenPath));
       expect(haltContent).toContain('claude setup-token');
       expect(haltContent).toContain(tokenPath);
       expect(haltContent).toContain('harness_self_host.build_auth');
@@ -62,7 +64,7 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
 
       const haltPath = join(projectRoot, HALT_MARKER);
       const haltContent = await readFile(haltPath, 'utf-8');
-      expect(haltContent).toContain('daemon must mint a build-auth token');
+      expect(haltContent).toContain(buildAuthRemediationMessage(tokenPath));
       expect(haltContent).toContain('cannot read');
     });
 

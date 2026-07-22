@@ -1616,6 +1616,22 @@ operator-credentials pre-flight for that project.
 See `src/conductor/README.md` → "Daemon build-auth" for the module-level reference, and the
 `CHANGELOG.md` `[Unreleased]` migration block for copy-pasteable setup commands.
 
+**Checking build-auth status.** `conduct-ts build-auth-status` reports the resolved mode and
+token state on one line — `valid`/`api-key` (clean, exit `0`) or
+`missing`/`unreadable`/`invalid`/`unverifiable` (non-clean, exit `1`, remediation printed
+underneath). `daemon-token` mode probes the token's actual liveness via a `claude -p` CLI
+invocation rather than just checking the file exists. `./bin/install --check` shows the same
+line as part of its overall status report — it delegates entirely to `conduct-ts
+build-auth-status`; bash only turns the exit code into an ok/fail line.
+
+**Daemon credential gate.** While `daemon-token` mode is configured and the token file is
+missing/empty/unreadable, the daemon stops picking up *new* features each cycle — in-flight
+work is unaffected and keeps running to completion/park. This is intentionally non-blocking:
+no HALT is written, and exactly one log line is emitted on the missing→present transition (not
+repeated every idle tick). The gate lifts automatically as soon as the token is restored — no
+operator action needed — via an event-driven watcher backed by a poll fallback, so it also
+works on filesystems where file-change notifications are unreliable.
+
 ### Harness self-host guardrails (`conduct-ts` only)
 
 The harness is the one repo the daemon can't build the way it builds every other repo — a self-build

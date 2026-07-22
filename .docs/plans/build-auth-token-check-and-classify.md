@@ -69,7 +69,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/execution/claude-provider.ts — pattern extension
 - src/conductor/test/execution/claude-provider.test.ts — fixtures
 
-**Wired-into:** none (no new production surface — extends the already-wired classifier)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** none
 
 ### Task 2: Precedence preserved over new patterns
@@ -89,7 +89,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/test/execution/claude-provider.test.ts — precedence fixtures
 - src/conductor/src/execution/claude-provider.ts — only if ordering fix needed
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** 1
 
 ### Task 3: Bare-401-in-prose does not classify
@@ -108,7 +108,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/test/execution/claude-provider.test.ts — non-match fixture
 - src/conductor/src/execution/claude-provider.ts — only if tightening needed
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/execution/claude-provider.ts#AUTH_FAILURE_RE
 **Dependencies:** 1
 
 ### Task 4: group-core routes authFailure to park, not the retry ladder
@@ -130,7 +130,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/engine/group-core.ts — authFailure branch
 - src/conductor/test/engine/group-core.test.ts — budget/park assertions
 
-**Wired-into:** none (no new production surface — existing wired retry loop)
+**Wired-into:** none (no new production surface)
 **Dependencies:** 1
 
 ### Task 5: Serial path parks on new patterns
@@ -172,7 +172,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/engine/self-host/token-liveness.ts — new module
 - src/conductor/test/engine/self-host/token-liveness.test.ts — verdict mapping
 
-**Wired-into:** same as Task 8
+**Wired-into:** src/conductor/src/index.ts#main, bin/install#check_installation
 **Dependencies:** none
 
 ### Task 7: Shared remediation-message builder
@@ -261,7 +261,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - bin/install — check_installation delegate block
 - test/test_install_check_build_auth.sh — new bash test (or nearest existing check-suite home)
 
-**Wired-into:** none (bin/install is itself the production entry point)
+**Wired-into:** none (no new production surface)
 **Dependencies:** 9
 
 ### Task 11: Credential confidentiality sweep
@@ -301,7 +301,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/engine/self-host/build-auth-preflight.ts — message swap
 - src/conductor/test/engine/self-host/build-auth-preflight.test.ts — content + preserved semantics
 
-**Wired-into:** none (no new production surface — existing wired preflight)
+**Wired-into:** none (no new production surface)
 **Dependencies:** 7
 
 ### Task 13: Daemon pre-dispatch credential gate (skip-picks)
@@ -325,7 +325,7 @@ None — no migrations, no new dependencies (probe reuses the installed `claude`
 - src/conductor/src/engine/daemon.ts — gate beside checkPaused
 - src/conductor/test/engine/daemon.test.ts — gate scenarios
 
-**Wired-into:** src/conductor/src/engine/daemon.ts#runDaemon (dispatch loop, beside checkPaused)
+**Wired-into:** src/conductor/src/engine/daemon.ts#runDaemon
 **Dependencies:** 7
 
 ### Task 14: One waiting condition, zero HALT markers

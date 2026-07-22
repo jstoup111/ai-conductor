@@ -416,6 +416,42 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    it('detects auth failure from observed "Failed to authenticate. API Error: 401 Invalid bearer token" (text mode)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Failed to authenticate. API Error: 401 Invalid bearer token',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('detects auth failure from "Failed to authenticate. API Error: 401 Invalid bearer token" embedded in longer output', async () => {
+      mockExeca.mockResolvedValue({
+        stdout:
+          'Starting session...\nConnecting to API...\nFailed to authenticate. API Error: 401 Invalid bearer token\nExiting with error.',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBe(true);
+      expect(result.success).toBe(false);
+    });
+
+    it('does not flag authFailure on a bare "401" mentioned in prose', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'The mock server expects a 401 response for this case',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBeUndefined();
+    });
+
     it('includes --name when sessionName provided', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',
@@ -469,6 +505,45 @@ describe('ClaudeProvider', () => {
       expect(result.rateLimited).toBe(true);
       expect(result.authFailure).toBeUndefined();
       expect(result.success).toBe(false);
+    });
+
+    it('Task 2 pin: session-limit precedence holds over extended auth patterns (failed to authenticate)', async () => {
+      // Message matches BOTH session-limit AND the new auth patterns from Task 1.
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your session limit · resets 3:20pm (America/New_York). Failed to authenticate. API Error: 401 Invalid bearer token",
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+    });
+
+    it('Task 2 pin: rate-limit precedence holds over extended auth patterns (invalid bearer token)', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: 'Error: rate limit exceeded. Invalid bearer token. API Error: 401',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.rateLimited).toBe(true);
+      expect(result.authFailure).toBeUndefined();
+    });
+
+    it('Task 2 pin: exit code 0 with auth-shaped text does not classify as authFailure', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Note: previously failed to authenticate. API Error: 401 Invalid bearer token, but retry succeeded.',
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.authFailure).toBeUndefined();
     });
 
     describe('Task 18: deadline-first timezone-aware reset parse with clamp', () => {

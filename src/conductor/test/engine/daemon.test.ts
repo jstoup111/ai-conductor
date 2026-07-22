@@ -1,10 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   runDaemon,
   guardedDispatchWith,
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
+import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
+import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -1982,4 +1987,428 @@ describe('engine/daemon — runDaemon', () => {
       expect(dispatched).toBe(true);
     });
   });
+
+  // ── Task 14 (FR-6): one waiting condition, zero HALT markers ──────────────
+  // Pinning tests alongside the acceptance-shaped RED specs in
+  // test/engine/daemon-build-auth-gate.test.ts. These drive the same real
+  // `runDaemon` with an injected `isBuildAuthMissing` predicate and assert:
+  // (a) exactly one waiting-condition log entry across many idle polls with
+  // N>=2 queued features (transition-only, not per-tick spam), (b) zero
+  // dispatches the whole time, (c) zero HALT markers written — the gate skips
+  // picks entirely, so it never reaches the per-feature HALT-writing path at
+  // all (no `writeHalt`/`onHaltWritten` call is ever made for the gated
+  // features).
+  describe('build-auth credential gate — single waiting condition, no HALT cascade (Task 14, FR-6)', () => {
+    it('missing credential + 3 queued features across many idle polls -> exactly one log entry, zero HALT writes, zero dispatches', async () => {
+      const logs: string[] = [];
+      let haltWrites = 0;
+      const resolvedPath = '/tmp/fake-daemon-build-token';
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(3)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => true,
+        getBuildAuthRemediationMessage: () => buildAuthRemediationMessage(resolvedPath),
+        onHaltWritten: async () => {
+          haltWrites += 1;
+        },
+        log: (msg) => logs.push(msg),
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 2,
+        once: false,
+        maxIdlePolls: 8,
+      });
+
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+      expect(haltWrites).toBe(0);
+
+      const waitingLines = logs.filter((l) => /build.?auth|credential/i.test(l));
+      // Transition-only: one entry total, not one per idle poll (8 polls ran).
+      expect(waitingLines.length).toBe(1);
+
+      // Task 14 (FR-6): the transition-edge log must carry the shared
+      // remediation message content (mint command, resolved token path,
+      // pitfalls) — not a bare status line.
+      const sharedMessage = buildAuthRemediationMessage(resolvedPath);
+      expect(waitingLines[0]).toContain(sharedMessage);
+      expect(waitingLines[0]).toContain(resolvedPath);
+    });
+
+    it('does not re-log the waiting condition after it clears and re-triggers (transition edges only, not a one-shot-forever latch)', async () => {
+      const logs: string[] = [];
+      // missing -> present -> missing again: expect a log on each missing-edge
+      // (2 total), never a log while the state is unchanged tick-to-tick.
+      const sequence = [true, true, true, false, false, true, true];
+      let call = 0;
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(2)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => sequence[Math.min(call++, sequence.length - 1)],
+        log: (msg) => logs.push(msg),
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps as DaemonDeps, {
+        concurrency: 2,
+        once: false,
+        maxIdlePolls: sequence.length,
+      });
+
+      const waitingLines = logs.filter((l) => /missing.*skip|credential missing/i.test(l));
+      expect(waitingLines.length).toBe(2);
+    });
+  });
+
+  // ── Task 15 (FR-6): auto-resume via credential watcher + waker ─────────────
+  // Mirrors the `watchHaltCleared` event-driven wake tests above, but for the
+  // daemon-global build-auth credential watcher (`watchBuildAuthRestored`).
+  describe('auto-resume via credential watcher + waker (Task 15, FR-6)', () => {
+    it('storing a fresh token arms the waker and the NEXT loop iteration dispatches, no operator action', async () => {
+      // Simulates: file watcher fires onRestored() the instant a valid token
+      // lands, and the daemon's own isBuildAuthMissing re-check (not the
+      // watcher) is what actually confirms the gate is clear before dispatch.
+      let missing = true;
+      const events: string[] = [];
+
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => {
+          events.push('dispatch');
+          return { slug: it.slug, status: 'done' };
+        },
+        isBuildAuthMissing: async () => missing,
+        watchBuildAuthRestored: (onRestored) => {
+          // Fire shortly after registration, simulating the token file being
+          // written mid-idle-wait (no operator un-park, no restart).
+          setTimeout(() => {
+            missing = false;
+            events.push('watcher:fired');
+            onRestored();
+          }, 5);
+          return () => {
+            events.push('watcher:disposed');
+          };
+        },
+        sleep: async () => {
+          events.push('sleep:started');
+          // Dummy sleep never resolves — only the waker (armed by the
+          // watcher firing) can unblock the idle race, per the existing
+          // watchHaltCleared precedent (commit a9963d73).
+          await new Promise(() => {});
+        },
+      };
+
+      const res = await Promise.race([
+        // maxIdlePolls: 1 mirrors the existing watchHaltCleared precedent
+        // above: one idle encounter while gated, the watcher-armed waker
+        // unblocks dispatch, then the idle-poll counter trips on the NEXT
+        // idle encounter (nothing left in the backlog) to end the run.
+        runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 1 }),
+        new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('daemon timeout')), 500),
+        ),
+      ]);
+
+      expect(events).toContain('watcher:fired');
+      expect(events).toContain('dispatch');
+      expect(events.indexOf('dispatch')).toBeGreaterThan(events.indexOf('watcher:fired'));
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+
+    it('a whitespace-only write does NOT lift the gate: the watcher firing alone never dispatches without isBuildAuthMissing confirming clear', async () => {
+      // The freshness classifier (readDaemonBuildToken) rejects whitespace-only
+      // content as still-missing — a real fs event can fire (e.g. debounced
+      // partial write) while isBuildAuthMissing correctly keeps reporting true.
+      // The gate must stay engaged: the watcher is not itself authoritative.
+      const events: string[] = [];
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => true, // whitespace-only still classifies as missing
+        watchBuildAuthRestored: (onRestored) => {
+          setTimeout(() => {
+            events.push('watcher:fired-on-whitespace');
+            onRestored(); // fs event fired, but the token is whitespace-only
+          }, 5);
+          return () => {};
+        },
+        sleep: async (ms) => {
+          events.push('sleep:started');
+          // Real (short) delay so the setTimeout above gets a chance to fire
+          // mid-run, same as the fs-event race in the "fresh token" test above.
+          await new Promise((r) => setTimeout(r, 10));
+        },
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      expect(events).toContain('watcher:fired-on-whitespace');
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('the watcher is disposed on daemon exit/shutdown — no leak', async () => {
+      let disposeCalled = false;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => false,
+        watchBuildAuthRestored: () => {
+          return () => {
+            disposeCalled = true;
+          };
+        },
+      };
+
+      const res = await runDaemon(deps, { concurrency: 1, once: true });
+
+      expect(res.processed).toHaveLength(1);
+      expect(disposeCalled).toBe(true);
+    });
+
+    it('poll backstop: the gate re-checks periodically even without a watcher event (no watchBuildAuthRestored dep provided)', async () => {
+      // No event-driven watcher at all — the credential clears purely because
+      // the daemon re-polls isBuildAuthMissing every idle tick (the existing
+      // poll cadence IS the backstop for filesystems where fs-change events
+      // are unreliable).
+      let missing = true;
+      let pollCount = 0;
+      const deps: DaemonDeps = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+        isBuildAuthMissing: async () => {
+          pollCount += 1;
+          return missing;
+        },
+        // watchBuildAuthRestored intentionally absent
+        sleep: async () => {
+          // Simulate the token landing after a couple of idle polls, entirely
+          // independent of any file-watch event.
+          if (pollCount >= 2) missing = false;
+        },
+      };
+
+      const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 5 });
+
+      expect(pollCount).toBeGreaterThanOrEqual(2);
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+  });
+
+  // ── Task 16 (FR-6 negative): per-feature preflight backstop survives a
+  // mid-cycle credential deletion race ────────────────────────────────────
+  // The daemon-level gate (`isBuildAuthMissing`, Tasks 13/14) is checked once
+  // at the top of a cycle before picks are made. If the credential is deleted
+  // AFTER the gate passes but BEFORE a dispatched feature's own preflight
+  // (`preflightBuildAuthCheck`, Task 6/12) runs, that feature must still
+  // fail-closed and HALT with the shared remediation message — the per-
+  // feature preflight is not allowed to trust the daemon-level gate's
+  // stale "clear" result. On the NEXT cycle, the daemon-level gate must
+  // re-poll and correctly report the credential missing again (no stale
+  // caching of the earlier "present" result).
+  describe('per-feature preflight backstop under mid-cycle token deletion (Task 16, FR-6)', () => {
+    it('gate passes at cycle start, credential deleted before feature preflight runs -> feature HALTs with shared message; gate re-engages next cycle', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-build-auth-race-'));
+      const tokenPath = join(projectRoot, 'daemon-token');
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      // Credential present at cycle start — the daemon-level gate should pass.
+      await writeFile(tokenPath, 'sk-live-token-value', 'utf-8');
+
+      try {
+        const gateChecks: boolean[] = [];
+        let preflightResult: Awaited<ReturnType<typeof preflightBuildAuthCheck>>;
+
+        const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+          discoverBacklog: staticBacklog(items(1)),
+          isBuildAuthMissing: async () => {
+            // Real-world daemon-level gate check: is the token file present
+            // right now? Non-destructive existence check only.
+            const stillPresent = await accessExists(tokenPath);
+            gateChecks.push(!stillPresent);
+            return !stillPresent;
+          },
+          runFeature: vi.fn(async (it) => {
+            // Simulate the race: the credential is deleted mid-cycle, after
+            // the daemon-level gate above already passed for this cycle, but
+            // before this feature's own preflight check runs.
+            await rm(tokenPath, { force: true });
+            preflightResult = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+            return { slug: it.slug, status: 'done' };
+          }),
+          log: () => {},
+          sleep: async () => {},
+        };
+
+        const res = await runDaemon(deps as DaemonDeps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 2,
+        });
+
+        // Cycle 1: gate saw the credential present (not missing) — dispatch proceeded.
+        expect(gateChecks[0]).toBe(false);
+        // The feature's own preflight, run after the mid-cycle deletion,
+        // still fail-closed HALTs with the shared remediation message.
+        expect(preflightResult).toBeDefined();
+        expect(preflightResult!.success).toBe(false);
+        expect(preflightResult!.output).toContain(buildAuthRemediationMessage(tokenPath));
+        expect(deps.runFeature).toHaveBeenCalledTimes(1);
+        expect(res.processed).toHaveLength(1);
+
+        // Cycle 2 (and onward, since backlog item already started/done —
+        // use a fresh backlog item to force another gate check): the
+        // daemon-level gate re-polls and correctly reports missing now that
+        // the credential is gone, rather than trusting a stale "present"
+        // result from cycle 1.
+        expect(gateChecks.length).toBeGreaterThanOrEqual(2);
+        expect(gateChecks[gateChecks.length - 1]).toBe(true);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // ── Task 17 (FR-6 negative): credential gate composes with PAUSE /
+  // operator-park / episode gates — each is an independent sibling check,
+  // not a replacement or a short-circuit of the others, and none of them
+  // ever touches in-flight work. ──────────────────────────────────────────
+  describe('build-auth credential gate composition with PAUSE / operator-park / episode (Task 17, FR-6)', () => {
+    it('clearing ONLY the credential while PAUSE remains set still blocks dispatch (PAUSE is independent)', async () => {
+      let credentialMissing = true;
+      let isPausedFlag = true;
+      let pollPhase = 0;
+
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => credentialMissing,
+        isPaused: async () => isPausedFlag,
+        sleep: async () => {
+          pollPhase++;
+          // After the first idle poll, restore the credential but leave PAUSE set.
+          if (pollPhase === 1) {
+            credentialMissing = false;
+          }
+        },
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // Credential cleared, but PAUSE never lifted -> still zero dispatches.
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('operator-park predicate is still consulted before dispatch even when the credential gate is not active', async () => {
+      let parkChecked = false;
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        isBuildAuthMissing: async () => false, // credential gate inactive throughout
+        isParked: async () => {
+          parkChecked = true;
+          return true;
+        },
+        log: () => {},
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: false,
+        maxIdlePolls: 3,
+      });
+
+      // The park check must still run (and block) — the credential gate being
+      // inert never bypasses or short-circuits the existing park check.
+      expect(parkChecked).toBe(true);
+      expect(deps.runFeature).not.toHaveBeenCalled();
+      expect(res.processed).toHaveLength(0);
+    });
+
+    it('credential gate transitioning to active mid-build never cancels an in-flight feature; only blocks NEW picks', async () => {
+      let credentialMissing = false;
+      let resolveFeatureA: ((value: FeatureOutcome) => void) | undefined;
+      const featureAPromise = new Promise<FeatureOutcome>((resolve) => {
+        resolveFeatureA = resolve;
+      });
+
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(2)), // f0, f1
+        runFeature: async (it: BacklogItem) => {
+          if (it.slug === 'f0') {
+            // Feature A: stays in flight until we resolve it below.
+            return featureAPromise;
+          }
+          return { slug: it.slug, status: 'done' };
+        },
+        isBuildAuthMissing: async () => credentialMissing,
+        sleep: async () => {},
+      };
+
+      const daemonPromise = runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: true,
+      });
+
+      // Yield to let f0 be picked/dispatched (in flight) before the credential
+      // goes missing.
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Credential becomes missing while f0 is in flight.
+      credentialMissing = true;
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Resolve the in-flight feature — it must complete normally, untouched
+      // by the credential gate having gone active mid-flight.
+      resolveFeatureA?.({ slug: 'f0', status: 'done' });
+
+      const res = await daemonPromise;
+
+      expect(res.processed.find((o) => o.slug === 'f0')?.status).toBe('done');
+    });
+
+    it('api-key mode (isBuildAuthMissing absent) never blocks dispatch regardless of PAUSE/park state — gates are independent, not coupled', async () => {
+      // api-key mode: no isBuildAuthMissing dep at all -> the credential gate
+      // is always inert. With PAUSE and park both cleared, dispatch proceeds
+      // normally; the absent credential predicate never couples to (nor is
+      // inferred from) the other gates' state.
+      const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        // isBuildAuthMissing intentionally absent (api-key mode)
+        isPaused: async () => false,
+        isParked: async () => false,
+      };
+
+      const res = await runDaemon(deps as DaemonDeps, {
+        concurrency: 1,
+        once: true,
+      });
+
+      expect(deps.runFeature).toHaveBeenCalledTimes(1);
+      expect(res.processed).toHaveLength(1);
+      expect(res.processed[0].status).toBe('done');
+    });
+  });
 });
+
+async function accessExists(path: string): Promise<boolean> {
+  const { access } = await import('node:fs/promises');
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}

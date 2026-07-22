@@ -259,6 +259,45 @@ export interface DaemonDeps {
    */
   isPaused?: () => Promise<boolean>;
   /**
+   * Task 13 (FR-6): true while the daemon's build credential (daemon-token
+   * mode) is missing/stale/unreadable. Consulted beside `isPaused` in the
+   * fill-pool gate — no NEW feature is picked/dispatched while true. Does
+   * NOT affect in-flight work: features already dispatched keep running to
+   * completion/park. Re-polled every loop iteration (including each idle
+   * tick), so a credential restored mid-run resumes dispatch at the next
+   * boundary without a restart (auto-resume, no operator un-park needed).
+   * Absent → never missing (pure-core default; production wires the real
+   * predicate from `readDaemonBuildToken` + `resolveSelfHostConfig`, and
+   * always reports false in api-key mode — the gate is inert there).
+   */
+  isBuildAuthMissing?: () => Promise<boolean>;
+  /**
+   * Task 15 (FR-6): event-driven wake for the build-auth credential gate.
+   * Mirrors `watchHaltCleared`'s shape and lifecycle exactly — registered
+   * once (not per-slug, since the gate is daemon-global, not per-feature),
+   * called with a callback the daemon wires to `waker.wake()`, and disposed
+   * on daemon exit alongside the other watchers. Purely an optimization: the
+   * `isBuildAuthMissing` re-poll every loop iteration (including each idle
+   * tick) is the poll backstop that already covers filesystems where
+   * file-change events are unreliable, so an absent/no-op dep degrades to
+   * poll-only auto-resume, never to no-resume (optimization-never-authority).
+   * Production wires the real token-path watcher (reusing the
+   * `readDaemonBuildToken` freshness classifier — no semantic change to it);
+   * a whitespace-only write must NOT fire `onRestored` early, but even if it
+   * did, `isBuildAuthMissing`'s own re-check is the sole authority on
+   * whether the gate actually lifts.
+   */
+  watchBuildAuthRestored?: (onRestored: () => void) => () => void;
+  /**
+   * Task 14 (FR-6): supplies the shared remediation message (mint command,
+   * resolved token path, pitfalls) built by `buildAuthRemediationMessage`
+   * (Task 7) for the transition-edge waiting-condition log emitted when
+   * `isBuildAuthMissing` flips false -> true. Absent -> the log falls back
+   * to the bare status line (pure-core default; production wires this to
+   * `buildAuthRemediationMessage(resolveSelfHostConfig(config).buildAuthTokenPath)`).
+   */
+  getBuildAuthRemediationMessage?: () => Promise<string> | string;
+  /**
    * Optional rate-limit episode coordinator (optimization-never-authority).
    * If provided and active, gates new dispatch to avoid thundering herd.
    * If undefined or inactive, behaves as today (no change to existing code path).
@@ -571,12 +610,76 @@ export async function runDaemon(
     }
   };
 
+  // Task 13 (FR-6): sibling gate to `checkPaused` for the build-auth
+  // credential. Same fail-closed-on-throw posture, same transition-only
+  // logging discipline (a stuck missing credential must not spam the log
+  // every idle tick) — the exact log-once behavior is Task 14's scope; this
+  // gate only needs to not crash the loop or silently proceed on a throw.
+  let buildAuthErrorActive = false;
+  // Transition-only waiting-condition log. Task 14 (FR-6): the log entry
+  // carries the shared `buildAuthRemediationMessage` content (mint command,
+  // resolved token path, pitfalls) via `deps.getBuildAuthRemediationMessage`
+  // so an operator staring at the daemon log has everything needed to fix
+  // it, not just a bare status line.
+  let buildAuthMissingLogged = false;
+  const logBuildAuthMissing = async (): Promise<void> => {
+    let message = 'build credential missing — skipping new picks until it is restored';
+    if (deps.getBuildAuthRemediationMessage) {
+      try {
+        const remediation = await deps.getBuildAuthRemediationMessage();
+        message = `build credential missing — skipping new picks until it is restored\n${remediation}`;
+      } catch {
+        // fall back to the bare status line if the remediation builder itself throws
+      }
+    }
+    log(`[daemon] ${message}`);
+  };
+  const checkBuildAuthMissing = async (): Promise<boolean> => {
+    if (!deps.isBuildAuthMissing) return false;
+    try {
+      const result = await deps.isBuildAuthMissing();
+      if (buildAuthErrorActive) {
+        buildAuthErrorActive = false;
+        log('[daemon] isBuildAuthMissing predicate recovered — resuming normal credential polling');
+      }
+      if (result) {
+        if (!buildAuthMissingLogged) {
+          buildAuthMissingLogged = true;
+          await logBuildAuthMissing();
+        }
+      } else {
+        buildAuthMissingLogged = false;
+      }
+      return result;
+    } catch (err) {
+      if (!buildAuthErrorActive) {
+        buildAuthErrorActive = true;
+        log(
+          `[daemon] isBuildAuthMissing predicate threw (${err instanceof Error ? err.message : String(err)}); failing closed — treating as missing`,
+        );
+      }
+      if (!buildAuthMissingLogged) {
+        buildAuthMissingLogged = true;
+        await logBuildAuthMissing();
+      }
+      return true; // fail-closed: an unreadable/erroring credential must never look "present"
+    }
+  };
+
   const idlePollMs = options.idlePollMs ?? 5000;
   const maxIdlePolls = options.maxIdlePolls ?? Infinity;
   const startedAt = now();
 
   const waker = Waker();
   const watchers = new Map<string, () => void>();
+
+  // Task 15 (FR-6): register the build-auth credential watcher once (daemon-
+  // global, not per-slug — mirrors `watchHaltCleared`'s wake-the-waker
+  // mechanism but has no per-feature identity to key on). Absent dep ->
+  // undefined dispose, a no-op at shutdown.
+  const disposeBuildAuthWatcher = deps.watchBuildAuthRestored?.(() => {
+    waker.wake();
+  });
 
   // Task 9: per-spec dispatch-ceiling bound on `isProgressReKickEligible`.
   // Defaults to 20 (same numeric value as the prior hardcoded interim cap —
@@ -877,6 +980,12 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       const paused = await checkPaused();
 
+      // Task 13 (FR-6): re-poll the build-auth credential gate every
+      // iteration, same cadence as `checkPaused`. Missing → no NEW item is
+      // picked this tick; in-flight work is unaffected. Non-blocking: the
+      // loop still services watchers/waker/idle-poll bookkeeping below.
+      const buildAuthMissing = await checkBuildAuthMissing();
+
       // Task 7: Rate-limit episode gate. When an episode is active, skip new
       // feature dispatch to avoid thundering herd. In-flight features remain
       // untouched. Optional dep: absence or inactive episode → proceed normally.
@@ -895,7 +1004,7 @@ export async function runDaemon(
       };
 
       let next: BacklogItem | undefined;
-      if (!paused && !episodeActive) {
+      if (!paused && !episodeActive && !buildAuthMissing) {
         // Local-only discovery first (no remote fetch): cheap, and it keeps a build
         // from being re-based onto specs that landed on origin while work is running.
         const parkedBeforeLocal = new Set(parked);
@@ -1150,6 +1259,9 @@ export async function runDaemon(
     dispose();
   }
   watchers.clear();
+  // Task 15 (FR-6): dispose the build-auth credential watcher too — no leak
+  // on daemon exit/shutdown, same lifecycle discipline as the HALT watchers.
+  disposeBuildAuthWatcher?.();
 
   return { processed, stoppedReason: stopReason ?? 'backlog_drained' };
 }

@@ -168,6 +168,30 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - `engineer land` no longer false-rejects technical-track specs by validating a
   legacy newest-by-mtime spec; all `landSpec` artifact pickers are idea-scoped
   (#488).
+- `conduct-ts build-auth-status` — a CLI verb that reports the resolved daemon
+  build-auth mode (`daemon-token`/`api-key`) and token state (`valid`, `missing`,
+  `unreadable`, `invalid`, `unverifiable`, or `api-key`), live-probing the token via
+  a `claude -p` CLI invocation in `daemon-token` mode. Exit code is mode-aware: `0`
+  for a clean state (`valid` or `api-key`), `1` for any non-clean state, with
+  remediation guidance printed alongside the status line. `bin/install --check` now
+  delegates its build-auth status line to this verb (all mode/token-path logic lives
+  in `conduct-ts`; bash only formats ok/fail from the exit code) (#498).
+- Daemon-level non-blocking build-credential gate (`conduct-ts` only): while
+  `harness_self_host.build_auth.mode` is `daemon-token` and the token file is
+  missing/empty/unreadable, the daemon skips picking up *new* features each cycle
+  (in-flight work is untouched) and logs exactly one waiting-condition line per
+  missing→present transition (no repeated logging, no HALT markers). Auto-resumes
+  as soon as the token is restored, via an event-driven watcher plus a poll backstop
+  each idle tick; whitespace-only writes to the token file do not lift the gate. The
+  gate composes as an independent sibling to the existing PAUSE, operator-park, and
+  rate-limit-episode gates and never interferes with them (#498, closes #483).
+- Auth-failure classification (`AUTH_FAILURE_RE` in
+  `src/conductor/src/execution/claude-provider.ts`) now recognizes observed 401/bearer-
+  token rejection shapes and correctly excludes rate-limit responses from the auth
+  guard (a precedence bug previously let rate-limit output match as an auth failure).
+  `conductor.ts`'s group-dispatch JOIN (both the concurrent and serial paths) now
+  parks an `authFailure` without consuming retry/escalation budget, matching the
+  serial-path behavior (#498, closes #484).
 
 ## Migration
 

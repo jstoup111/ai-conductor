@@ -15,6 +15,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { detectsAuthFailure } from '../../src/execution/claude-provider.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
 
@@ -566,6 +567,91 @@ describe('conductor auth-park: daemon-token mode', () => {
       // - Attempt 2 (same attempt counter, retry budget consumed here): build succeeds
       // So we should see exactly 2 build calls total, confirming park did not count as a separate retry.
       expect(buildAttempts).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('serial dispatch parks on the newly extended auth-failure patterns (FR-4, e.g. "Failed to authenticate. API Error: 401 Invalid bearer token")', async () => {
+    // Verifies the serial (non-group) conductor dispatch path parks when the
+    // step runner's result carries `authFailure: true` as classified by
+    // claude-provider's extended AUTH_FAILURE_RE (Task 1). The park branch
+    // gates purely on the boolean flag, not the literal pattern text, so any
+    // string that AUTH_FAILURE_RE matches should engage the same park-and-poll
+    // behavior as the pre-existing patterns (e.g. "not logged in").
+    const observedOutput = 'Failed to authenticate. API Error: 401 Invalid bearer token';
+    expect(detectsAuthFailure(observedOutput)).toBe(true);
+
+    let buildAttempts = 0;
+    let buildAttempt1Failed = false;
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: string): Promise<StepRunResult> => {
+        if (step !== 'build') return { success: true };
+        buildAttempts++;
+        if (buildAttempts === 1) {
+          buildAttempt1Failed = true;
+          return {
+            success: false,
+            output: observedOutput,
+            authFailure: detectsAuthFailure(observedOutput),
+          } as AuthResult;
+        }
+        return { success: true };
+      }),
+    };
+
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => process.env,
+        teardown: async () => {},
+      })),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+
+    let parkResumeCalls = 0;
+    const sleepFn = vi.fn(async () => {
+      if (buildAttempt1Failed && parkResumeCalls === 0) {
+        parkResumeCalls++;
+        clockOffset += 10_000;
+        await utimes(tokenPath, new Date(), new Date());
+        await writeFile(tokenPath, 'tok-v2', 'utf-8');
+      } else {
+        clockOffset += 120_000;
+      }
+    });
+
+    try {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: true,
+        maxRetries: 1,
+        sleepFn,
+        selfHostGuardrails: mockGuardrails as any,
+        config: selfHostConfig(),
+      });
+
+      await conductor.run();
+
+      // Build called twice: first fails with authFailure (parks, no retry
+      // budget burned), second succeeds after park resumes on token refresh.
+      expect(buildAttempts).toBe(2);
+      expect(mockGuardrails.provisionSandbox).toHaveBeenCalledTimes(1);
     } finally {
       nowSpy.mockRestore();
     }
