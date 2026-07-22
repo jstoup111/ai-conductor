@@ -22,6 +22,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
 
+### Fixed
+
+- Build progress display is now 1-based: the first in-progress task shows `1/N`
+  instead of `0/N`, and a completed build still reads `N/N`. Accounting and gate
+  logic (resolved/total counts, stall detection, halt eligibility) are unchanged —
+  this only affects the rendered display string in `daemon-cli.ts` and
+  `create-renderer.ts` via a new pure `displayBuildPosition` helper.
+
 ### Changed
 
 - `build_review`'s completeness rubric is now default-on and is the real build-completion
