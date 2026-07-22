@@ -2,7 +2,12 @@ import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
-import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK, MUTATION_GATE_HOOK } from './session-hook-assets.js';
+import {
+  PRE_DISPATCH_HOOK,
+  POST_DISPATCH_HOOK,
+  MUTATION_GATE_HOOK,
+  DOCS_GUARD_HOOK,
+} from './session-hook-assets.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -203,6 +208,15 @@ async function wireSessionHookSettings(
       { matcher: 'Bash', hooks: [{ type: 'command', command: `${mutationGatePath} bash` }] },
     );
 
+    // Docs-guard (#788): its own PreToolUse entry, independent of the
+    // mutation-gate wiring above — no chaining, no shared invocation.
+    const docsGuardPath = join(worktreePath, '.pipeline', 'session-hooks', 'docs-guard.sh');
+    hooks.PreToolUse = replaceSessionHookEntry(
+      hooks.PreToolUse,
+      'docs-guard.sh',
+      { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: docsGuardPath }] },
+    );
+
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
     log?.('session hook settings: wired into .claude/settings.local.json');
   } catch (err) {
@@ -264,6 +278,10 @@ async function writeSessionHooks(
     const mutationGatePath = join(hooksDir, 'mutation-gate.sh');
     await writeFile(mutationGatePath, MUTATION_GATE_HOOK, 'utf-8');
     await chmod(mutationGatePath, 0o755);
+
+    const docsGuardPath = join(hooksDir, 'docs-guard.sh');
+    await writeFile(docsGuardPath, DOCS_GUARD_HOOK, 'utf-8');
+    await chmod(docsGuardPath, 0o755);
 
     log?.('session hooks: written to .pipeline/session-hooks/');
   } catch (err) {
