@@ -8,13 +8,37 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.docsonly.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: docsonly
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          docs_only=false
+          if files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) && [ -n "$files" ]; then
+            docs_only=$(printf '%s\n' "$files" | bash .github/scripts/ci-detect-docs-only.sh | sed 's/^docs_only=//')
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   integrity:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: bash test/test_harness_integrity.sh
 
   typecheck:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +53,8 @@ jobs:
         working-directory: src/conductor
 
   conductor:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,3 +71,23 @@ jobs:
         working-directory: src/conductor
       - run: npx vitest run
         working-directory: src/conductor
+
+  ci-gate:
+    needs: [changes, integrity, typecheck, conductor]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          INTEGRITY: ${{ needs.integrity.result }}
+          TYPECHECK: ${{ needs.typecheck.result }}
+          CONDUCTOR: ${{ needs.conductor.result }}
+        run: |
+          for r in "$CHANGES" "$INTEGRITY" "$TYPECHECK" "$CONDUCTOR"; do
+            case "$r" in
+              failure|cancelled)
+                echo "CI gate failed: changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR" >&2
+                exit 1 ;;
+            esac
+          done
+          echo "CI gate satisfied (changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR)"

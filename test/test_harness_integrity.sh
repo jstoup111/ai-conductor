@@ -81,6 +81,14 @@ for script in "${HARNESS_DIR}"/test/*.sh; do
   assert "${name}" $?
 done
 
+# Check .github/scripts scripts
+for script in "${HARNESS_DIR}"/.github/scripts/*.sh; do
+  [ -f "$script" ] || continue
+  name=".github/scripts/$(basename "$script")"
+  bash -n "$script" 2>/dev/null
+  assert "${name}" $?
+done
+
 # ── 2. SKILL.md frontmatter ─────────────────────────────────────────────────
 
 echo ""
@@ -660,6 +668,32 @@ if [ -f "$plan_skill" ]; then
   assert "skills/plan/SKILL.md — overlap-scan step states result is advisory" $?
 else
   assert "skills/plan/SKILL.md exists" 1
+fi
+
+# ── 13. ci-detect-docs-only.sh predicate suite ──────────────────────────────
+# Runs test/test_ci_detect_docs_only.sh, which covers
+# .github/scripts/ci-detect-docs-only.sh (the docs-only CI gating predicate).
+# Guarded here so the predicate's behavior is checked on every non-doc PR —
+# integrity is exactly the job that runs for any change touching
+# .github/scripts/.
+echo ""
+echo -e "${BOLD}13. ci-detect-docs-only.sh predicate suite${NC}"
+
+docs_only_test="${HARNESS_DIR}/test/test_ci_detect_docs_only.sh"
+if [ -f "$docs_only_test" ]; then
+  set +e
+  docs_only_output=$(bash "$docs_only_test" 2>&1)
+  docs_only_exit=$?
+  set -e
+
+  if [ "$docs_only_exit" -eq 0 ]; then
+    assert "test/test_ci_detect_docs_only.sh — all assertions pass" 0
+  else
+    echo "$docs_only_output" | sed 's/^/    /'
+    assert "test/test_ci_detect_docs_only.sh — assertions failed" 1
+  fi
+else
+  assert "test/test_ci_detect_docs_only.sh exists" 1
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

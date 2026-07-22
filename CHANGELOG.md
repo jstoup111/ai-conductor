@@ -32,6 +32,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- CI now skips the heavy `integrity`, `typecheck`, and `conductor` jobs for PRs whose changed
+  files are entirely under `.docs/**`, computed by a new `changes` job and the pure
+  `.github/scripts/ci-detect-docs-only.sh` predicate; any non-doc file, or an undeterminable
+  diff, still runs the full suite. A new always-on `ci-gate` job is the single required check
+  (green whenever nothing failed or was cancelled, including when the heavy jobs were
+  skipped) — branch/ruleset protection should require `ci-gate`, not the individual heavy
+  jobs (#802).
+
 - `build_review`'s completeness rubric is now default-on and is the real build-completion
   authority: it holistically judges plan-vs-diff completeness and fail-closes with a
   self-heal kickback (bounded by `MAX_KICKBACKS_PER_GATE`) instead of leaning on per-task

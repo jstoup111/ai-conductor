@@ -654,6 +654,17 @@ HALT-grade `ci_failed` event tailed by the halt-monitor. Set `ci_watch: { enable
 opt out. See `src/conductor/README.md` → "CI feedback loop on shipped PRs" for the full
 pipeline.
 
+**Docs-only PRs skip the heavy CI jobs.** `.github/workflows/ci.yml` runs a `changes` job
+first that inspects the PR's changed-file list via `.github/scripts/ci-detect-docs-only.sh`.
+If every changed file lives under `.docs/**`, the heavy `integrity`, `typecheck`, and
+`conductor` jobs are skipped entirely; any non-doc file — or an undeterminable diff (e.g. no
+changed-file list available) — runs the full suite as before. A final `ci-gate` job (`if:
+always()`, depending on all four) is the single required check: it fails only if one of the
+upstream jobs actually failed or was cancelled, so an all-skipped docs-only PR still resolves
+green. **Operator note:** point any branch-protection or repo-ruleset `required_status_checks`
+at `ci-gate`, never at `integrity`/`typecheck`/`conductor` directly — those get skipped on
+docs-only PRs, so requiring them individually would block docs-only merges forever (#802).
+
 On startup, before any dispatch, the daemon prints a grouped **inherited-state
 dashboard** (HALTED / IN-PROGRESS / **WAITING** / ELIGIBLE / PROCESSED) to both your
 terminal and `daemon.log`. **By default the PROCESSED (completed) group is omitted**
