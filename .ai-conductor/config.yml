@@ -36,25 +36,26 @@ harness_self_host:
 # here. Read at daemon startup; restart once to apply.
 auto_restart_on_stale_engine: true
 
-# Inline-work attribution enforcement cutover (#505, PR #509). On/after this
-# instant, active build steps enforce attribution fail-closed: commit-msg
-# rejects unattributed content commits (incl. --no-verify via the session
-# Bash gate), the session mutation gate blocks unstamped file mutations, and
-# zero-work sessions are kicked back. Before the instant (or with the key
-# absent) the hooks stamp but never block — the observed 4/5 canary state.
-# Read at daemon startup; restart the daemon to apply.
-attribution_enforcement_cutover: "2026-07-11T08:30:00Z"
+# Inline-work attribution enforcement cutover (#505, PR #509). RETIRED 2026-07-22
+# (#773): the per-task trailer/evidence rating is being demoted to telemetry;
+# leaving enforcement armed rejects legitimate commits and stalls builds. With the
+# key absent the hooks stamp but never block.
+# attribution_enforcement_cutover: "2026-07-11T08:30:00Z"
 
-# Attribution judge cutover (#520, PR #525). On/after this instant the semantic
-# attribution judgment gate activates: mechanical-lane residue at the build gate
-# is judged by a fresh-context verifier and engine-stamped on PASS. Absent =
-# disabled. Armed 2026-07-11 immediately after the #520 merge (operator order);
-# first live firing doubles as the lane's production observation.
-attribution_judge_cutover: "2026-07-11T18:30:00Z"
+# Attribution judge cutover (#520, PR #525). RETIRED 2026-07-22 (#773): the semantic
+# trailer-citation rating lane is the wedge machinery being deleted; absent = disabled,
+# so no semantic judge gate runs.
+# attribution_judge_cutover: "2026-07-11T18:30:00Z"
 
-# Spot-audit sampling percentage for judged-vs-mechanical agreement measurement
-# (defaults to 10 when the judge cutover is armed; explicit here for visibility).
+# Spot-audit sampling percentage (telemetry only; inert now the judge cutover is retired,
+# kept for when attribution telemetry is consumed).
 attribution_audit_sample_pct: 10
+
+# Progress-aware build halt/park. Disabled 2026-07-22 (#773): the no_task_progress
+# park fires on the very trailer-corroboration wedges #773 removes, halting otherwise-
+# healthy builds. enabled:false stops the park (attempt/wall-clock retry bounds still apply).
+build_progress_halt:
+  enabled: false
 
 # Wiring-reachability gate Layer 2 (TS import-graph reachability, Task 22).
 # entry_points are the roots the import graph is walked from to check that

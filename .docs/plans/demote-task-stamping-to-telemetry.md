@@ -100,7 +100,7 @@ phases, ordered so completeness is enforcing before the old stamp gate is remove
 1. Write failing test: a completeness-FAIL under cap seeds `pendingRetryHints.set('build', <reasons>)` and `navigateBack('build')` via `buildReviewSelfHeals` (no new routing).
 2. RED. 3. Confirm the completeness FAIL flows through the existing self-heal block. 4. GREEN.
 5. Commit: "test: completeness FAIL kicks back to build via buildReviewSelfHeals"
-**Files:** src/conductor/src/engine/conductor.ts
+**Files:** none
 **Wired-into:** src/conductor/src/engine/conductor.ts#buildReviewSelfHeals (existing kickback)
 **Dependencies:** 4
 
@@ -111,7 +111,7 @@ phases, ordered so completeness is enforcing before the old stamp gate is remove
 1. Write failing test: 3 consecutive completeness FAILs → `LOOP_HALT_MARKER` + `loop_halt` on the 3rd (not a 4th), via `buildReviewSelfHeals`/`MAX_KICKBACKS_PER_GATE`.
 2. RED. 3. Confirm the existing cap covers completeness FAILs. 4. GREEN.
 5. Commit: "test: completeness FAIL bounded by MAX_KICKBACKS_PER_GATE (HALT not spin)"
-**Files:** src/conductor/src/engine/conductor.ts
+**Files:** none
 **Wired-into:** none (no new production surface)
 **Dependencies:** 6
 
