@@ -116,10 +116,11 @@ and the engine executes it deterministically:
   the **worktree root** (normalizing up a stray nested marker if the command wrote one
   relative to `cwd`), and re-validates via the existing `validateAcceptanceRedEvidence` —
   reused unchanged, so every prior negative path still fails the same way.
-- **Self-heal seam in `Conductor.run`** — mirrors the existing `deriveCompletion` self-heal
-  pattern: on an `acceptance_specs` completion-gate miss that names a missing/invalid RED
-  marker *and* spec files are present, the runner is invoked once per step attempt, before
-  the retry budget is spent.
+- **Self-heal seam in `Conductor.run`** — the same self-heal-before-retry pattern `build_review`
+  uses for its completeness rubric (see "Task Status (engine-owned)" and "build_review
+  completeness rubric" below): on an `acceptance_specs` completion-gate miss that names a
+  missing/invalid RED marker *and* spec files are present, the runner is invoked once per
+  step attempt, before the retry budget is spent.
 - **Fail-safe, never masks a real failure** — an absent or malformed contract makes the
   self-heal decline (not guess); the step fails with an explicit reason and the retry
   re-dispatches the skill with a directive to author the contract. A genuinely non-RED
@@ -237,10 +238,13 @@ context) — never one dispatch per member — drawing from the same shared
 `Conductor.run()` (`engine/conductor.ts:1761+`) detects the marker (`stalled === 'halt_marker'`)
 and routes through `/remediate` before halting. Zero-work stalls (`stalled ===
 'no_task_progress'`) are also routed through the same `/remediate` dispatch and share the
-`MAX_KICKBACKS_PER_GATE` budget below, but differ on the terminal decision: the durable
-no-evidence counter (not the remediation outcome) still owns HALT/park, so a non-recovering
-`/remediate` outcome for a `no_task_progress` stall falls through to retry/auto-park instead of
-an immediate terminal HALT, and an exhausted `no_task_progress` build halts with a distinct,
+`MAX_KICKBACKS_PER_GATE` budget below, but differ on the terminal decision: the step's own
+retry budget (`maxRetries`) — not the remediation outcome — still owns HALT, so a
+non-recovering `/remediate` outcome for a `no_task_progress` stall falls through to normal
+retry accounting instead of an immediate terminal HALT. (Prior to #773 this fell through to
+a durable no-evidence-attempts auto-park counter; that counter's park path was deleted in
+#773 Task 13, so a `no_task_progress` stall today exhausts via `maxRetries`/HALT, not
+auto-park.) An exhausted `no_task_progress` build halts with a distinct,
 specific reason (`build stalled: no task progress (...)`) rather than the generic "retries
 exhausted" message. The `halt_marker` flow below is unchanged:
 
@@ -513,7 +517,10 @@ that had lingering pre-rebase objects to fall back on.
 
 `performRebase` now translates these stores automatically whenever a rebase
 changes commits — no new CLI flag or config, and no action required at either
-call site:
+call site. (As of #773 these stores are telemetry, not a completion gate —
+`task-evidence.json`, `task-status.json`, and `attribution-memo.json` still exist
+and are still kept sha-consistent across rebases for audit/reporting purposes, but
+none of them decide build completion; `build_review`'s completeness rubric does.)
 
 - **`.pipeline/rebase-rewrites.json`** — the persisted old-sha → new-sha map,
   built by matching pre- and post-rebase commits via `git patch-id --stable`
@@ -800,60 +807,70 @@ mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
 `src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
 `test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
 
-#### Attribution enforcement: inline build-work commits (#505)
+#### Attribution enforcement: inline build-work commits (#505, advisory since #773)
 
 A Claude session driving a build step can commit or mutate files directly, bypassing
 the per-task subagent dispatch the pipeline uses to stamp a `Task: <id>` commit
-trailer. Inline build-work attribution enforcement adds two engine-owned gate
-surfaces (documented for orchestrators in `skills/pipeline/SKILL.md`, not a new
-orchestrator instruction):
+trailer. Inline build-work attribution enforcement adds two engine-owned surfaces
+(documented for orchestrators in `skills/pipeline/SKILL.md`, not a new orchestrator
+instruction). As of Feature #773 (Task 14), both surfaces are **advisory only** — they
+never reject a commit or block a mutation on attribution grounds. Build completion is
+decided solely by `build_review`'s completeness rubric (see "build_review completeness
+rubric" below), not by attribution status.
 
-- **Surface A — commit-msg gate** (`git-hook-assets.ts` → `COMMIT_MSG_HOOK`). Rejects
-  an unattributed build-step commit: no `Task:` trailer while
-  `.pipeline/build-step-active` is present.
-- **Surface B — session mutation gate** (`session-hook-assets.ts` →
+- **Surface A — commit-msg check** (`git-hook-assets.ts` → `COMMIT_MSG_HOOK`). Still
+  rejects a *malformed* `Task:` trailer (wrong format, e.g. `task-N` instead of a bare
+  numeric id, or an id not present in `task-status.json`) — that's a data-hygiene check,
+  not a completion gate. It no longer rejects a commit for a *missing* `Task:` trailer;
+  commit-evidence rejection was retired in #773 Task 14.
+- **Surface B — session mutation check** (`session-hook-assets.ts` →
   `MUTATION_GATE_HOOK`). A `PreToolUse` hook wired to `Edit|Write|NotebookEdit|Bash`
-  that blocks a direct mutation (or a `git commit` invocation) issued in the
+  that flags a direct mutation (or a `git commit` invocation) issued in the
   orchestrator session — outside a stamped subagent dispatch — while a build step is
-  active.
+  active. Advisory: it logs/reports, it does not block.
 
-Both surfaces gate on the same predicate: `attribution_enforcement_cutover` (project
+Both surfaces key off the same predicate: `attribution_enforcement_cutover` (project
 config), read via `isAttributionEnforcementActive` / `isEnforcementConfigured`
 (`src/engine/attribution-enforcement.ts`, `src/engine/config.ts`). Absent or a future
-instant → enforcement inactive, both hooks pass through unchanged (pre-feature
-behavior). A past ISO-8601 instant → enforcement active for build steps dispatched
-after that instant. The value is read once at daemon/conductor start — **changing it
-requires an engine restart** to take effect.
+instant → checks inactive. A past ISO-8601 instant → checks active for build steps
+dispatched after that instant. The value is read once at daemon/conductor start —
+changing it requires an engine restart to take effect.
 
-**Exemption matrix (both surfaces short-circuit before rejecting):**
+**Exemption matrix (commit-msg check, malformed-trailer path):**
 
 1. **Merge commits** — `MERGE_HEAD` present; a merge commit legitimately lacks a
    `Task:` trailer.
 2. **Amend of a pre-enforcement commit** — `COMMIT_SOURCE`/invoking-command detection
    (`--amend`) abstains rather than restamping or rejecting an old commit.
-3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
-   intentional evidence-only commit is accepted; an empty commit with neither a
-   `Task:` trailer nor a resolvable `Evidence:` trailer is rejected.
+3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — accepted
+   as an intentional evidence-only commit.
 
-Rebase replay and `CONDUCT_ENGINE_COMMIT=1` (engine bookkeeping commits) are
-additional commit-msg-gate-only abstentions. An unparseable hook payload fails open
-(exit 0) on both surfaces, matching the #494 degradation rule.
+Rebase replay and `CONDUCT_ENGINE_COMMIT=1` (engine bookkeeping commits) are additional
+abstentions. An unparseable hook payload fails open (exit 0) on both surfaces, matching
+the #494 degradation rule.
 
 See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 `src/engine/session-hook-assets.ts`, `test/engine/attribution-enforcement.test.ts`,
 `adr-2026-07-10-session-hook-task-stamping.md`, and
-`adr-2026-07-10-inline-work-attribution-enforcement.md`.
+`adr-2026-07-10-inline-work-attribution-enforcement.md` (historical design context —
+the enforcement they describe is now advisory, not blocking).
 
-#### Evidence as source of truth: task-status reconciliation from stamps
+#### Task-status telemetry (task-evidence stamps are not a completion gate, #773)
 
-**Evidence as source of truth:** The `evidenceStamps` in `.pipeline/task-evidence.json` are the single source of truth for task completion. On every stamp write and at the end of each derived-completion pass, `.pipeline/task-status.json` rows are automatically reconciled from stamps, ensuring rows never lag behind evidence.
+`.pipeline/task-evidence.json` (`evidenceStamps`) still exists and is still written on
+every `Task:` trailer stamp, but as of Feature #773 it is telemetry, not the source of
+truth for task completion. `.pipeline/task-status.json` rows are still reconciled from
+stamps for progress/resolved-count reporting (#757), but reconciliation state no longer
+gates whether a build step is allowed to finish. **Completion authority is
+`build_review`'s completeness rubric** (see below): an LLM-judged, fail-closed,
+plan-vs-diff check.
 
 #### Build dispatches must not run attribution-blind (#671)
 
 Before this hardening, a build step whose attribution machinery was silently
 broken (e.g. `task-status.json` missing, session hooks not installed, the
 stamp path unwritable) could still dispatch — every sub-dispatch would land
-as `Task: none`, and the gap was only visible later, at the evidence gate.
+as `Task: none`, and the gap was only visible later in telemetry/reporting.
 Two engine-side safeguards close that gap at the build seam itself:
 
 - **`readDispatchAttribution(root)`** (`src/engine/attribution-enforcement.ts`)
@@ -861,172 +878,64 @@ Two engine-side safeguards close that gap at the build seam itself:
   unattributed, taskIds }`, rather than a single opaque count.
 - **`detectUnattributedDispatch(attribution, threshold)`** flags when a
   dispatch cycle's unattributed count crosses the threshold; the conductor
-  emits a loud `unattributed_dispatch` event during/right after dispatch,
-  instead of deferring discovery to the evidence gate.
+  emits a loud `unattributed_dispatch` event during/right after dispatch, for
+  visibility into telemetry gaps.
 - **`checkAttributionMachineryIntact()`** (`src/engine/conductor.ts`) is a
   pre-dispatch guard: when attribution enforcement is configured
   (`isEnforcementConfigured`) and the build step's attribution machinery is
   broken, the build dispatch is skipped/fails loudly rather than proceeding
   attribution-blind, and `.pipeline/HALT` is written after 2 failed attempts.
+  This guard protects telemetry integrity — it is independent of, and does
+  not affect, `build_review`'s completeness gating.
 
 Hook-lane contracts (`git-hook-assets.ts`, `session-hook-assets.ts`) are
 unchanged by this — abstention still exits 0 with no trailer, and no code
 path guesses a task id on the agent's behalf.
 
-#### Semantic attribution verification lane at the evidence gate (Task 11 / #520)
+#### build_review completeness rubric: the real completion authority (#773)
 
-The deterministic evidence gate (trailers, path corroboration) is the sole
-completion authority, but six escape cycles revealed a class of builds with real
-work but misattributed metadata. Rather than adding more proxies (which would
-grow the mechanical lane, making it harder to reason about), a semantic
-verification lane runs an engine-embedded judge to validate unresolved residue:
+The deterministic per-task evidence gate and the semantic attribution
+citation-judge lane that used to sit on top of it (documented in earlier
+revisions of this README as "Semantic attribution verification lane") have
+been **deleted** (#773 Tasks 6–12): `deriveCompletion`'s per-task evidence
+gate is gone from the build predicate, the citation-judge machinery
+(`attribution_judge_cutover`, per-task SHA validation, `semantic-verified`
+stamps, `pendingRetryHints`, the `conduct-ts evidence judge <slug>` CLI) is
+gone, and the no-evidence auto-park counter that keyed off it is gone.
 
-- **Trigger:** after `deriveCompletion` + `applyDerivedCompletion`, if unresolved
-  tasks remain (the "residue"), the cutover flag is active (`attribution_judge_cutover`),
-  and the residue is new (not memoized), the engine dispatches the attribution
-  verifier.
+In their place, `build_review` — the existing quality-review gate — carries a
+**completeness rubric item**, default-on since commit `6ef00fe1`:
 
-- **Class-scoped verify-only dispatch (#677):** a plan task marked
-  `**Verify-only:** yes` (a prove-closed task that legitimately produces no
-  commit — e.g. re-running an existing test suite to confirm coverage) arms
-  the judged lane for its own residue even when `attribution_judge_cutover` is
-  dark. When the gate-miss residue contains a mix of marked and unmarked ids,
-  only the marked subset is dispatched under a dark cutover; an armed cutover
-  is unaffected and keeps dispatching the full residue as before. Residue with
-  no marked ids is byte-identical to pre-#677 behavior (lane not dispatched
-  without the cutover). This closes the #677 evidence-stranding gap where a
-  verify-only task's lack of a commit burned `noEvidenceAttempts` and could
-  auto-park an otherwise evaluator-APPROVED build. See the `verifyOnlyResidue`
-  predicate in `engine/conductor.ts`.
+- **What it checks:** holistically compares the plan against the actual diff
+  and FAILs if any planned task's work is missing from the diff — a
+  plan-vs-diff judgment, not a per-task SHA-citation check.
+- **LLM-judged, fail-closed:** if the grading model is unavailable or the
+  response is unparseable, the gate treats that as a FAIL rather than passing
+  by default.
+- **Self-heals via kickback:** a completeness FAIL kicks the build back
+  through the normal `build_review` self-heal path
+  (`buildReviewSelfHeals`), bounded by `MAX_KICKBACKS_PER_GATE` — repeated
+  FAILs HALT for the operator rather than spinning forever.
+- **`Task:` trailers feed it only as telemetry:** the completeness rubric
+  reasons over the plan and the diff directly; it does not consult
+  `task-evidence.json` stamps to decide completion.
 
-- **Memoization:** verdict requests are keyed by `(HEAD sha, sorted residue ids)`.
-  An unchanged key never re-dispatches; a retry without new commits reuses the
-  prior verdict at zero cost.
+See `src/engine/build-review.ts` (grader prompt + `rubric.completeness`
+verdict field), `test/acceptance/*build-review*completeness*`, and the #773
+plan/ADR for the full before/after design rationale.
 
-- **Judge dispatch:** fresh UUID session, `resume: false`, `invokeWithLadder`, model
-  and effort from `resolvedConfigFor('attribution_verify')` (opus/high from
-  resolved-config.ts). The engine assembles the **entire input** to prevent prompt
-  discipline: residue task definitions (verbatim plan sections), candidate commits
-  (sha + subject + full diff) not already cited, and the plan's declared Files:/test
-  lines. The session receives **nothing else** — no task-status, no maker transcript,
-  no prior verdicts, no project context.
+#### No-diff task completion currency (historical — #733, superseded by #773)
 
-- **Verdict:** the verifier writes `.pipeline/attribution-verdict.json` (schema:
-  adr-2026-07-11-attribution-verdict-interface.md). Parsing is fail-closed: un-
-  parseable, schema-invalid, or missing files → abstention for every residue task.
-
-- **Engine-side validation (the no-whitewash gate):** for each `satisfied` task
-  verdict, the ENGINE mechanically verifies BEFORE writing a stamp:
-  - Every cited SHA exists, is reachable from HEAD, is not empty, not a bookkeeping
-    commit (`CONDUCT_ENGINE_COMMIT=1`), and passes `git merge-base --is-ancestor`.
-  - The union of cited diffs is non-empty and overlaps task-declared paths
-    (adr-2026-07-09-deterministic-evidence-attribution-enforcement, fileMatchesPlanPath).
-  - The verdict carries test evidence (command, exit 0) for the task.
-
-  Any check fails ⇒ **no stamp, ever** — the task stays unresolved, the retry
-  ladder proceeds unchanged.
-
-- **Stamping:** validated verdicts are written by the ENGINE as `semantic-verified`
-  evidence stamps. The gate re-evaluates; judged tasks count as `resolvedTasksAfter`,
-  resetting the `noEvidenceAttempts` counter via the existing progress branch
-  (conductor.ts Task-12 block).
-
-- **In-cycle advancement (#581):** a satisfied verdict — one that passes engine-side
-  validation (valid citations + passing test evidence) — persists its evidence stamp
-  and re-checks the completion gate immediately, in the same build cycle, rather than
-  waiting for a subsequent loop iteration. This fixes prior behavior where a fully
-  judged-covered build would still HALT because the gate had already evaluated before
-  the stamp landed; only the following loop pass would pick it up. `no-verdict` and
-  `fail` outcomes are unaffected — no-whitewash still applies, and the build halts
-  exactly as before for those cases.
-
-- **Split attribution:** the verdict is per-task; multiple tasks may cite the same
-  SHA (bundled commit case). The validator accepts overlapping citations.
-
-- **Id normalization:** every task-id comparison (residue, verdict `taskId`, memo
-  keys, stamp keys) normalizes both sides via `String()` so numeric IDs from agent-
-  authored files never silently fail to match.
-
-- **Retry hints:** `unsatisfied` verdicts (genuinely unimplemented) feed into
-  `pendingRetryHints`, so the next build try names exactly the missing tasks.
-
-- **Spot-audit measurement:** every judge dispatch emits a fact to
-  `.pipeline/attribution-audit.jsonl` including the decision outcome. The optional
-  `attribution_audit_sample_pct` (0-100, default 10) controls sampling — post-
-  processing measures judge accuracy over time (adr-2026-07-11-attribution-spot-
-  audit-measurement.md).
-
-- **Mechanical-lane policy:** with the judged lane in place, the mechanical
-  attribution lane is CAPPED. New proxy-escape shapes are handled as judge residue,
-  not new machinery (adr-2026-07-11-semantic-attribution-verification-lane.md,
-  Decision 9).
-
-Configuration:
-
-```yaml
-# .ai-conductor/config.yml
-attribution_judge_cutover: "2026-07-11T08:30:00Z"   # ISO-8601 instant; absent = off
-attribution_audit_sample_pct: 10                     # 0-100; absent = 10; clamped with warning
-```
-
-See `src/engine/attribution-lane.ts` (orchestrator), `attribution-verdict.ts`
-(verdict interface), `attribution-validate.ts` (engine-side validation),
-`attribution-audit.ts` (audit sampling), `test/attribution-verdict.test.ts`,
-and `test/acceptance/evidence-gate-validates-provenance-proxies-not-whe.acceptance.test.ts`.
-
-**CLI: `conduct-ts evidence judge <slug> [--dry-run]`** (`src/engine/evidence-cli.ts`,
-wired in `src/cli.ts`) runs the same lane by hand, outside the daemon's automatic
-dispatch — for replaying a stranded build's evidence gate against a live acceptance
-corpus, or investigating a halted feature without waiting for the next poll:
-
-- `detectEvidenceCommand(argv)` is pure argv parsing (no I/O), mirroring the
-  `derive-feedback-cli.ts` pattern: `conduct evidence judge <slug>` → dispatch;
-  `conduct evidence judge <slug> --dry-run` → dispatch with `dryRun: true`; a missing
-  subcommand or slug → the usage guide (exit 2); an unknown top-level subcommand → `null`
-  (not this command at all).
-- `dispatchEvidence` resolves `<slug>` via `WorktreeManager.scan()`; an unknown slug prints
-  the known-slugs list and exits 1.
-- **Active-build refusal:** if `.pipeline/build-step-active` exists in the resolved
-  worktree, the judge refuses to run (exit non-zero, zero writes) rather than racing a
-  build step in flight.
-- **`--dry-run`:** runs assembly → dispatch → parse → validate exactly as the live path,
-  but skips the evidence-sidecar write. Output reports `wouldStamp` (the task IDs that
-  *would* be stamped) instead of `stampedTaskIds`.
-- **Output:** one JSON line — `{ before, after, stampedTaskIds, wouldStamp }` — where
-  `before`/`after` are unresolved-residue counts, letting a caller script diff the
-  before/after state without parsing prose.
-- **HALT/REKICK recovery tail (Task 21):** when a judge run fully resolves all residue
-  for a feature (partial resolution — some residue remains — leaves halt state
-  untouched), the CLI removes a stale `.pipeline/HALT` marker and writes
-  `.pipeline/REKICK`. This is the identical sentinel the daemon's own re-kick sweep
-  (see "Halt-reconciliation" below) uses to re-dispatch a parked feature on the next
-  poll — a manual judge run that clears all residue doesn't require an extra manual
-  un-park step.
-
-**Accuracy ledger (`.pipeline/attribution-audit.jsonl` / `.daemon/attribution-accuracy.jsonl`,
-Task 16):** every judge dispatch (automatic or via the CLI above) appends a fact recording
-the decision outcome; sampled spot-audits additionally append an agreement record —
-`{ ts, feature, taskId, fastLaneForm, fastLaneSha, auditVerdict, agree, citations?, reason? }`
-— one JSON object per line, safe to split on `\n` and parse independently
-(`appendAccuracyLedger`, `src/engine/attribution-audit.ts`). This is the corpus
-`attribution_audit_sample_pct` measurement post-processes to track judge accuracy over
-time; it never feeds back into gate decisions (audit is read-only, fire-and-forget,
-dispatched only after the build gate verdict is already final).
-
-#### No-diff task completion currency (#733)
-
-A task that legitimately produces no diff (a skip, or a pure verification pass)
-now earns completion currency two ways, closing the gap where such tasks
-starved `noEvidenceAttempts` toward auto-park:
-
-- **`Evidence: skipped <reason>` commit trailer:** mints an `evidenceStamps`
-  entry (`form: 'evidence:skipped'`) in `deriveCompletionInternal`, keyed to
-  that commit, so the task counts as resolved toward the completion gate
-  without needing a code change.
-- **`**Type:** verification` plan marker:** recognized in union with the
-  pre-existing `**Verify-only:** yes` marker by `parsePlanTaskVerifyOnly`,
-  arming the judged-closure lane (see the semantic attribution verification
-  lane above) for that task's residue even under a dark cutover.
+Before #773, a task that legitimately produced no diff (a skip, or a pure
+verification pass) needed special-cased completion currency — an
+`Evidence: skipped <reason>` commit trailer or a `**Type:** verification` /
+`**Verify-only:** yes` plan marker — to avoid starving the (now-deleted)
+no-evidence auto-park counter. That special-casing is no longer load-bearing:
+`build_review`'s completeness rubric judges the plan against the diff
+directly, so a legitimately no-diff task is simply a task whose planned work
+is genuinely absent from (or not required in) the diff, not a case requiring
+a currency workaround. The markers/trailers above may still appear in older
+plans; the engine no longer keys completion behavior off them.
 
 
 #### Halt-reconciliation: startup dashboard + main-advance re-kick (ADR-013)
@@ -2137,16 +2046,15 @@ written in the window between selection and dispatch (e.g. during
 regression test (`daemon-park-dispatch-guard.test.ts`) asserts every build-start call site is
 guarded this way.
 
-**Unpark counter reset (#486, #667):** `daemon unpark` resets the no-evidence attempt counter
-(`noEvidenceAttempts`/`noEvidenceReasons`) in the feature's `.worktrees/<slug>/` (or the main
-root if the worktree is absent) regardless of the marker's provenance — both an auto-parked
-feature (provenance: `auto`) and an operator-parked feature (provenance: `operator`) get a
-fresh no-evidence budget on unpark, so re-dispatch resumes normal re-kick flow without being
-immediately re-parked on stale counts. Because the counter can now carry over from a prior
-park/unpark cycle, the auto-park halt message distinguishes a budget **inherited** from an
-earlier cycle from **fresh** failures accumulated since the last unpark, so an operator reading
-the halt reason can tell whether the trigger reflects new evidence misses or leftover count from
-before the last unpark.
+**Unpark (#486, #667, #773):** `daemon unpark` removes the park marker regardless of the
+marker's provenance — both an auto-parked feature (provenance: `auto`) and an
+operator-parked feature (provenance: `operator`) resume normal re-kick flow once unparked.
+Auto-park itself no longer fires on a no-evidence attempt counter (that durable counter
+park path was deleted in #773 Task 13 along with the citation-judge gate it fed); auto-park
+today fires only for an explicit reason — currently just an empty/missing plan at seed
+time. `noEvidenceAttempts`/`noEvidenceReasons` still exist in
+`.pipeline/task-evidence.json` as telemetry (progress-watcher reporting), but they no
+longer arm a park.
 
 The status dashboard's **PARKED** group (`engine/daemon-dashboard.ts`) has **absolute precedence**
 over every other group: it renders first, and any slug present there is excluded from HALTED,
@@ -2404,13 +2312,13 @@ zero-progress path instead of crashing the loop or the daemon tick.
 **Within-dispatch progress-bypass gate** (`conductor.ts`, build branch of the retry loop).
 When an attempt's completion-gate miss coincides with `resolvedTasksAfter >
 resolvedTasksBefore`, the loop re-dispatches without counting the attempt toward
-`stepMaxRetries` halt/park, and resets `noEvidenceAttempts` as it already did. A separate
-bounded progress-attempt counter (distinct from `stepMaxRetries`) tracks these attempts; once
-it reaches `attempt_ceiling` the run parks with an explicit reason ("build progressing but
-hit absolute attempt ceiling N") rather than the misleading zero-progress "tasks not
-completed" wording. The zero-progress branch (`resolvedTasksAfter <= resolvedTasksBefore`) is
-untouched — `noEvidenceAttempts` still increments and `checkAndAutoPark` still parks at the
-same threshold as before this change.
+`stepMaxRetries` halt/park. A separate bounded progress-attempt counter (distinct from
+`stepMaxRetries`) tracks these attempts; once it reaches `attempt_ceiling` the run parks
+with an explicit reason ("build progressing but hit absolute attempt ceiling N") rather
+than the misleading zero-progress "tasks not completed" wording. (Historical note: prior
+to #773, this branch also reset a durable `noEvidenceAttempts` counter that fed
+`checkAndAutoPark`; that counter's park path was deleted in #773 Task 13 — `noEvidenceAttempts`
+now increments as telemetry only and no longer arms a park on either branch.)
 
 **Cross-dispatch progress-gated re-kick** (`daemon.ts` idle/poll tick). A parked/halted build
 whose sidecar shows the last dispatch ended with a higher resolved count than it started
@@ -2705,7 +2613,7 @@ conduct-ts task done <id>     # Mark task completed after the subagent's commit 
 - `task start` updates `.pipeline/task-status.json` and writes `.pipeline/current-task` (the in-flight marker).
 - `task done` clears the in-flight marker and marks the task `completed` in the status file.
 - Both commands are **idempotent**: running them multiple times on the same task is safe (no corrupt state).
-- Failures are **non-fatal and logged**: if the status file is corrupt, the commands exit non-zero but do not halt the build (the engine's later evidence gate derives completion from git trailers).
+- Failures are **non-fatal and logged**: if the status file is corrupt, the commands exit non-zero but do not halt the build. `Task:` trailers are telemetry only (#773) — build completion is decided by `build_review`'s completeness rubric (plan-vs-diff), not by these commands or by git trailers.
 
 **Invocation by the conductor:** When the pipeline step dispatches a subagent (Task 0, DISPATCH phase),
 it first runs `conduct-ts task start <id>` to mark the task in-flight. When the subagent commits and
@@ -2806,8 +2714,9 @@ stdin (bounded read), parses **line 1 only** of `tool_input.prompt` against the 
 
 **`post-dispatch.sh` (`PostToolUse`, fires after the subagent returns):** removes
 `.pipeline/current-task` iff its content still matches the id that was stamped for this dispatch.
-It never writes `completed` — task completion is derived solely from the evidence gate
-(`engine/artifacts.ts`, #456/#463), never from session-hook state.
+It never writes `completed` — task completion is derived by `build_review`'s completeness
+rubric (plan-vs-diff, LLM-judged, fail-closed; see "build_review completeness rubric"
+above), never from session-hook state.
 
 #### Contract with dispatch templates
 
@@ -2842,30 +2751,27 @@ integration coverage (provisioning → wiring → hook execution) follows the
 ### Task Status (engine-owned)
 
 The conductor engine is the **single authority** for `.pipeline/task-status.json`, which
-tracks per-task completion state across build retries. The engine owns reads and writes;
-no other component modifies it.
+tracks per-task status across build retries. The engine owns reads and writes; no other
+component modifies it.
 
 **Ownership model:**
-- Engine seeds the task-status on merge/upsert from the plan (`.pipeline/plan.json`)
-- Completion state is derived from **git evidence**: each pending task maps to commits by
-  trailer match (`Task: <id>` in the commit message) or by content-hash matching (when
-  trailers are absent).
-- Evidence sidecar (`autoheal.ts`) reconciles stale in-flight state against the live
-  git log before re-invoking a build step, flipping `pending` tasks to `completed` when
-  their commits are unambiguously matched (word-boundary name match + file-path overlap
-  with the plan's per-task file list).
-
-**Trailer contract:** Every task commit must carry a `Task: <id>` line in its message
-(or the older `#<id>` form for backward compatibility). The conductor reads this to
-correlate commits with tasks and to verify no intermediate work was dropped during rebase
-or conflict resolution (FR-9).
+- Engine seeds the task-status on merge/upsert from the plan (`.pipeline/plan.json`).
+- `Task: <id>` commit trailers (and the older `#<id>` form) are read by the engine to
+  correlate commits with tasks for **progress/resolved-count telemetry** (#757) and
+  attribution spot-audit sampling. As of Feature #773 this correlation is advisory only —
+  it feeds reporting, not the completion decision.
+- **Completion authority: `build_review`'s completeness rubric.** Build-step (and task)
+  completion is decided by an LLM-judged, fail-closed comparison of the plan against the
+  actual diff (default-on since commit `6ef00fe1`; see "build_review completeness rubric"
+  above). The engine no longer derives task completion from git-trailer/content-hash
+  scanning (`deriveCompletion` and the per-task evidence gate it fed were deleted in #773
+  Tasks 6–12), and `task-status.json` rows are no longer overwritten from a
+  derived-evidence pass to decide a gate verdict.
 
 **Evidence range derivation ladder (`getEvidenceRange`, `engine/autoheal.ts`, #456):**
-Before scanning commits for trailer/content-hash evidence, the engine must pick a lower
-bound for the range. It never falls back to repo genesis (`root-commit..HEAD`) or a
-hardcoded branch name — that made evidence ranges balloon on long-lived repos and drift
-if the default branch was renamed. Instead it walks a 4-rung ladder, taking the first
-rung that resolves:
+retained for the telemetry/resolved-count and rebase-citation-translation paths that still
+consume commit ranges — it never falls back to repo genesis (`root-commit..HEAD`) or a
+hardcoded branch name. It walks a 4-rung ladder, taking the first rung that resolves:
 1. A reachable explicit `anchor` (the plan's seed SHA) is used as the lower bound directly.
 2. Otherwise, `git merge-base --fork-point origin/<default> HEAD` — the branch point,
    including reflog-expired commits where fork-point still has evidence.
@@ -2875,79 +2781,67 @@ rung that resolves:
 `origin/<default>` is itself derived — never hardcoded `origin/main` — via
 `originDefaultBranch` (reading `refs/remotes/origin/HEAD`), falling back to probing
 `origin/main` then `origin/master` if origin/HEAD is unset. All ladder failures are
-logged as anomalies/warnings but never thrown; the gate always gets a `done: false`
-verdict with a reason instead of an unhandled exception.
+logged as anomalies/warnings but never thrown.
 
-**Completion currency — evidence stamps only, no grandfather (#463):** The build gate
-(`engine/artifacts.ts`, the H6/H7/H8 block) accepts exactly one form of proof that a
-task is done: an `evidenceStamps` entry in `.pipeline/task-evidence.json`, written by
-`deriveCompletion`'s own git-trailer/content-hash scan and independently re-derived on
-every gate evaluation. `task-status.json` rows are never trusted as-is — they're
-overwritten from the derived evidence before the verdict is decided, so a wiped or
-hand-edited status file can't fake completion and can't block it either. Earlier
-revisions of this gate additionally accepted a `migrationGrandfather` entry — a one-time
-stamp `task-seed.ts` wrote for terminal rows that already existed before the evidence
-gate was introduced, so pre-cutover work wouldn't be forced to backfill evidence it
-never had. That escape hatch is retired: `task-seed.ts` no longer writes new
-`migrationGrandfather` entries, and the gate no longer consults the field at all — a
-grandfathered id with no real evidence stamp is unresolved, full stop. This closes the
-gap where a forged or stale grandfather entry could pass the gate with zero git evidence.
+**Historical note — evidence stamps as gate currency (retired, #773):** prior to this
+feature, the build gate (`engine/artifacts.ts`) accepted exactly one form of proof that a
+task was done — an `evidenceStamps` entry in `.pipeline/task-evidence.json`, independently
+re-derived on every gate evaluation — and `task-status.json` rows were overwritten from
+that derived evidence before the verdict was decided. An earlier `migrationGrandfather`
+escape hatch (for terminal rows that predated the evidence gate) had already been retired
+before #773. All of this per-task evidence-gate machinery is now deleted; `evidenceStamps`
+still exist in `.pipeline/task-evidence.json` but purely as telemetry input (progress
+reporting, spot-audit), never as gate currency.
 
 **Audit trail:** All reconciliations are logged to `.pipeline/audit-trail/` so the
-operator can see how completion state evolved across a multi-attempt build.
+operator can see how status/telemetry state evolved across a multi-attempt build.
 
-Key modules: `engine/autoheal.ts` (reconciliation logic), `engine/conductor.ts` (ownership,
-seed/upsert), `engine/artifacts.ts` (gate predicates on task-status shape).
+Key modules: `engine/autoheal.ts` (telemetry reconciliation), `engine/conductor.ts`
+(ownership, seed/upsert), `engine/build-review.ts` (the completeness rubric that actually
+gates completion).
 
-### Auto-park on N-attempt trigger
+### Auto-park
 
-The daemon auto-parks a feature after N consecutive **no-evidence** gate misses (a gate
-whose completion check found no new evidence of task completion since the prior attempt)
-or when the plan artifact is empty/missing at seed time. This replaces the prior
-infinite re-kick loop with a survivable, machine-placed halt.
+The daemon auto-parks a feature to convert an otherwise-infinite re-kick loop into a
+survivable, machine-placed halt. As of Feature #773 (Task 13), the durable
+**no-evidence-attempt counter** park path has been deleted — commit-stamping telemetry no
+longer drives auto-park. Auto-park today fires only for an explicit, caller-supplied
+reason:
 
-**Trigger:** After a gate evaluation, if:
-1. The plan is absent or empty → park immediately with reason `'empty plan'`
-2. The gate shows no new evidence AND `noEvidenceAttempts >= AUTO_PARK_THRESHOLD` (default
-   N=1, meaning "2 consecutive no-evidence misses") → park with reason `'no evidence
-   after N attempts'`
+**Trigger:** After a gate evaluation, if the plan artifact is absent or empty at seed time
+→ park immediately with reason `'empty/missing plan'`. There is currently no other
+automatic auto-park trigger; wall-clock and attempt-ceiling bounds elsewhere in the retry
+loop (see "Forward-progress-aware retry budget" above) provide the survivable-halt backstop
+for stuck-but-non-empty-plan builds, HALTing rather than parking.
 
 **Behavior:**
-- Writes `.daemon/parked/<slug>` with provenance `auto` and the reason in the marker body
-- Emits a `ConductorEvent` of type `auto_park` with the slug and reason
-- Halts the feature gracefully instead of re-kicking
+- Writes `.daemon/parked/<slug>` with provenance `auto` and the reason in the marker body.
+- Emits a `ConductorEvent` of type `auto_park` with the slug and reason.
+- Halts the feature gracefully instead of re-kicking.
 - The feature is visible in the daemon dashboard's PARKED group with provenance shown
-  (`— auto-parked`)
+  (`— auto-parked`).
 
-**Unpark (Task 24 — `conduct daemon unpark <slug>`):** Removes the park marker and resets
-the `noEvidenceAttempts` counter, allowing the daemon to re-dispatch the feature.
-Operator unpark and manual re-kick both resume from where they left off.
+**Unpark (`conduct daemon unpark <slug>`):** Removes the park marker, allowing the daemon
+to re-dispatch the feature. `noEvidenceAttempts` still exists in
+`.pipeline/task-evidence.json` as a telemetry counter, but unpark no longer needs to reset
+it to unblock re-dispatch — it plays no role in the park decision.
 
 **Distinction from operator park:** A human-placed operator park (`conduct daemon park`)
 places a different provenance marker and serves a different purpose (manual hold). Both
-are respected by the daemon's dispatch and re-kick logic, but auto-park is deterministic
-(machine-triggered after N attempts) while operator park is human-triggered.
+are respected by the daemon's dispatch and re-kick logic.
 
-**Verify-only naming in the reason (#677):** when the unresolved residue at
-park time is (or includes) tasks marked `**Verify-only:** yes`, the auto-park
-reason is enriched with an ` — unresolved verify-only tasks: <ids>` suffix
-naming those specific task ids, instead of leaving the operator to guess which
-task stranded the build from the generic "no evidence after N attempts"
-message. Mixed residue keeps the generic reason and lists the verify-only ids
-alongside it; a park with no marked tasks in the unresolved set is
-byte-identical to today. See `daemon-auto-park.ts` (reason assembly) and
-`engine/conductor.ts` (unresolved-id collection).
+**Contradiction guard (#612), still active:** Before honoring an `'empty/missing plan'`
+trigger, the daemon cross-checks the run's own completion evidence — `summary.json`
+`tasks_completed`, task-evidence stamps, or resolved tasks. If that evidence is non-zero,
+the empty/missing-plan reading contradicts what the run itself already recorded, so the
+daemon refuses the immediate park, emits a `ConductorEvent` of type
+`auto_park_contradiction` (with a loud log line), and falls through to the ordinary
+stall/retry handling instead of parking on a potentially-stale plan-emptiness signal. (The
+prior fallback target — "the durable no-evidence-attempts counter" — no longer exists;
+falling through now just means the build continues under its normal retry/HALT budget.)
 
-**Contradiction guard (#612):** Before honoring an `'empty plan'` trigger, the daemon
-cross-checks the run's own completion evidence — `summary.json` `tasks_completed`,
-task-evidence stamps, or resolved tasks. If that evidence is non-zero, the empty/missing
-plan reading contradicts what the run itself already recorded, so the daemon refuses the
-immediate empty-plan park, emits a `ConductorEvent` of type `auto_park_contradiction`
-(with a loud log line), and falls back to the durable no-evidence-attempts counter instead
-of trusting the potentially-stale plan-emptiness signal.
-
-Key modules: `engine/park-marker.ts` (marker write/read), `engine/conductor.ts` (auto-park
-trigger check + contradiction guard), `engine/daemon-park-cli.ts` (unpark subcommand),
+Key modules: `engine/park-marker.ts` (marker write/read), `engine/daemon-auto-park.ts`
+(trigger check + contradiction guard), `engine/daemon-park-cli.ts` (unpark subcommand),
 `daemon-dashboard.ts` (provenance display).
 
 ### Remediation (agentic gap routing)

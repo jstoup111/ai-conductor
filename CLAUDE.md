@@ -22,9 +22,11 @@ discipline for something machinery can enforce or compute — prompt-level rules
 under long builds and cost operator interventions; deterministic enforcement is instant,
 token-free, and fails at the point of violation. When an agent repeatedly violates a
 rule, the fix is machinery that stamps/validates/rejects at the moment of the mistake —
-not a stronger prompt. (Precedents: the evidence gate derives completion from commits
-rather than trusting agent reports; #426 fixed path matching engine-side; #433 replaces
-trailer discipline with engine-stamped task ids and commit hooks.)
+not a stronger prompt. (Precedents: `build_review`'s completeness rubric derives build
+completion from an LLM-judged plan-vs-diff comparison rather than trusting agent
+self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#773); #426
+fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
+task ids and commit hooks.)
 
 ## Daemon Operations Safety (Operator / Claude)
 
