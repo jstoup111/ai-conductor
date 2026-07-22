@@ -136,7 +136,6 @@ import {
   type ShouldEscalateKickbackResult,
 } from './kickback-escalation.js';
 import { WorktreeManager } from './worktree.js';
-import { deriveCompletion, applyDerivedCompletion } from './autoheal.js';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -3295,63 +3294,15 @@ export class Conductor {
             // as a stale "in-flight attempt" timestamp.
             this.currentAttemptStartedAt = undefined;
 
-            // Auto-heal hook: before treating a build-gate miss as a failure,
-            // reconcile .pipeline/task-status.json against git log. If the
-            // prior pipeline run committed work for tasks still marked
-            // "pending", mark them completed in-place and re-check the gate
-            // — the retry never has to fire. Runs fresh on every gate
-            // evaluation (no once-per-session guard) to ensure derivation
-            // uses current git state and fresh task counts (H7).
-            let derivedCompletion: any = null;
-            if (
-              !completion.done &&
-              step.name === 'build'
-            ) {
-              // Resolve the plan path used for derivation: prefer the
-              // engine-recorded active plan path (H8), falling back to the
-              // completion-context plan (findArtifactFilesForStep) when the
-              // engine hasn't recorded one yet.
-              const activePlanPath = await this.getActivePlanPath();
-              const derivePlanPath = activePlanPath
-                ? join(this.projectRoot, activePlanPath)
-                : (await this.completionCtx(state)).planPath;
-
-              const result = derivePlanPath
-                ? await deriveCompletion(this.projectRoot, derivePlanPath)
-                    .catch(() => null)
-                : null;
-
-              // Task 12: Capture the derived result for lane dispatch
-              derivedCompletion = result;
-
-              const heal = result
-                ? await applyDerivedCompletion(this.projectRoot, result)
-                : { healed: [], skipped: [] };
-              await emitTracked({
-                type: 'auto_heal',
-                step: 'build',
-                healed: heal.healed.length,
-                skipped: heal.skipped.length,
-              });
-              if (heal.healed.length > 0) {
-                completion = await checkStepCompletion(
-                  this.projectRoot,
-                  step.name,
-                  await this.completionCtx(state),
-                );
-              }
-
-              // Attribution citation-judge GATING removed (feature #773,
-              // Task 12). The lane previously dispatched a semantic verifier
-              // here, validated its citations, and stamped residue tasks so
-              // the build gate could advance on the verdict. Per-task
-              // commit-stamping is demoted to telemetry — the build
-              // completion gate never derives from per-task evidence stamps
-              // (artifacts.ts, Task 10) and citation-quality sampling now
-              // lives exclusively in the separate, non-blocking spot-audit
-              // path (attribution-audit.ts's `runSpotAudit`, dispatched
-              // post-green below). Nothing to do here.
-            }
+            // Auto-heal hook removed (feature #773, Task 11). It used to
+            // reconcile .pipeline/task-status.json against git-trailer
+            // evidence via autoheal.ts's deriveCompletion/
+            // applyDerivedCompletion before treating a build-gate miss as a
+            // failure. Per-task commit-stamping is demoted to telemetry:
+            // task-status.json rows are the sole source of truth for build
+            // completion (artifacts.ts, Task 10), so there is nothing left
+            // to derive here — a build-gate miss just falls through to the
+            // normal retry path below.
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;

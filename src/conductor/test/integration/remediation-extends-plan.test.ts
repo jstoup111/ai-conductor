@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
+import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import type { RemediationGap } from '../../src/engine/artifacts.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -155,14 +155,19 @@ describe('integration: remediation extends the plan, end-to-end (H3/H9, plan Tas
     await git('add', '.');
     await git('commit', '-q', '-m', `fix: remediate fr10-1\n\nTask: ${remId}`);
 
-    const { deriveCompletion } = (await import('../../src/engine/autoheal.js')) as unknown as {
-      deriveCompletion: (
-        root: string,
-        plan: string,
-      ) => Promise<Record<string, { completed: boolean }>>;
-    };
-    const derived = await deriveCompletion(dir, planPath);
-    expect(derived[remId]?.completed).toBe(true);
+    // Commit-stamping is telemetry-only (feature #773) — completion is now
+    // authoritative from task-status.json rows, not re-derived from git
+    // trailers. Mark the row completed the way the build gate does and
+    // confirm it sticks (no derivation engine involved).
+    const rows = await readSeededTasks(dir);
+    const row = rows.find((t) => t.id === remId)!;
+    row.status = 'completed';
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ plan_ref: '.docs/plans/p.md', tasks: rows }, null, 2),
+    );
+    const after = (await readSeededTasks(dir)).find((t) => t.id === remId);
+    expect(after!.status).toBe('completed');
   });
 
   it('negative: a completed remediation task re-deriving the same id for DIFFERENT content is never mutated (bumped id instead)', async () => {

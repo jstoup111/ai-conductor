@@ -1046,7 +1046,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
 
     // Task 10 (#773): the build predicate no longer gates on the per-task
-    // evidence-ledger (deriveCompletion/createTaskEvidence/evidenceStamps).
+    // evidence-ledger (the derivation engine + createTaskEvidence's
+    // evidenceStamps; the derivation engine itself was deleted in Task 11).
     // Real completion authority now lives in the build_review step's
     // completeness rubric (a fail-closed, default-on grader verdict) plus
     // the existing outcome gates — the per-task commit-stamp ledger is being
@@ -1059,17 +1060,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // with no evidenceStamps entry is never counted") is retired: a forged
     // or stale 'completed' row is no longer this gate's concern, since
     // build_review's completeness rubric now independently judges the real
-    // diff on every pass. Conductor.ts's own auto-heal call (unchanged,
-    // outside this file) still re-derives task-status.json from git
-    // evidence whenever this predicate reports not-done, so legitimate
-    // completions still get their rows flipped to 'completed' and the
-    // attribution/residue lane still dispatches on that path — this
-    // predicate simply no longer duplicates that derivation or requires an
-    // evidence stamp on top of it.
+    // diff on every pass. The derivation engine that used to re-derive
+    // task-status.json from git evidence (autoheal.ts's deriveCompletion/
+    // applyDerivedCompletion, wired from conductor.ts's auto-heal call) was
+    // deleted entirely (feature #773, Task 11) — commit-trailer stamping is
+    // telemetry only now, and this predicate simply trusts whatever status
+    // is already on the row.
     if (ctx.projectRoot && ctx.planPath) {
       let planTaskIds: string[];
       try {
-        const { parsePlanTaskPaths } = await import('./autoheal.js');
+        const { parsePlanTaskPaths } = await import('./plan-task-parse.js');
         planTaskIds = Array.from(parsePlanTaskPaths(planText!).keys());
       } catch (err) {
         return {

@@ -7,9 +7,10 @@
 // Runs NON-INTERACTIVELY and exits — mirrors the shipped-record/render
 // dispatch pattern: detected and handled before the interactive pipeline
 // boots. Read-only: never writes task-status.json or the evidence sidecar
-// (that stays engine-owned via deriveCompletion/applyDerivedCompletion on
-// the build gate). Advisory by contract — the hook wrapping this call
-// always exits 0 regardless of what this CLI reports.
+// (commit-trailer stamping is telemetry only — feature #773, Task 11 deleted
+// the derivation engine that used to own those writes). Advisory by
+// contract — the hook wrapping this call always exits 0 regardless of what
+// this CLI reports.
 
 import { checkCommitEvidence } from './autoheal.js';
 

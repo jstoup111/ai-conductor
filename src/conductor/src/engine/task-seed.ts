@@ -248,8 +248,9 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
         // Preserve terminal rows unconditionally (Task 10, #773): the
         // build predicate no longer cross-checks task-status.json rows
-        // against the evidence ledger (deriveCompletion/createTaskEvidence/
-        // evidenceStamps) — that anti-forgery check is retired, since
+        // against the evidence ledger (the derivation engine +
+        // createTaskEvidence's evidenceStamps; the derivation engine itself
+        // was deleted in Task 11) — that anti-forgery check is retired, since
         // build_review's completeness rubric now independently judges the
         // real diff on every pass. A row already marked completed/skipped
         // stays that way across re-seeds regardless of whether an evidence

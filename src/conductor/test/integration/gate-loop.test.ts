@@ -14,7 +14,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
+import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
@@ -1757,13 +1757,20 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     // Task 10 (#773): the build predicate itself no longer derives
     // completion from git-trailer evidence (deriveCompletion/evidenceStamps
     // were removed from checkStepCompletion's 'build' path); it only trusts
-    // task-status.json row status. Real commit evidence is now reconciled
-    // by conductor.ts's auto-heal step (deriveCompletion +
-    // applyDerivedCompletion), which runs whenever the gate reports
-    // not-done — mirror that here, the same way conductor.ts does.
-    const { deriveCompletion, applyDerivedCompletion } = await import('../../src/engine/autoheal.js');
-    const derived = await deriveCompletion(repoDir, planPath);
-    await applyDerivedCompletion(repoDir, derived);
+    // task-status.json row status. Task 11 (#773) deleted the derivation
+    // engine (deriveCompletion/applyDerivedCompletion) entirely — real
+    // commit-trailer evidence is telemetry only now. Mark the rows completed
+    // directly, the way a real build step's own completion write-back does.
+    await writeFile(
+      join(repoDir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        plan_ref: '.docs/plans/p.md',
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'completed' },
+        ],
+      }),
+    );
 
     // (a) Build gate: all tasks commit-evidenced within «merge-base»..HEAD.
     const gateVerdict = await checkStepCompletion(repoDir, 'build', ctx);

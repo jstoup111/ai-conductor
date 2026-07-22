@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { seedTaskStatus, clearStaleMarker } from '../../src/engine/task-seed.js';
-import { deriveCompletion, applyDerivedCompletion } from '../../src/engine/autoheal.js';
 import { markerPath, writeBuildStepMarker } from '../../src/engine/attribution-enforcement.js';
 
 describe('task-seed', () => {
@@ -832,83 +831,4 @@ Content
     });
   });
 
-  describe('legitimate completions survive sidecar deletion (Task 10 regression)', () => {
-    it('re-stamps a real commit-evidenced task from git after .pipeline/task-evidence.json is deleted', async () => {
-      // Real git repo with a real commit carrying a `Task: N` trailer and a
-      // path-corroborating file change — the only durable source of truth
-      // for completion under the new evidence model.
-      await execa('git', ['init', '-b', 'main'], { cwd: dir });
-      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
-      await fsPromises.writeFile(join(dir, 'README.md'), '# Test\n');
-      await execa('git', ['add', 'README.md'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
-
-      // getEvidenceRange requires a resolvable origin default branch to
-      // bound the commit range (fail-closed otherwise) — set up a bare
-      // "origin" the way a real clone would have one, pushed at the
-      // initial commit so the plan + work commits below are ahead of it.
-      const bareDir = await fsPromises.mkdtemp(join(tmpdir(), 'task-seed-origin-'));
-      await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
-      await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
-      await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
-
-      const planPath = join(dir, '.docs/plans/test.md');
-      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await fsPromises.writeFile(
-        planPath,
-        `# Plan
-
-## Task 1: Real task
-Content with \`src/real.ts\`
-`,
-      );
-      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
-
-      await fsPromises.mkdir(join(dir, 'src'), { recursive: true });
-      await fsPromises.writeFile(join(dir, 'src/real.ts'), 'export const real = true;\n');
-      await execa('git', ['add', 'src/real.ts'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'feat: implement real task\n\nTask: 1\n'], { cwd: dir });
-
-      const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
-
-      // First pass: seed creates pending rows, then derive stamps the task
-      // from the git commit and writes the evidence sidecar, and
-      // applyDerivedCompletion writes that back to task-status.json (the
-      // same seed→derive→apply sequence the gate runs).
-      await seedTaskStatus(dir, planPath);
-      let derived = await deriveCompletion(dir, planPath);
-      expect(derived['1'].completed).toBe(true);
-      expect(derived['1'].evidencedBy).toBe(workCommitSha);
-      await applyDerivedCompletion(dir, derived);
-
-      const evidencePath = join(dir, '.pipeline/task-evidence.json');
-      const beforeDelete = JSON.parse(await fsPromises.readFile(evidencePath, 'utf-8'));
-      expect(beforeDelete.evidenceStamps['1']).toBeDefined();
-
-      // Delete the mutable sidecar — completion must not depend on it.
-      await fsPromises.rm(evidencePath, { force: true });
-
-      // Re-run seed + derive: the task must be re-discovered and re-stamped
-      // from git, not from the (now-deleted) sidecar.
-      await seedTaskStatus(dir, planPath);
-      derived = await deriveCompletion(dir, planPath);
-      expect(derived['1'].completed).toBe(true);
-      expect(derived['1'].evidencedBy).toBe(workCommitSha);
-      await applyDerivedCompletion(dir, derived);
-
-      const restamped = JSON.parse(await fsPromises.readFile(evidencePath, 'utf-8'));
-      expect(restamped.evidenceStamps['1']).toBeDefined();
-      expect(restamped.evidenceStamps['1'].sha).toBe(workCommitSha);
-
-      // task-status.json still counts the task as completed.
-      const statusPath = join(dir, '.pipeline/task-status.json');
-      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf-8'));
-      const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('completed');
-
-      await fsPromises.rm(bareDir, { recursive: true, force: true });
-    });
-  });
 });

@@ -26,7 +26,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
+import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 
 const paths = (m: Map<string, Set<string>>, id: string): string[] =>
   Array.from(m.get(id) ?? []).sort();
