@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { landSpec } from '../../../src/engine/engineer/land-spec.js';
+import { landSpec, resolveIdeaFiles } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 
@@ -371,5 +371,464 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     const logCountAfter = (await git(['log', '--oneline'], dir)).split('\n').filter(Boolean).length;
     expect(headAfter).toBe(headBefore);
     expect(logCountAfter).toBe(logCountBefore);
+  });
+});
+
+describe('resolveIdeaFiles (Task 1: idea-scoped artifact attribution)', () => {
+  it('returns exactly the committed + untracked idea artifacts, excluding a legacy file on main', async () => {
+    // Seed a legacy artifact committed on `main` BEFORE the worktree is created.
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'plans', 'legacy.md'), '# legacy plan\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    // One artifact committed on the idea's spec/<slug> branch.
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'idea plan'], dir);
+
+    // Another artifact left untracked in the worktree.
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+
+    const ideaFiles = await resolveIdeaFiles(dir, repoPath);
+
+    expect(ideaFiles).toEqual(new Set(['.docs/plans/dep-bump.md', '.docs/stories/dep-bump.md']));
+    expect(ideaFiles.has('.docs/plans/legacy.md')).toBe(false);
+  });
+});
+
+describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
+  it('technical-track worktree lands clean even when a legacy DRAFT spec on main is newest-by-mtime', async () => {
+    // Legacy spec committed on `main` BEFORE the worktree is created, carrying
+    // a DRAFT status line that would trip the C2 content guard if it were ever
+    // picked. corpus-wide findNewestFile() would pick this file up once it's
+    // touched to be newest; the idea-scoped picker must never even consider it
+    // (technical track has no spec candidate in the idea's own attribution set).
+    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
+    const legacySpecPath = join(repoPath, '.docs', 'specs', 'legacy.md');
+    await writeFile(legacySpecPath, '# PRD: legacy\n\n**Status:** DRAFT\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy DRAFT spec on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    // Touch the legacy spec to be newest-by-mtime in .docs/specs/ AFTER the
+    // idea's own artifacts were written — a corpus-wide picker would now pick it.
+    const newDate = new Date();
+    await utimes(legacySpecPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+
+    // The commit landSpec made must not touch the legacy spec at all.
+    const diffNames = await git(['diff', '--name-only', headBefore, 'HEAD'], dir);
+    expect(diffNames.split('\n')).not.toContain('.docs/specs/legacy.md');
+  });
+
+  it('idea Track: technical marker wins over a legacy Track: product marker regardless of mtime', async () => {
+    // Legacy product-track marker committed on `main` BEFORE the worktree is
+    // created — outside the idea's own attribution set, so it must never be
+    // picked even though it's a "Track:" file living in the same directory.
+    await mkdir(join(repoPath, '.docs', 'track'), { recursive: true });
+    const legacyTrackPath = join(repoPath, '.docs', 'track', 'legacy.md');
+    await writeFile(legacyTrackPath, '# Track\n\nTrack: product\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy product-track marker on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    // Idea's own technical-track marker.
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    // Touch the legacy marker (present in the worktree's checkout too, since
+    // the branch derived from `main` after it was committed there) to be
+    // newest-by-mtime — mtime alone must not let it win.
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'track', 'legacy.md'), newDate, newDate);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Technical track requires no spec — if the product-track legacy marker
+    // won instead, this would throw "spec (product track)" missing.
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('Task 5: missing idea-authored track marker defaults to product — a legacy `Track: technical` file on main cannot loosen the gate', async () => {
+    // Legacy technical-track marker committed on `main` BEFORE the worktree is
+    // created — outside the idea's own attribution set. If the track picker
+    // fell back to a corpus-wide (non-idea-scoped) search, it could pick this
+    // up and wrongly treat the land as technical track (no spec required).
+    await mkdir(join(repoPath, '.docs', 'track'), { recursive: true });
+    const legacyTrackPath = join(repoPath, '.docs', 'track', 'legacy.md');
+    await writeFile(legacyTrackPath, '# Track\n\nTrack: technical\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy technical-track marker on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    // No idea-authored track marker at all — only stories + plan, no spec.
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Missing idea-authored track marker must default to product track, which
+    // requires a spec. The legacy technical-track marker on main must not
+    // loosen the gate by making this land as technical (spec-exempt).
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh })
+    ).rejects.toThrow(/spec \(product track\)/);
+  });
+});
+
+describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/decisions pickers', () => {
+  it('stories picker: validates the idea\'s stories content, ignoring a newer-mtime legacy stories file on main', async () => {
+    // Legacy stories file committed on `main` BEFORE the worktree is created,
+    // carrying content that would fail idea-content validation if ever picked
+    // (it references a different idea entirely). corpus-wide findNewestFile()
+    // would pick this once touched to be newest; the idea-scoped picker must
+    // never even consider it.
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    const legacyStoriesPath = join(repoPath, '.docs', 'stories', 'legacy.md');
+    await writeFile(
+      legacyStoriesPath,
+      ['# Stories: unrelated legacy idea', '', '**Status:** Accepted', ''].join('\n'),
+    );
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy stories on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    // Touch the legacy stories file to be newest-by-mtime AFTER the idea's own
+    // artifacts were written — a corpus-wide picker would now pick it.
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'stories', 'legacy.md'), newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // If the legacy stories file were picked, validateArtifactContent('stories', ..., idea)
+    // would throw because its content does not reference "dep bump".
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('plan picker + intake marker: keys the marker to the idea\'s own plan stem, ignoring a newer-mtime legacy plan on main', async () => {
+    // Legacy plan committed on `main` BEFORE the worktree is created, with a
+    // stem that must never become the intake-marker key.
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    const legacyPlanPath = join(repoPath, '.docs', 'plans', 'legacy-plan.md');
+    await writeFile(legacyPlanPath, PLAN_WITH_DEPS);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    // Touch the legacy plan to be newest-by-mtime AFTER the idea's own plan
+    // was written — a corpus-wide picker would now pick it (and key the
+    // intake marker to "legacy-plan" instead of "dep-bump").
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'plans', 'legacy-plan.md'), newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    // The intake marker must be keyed to the idea's own plan stem ("dep-bump"),
+    // never the legacy plan's stem ("legacy-plan").
+    const markerContent = await execFile(
+      'git',
+      ['show', `HEAD:.docs/intake/dep-bump.md`],
+      { cwd: dir },
+    ).then((r) => r.stdout);
+    expect(markerContent).toBeTruthy();
+
+    await expect(
+      execFile('git', ['show', `HEAD:.docs/intake/legacy-plan.md`], { cwd: dir }),
+    ).rejects.toThrow();
+  });
+
+  it('complexity picker: uses the idea\'s own tier, ignoring a newer-mtime legacy non-Small complexity file on main', async () => {
+    // Legacy complexity file committed on `main`, declaring a non-Small tier
+    // that would demand conflicts/architecture/decisions if ever picked.
+    await mkdir(join(repoPath, '.docs', 'complexity'), { recursive: true });
+    const legacyComplexityPath = join(repoPath, '.docs', 'complexity', 'legacy.md');
+    await writeFile(legacyComplexityPath, '# Complexity\n\nTier: M\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy non-Small complexity on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    // Idea's own complexity file declares Small — no conflicts/architecture/decisions needed.
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
+
+    // Touch the legacy complexity file to be newest-by-mtime AFTER the idea's
+    // own complexity file was written — a corpus-wide picker would now pick
+    // it and (wrongly) demand conflicts/architecture/decisions.
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'complexity', 'legacy.md'), newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // If the legacy Tier: M file were picked, this would throw for missing
+    // conflicts/architecture/decisions artifacts (none were seeded).
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('conflicts/architecture/decisions pickers: idea-scoped tier-M artifacts satisfy the DECIDE gate, ignoring legacy decoys on main', async () => {
+    // Legacy conflicts/architecture/decisions files committed on `main`, newer
+    // by mtime than the idea's own — must never satisfy the gate on their own,
+    // and the idea's own files (once present) must be what's used.
+    await mkdir(join(repoPath, '.docs', 'conflicts'), { recursive: true });
+    await mkdir(join(repoPath, '.docs', 'architecture'), { recursive: true });
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'conflicts', 'legacy.md'), '# Conflicts\n\nNone.\n');
+    await writeFile(join(repoPath, '.docs', 'architecture', 'legacy.md'), '# Architecture\n\nDiagram.\n');
+    await writeFile(join(repoPath, '.docs', 'decisions', 'legacy.md'), '# Review\n\nApproved.\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy DECIDE artifacts on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: M\n');
+
+    // Do NOT seed the idea's own conflicts/architecture/decisions files yet —
+    // only the legacy ones (newer-mtime) exist in the worktree checkout.
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'conflicts', 'legacy.md'), newDate, newDate);
+    await utimes(join(dir, '.docs', 'architecture', 'legacy.md'), newDate, newDate);
+    await utimes(join(dir, '.docs', 'decisions', 'legacy.md'), newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // The legacy files must NOT satisfy the tier-M DECIDE gate — landSpec
+    // must throw for missing conflicts/architecture/decisions even though
+    // files exist by those names in those directories (just not the idea's).
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/conflicts.*architecture.*decisions|complexity tier/i);
+
+    // Now seed the idea's own DECIDE artifacts — landing must succeed and use them.
+    await writeFile(join(dir, '.docs', 'conflicts', 'dep-bump.md'), '# Conflicts\n\nNone.\n');
+    await writeFile(join(dir, '.docs', 'architecture', 'dep-bump.md'), '# Architecture\n\nDiagram.\n');
+    await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    expect(result.branch).toBeTruthy();
+  });
+});
+
+describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', () => {
+  it('rejects a worktree whose .docs/plans/ holds only a legacy plan committed on main', async () => {
+    // Legacy plan committed on `main` BEFORE the worktree is created — not
+    // attributable to the idea. The idea authors valid stories/complexity but
+    // never writes its own plan.
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    const legacyPlanPath = join(repoPath, '.docs', 'plans', 'legacy.md');
+    await writeFile(legacyPlanPath, PLAN_WITH_DEPS);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy plan on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+
+    // Touch the legacy plan to be newest-by-mtime — a corpus-wide picker
+    // would wrongly treat it as satisfying the plan requirement.
+    const newDate = new Date();
+    await utimes(legacyPlanPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/\bplan\b/);
+  });
+});
+
+describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
+  it('rejects a product-track worktree whose .docs/specs/ holds only a legacy spec committed on main', async () => {
+    // Legacy spec committed on `main` BEFORE the worktree is created — not
+    // attributable to the idea. Product track defaults (no track marker), so
+    // a spec IS required; the idea has none of its own.
+    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
+    const legacySpecPath = join(repoPath, '.docs', 'specs', 'legacy.md');
+    await writeFile(legacySpecPath, '# PRD: legacy\n\nApproved.\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy spec on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    // Touch the legacy spec to be newest-by-mtime — a corpus-wide picker
+    // would wrongly treat it as satisfying the spec requirement.
+    const newDate = new Date();
+    await utimes(legacySpecPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/spec \(product track\)/);
+  });
+
+  it('lands the idea PRD, not a newer-mtime legacy spec on main, on the product track', async () => {
+    // Legacy spec committed on `main` BEFORE the worktree is created, made
+    // newest-by-mtime after the idea's own spec is written.
+    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
+    const legacySpecPath = join(repoPath, '.docs', 'specs', 'legacy.md');
+    await writeFile(legacySpecPath, '# PRD: legacy\n\nApproved.\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy spec on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'specs', 'legacy.md'), newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    expect(result.branch).toBeTruthy();
+
+    const diffNames = await git(['diff', '--name-only', headBefore, 'HEAD'], dir);
+    expect(diffNames.split('\n')).toContain('.docs/specs/dep-bump.md');
+    expect(diffNames.split('\n')).not.toContain('.docs/specs/legacy.md');
+  });
+});
+
+describe('Task 7: idea-scoped resolution preserves content validation and the dirty-worktree guard', () => {
+  it('rejects the idea\'s own DRAFT-status stories (stories-not-approved), even though attribution/pickers resolve them cleanly', async () => {
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    // The idea's OWN stories artifact — untracked, correctly attributed and
+    // picked — but still DRAFT. Idea-scoped resolution must not skip content
+    // validation just because the file is unambiguously "the idea's own".
+    await writeFile(
+      join(dir, '.docs', 'stories', 'dep-bump.md'),
+      ['# Stories: dep bump', '', '**Status:** DRAFT', '', '## Story: bump', ''].join('\n'),
+    );
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/DRAFT.*not been approved|not approved/i);
+
+    const headAfter = await git(['rev-parse', 'HEAD'], dir);
+    expect(headAfter).toBe(headBefore);
+  });
+
+  it('dirty-worktree guard still rejects a tracked .docs file modified-but-uncommitted, before idea-scoped resolution ever runs', async () => {
+    const dir = await seedValidWorktree('dep bump');
+
+    // Commit the idea's own artifacts so they're tracked, then dirty one of
+    // them without committing — the dirty-tree guard must fire first,
+    // regardless of idea-scoped attribution/content validity.
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed idea artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES + '\nmore\n');
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/dirty|uncommitted/i);
+
+    const headAfter = await git(['rev-parse', 'HEAD'], dir);
+    expect(headAfter).toBe(headBefore);
   });
 });
