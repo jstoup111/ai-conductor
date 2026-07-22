@@ -77,6 +77,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Owner-gate write-back no longer comments on another operator's issue. `announceGatedIssue`
+  (`gate-writeback.ts`) posted an `owner-gated` label + marker comment on a gated spec's
+  originating intake issue — but a spec is only ever gated for `other-owner`, so that issue
+  belongs to a *different* operator. In a shared repo this laundered one operator's daemon into
+  writing on another's issues (observed: 83 owner-gated comments left on issues assigned to a
+  different operator, #691). The issue write-back is now silently skipped for `other-owner`
+  specs — only the issue's own operator (whose daemon does not gate the spec) may write on it.
+  The PR write-back is unchanged.
 - The `build_review` grader (and every autonomous `claude --print` dispatch) now delivers its
   prompt on **stdin** instead of as a `-p <prompt>` command-line argument. A single argv string is
   capped at `MAX_ARG_STRLEN` (128 KiB on Linux); the grader prompt embeds the plan **and the full

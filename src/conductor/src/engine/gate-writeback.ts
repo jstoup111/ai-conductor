@@ -258,6 +258,16 @@ export async function announceGatedIssue(
     return;
   }
 
+  // Ownership isolation (the #691-class breach): a gated spec is always
+  // `other-owner`, so its originating intake issue belongs to a DIFFERENT
+  // operator. This daemon must NOT label or comment on another operator's
+  // issue — that is exactly how one operator's daemon left 83 owner-gated
+  // comments on issues assigned to another operator. Silently skip; only the
+  // issue's own operator (whose daemon does not gate the spec) may write on it.
+  if (spec.reason === 'other-owner') {
+    return;
+  }
+
   const issueUrl = `https://github.com/${parsed.repo}/issues/${parsed.number}`;
 
   try {
