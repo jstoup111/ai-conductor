@@ -478,6 +478,37 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
 
     expect(result.branch).toBeTruthy();
   });
+
+  it('Task 5: missing idea-authored track marker defaults to product — a legacy `Track: technical` file on main cannot loosen the gate', async () => {
+    // Legacy technical-track marker committed on `main` BEFORE the worktree is
+    // created — outside the idea's own attribution set. If the track picker
+    // fell back to a corpus-wide (non-idea-scoped) search, it could pick this
+    // up and wrongly treat the land as technical track (no spec required).
+    await mkdir(join(repoPath, '.docs', 'track'), { recursive: true });
+    const legacyTrackPath = join(repoPath, '.docs', 'track', 'legacy.md');
+    await writeFile(legacyTrackPath, '# Track\n\nTrack: technical\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy technical-track marker on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    // No idea-authored track marker at all — only stories + plan, no spec.
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Missing idea-authored track marker must default to product track, which
+    // requires a spec. The legacy technical-track marker on main must not
+    // loosen the gate by making this land as technical (spec-exempt).
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh })
+    ).rejects.toThrow(/spec \(product track\)/);
+  });
 });
 
 describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/decisions pickers', () => {
