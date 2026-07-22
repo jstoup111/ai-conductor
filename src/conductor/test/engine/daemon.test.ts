@@ -2002,10 +2002,12 @@ describe('engine/daemon — runDaemon', () => {
     it('missing credential + 3 queued features across many idle polls -> exactly one log entry, zero HALT writes, zero dispatches', async () => {
       const logs: string[] = [];
       let haltWrites = 0;
+      const resolvedPath = '/tmp/fake-daemon-build-token';
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(3)),
         runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
         isBuildAuthMissing: async () => true,
+        getBuildAuthRemediationMessage: () => buildAuthRemediationMessage(resolvedPath),
         onHaltWritten: async () => {
           haltWrites += 1;
         },
@@ -2026,6 +2028,13 @@ describe('engine/daemon — runDaemon', () => {
       const waitingLines = logs.filter((l) => /build.?auth|credential/i.test(l));
       // Transition-only: one entry total, not one per idle poll (8 polls ran).
       expect(waitingLines.length).toBe(1);
+
+      // Task 14 (FR-6): the transition-edge log must carry the shared
+      // remediation message content (mint command, resolved token path,
+      // pitfalls) — not a bare status line.
+      const sharedMessage = buildAuthRemediationMessage(resolvedPath);
+      expect(waitingLines[0]).toContain(sharedMessage);
+      expect(waitingLines[0]).toContain(resolvedPath);
     });
 
     it('does not re-log the waiting condition after it clears and re-triggers (transition edges only, not a one-shot-forever latch)', async () => {

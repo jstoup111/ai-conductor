@@ -19,6 +19,7 @@ import {
 } from './engine/ci-fix.js';
 import { resolveRebaseResolutionAttempts, resolveSelfHostConfig } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
+import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { registerBuiltins } from './engine/plugin-loader.js';
@@ -1235,6 +1236,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         if (buildAuthMode !== 'daemon-token') return false;
         const tokenState = await readDaemonBuildToken(buildAuthTokenPath);
         return tokenState.state !== 'ok';
+      },
+      // Task 14 (FR-6): supply the shared remediation message (Task 7) so the
+      // daemon's transition-edge waiting-condition log carries the mint
+      // command, resolved token path, and pitfalls instead of a bare status
+      // line.
+      getBuildAuthRemediationMessage: () => {
+        const { buildAuthTokenPath } = resolveSelfHostConfig(config);
+        return buildAuthRemediationMessage(buildAuthTokenPath);
       },
       rateLimitEpisode,
       // Task 20: record episode causality when the daemon parks a halted/error

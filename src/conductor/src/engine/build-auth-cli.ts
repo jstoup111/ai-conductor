@@ -46,7 +46,8 @@ export interface BuildAuthStatusDispatchDeps {
  *   - present → probes liveness; valid → clean; invalid/unverifiable →
  *     non-clean, remediation printed.
  *
- * Exit code is a placeholder (0) — Task 9 refines exit-code mapping.
+ * Exit code: 0 for clean states (valid daemon-token, or api-key mode); 1 for
+ * any non-clean state (missing, unreadable, invalid, unverifiable).
  */
 export async function dispatchBuildAuthStatus(
   _cmd: BuildAuthStatusDispatch,

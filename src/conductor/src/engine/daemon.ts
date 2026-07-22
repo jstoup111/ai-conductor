@@ -289,6 +289,15 @@ export interface DaemonDeps {
    */
   watchBuildAuthRestored?: (onRestored: () => void) => () => void;
   /**
+   * Task 14 (FR-6): supplies the shared remediation message (mint command,
+   * resolved token path, pitfalls) built by `buildAuthRemediationMessage`
+   * (Task 7) for the transition-edge waiting-condition log emitted when
+   * `isBuildAuthMissing` flips false -> true. Absent -> the log falls back
+   * to the bare status line (pure-core default; production wires this to
+   * `buildAuthRemediationMessage(resolveSelfHostConfig(config).buildAuthTokenPath)`).
+   */
+  getBuildAuthRemediationMessage?: () => Promise<string> | string;
+  /**
    * Optional rate-limit episode coordinator (optimization-never-authority).
    * If provided and active, gates new dispatch to avoid thundering herd.
    * If undefined or inactive, behaves as today (no change to existing code path).
@@ -607,10 +616,24 @@ export async function runDaemon(
   // every idle tick) — the exact log-once behavior is Task 14's scope; this
   // gate only needs to not crash the loop or silently proceed on a throw.
   let buildAuthErrorActive = false;
-  // Transition-only waiting-condition log (Task 14 owns the full transition
-  // model; this is the minimal single-entry version needed so a stuck
-  // missing credential doesn't spam the log every idle tick).
+  // Transition-only waiting-condition log. Task 14 (FR-6): the log entry
+  // carries the shared `buildAuthRemediationMessage` content (mint command,
+  // resolved token path, pitfalls) via `deps.getBuildAuthRemediationMessage`
+  // so an operator staring at the daemon log has everything needed to fix
+  // it, not just a bare status line.
   let buildAuthMissingLogged = false;
+  const logBuildAuthMissing = async (): Promise<void> => {
+    let message = 'build credential missing — skipping new picks until it is restored';
+    if (deps.getBuildAuthRemediationMessage) {
+      try {
+        const remediation = await deps.getBuildAuthRemediationMessage();
+        message = `build credential missing — skipping new picks until it is restored\n${remediation}`;
+      } catch {
+        // fall back to the bare status line if the remediation builder itself throws
+      }
+    }
+    log(`[daemon] ${message}`);
+  };
   const checkBuildAuthMissing = async (): Promise<boolean> => {
     if (!deps.isBuildAuthMissing) return false;
     try {
@@ -622,7 +645,7 @@ export async function runDaemon(
       if (result) {
         if (!buildAuthMissingLogged) {
           buildAuthMissingLogged = true;
-          log('[daemon] build credential missing — skipping new picks until it is restored');
+          await logBuildAuthMissing();
         }
       } else {
         buildAuthMissingLogged = false;
@@ -637,7 +660,7 @@ export async function runDaemon(
       }
       if (!buildAuthMissingLogged) {
         buildAuthMissingLogged = true;
-        log('[daemon] build credential missing — skipping new picks until it is restored');
+        await logBuildAuthMissing();
       }
       return true; // fail-closed: an unreadable/erroring credential must never look "present"
     }

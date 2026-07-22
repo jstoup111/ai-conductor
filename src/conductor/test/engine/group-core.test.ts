@@ -471,20 +471,6 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
   const fakeState = {} as ConductState;
 
   it("an authFailure result does NOT burn retry budget and classifies as no-verdict with reason 'authFailure'", async () => {
-    // maxRetries=1 means a single real attempt is allowed. The branch must
-    // not loop/retry an authFailure automatically (that's core/join's job
-    // in a later task) — it surfaces immediately as no-verdict:authFailure
-    // after exactly one call.
-    const runner = spyRunner([{ success: false, authFailure: true, output: "401 unauthorized" }]);
-    const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
-
-    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
-
-    expect(runner.calls).toHaveLength(1);
-    expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
-  });
-
-  it("group-core: authFailure parks without consuming retry/escalation budget (FR-4 concurrent path)", async () => {
     // Regression pin for the group JOIN behavior (conductor.ts's
     // `noVerdictIdx !== -1` branch, adr-2026-07-04-auth-failure-park-and-poll.md):
     // this branch-level unit test asserts the invariants runGroupBranch itself
@@ -508,7 +494,7 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     // remaining budget looping on its own.
     expect(runner.calls).toHaveLength(1);
 
-    // (c) distinguishable from a generic "retries exhausted" no-verdict: the
+    // (b) distinguishable from a generic "retries exhausted" no-verdict: the
     // reason is preserved verbatim so the join can special-case it.
     expect(classifyOutcome(outcome)).toBe("no-verdict");
     expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
