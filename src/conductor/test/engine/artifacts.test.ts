@@ -1564,7 +1564,12 @@ describe('engine/artifacts', () => {
         getHeadSha: sha('bbb222'),
       });
       expect(result).toEqual({ done: true });
-      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+      // The whitewash-guard fields (headSha/observedAt/failRows) are cleared —
+      // codeStamp is additive PASS-path telemetry (#817) written afterward, so
+      // the marker file itself may still exist carrying only codeStamp.
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.headSha).toBeUndefined();
+      expect(marker.failRows).toBeUndefined();
     });
 
     it('ignores (and cleans up) a fail-evidence marker from a previous session', async () => {
@@ -1578,7 +1583,12 @@ describe('engine/artifacts', () => {
         getHeadSha: sha('aaa111'),
       });
       expect(result).toEqual({ done: true });
-      await expect(readFile(join(dir, MARKER), 'utf-8')).rejects.toThrow();
+      // The stale whitewash-guard fields are cleared — codeStamp is additive
+      // PASS-path telemetry (#817) written afterward, so the marker file
+      // itself may still exist carrying only codeStamp.
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.headSha).toBeUndefined();
+      expect(marker.failRows).toBeUndefined();
     });
 
     it('fails open when no getHeadSha seam is provided (pre-change behavior preserved)', async () => {
@@ -1707,6 +1717,79 @@ describe('engine/artifacts', () => {
       // manual_test→build kickback path still has concrete bug evidence.
       const failRows = await readManualTestFailRows(dir);
       expect(failRows.join('\n')).toMatch(/Bar.*FAIL/);
+    });
+  });
+
+  describe('checkStepCompletion: manual_test codeStamp (gate-code-validity, #817)', () => {
+    const RESULTS = '.pipeline/manual-test-results.md';
+    const MARKER = '.pipeline/manual-test-fail-evidence.json';
+    const PASS_FILE = '| Story | Result |\n|---|---|\n| Foo | PASS |\n';
+    const sha = (s: string) => async () => s;
+
+    it('on a clean PASS-path completion, writes codeStamp equal to the current head sha', async () => {
+      await createFile(RESULTS, PASS_FILE);
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('ccc333'),
+      });
+      expect(result).toEqual({ done: true });
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.codeStamp).toBe('ccc333');
+    });
+
+    it('does not disturb the pre-existing FAIL→PASS headSha whitewash guard', async () => {
+      const FAIL_FILE = '| Story | Result |\n|---|---|\n| Bar | FAIL |\n';
+      await createFile(RESULTS, FAIL_FILE);
+      await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0, getHeadSha: sha('aaa111') });
+      await createFile(RESULTS, PASS_FILE);
+      // HEAD has not moved — the guard must still block, same as before this change.
+      const blocked = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('aaa111'),
+      });
+      expect(blocked.done).toBe(false);
+      expect(blocked.reason).toMatch(/no new commits|whitewash/i);
+
+      // HEAD moves — the guard still allows the flip, and codeStamp is recorded too.
+      const allowed = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+        getHeadSha: sha('bbb222'),
+      });
+      expect(allowed).toEqual({ done: true });
+      const marker = JSON.parse(await readFile(join(dir, MARKER), 'utf-8'));
+      expect(marker.codeStamp).toBe('bbb222');
+      expect(marker.headSha).toBeUndefined();
+    });
+  });
+
+  describe('checkStepCompletion: prd_audit codeStamp sidecar (gate-code-validity, #817)', () => {
+    const SIDECAR = '.pipeline/prd-audit-code-stamp.json';
+    const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
+
+    it('on true completion, writes a sidecar carrying codeStamp equal to the current head sha', async () => {
+      await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n');
+      const result = await checkStepCompletion(dir, 'prd_audit', {
+        sessionStartedAt: 0,
+        getHeadSha: async () => 'ddd444',
+      });
+      expect(result.done).toBe(true);
+      const marker = JSON.parse(await readFile(join(dir, SIDECAR), 'utf-8'));
+      expect(marker.codeStamp).toBe('ddd444');
+    });
+  });
+
+  describe('checkStepCompletion: architecture_review_as_built codeStamp sidecar (gate-code-validity, #817)', () => {
+    const SIDECAR = '.pipeline/architecture-review-as-built-code-stamp.json';
+
+    it('on true completion, writes a sidecar carrying codeStamp equal to the current head sha', async () => {
+      await createFile('.pipeline/architecture-review-as-built.md', '# As-Built\n\nVerdict: APPROVED\n');
+      const result = await checkStepCompletion(dir, 'architecture_review_as_built', {
+        sessionStartedAt: 0,
+        getHeadSha: async () => 'eee555',
+      });
+      expect(result.done).toBe(true);
+      const marker = JSON.parse(await readFile(join(dir, SIDECAR), 'utf-8'));
+      expect(marker.codeStamp).toBe('eee555');
     });
   });
 

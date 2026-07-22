@@ -1006,6 +1006,44 @@ export interface GateCodeStampMarker {
   codeStamp?: string | null;
 }
 
+/** Sidecar path for prd_audit's code stamp (see `GateCodeStampMarker`). */
+export const PRD_AUDIT_CODE_STAMP = '.pipeline/prd-audit-code-stamp.json';
+
+/**
+ * Sidecar path for architecture_review_as_built's code stamp (see
+ * `GateCodeStampMarker`).
+ */
+export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
+  '.pipeline/architecture-review-as-built-code-stamp.json';
+
+/**
+ * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
+ * exit. Best-effort — never throws, never blocks returning `done: true`.
+ */
+async function writeGateCodeStamp(
+  dir: string,
+  sidecarPath: string,
+  ctx: CompletionContext,
+): Promise<void> {
+  const codeStamp = await stampCode(ctx);
+  await writeFile(
+    join(dir, sidecarPath),
+    JSON.stringify({ codeStamp } satisfies GateCodeStampMarker, null, 2),
+    'utf-8',
+  ).catch(() => {});
+}
+
+async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
+  await writeGateCodeStamp(dir, PRD_AUDIT_CODE_STAMP, ctx);
+}
+
+async function writeArchitectureReviewAsBuiltCodeStamp(
+  dir: string,
+  ctx: CompletionContext,
+): Promise<void> {
+  await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -1375,6 +1413,26 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
       }
     }
+    // Additive PASS-path telemetry (gate-code-validity-on-redispatch, #817):
+    // record the HEAD sha the current PASS verdict was formed against, in
+    // the same marker file used by the FAIL-path whitewash guard above.
+    // Merge onto any existing marker content (there should be none at this
+    // point on the fresh-flip path, but merging is defensive) rather than
+    // clobbering fields the guard depends on. Best-effort — never blocks
+    // returning done:true.
+    if (headSha) {
+      let existing: ManualTestFailEvidence = {};
+      try {
+        existing = JSON.parse(await readFile(markerPath, 'utf-8')) as ManualTestFailEvidence;
+      } catch {
+        existing = {};
+      }
+      await writeFile(
+        markerPath,
+        JSON.stringify({ ...existing, codeStamp: headSha }, null, 2),
+        'utf-8',
+      ).catch(() => {});
+    }
     return { done: true };
   },
 
@@ -1427,6 +1485,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const passF = fresh[0];
     const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
       verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
@@ -1491,6 +1550,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const passF = fresh[0];
     const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
     return {
       done: true,
       verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
