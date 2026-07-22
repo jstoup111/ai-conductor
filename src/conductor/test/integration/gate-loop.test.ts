@@ -1248,6 +1248,74 @@ describe('integration/gate-loop', () => {
       expect(haltContents).toContain('always fails');
     });
 
+    // Task 7 (#773): a completeness-only FAIL must be bounded by the SAME
+    // MAX_KICKBACKS_PER_GATE cap as any other rubric FAIL — repeated
+    // completeness FAILs must HALT rather than kick back forever. This is
+    // the wedge-proof regression lock for the failure mode the cap exists
+    // to prevent.
+    it('completeness-only FAIL repeated MAX_KICKBACKS_PER_GATE (2) times then HALTs, no further dispatch', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`incomplete implementation (attempt ${buildRuns})`],
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const config = { build_review: { enabled: true }, kickback_escalation: { enabled: false } };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(buildRuns).toBe(3); // initial + 2 kickback rebuilds, capped there
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+      const haltContents = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // The HALT marker must carry the grader's evidence, not a generic message,
+      // so the surfaced blocker tells the human what the grader actually flagged
+      // — even when the FAIL was driven solely by rubric.completeness.
+      expect(haltContents).toContain('incomplete implementation');
+    });
+
     it('the build_review counter is independent of manualTestSelfHeals', async () => {
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
       let buildRuns = 0;
