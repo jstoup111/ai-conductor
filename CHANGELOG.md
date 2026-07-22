@@ -19,6 +19,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
 
+### Changed
+
+- `build_review`'s completeness rubric is now default-on and is the real build-completion
+  authority: it holistically judges plan-vs-diff completeness and fail-closes with a
+  self-heal kickback (bounded by `MAX_KICKBACKS_PER_GATE`) instead of leaning on per-task
+  evidence stamping. `Task:` commit trailers are now telemetry-only — they feed progress
+  and #757 resolved-count reporting plus attribution spot-audit sampling — and no longer
+  gate build-step completion. Attribution enforcement is demoted to advisory-only: it can
+  no longer block a commit or park the daemon (#773).
+
 ### Fixed
 
 - Sidecar evidence stamps (`Evidence: satisfied-by <sha>`) that cite a commit absent
@@ -66,6 +76,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   engine self-heals by executing that contract once (before spending retry budget),
   writing `.pipeline/acceptance-specs-red.json` at the worktree root, and re-validating
   via the existing validator — never masking a genuine non-RED failure (#741, supersedes #297)
+- The per-task evidence-ledger derivation engine, the attribution citation judge gate, the
+  no-evidence park counter, the evidence-based task-status reseed, and the commit-msg
+  fail-closed evidence rejection — all gating machinery built around `Task:` commit-trailer
+  stamping — are removed now that `build_review`'s completeness rubric is the default-on
+  completion authority and trailer stamping is telemetry-only (#773).
 
 ## Migration
 
