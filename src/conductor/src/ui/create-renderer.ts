@@ -7,7 +7,7 @@ import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapsh
 import type { DashboardSnapshot, ViewMode } from './types.js';
 import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
-import { formatProgressDelta } from '../engine/format-retry-line.js';
+import { formatProgressDelta, displayBuildPosition } from '../engine/format-retry-line.js';
 
 export interface CreateRendererOptions {
   stateFilePath: string;
@@ -212,17 +212,27 @@ export function createRenderer(
         const task = event.currentTaskId
           ? ` — ${event.currentTaskId}${event.currentTaskName ? ` ${event.currentTaskName}` : ''}`
           : '';
+        const displayResolved = displayBuildPosition(
+          event.resolved,
+          event.total,
+          Boolean(event.currentTaskId || event.currentTaskName),
+        );
         region.log(
-          chalk.cyan(`  ⠿ ${event.step} — progress ${event.resolved}/${event.total}${task}`),
+          chalk.cyan(`  ⠿ ${event.step} — progress ${displayResolved}/${event.total}${task}`),
         );
         break;
       }
 
       case 'build_no_progress': {
         const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
+        const displayResolved = displayBuildPosition(
+          event.resolved,
+          event.total,
+          Boolean(event.currentTaskId),
+        );
         region.log(
           chalk.yellow(
-            `  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${event.resolved}/${event.total})${task}`,
+            `  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${displayResolved}/${event.total})${task}`,
           ),
         );
         break;
