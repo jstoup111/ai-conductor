@@ -311,6 +311,30 @@ export interface StepRunResult {
    * The conductor halts and reports the auth failure.
    */
   authFailure?: boolean;
+  /**
+   * #814: set when a judged-gate grader (today: build_review) could not be
+   * DISPATCHED — the grader subprocess/session failed to run or exited without
+   * producing a verdict, as opposed to running and returning a not-PASS verdict
+   * (which arrives as `success:true` and is caught by the completion predicate,
+   * then routed as a kickback to build). This is an INFRASTRUCTURE failure: the
+   * conductor backs off between retries instead of burning the whole ladder in
+   * milliseconds, and names the dispatch failure in the HALT reason. It is never
+   * set when the grader ran and produced a real FAIL.
+   */
+  graderDispatchFailed?: boolean;
+}
+
+/**
+ * #814: backoff (ms) before re-dispatching a grader whose previous dispatch
+ * failed to run. Exponential with a cap so a transient spawn/startup failure has
+ * time to clear, without materially slowing a healthy grader (which itself runs
+ * for minutes). `attempt` is the 1-based number of the attempt about to run.
+ */
+export function graderDispatchBackoffMs(attempt: number): number {
+  const BASE_MS = 2000;
+  const CAP_MS = 30000;
+  const exp = BASE_MS * 2 ** Math.max(0, attempt - 1);
+  return Math.min(CAP_MS, exp);
 }
 
 export interface StepRunOptions {
@@ -2826,6 +2850,13 @@ export class Conductor {
         // a real #733-shaped failure never gets flattened into the generic
         // "retries exhausted" message.
         let acceptanceRedHealFailureReason: string | undefined;
+        // #814: set when a judged-gate grader (build_review) could not be
+        // dispatched (grader subprocess/session failed to run or produced no
+        // verdict). Consulted at the terminal HALT fallback so the operator sees
+        // "grader could not be dispatched: …" — an infrastructure diagnosis —
+        // instead of the generic "retries exhausted" that hides an infra failure
+        // behind a message that reads like a code-quality rejection.
+        let graderDispatchFailureReason: string | undefined;
 
         // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
         // spending ANY of this step's retry budget, check whether this is an
@@ -3214,8 +3245,31 @@ export class Conductor {
           }
 
           if (!result.success) {
-            lastError = result.output ?? `Step '${step.name}' session ended with error`;
+            // #814: an EMPTY/whitespace runner output slips past `??` (which
+            // only substitutes null/undefined), so `lastError` used to become
+            // '' and render as "no reason recorded" — masking a grader/subprocess
+            // dispatch that died at startup. Treat blank output as absent and
+            // synthesize a diagnosable reason so every retry + the terminal HALT
+            // name a real cause.
+            const runnerOutput =
+              typeof result.output === 'string' && result.output.trim().length > 0
+                ? result.output
+                : undefined;
+            lastError =
+              runnerOutput ??
+              `Step '${step.name}' produced no output — the step runner exited without a result ` +
+                `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
+
+            // #814: a grader-dispatch failure (build_review's grader could not
+            // RUN — distinct from it running and returning a not-PASS verdict,
+            // which arrives as success:true via the completion predicate) is an
+            // infrastructure failure. Record it so the terminal HALT names the
+            // dispatch failure instead of the generic "retries exhausted", and
+            // so we back off between re-dispatches below.
+            if (result.graderDispatchFailed) {
+              graderDispatchFailureReason = `step '${step.name}' grader could not be dispatched: ${lastError}`;
+            }
 
             // Preflight opt-out halt (TR-16): if a HALT marker was written by the
             // preflight credentials check, exit immediately without retrying. This
@@ -3252,6 +3306,14 @@ export class Conductor {
                   escalatedEffort: escNext.effort,
                 }),
               });
+              // #814: back off before re-dispatching a grader whose dispatch
+              // failed, so a transient spawn/startup failure has time to clear
+              // rather than the whole retry ladder collapsing in milliseconds
+              // (observed: 3 attempts in ~118ms). Scoped to grader-dispatch
+              // failures so ordinary step-runner failures keep their timing.
+              if (result.graderDispatchFailed) {
+                await this.sleep(graderDispatchBackoffMs(attempt + 1));
+              }
               continue;
             }
             break;
@@ -4612,9 +4674,11 @@ export class Conductor {
                   ? acceptanceRedHealFailureReason
                   : lastBuildStallReason
                     ? lastBuildStallReason
-                    : unchangedInputNote
-                      ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                      : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                    : graderDispatchFailureReason
+                      ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                      : unchangedInputNote
+                        ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                        : `step '${step.name}' failed in auto mode (retries exhausted)`;
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
               () => {},
             );

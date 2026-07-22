@@ -1425,6 +1425,17 @@ silently passing the build through. Separately, each `build_review` dispatch att
 gets up to `DEFAULT_STEP_RETRIES.build_review` (3) retries before being reported failed, same
 as any other step.
 
+**Grader-dispatch failure vs FAIL verdict (#814).** A grader that *runs and returns a not-PASS
+verdict* is a code-quality kickback (above). A grader that *could not run at all* — the
+subprocess/session failed to start or died before writing a verdict — is an **infrastructure**
+failure, flagged distinctly (`StepRunResult.graderDispatchFailed`). The conductor never lets that
+collapse the retry ladder in milliseconds: each retry re-dispatches a fresh grader with an
+exponential backoff (`graderDispatchBackoffMs`), an empty grader output can never render as a
+blank "no reason recorded" reason, and if all retries are exhausted the HALT names the dispatch
+failure ("grader could not be dispatched: …") rather than the generic "retries exhausted" — so an
+operator can tell an infra failure apart from a real FAIL, and a healthy plan-complete build is not
+silently discarded by a transient grader-startup failure.
+
 **Cost note.** Because it must be an objective outside opinion rather than the same session
 grading its own work, `build_review` always dispatches on the Opus model tier (see the model
 selection table in `HARNESS.md`) in a fresh session — it is deliberately not cheap, and enabling

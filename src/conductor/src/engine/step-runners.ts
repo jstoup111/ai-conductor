@@ -926,14 +926,28 @@ export class DefaultStepRunner implements StepRunner {
 
     // Full-ladder exhaustion: every attempted model reported unavailable.
     // Name them all so the eventual HALT is diagnosable from daemon.log alone.
+    // #814: this is a grader-DISPATCH failure (no model could run the grader),
+    // not a returned FAIL — flag it so the conductor backs off and names it.
     if (result.modelUnavailable && attemptedModels.length > 1) {
       return {
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+        graderDispatchFailed: true,
       };
     }
 
-    return { success: false, output: result.output };
+    // #814: generic grader-dispatch failure — the grader session ended without
+    // success (subprocess crashed / exited non-zero / died at startup) and never
+    // wrote a PASS/FAIL verdict. A fast empty-output death here is exactly what
+    // collapsed the retry ladder in ~118ms with "no reason recorded". Never
+    // return an empty output (it renders blank), and flag it as a dispatch
+    // failure so the conductor backs off between re-dispatches and the HALT
+    // names an infrastructure cause rather than a code-quality rejection.
+    const graderOutput =
+      typeof result.output === 'string' && result.output.trim().length > 0
+        ? result.output
+        : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
+    return { success: false, output: graderOutput, graderDispatchFailed: true };
   }
 
   private async fileExists(path: string): Promise<boolean> {

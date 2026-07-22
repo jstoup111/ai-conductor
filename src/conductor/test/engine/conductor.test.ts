@@ -355,6 +355,105 @@ describe('engine/conductor', () => {
     expect(stepsRun).not.toContain('complexity');
   });
 
+  it('#814: build_review grader-dispatch failure re-dispatches with backoff and a diagnosable reason', async () => {
+    // Reproduces the collapse: the grader subprocess dies instantly with EMPTY
+    // output (graderDispatchFailed). Pre-fix, all retries burned back-to-back in
+    // ms (no backoff) and the reason rendered as "no reason recorded". The fix:
+    // each retry re-dispatches, a backoff sleeps between attempts, and the
+    // reason is never empty.
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', stories: 'done', conflict_check: 'done',
+      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', build: 'done',
+    } as ConductState);
+
+    let buildReviewCalls = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build_review') {
+          buildReviewCalls++;
+          return { success: false, output: '', graderDispatchFailed: true };
+        }
+        return { success: true };
+      }),
+    };
+
+    const sleeps: number[] = [];
+    const retryReasons: string[] = [];
+    events.on('step_retry', (e) => {
+      if (e.type === 'step_retry' && e.step === 'build_review') retryReasons.push(e.reason);
+    });
+    const failedErrors: string[] = [];
+    events.on('step_failed', (e) => {
+      if (e.type === 'step_failed' && e.step === 'build_review') failedErrors.push(e.error);
+    });
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      fromStep: 'build_review',
+      maxRetries: 3,
+      sleepFn: async (ms: number) => { sleeps.push(ms); },
+    });
+
+    await conductor.run().catch(() => {});
+
+    // Each retry actually re-dispatched the grader (not one predicate-eval burst).
+    expect(buildReviewCalls).toBe(3);
+    // A backoff was applied between re-dispatches (no ms-collapse).
+    expect(sleeps.filter((ms) => ms > 0).length).toBeGreaterThanOrEqual(1);
+    // Every retry reason is diagnosable — never empty / "no reason recorded".
+    expect(retryReasons.length).toBeGreaterThanOrEqual(1);
+    for (const r of retryReasons) {
+      expect(r.trim().length).toBeGreaterThan(0);
+      expect(r).not.toContain('no reason recorded');
+    }
+    // The terminal failure error is diagnosable too.
+    expect(failedErrors.length).toBe(1);
+    expect(failedErrors[0].trim().length).toBeGreaterThan(0);
+  });
+
+  it('#814: an ordinary step failure gets a non-empty reason but no grader backoff (scoping)', async () => {
+    // A normal runner failure with EMPTY output must still render a diagnosable
+    // reason (the empty-string fix is general), but must NOT incur the
+    // grader-dispatch backoff — that is scoped to graderDispatchFailed so
+    // ordinary failures keep their existing timing.
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) =>
+        step === 'explore' ? { success: false, output: '' } : { success: true },
+      ),
+    };
+    const sleeps: number[] = [];
+    const retryReasons: string[] = [];
+    events.on('step_retry', (e) => {
+      if (e.type === 'step_retry' && e.step === 'explore') retryReasons.push(e.reason);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      maxRetries: 3,
+      sleepFn: async (ms: number) => { sleeps.push(ms); },
+    });
+
+    await conductor.run().catch(() => {});
+
+    // No grader backoff for an ordinary failure.
+    expect(sleeps.filter((ms) => ms > 0).length).toBe(0);
+    // But the reason is still diagnosable (not empty / "no reason recorded").
+    expect(retryReasons.length).toBeGreaterThanOrEqual(1);
+    for (const r of retryReasons) {
+      expect(r.trim().length).toBeGreaterThan(0);
+      expect(r).not.toContain('no reason recorded');
+    }
+  });
+
   it('auto mode never prompts: gating-step failure stops without recovery', async () => {
     // `stories` is gating; it permanently fails. In auto mode the conductor must
     // NOT open the recovery menu / a REPL — it stops for a human to inspect.
