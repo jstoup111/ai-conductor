@@ -26,6 +26,7 @@ import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { readState } from '../../src/engine/state.js';
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
 import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -381,9 +382,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
 
   // Build a repo with a real conflicting rebase paused mid-flight.
   async function repoWithPausedRebase(): Promise<void> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
@@ -409,9 +408,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
   });
 
   it('hasRebaseInProgress: false on a clean repo', async () => {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await writeFile(join(dir, 'README.md'), '# x\n');
     await git('add', '.');
@@ -420,9 +417,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
   });
 
   it('abortRebase throws when there is no rebase to abort', async () => {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await writeFile(join(dir, 'README.md'), '# x\n');
     await git('add', '.');
@@ -481,9 +476,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
       .then(() => true, () => false);
   }
   async function initFeatureRepo(): Promise<void> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
@@ -545,9 +538,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
 
   // Branch and base edit the SAME file differently → guaranteed rebase conflict.
   async function initConflictRepo(): Promise<void> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
@@ -648,9 +639,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
   // (build, build_review, manual_test) gets unconditionally invalidated kickback
   // verdicts WITHOUT preVerify capability, preserving fail-closed default.
   it('play-forward rebase with changed code paths → unconditionally fail-closed (no preVerify)', async () => {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
 
@@ -746,9 +735,8 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
 
     // Worktree B: a real conflicting rebase paused mid-flight + a HALT marker.
     const b = join(base, 'feat-b');
-    await execFileAsync('git', ['init', '-b', 'main', b]);
-    await gitIn(b, 'config', 'user.email', 'test@example.com');
-    await gitIn(b, 'config', 'user.name', 'Test');
+    await mkdir(b, { recursive: true });
+    await initTestRepo(b);
     await gitIn(b, 'config', 'commit.gpgsign', 'false');
     await mkdir(join(b, 'src'), { recursive: true });
     await writeFile(join(b, 'src/x.ts'), 'export const v = 0;\n');
@@ -844,9 +832,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
   // Non-conflicting: advanced base, clean rebase (same shape as the FR-12
   // "advanced base" test above).
   async function initAdvancingRepo(): Promise<{ baseSha: string }> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
@@ -1066,9 +1052,7 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
   }
 
   async function initAdvancingRepo(): Promise<void> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
@@ -1214,9 +1198,7 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
   }
 
   async function initFeatureRepo(): Promise<void> {
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
@@ -1304,9 +1286,7 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
   it('conflicted play-forward rebase (resolution exhausted): state.rebase stays unset and HALT is left in place', async () => {
     // Branch and base edit the SAME file differently → guaranteed conflict
     // (mirrors initConflictRepo in the FR-12 describe block above).
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
+    await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
     await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
@@ -1390,9 +1370,7 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
 
     // Initialize main repo
     await mkdir(mainRepoDir, { recursive: true });
-    await execFileAsync('git', ['init', '-b', 'main', mainRepoDir]);
-    await git(mainRepoDir, 'config', 'user.email', 'test@example.com');
-    await git(mainRepoDir, 'config', 'user.name', 'Test');
+    await initTestRepo(mainRepoDir);
     await git(mainRepoDir, 'config', 'commit.gpgsign', 'false');
 
     // Create initial commit
@@ -1549,9 +1527,7 @@ describe('engine/daemon-rekick — Task 15: reconcile stranded markers at sweep 
 
     // Initialize main repo
     await mkdir(mainRepoDir, { recursive: true });
-    await execFileAsync('git', ['init', '-b', 'main', mainRepoDir]);
-    await git(mainRepoDir, 'config', 'user.email', 'test@example.com');
-    await git(mainRepoDir, 'config', 'user.name', 'Test');
+    await initTestRepo(mainRepoDir);
     await git(mainRepoDir, 'config', 'commit.gpgsign', 'false');
 
     // Create initial commit

@@ -33,6 +33,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt } from '../../src/engine/rebase.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 const execFile = promisify(execFileCb);
 
@@ -66,9 +67,7 @@ async function buildConflictRepo(): Promise<{
   const gc = (args: string[]) =>
     execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
-  await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-  await g(['config', 'user.email', 't@t.com']);
-  await g(['config', 'user.name', 'T']);
+  await initTestRepo(repo);
   await writeFile(join(repo, 'a.ts'), 'base\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'init']);
