@@ -1,8 +1,16 @@
 # ADR: Build completion authority — a build-end plan-completeness judgement gate
 
 **Date:** 2026-07-21
-**Status:** APPROVED
+**Status:** SUPERSEDED by adr-2026-07-21-completeness-as-build-review-rubric
 **Deciders:** Operator (jstoup111), via /engineer DECIDE for #773
+
+> **Superseded 2026-07-21.** This ADR proposed a NEW `build_completeness` step without recognizing
+> that `build_review` (adr-2026-07-07-build-review-judgement-gate, #324 — merged) already IS the
+> judgement gate at the build → manual_test seam with this exact machinery. The completeness
+> judgement is instead folded into build_review as a default-on rubric item. See
+> adr-2026-07-21-completeness-as-build-review-rubric. The rest of this ADR (fail-closed predicate,
+> kickback bounding, fail-closed-on-unavailability, the holistic-not-per-task-stamp guardrail) is
+> preserved there.
 
 <!-- Companion to adr-2026-07-21-demote-task-stamping-to-telemetry -->
 

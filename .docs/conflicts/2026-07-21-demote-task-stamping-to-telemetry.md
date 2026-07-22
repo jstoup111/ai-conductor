@@ -8,8 +8,10 @@ All 5 conflict types (contradiction / overlap / state / resource / sequencing) c
 13 stories and against existing conductor behavior. The stories are facets of one coherent change;
 the tension points the operator flagged were examined directly:
 
-- **New build_completeness gate vs deleted evidence gate** — complementary, not contradictory: one
-  gate replaces the other. No story asserts stamps still gate. CLEAN (confidence ~95%).
+- **build_review completeness rubric vs deleted evidence gate** — complementary, not contradictory:
+  the default-on completeness rubric on the existing build_review gate replaces the per-task stamp
+  gate. No story asserts stamps still gate. CLEAN (confidence ~95%). (Revised 2026-07-21: replacement
+  is a build_review rubric item, not a new step — see adr-2026-07-21-completeness-as-build-review-rubric.)
 - **Sequencing story vs deletion story** — the sequencing story is a CONSTRAINT on the deletion
   ("new gate enforcing before stamp-predicate removed"), correctly captured as a task-dependency
   ordering, not a circular/contradictory dependency. CLEAN.
