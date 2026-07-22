@@ -522,7 +522,7 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 // manual_test seam — replacement completion authority, #773 Task 4)
 // ────────────────────────────────────────────────────────────────────────────
 
-export const DEFAULT_BUILD_REVIEW_ENABLED = true;
+const DEFAULT_BUILD_REVIEW_ENABLED = true;
 
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
