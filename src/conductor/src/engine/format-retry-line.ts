@@ -43,3 +43,14 @@ export function formatProgressDelta(before?: number, after?: number): string {
 
   return `${before}→${after} tasks`;
 }
+
+/**
+ * Computes the 1-based display position for build progress.
+ * @param resolved - Count of resolved/completed tasks
+ * @param total - Total task count
+ * @param hasCurrent - Whether there is an in-progress task
+ * @returns Display-only 1-based position, clamped to total
+ */
+export function displayBuildPosition(resolved: number, total: number, hasCurrent: boolean): number {
+  return Math.min(resolved + (hasCurrent ? 1 : 0), total);
+}
