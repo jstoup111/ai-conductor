@@ -876,6 +876,8 @@ export interface BuildReviewRubric {
   scope?: boolean;
   /** Fix addresses a symptom rather than the underlying root cause. */
   rootCause?: boolean;
+  /** Implementation addresses only part of the task's declared scope. */
+  completeness?: boolean;
 }
 
 export interface BuildReviewVerdict {
@@ -923,6 +925,7 @@ export function validateBuildReviewVerdict(
   if (typeof rubricSrc.tautology === 'boolean') rubric.tautology = rubricSrc.tautology;
   if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
   if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
+  if (typeof rubricSrc.completeness === 'boolean') rubric.completeness = rubricSrc.completeness;
 
   const result: {
     ok: true;

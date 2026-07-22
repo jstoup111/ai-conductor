@@ -2305,6 +2305,32 @@ Task 1 → Task 2
       });
     });
 
+    it('accepts and round-trips a verdict containing rubric.completeness', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      });
+    });
+
+    it('validates a verdict where only rubric.completeness fails as overall FAIL (all-or-FAIL semantics)', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['implementation addresses only part of the task scope'],
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['implementation addresses only part of the task scope'],
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+    });
+
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
