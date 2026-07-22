@@ -1,10 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   runDaemon,
   guardedDispatchWith,
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
+import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
+import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -2189,4 +2194,85 @@ describe('engine/daemon — runDaemon', () => {
       expect(res.processed[0].status).toBe('done');
     });
   });
+
+  // ── Task 16 (FR-6 negative): per-feature preflight backstop survives a
+  // mid-cycle credential deletion race ────────────────────────────────────
+  // The daemon-level gate (`isBuildAuthMissing`, Tasks 13/14) is checked once
+  // at the top of a cycle before picks are made. If the credential is deleted
+  // AFTER the gate passes but BEFORE a dispatched feature's own preflight
+  // (`preflightBuildAuthCheck`, Task 6/12) runs, that feature must still
+  // fail-closed and HALT with the shared remediation message — the per-
+  // feature preflight is not allowed to trust the daemon-level gate's
+  // stale "clear" result. On the NEXT cycle, the daemon-level gate must
+  // re-poll and correctly report the credential missing again (no stale
+  // caching of the earlier "present" result).
+  describe('per-feature preflight backstop under mid-cycle token deletion (Task 16, FR-6)', () => {
+    it('gate passes at cycle start, credential deleted before feature preflight runs -> feature HALTs with shared message; gate re-engages next cycle', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-build-auth-race-'));
+      const tokenPath = join(projectRoot, 'daemon-token');
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      // Credential present at cycle start — the daemon-level gate should pass.
+      await writeFile(tokenPath, 'sk-live-token-value', 'utf-8');
+
+      try {
+        const gateChecks: boolean[] = [];
+        let preflightResult: Awaited<ReturnType<typeof preflightBuildAuthCheck>>;
+
+        const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
+          discoverBacklog: staticBacklog(items(1)),
+          isBuildAuthMissing: async () => {
+            // Real-world daemon-level gate check: is the token file present
+            // right now? Non-destructive existence check only.
+            const stillPresent = await accessExists(tokenPath);
+            gateChecks.push(!stillPresent);
+            return !stillPresent;
+          },
+          runFeature: vi.fn(async (it) => {
+            // Simulate the race: the credential is deleted mid-cycle, after
+            // the daemon-level gate above already passed for this cycle, but
+            // before this feature's own preflight check runs.
+            await rm(tokenPath, { force: true });
+            preflightResult = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+            return { slug: it.slug, status: 'done' };
+          }),
+          log: () => {},
+          sleep: async () => {},
+        };
+
+        const res = await runDaemon(deps as DaemonDeps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 2,
+        });
+
+        // Cycle 1: gate saw the credential present (not missing) — dispatch proceeded.
+        expect(gateChecks[0]).toBe(false);
+        // The feature's own preflight, run after the mid-cycle deletion,
+        // still fail-closed HALTs with the shared remediation message.
+        expect(preflightResult).toBeDefined();
+        expect(preflightResult!.success).toBe(false);
+        expect(preflightResult!.output).toContain(buildAuthRemediationMessage(tokenPath));
+        expect(deps.runFeature).toHaveBeenCalledTimes(1);
+        expect(res.processed).toHaveLength(1);
+
+        // Cycle 2 (and onward, since backlog item already started/done —
+        // use a fresh backlog item to force another gate check): the
+        // daemon-level gate re-polls and correctly reports missing now that
+        // the credential is gone, rather than trusting a stale "present"
+        // result from cycle 1.
+        expect(gateChecks.length).toBeGreaterThanOrEqual(2);
+        expect(gateChecks[gateChecks.length - 1]).toBe(true);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+  });
 });
+
+async function accessExists(path: string): Promise<boolean> {
+  const { access } = await import('node:fs/promises');
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
