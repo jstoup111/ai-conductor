@@ -113,6 +113,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   fail-closed evidence rejection — all gating machinery built around `Task:` commit-trailer
   stamping — are removed now that `build_review`'s completeness rubric is the default-on
   completion authority and trailer stamping is telemetry-only (#773).
+- `engineer land` no longer false-rejects technical-track specs by validating a
+  legacy newest-by-mtime spec; all `landSpec` artifact pickers are idea-scoped
+  (#488).
 
 ## Migration
 
