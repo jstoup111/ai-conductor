@@ -181,7 +181,7 @@ describe('daemon.log renders build progress/no-progress/stall; daemon status fre
     // these three kinds, so nothing is written and this fails on length.
     expect(lines.length).toBeGreaterThanOrEqual(3);
 
-    const progressLine = lines.find((l) => l.includes('20/21'));
+    const progressLine = lines.find((l) => l.includes('21/21'));
     expect(progressLine).toBeDefined();
     expect(progressLine).toContain('emit-intra-step-build-progress-and-stall-as-events');
 
@@ -216,8 +216,8 @@ describe('daemon.log renders build progress/no-progress/stall; daemon status fre
 
     expect(rows).toHaveLength(1);
     // Fails today: no line was ever written (renderDaemonEvent drops the
-    // event), so lastActivity is undefined rather than containing "20/21".
+    // event), so lastActivity is undefined rather than containing "21/21".
     expect(rows[0].lastActivity).toBeDefined();
-    expect(rows[0].lastActivity).toContain('20/21');
+    expect(rows[0].lastActivity).toContain('21/21');
   });
 });

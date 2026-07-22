@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { formatRetryReason, formatProgressDelta } from './engine/format-retry-line.js';
+import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import {
@@ -1719,15 +1719,17 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           ? ` — task ${event.currentTaskId}`
           : '';
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
-      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${event.resolved}/${event.total}${task}${slug}`);
+      const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}`);
       break;
     }
     case 'build_no_progress': {
       // Warning line: distinct glyph + yellow coloring so it stands out from
       // the plain build_progress heartbeat above during a quiet episode.
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
+      const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
       log(
-        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${event.resolved}/${event.total})`)}${slug}`,
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})`)}${slug}`,
       );
       break;
     }

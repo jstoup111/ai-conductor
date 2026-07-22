@@ -55,8 +55,7 @@ describe('createRenderer — build progress/no-progress/stall', () => {
 
     const output = stream.output();
     expect(output).toContain('build');
-    expect(output).toContain('3');
-    expect(output).toContain('10');
+    expect(output).toContain('4/10');
     expect(output).toContain('T-4');
     expect(output).toContain('Wire up the widget');
   });
@@ -74,6 +73,58 @@ describe('createRenderer — build progress/no-progress/stall', () => {
     expect(output).toContain('5');
   });
 
+  it('renders the first in-progress task as 1/N, never 0/N', async () => {
+    await renderer({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 0,
+      total: 10,
+      currentTaskId: 'T-1',
+    });
+
+    const output = stream.output();
+    expect(output).toContain('1/10');
+    expect(output).not.toContain('0/10');
+  });
+
+  it('renders the last task as N/N when it is still in progress', async () => {
+    await renderer({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 9,
+      total: 10,
+      currentTaskId: 'T-10',
+    });
+
+    const output = stream.output();
+    expect(output).toContain('10/10');
+  });
+
+  it('renders an all-done build as N/N, not N+1/N, when there is no current task', async () => {
+    await renderer({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 10,
+      total: 10,
+    });
+
+    const output = stream.output();
+    expect(output).toContain('10/10');
+    expect(output).not.toContain('11/10');
+  });
+
+  it('renders a plain resolved count unincremented when there is no current task', async () => {
+    await renderer({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 6,
+      total: 10,
+    });
+
+    const output = stream.output();
+    expect(output).toContain('6/10');
+  });
+
   it('renders a human-readable warning line for build_no_progress with quiet minutes', async () => {
     await renderer({
       type: 'build_no_progress',
@@ -88,6 +139,21 @@ describe('createRenderer — build progress/no-progress/stall', () => {
     expect(output).toContain('build');
     expect(output).toContain('15');
     expect(output).toContain('T-2');
+  });
+
+  it('renders build_no_progress with a 1-based parenthetical count when a current task is set', async () => {
+    await renderer({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 0,
+      total: 8,
+      currentTaskId: 'T-1',
+    });
+
+    const output = stream.output();
+    expect(output).toContain('1/8');
+    expect(output).not.toContain('0/8');
   });
 
   it('renders a human-readable halt line for build_stall', async () => {
