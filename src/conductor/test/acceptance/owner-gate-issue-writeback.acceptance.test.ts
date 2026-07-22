@@ -200,7 +200,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     expect(patchCount).toBe(10);
   });
 
-  it('a reason transition (unowned-indeterminate → other-owner) on the issue updates the SAME existing comment in place, no new create', async () => {
+  it('ownership isolation: a transition to other-owner suppresses the issue write entirely (no PATCH, no create)', async () => {
     const mod = await loadGateWriteback();
     const markedUrl = 'https://github.com/acme/repo/issues/9#issuecomment-8002';
     const patchBodies: string[] = [];
@@ -231,8 +231,9 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     };
     await mod.announceGatedIssue(transitioned, 'acme/repo#9', { runGh: gh, cwd: '/repo' });
 
-    expect(patchBodies.length).toBe(1);
-    expect(patchBodies[0]).toContain('bob');
+    // other-owner ⇒ the daemon must not touch another operator's issue: no
+    // in-place PATCH of the marker comment and no new comment created.
+    expect(patchBodies.length).toBe(0);
     expect(commentCreateCount).toBe(0);
   });
 

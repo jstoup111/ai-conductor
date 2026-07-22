@@ -512,7 +512,10 @@ describe('gate-writeback (Task 17)', () => {
   // ── Task 20: Source-Ref issue announcements (S7 all) ─────────────────────
 
   describe('announceGatedIssue (Task 20)', () => {
-    it('a valid Source-Ref parses via issue-ref.ts and upserts the marker comment on the issue', async () => {
+    it('ownership isolation: an other-owner spec makes NO issue label/comment even with a valid Source-Ref', async () => {
+      // A gated spec is always `other-owner`, so its originating issue belongs
+      // to a different operator. The daemon must not label or comment on it
+      // (the #691-class breach). No gh write of any kind is issued.
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
         calls.push([...args]);
@@ -524,12 +527,8 @@ describe('gate-writeback (Task 17)', () => {
 
       await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo' });
 
-      expect(calls.some((c) => c.join(' ').includes('42'))).toBe(true);
-      const commentCall = calls.find((c) => c[0] === 'issue' && c[1] === 'comment');
-      expect(commentCall).toBeDefined();
-      const body = commentCall![commentCall!.indexOf('--body') + 1];
-      expect(body).toContain(OWNER_GATED_MARKER);
-      expect(body).toContain(SPEC.slug);
+      expect(calls.find((c) => c[0] === 'issue' && c[1] === 'comment')).toBeUndefined();
+      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_LABEL))).toBe(false);
     });
 
     it('absent marker (sourceRef undefined) skips silently — zero gh calls', async () => {
@@ -647,7 +646,7 @@ describe('gate-writeback (Task 17)', () => {
       expect(warnedSkips.size).toBe(2);
     });
 
-    it('RT-3: dedup never blocks a real announcement — a valid Source-Ref still announces after a prior no-source-ref skip for the same slug', async () => {
+    it('ownership isolation: an other-owner spec never announces on the issue, even with a warnedSkips set present', async () => {
       const warnedSkips = new Set<string>([`${SPEC.slug}:no-source-ref`]);
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
@@ -660,15 +659,11 @@ describe('gate-writeback (Task 17)', () => {
 
       await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo', warnedSkips });
 
-      const labelCall = calls.find((c) => c.join(' ').includes(OWNER_GATED_LABEL));
-      expect(labelCall).toBeDefined();
-      const commentCall = calls.find((c) => c[0] === 'issue' && c[1] === 'comment');
-      expect(commentCall).toBeDefined();
-      const body = commentCall![commentCall!.indexOf('--body') + 1];
-      expect(body).toContain(OWNER_GATED_MARKER);
+      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_LABEL))).toBe(false);
+      expect(calls.find((c) => c[0] === 'issue' && c[1] === 'comment')).toBeUndefined();
     });
 
-    it('closed issue still gets commented on', async () => {
+    it('ownership isolation: an other-owner spec is NOT commented on regardless of issue state (closed)', async () => {
       let commentPosted = false;
       const gh: GhRunner = async (args) => {
         if (args[0] === 'issue' && args[1] === 'view') {
@@ -682,7 +677,7 @@ describe('gate-writeback (Task 17)', () => {
 
       await announceGatedIssue(SPEC, 'acme/repo#7', { runGh: gh, cwd: '/repo' });
 
-      expect(commentPosted).toBe(true);
+      expect(commentPosted).toBe(false);
     });
 
     it('PR-succeeded/issue-failed: independent, pass completes without throwing', async () => {
