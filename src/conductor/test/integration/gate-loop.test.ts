@@ -837,10 +837,20 @@ describe('integration/gate-loop', () => {
       // intact and parseable (the loop converged rather than HALT-looping).
       const ts = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
       expect(ts.tasks[0].status).toBe('completed');
-      // Whitewash-guard marker was cleared on the legitimate pass.
-      await expect(
-        access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
-      ).rejects.toThrow();
+      // Whitewash-guard FAIL evidence (headSha/failRows) is cleared on the
+      // legitimate pass. The marker file itself now survives (#817): the
+      // gate-code-validity-on-redispatch PASS-path telemetry re-stamps it
+      // with just a `codeStamp` (the HEAD sha the clean PASS was formed
+      // against) so a later re-dispatch can trust an unchanged-code PASS
+      // without re-running manual_test. That codeStamp-only shape is
+      // unambiguously distinct from the FAIL-laundering shape (no headSha,
+      // no failRows) — see the `cleanPass` check in the manual_test gate.
+      const marker = JSON.parse(
+        await readFile(join(dir, '.pipeline/manual-test-fail-evidence.json'), 'utf-8'),
+      );
+      expect(marker.headSha).toBeUndefined();
+      expect(marker.failRows).toBeUndefined();
+      expect(typeof marker.codeStamp).toBe('string');
     });
 
     it('FAIL → kickback → build commits nothing → PASS rewrite is refused (whitewash) and the run HALTs', async () => {
