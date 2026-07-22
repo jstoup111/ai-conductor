@@ -56,6 +56,7 @@ import {
   detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
+import { removePhaseMarker } from './phase-marker.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -2028,6 +2029,12 @@ export class Conductor {
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
+        // Clear any stale phase-active marker (e.g. left behind by a crash
+        // mid-BUILD) unconditionally on every loop iteration, before any
+        // skip/continue logic runs. Without this, a leftover BUILD-phase
+        // marker can survive into a later DECIDE-phase step's dispatch and
+        // mask the write-guard's view of which phase is actually active.
+        removePhaseMarker(this.projectRoot);
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
 
