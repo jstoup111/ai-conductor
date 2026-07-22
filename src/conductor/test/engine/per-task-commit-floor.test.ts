@@ -15,7 +15,7 @@ describe('per-task-commit-floor', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'per-task-commit-floor-test-'));
     planPath = join(dir, 'plan.md');
-    await execa('git', ['init'], { cwd: dir });
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
   });
