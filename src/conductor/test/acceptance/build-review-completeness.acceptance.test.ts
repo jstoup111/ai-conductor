@@ -20,17 +20,19 @@
  * build-review-completeness.test.ts) cannot observe either seam — only a
  * real `Conductor.run()` pass proves the wiring.
  *
- * PRE-IMPLEMENTATION RED: as of this file's authoring, `build-review-prompt.ts`
- * has no completeness rubric item (only tautology/scope/rootCause exist) and
- * `DEFAULT_BUILD_REVIEW_ENABLED` is `false` (Tasks 2-8 of the plan have not
- * landed). This spec fakes the grader's dispatch (writing
- * `.pipeline/build-review.json` directly, the same convention
- * `merged-pr-guard-kickback.test.ts`'s `failingBuildReviewRunner` uses) so it
- * is red for the right reason: build_review never dispatches by default
- * today (Task 4 not yet default-on) and, even once forced to dispatch here,
- * the point under test — that a `Task:`-stamped-but-incomplete row does not
- * substitute for a passing completeness verdict — has no production wiring
- * to lean on yet either.
+ * POST-IMPLEMENTATION GREEN (Task 9): with Tasks 1-8 landed (grader-prompt
+ * completeness item, verdict schema, default-on activation, fail-closed
+ * predicate handling, self-heal kickback reuse, kickback-cap HALT, and
+ * fail-closed-on-LLM-unavailability), this spec now passes GREEN end-to-end
+ * with no production changes required: build_review dispatches by default
+ * with no per-project opt-in, a `Task:`-stamped-but-unimplemented row still
+ * FAILs the completeness dimension and kicks back to build via the existing
+ * build_review→build kickback path, and the run only reaches `done` once the
+ * missing work actually lands in the diff. This spec fakes the grader's
+ * dispatch (writing `.pipeline/build-review.json` directly, the same
+ * convention `merged-pr-guard-kickback.test.ts`'s `failingBuildReviewRunner`
+ * uses) so the assertions stay focused on the conductor-level wiring seam
+ * rather than the grader's own LLM call.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
