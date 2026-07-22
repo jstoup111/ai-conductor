@@ -186,13 +186,14 @@ export async function landSpec(
   // PRODUCT track. Technical-only features carry acceptance criteria in stories
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).
+  const ideaFiles = await resolveIdeaFiles(worktreePath, canonical);
   const trackDir = join(worktreePath, '.docs', 'track');
-  const trackFile = await findNewestFile(trackDir);
+  const trackFile = await pickIdeaFile(trackDir, ideaFiles);
   const track = parseTrack(trackFile ? await readFile(trackFile, 'utf-8') : null) ?? 'product';
   const specRequired = track === 'product';
 
   // 4. C2: require stories + plan always; spec only on the product track.
-  const specFile = await findNewestFile(specsDir);
+  const specFile = await pickIdeaFile(specsDir, ideaFiles);
   const storiesFile = await findNewestFile(storiesDir);
   const planFile = await findNewestFile(plansDir);
 

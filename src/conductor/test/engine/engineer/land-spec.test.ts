@@ -402,3 +402,80 @@ describe('resolveIdeaFiles (Task 1: idea-scoped artifact attribution)', () => {
     expect(ideaFiles.has('.docs/plans/legacy.md')).toBe(false);
   });
 });
+
+describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
+  it('technical-track worktree lands clean even when a legacy DRAFT spec on main is newest-by-mtime', async () => {
+    // Legacy spec committed on `main` BEFORE the worktree is created, carrying
+    // a DRAFT status line that would trip the C2 content guard if it were ever
+    // picked. corpus-wide findNewestFile() would pick this file up once it's
+    // touched to be newest; the idea-scoped picker must never even consider it
+    // (technical track has no spec candidate in the idea's own attribution set).
+    await mkdir(join(repoPath, '.docs', 'specs'), { recursive: true });
+    const legacySpecPath = join(repoPath, '.docs', 'specs', 'legacy.md');
+    await writeFile(legacySpecPath, '# PRD: legacy\n\n**Status:** DRAFT\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy DRAFT spec on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    // Touch the legacy spec to be newest-by-mtime in .docs/specs/ AFTER the
+    // idea's own artifacts were written — a corpus-wide picker would now pick it.
+    const newDate = new Date();
+    await utimes(legacySpecPath, newDate, newDate);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+
+    // The commit landSpec made must not touch the legacy spec at all.
+    const diffNames = await git(['diff', '--name-only', headBefore, 'HEAD'], dir);
+    expect(diffNames.split('\n')).not.toContain('.docs/specs/legacy.md');
+  });
+
+  it('idea Track: technical marker wins over a legacy Track: product marker regardless of mtime', async () => {
+    // Legacy product-track marker committed on `main` BEFORE the worktree is
+    // created — outside the idea's own attribution set, so it must never be
+    // picked even though it's a "Track:" file living in the same directory.
+    await mkdir(join(repoPath, '.docs', 'track'), { recursive: true });
+    const legacyTrackPath = join(repoPath, '.docs', 'track', 'legacy.md');
+    await writeFile(legacyTrackPath, '# Track\n\nTrack: product\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'legacy product-track marker on main']);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    const dir = worktree.worktreePath;
+
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    // Idea's own technical-track marker.
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    // Touch the legacy marker (present in the worktree's checkout too, since
+    // the branch derived from `main` after it was committed there) to be
+    // newest-by-mtime — mtime alone must not let it win.
+    const newDate = new Date();
+    await utimes(join(dir, '.docs', 'track', 'legacy.md'), newDate, newDate);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    // Technical track requires no spec — if the product-track legacy marker
+    // won instead, this would throw "spec (product track)" missing.
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+});
