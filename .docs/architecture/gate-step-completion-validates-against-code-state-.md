@@ -12,30 +12,30 @@ the `GATE_SURFACE` + `partitionDelta` machinery from `gate-invalidation.ts` (ADR
 
 ```mermaid
 flowchart TD
-  RD[Daemon re-dispatch\ndaemon-cli.ts:823-909] --> RUN[Conductor.run\nre-stamps session_started_at\nconductor.ts:1578-1581]
-  RUN --> CSC[checkStepCompletion\nartifacts.ts:2499-2517]
-  CSC --> PRED{judged-gate\nverdict predicate?\nbuild_review / prd_audit /\narch_review_as_built / manual_test}
+  RD["Daemon re-dispatch<br/>daemon-cli.ts:823-909"] --> RUN["Conductor.run<br/>re-stamps session_started_at<br/>conductor.ts:1578-1581"]
+  RUN --> CSC["checkStepCompletion<br/>artifacts.ts:2499-2517"]
+  CSC --> PRED{"judged-gate verdict predicate?<br/>build_review / prd_audit /<br/>arch_review_as_built / manual_test"}
 
-  PRED -->|no| OLD[unchanged predicate\n(task-status build, acceptance_specs,\nwiring_check already HEAD-anchored)]
+  PRED -->|no| OLD["unchanged predicate<br/>(task-status build, acceptance_specs,<br/>wiring_check already HEAD-anchored)"]
 
-  PRED -->|yes| PARSE{verdict file exists\n& parses & PASS?}
-  PARSE -->|no / FAIL / invalid| RERUN[re-run gate\n(dispatch judge)]
-  PARSE -->|yes| STAMP{codeStamp present\non verdict?}
+  PRED -->|yes| PARSE{"verdict file exists,<br/>parses, and PASS?"}
+  PARSE -->|"no / FAIL / invalid"| RERUN["re-run gate<br/>(dispatch judge)"]
+  PARSE -->|yes| STAMP{"codeStamp present<br/>on verdict?"}
 
-  STAMP -->|absent\n(legacy / opt-out)| MTIME[fall back to existing\nmtime attempt-floor check]
+  STAMP -->|"absent (legacy / opt-out)"| MTIME["fall back to existing<br/>mtime attempt-floor check"]
   MTIME --> RERUN
 
-  STAMP -->|present| VALID[gate-code-validity helper]
-  VALID --> REACH{stamped baseline\nreachable in history?}
-  REACH -->|no — orphaned #766| RERUN
-  REACH -->|yes| DELTA{delta baseline..HEAD\ncomputable?}
+  STAMP -->|present| VALID["gate-code-validity helper"]
+  VALID --> REACH{"stamped baseline<br/>reachable in history?"}
+  REACH -->|"no — orphaned (766)"| RERUN
+  REACH -->|yes| DELTA{"delta baseline..HEAD<br/>computable?"}
   DELTA -->|no| RERUN
-  DELTA -->|yes| SURF{partitionDelta by\nGATE_SURFACE hits\nthis gate's surface?}
-  SURF -->|yes — code changed| RERUN
-  SURF -->|no — surface unchanged| KEEP[PRESERVE verdict\nstep = done, no re-run]
+  DELTA -->|yes| SURF{"partitionDelta by GATE_SURFACE:<br/>does the delta hit<br/>this gate's surface?"}
+  SURF -->|"yes — code changed"| RERUN
+  SURF -->|"no — surface unchanged"| KEEP["PRESERVE verdict<br/>step = done, no re-run"]
 
-  subgraph writepath[Verdict write path unchanged shape, + stamp]
-    JUDGE[judge dispatch writes\nbuild-review.json etc.] --> WSTAMP[stamp codeStamp = current HEAD\nat write time]
+  subgraph writepath ["Verdict write path (unchanged shape) + stamp"]
+    JUDGE["judge dispatch writes<br/>build-review.json etc."] --> WSTAMP["stamp codeStamp = current HEAD<br/>at write time"]
   end
 ```
 
