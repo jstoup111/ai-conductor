@@ -263,14 +263,16 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
           continue;
         }
 
-        // Preserve terminal rows backed by engine evidence: a real evidence
-        // stamp, or a legacy migrationGrandfather entry from before H8 was
-        // retired. Nothing writes new grandfather entries anymore (see Task
-        // 8/9) — completion is derived solely from evidence stamps.
+        // Preserve terminal rows unconditionally (Task 10, #773): the
+        // build predicate no longer cross-checks task-status.json rows
+        // against the evidence ledger (deriveCompletion/createTaskEvidence/
+        // evidenceStamps) — that anti-forgery check is retired, since
+        // build_review's completeness rubric now independently judges the
+        // real diff on every pass. A row already marked completed/skipped
+        // stays that way across re-seeds regardless of whether an evidence
+        // stamp exists for it.
         if (existing.status === 'completed' || existing.status === 'skipped') {
-          if (stampFor(taskId) || hasGrandfather(taskId)) {
-            continue;
-          }
+          continue;
         }
 
         // Otherwise update name and status

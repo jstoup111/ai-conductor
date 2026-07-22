@@ -1468,10 +1468,15 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       expect(result.value.build).not.toBe('done');
     }
 
-    // Exactly one checkStepCompletion call for the 'build' step: the guard
-    // must NOT fire a second call when stampedTaskIds is empty.
+    // Task 10 (#773): the build predicate no longer derives completion from
+    // git-trailer evidence inline, so the FIRST checkStepCompletion('build')
+    // call reports not-done on fresh task-status.json rows; conductor.ts's
+    // own auto-heal step (deriveCompletion + applyDerivedCompletion) then
+    // fires a re-check — that's the baseline call count now, independent of
+    // the attribution-lane guard this spec targets. The guard under test
+    // still must NOT fire a THIRD call when stampedTaskIds is empty.
     const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
-    expect(buildChecks).toHaveLength(1);
+    expect(buildChecks).toHaveLength(2);
 
     checkSpy.mockRestore();
   });
@@ -1535,10 +1540,13 @@ describe('attribution-conductor-wiring — in-cycle rescue (Story 1, RED)', () =
       expect(result.value.build).not.toBe('done');
     }
 
-    // Exactly one checkStepCompletion call for 'build' — the pre-lane
-    // baseline, with no lane-triggered re-check.
+    // Task 10 (#773): the build predicate no longer derives completion from
+    // git-trailer evidence inline, so conductor.ts's auto-heal step
+    // (deriveCompletion + applyDerivedCompletion) re-checks once after the
+    // initial not-done evaluation — that's the pre-lane baseline call count
+    // now. The lane itself still must add no further re-check.
     const buildChecks = checkSpy.mock.calls.filter((args) => args[1] === 'build');
-    expect(buildChecks).toHaveLength(1);
+    expect(buildChecks).toHaveLength(2);
 
     checkSpy.mockRestore();
   });

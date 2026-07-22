@@ -343,7 +343,20 @@ describe('acceptance: the #733 no-diff stall shape reaches gate-pass (Evidence: 
 
   // ── Story 3 (negative: self-reported skip with no commit resolves nothing) ─
 
-  it('a task-status row merely claiming skipped, with no Evidence: skipped commit on the branch, never reaches done (pins today\'s behavior)', async () => {
+  // Task 10 (#773): this used to pin the anti-forgery invariant — a
+  // task-status.json row claiming 'skipped' with no `Evidence: skipped`
+  // commit on the branch was rejected by the build gate's cross-check
+  // against the independently re-derived evidence ledger
+  // (deriveCompletion/createTaskEvidence/evidenceStamps). That cross-check
+  // has been removed from the build predicate: it now trusts
+  // task-status.json row status directly, and real completion authority
+  // for a forged/self-reported row lives in build_review's completeness
+  // rubric (a fail-closed, default-on grader verdict) instead. This test
+  // now pins the NEW behavior: a self-reported 'skipped' row reaches
+  // done, and — critically — no `evidence:skipped` stamp is fabricated in
+  // the evidence sidecar, since this predicate no longer writes to it at
+  // all.
+  it('a task-status row merely claiming skipped, with no Evidence: skipped commit on the branch, reaches done — the anti-forgery cross-check is retired; build_review judges the real diff instead', async () => {
     const repo = await initRepo('nodiffstamp-forged-skip-');
     repos.push(repo);
     const statePath = join(repo.root, 'conduct-state.json');
@@ -356,8 +369,8 @@ describe('acceptance: the #733 no-diff stall shape reaches gate-pass (Evidence: 
         '### Task 3\n**Verify-only:** yes\n**Files likely touched:** `b.ts`\n\nClose or prove closed.\n',
     );
     // task-status.json CLAIMS task 3 is skipped, but no Evidence: skipped
-    // commit exists on the branch for it — the derive-from-git invariant
-    // must ignore the self-reported row entirely.
+    // commit exists on the branch for it — the build predicate no longer
+    // cross-checks this self-reported row against the evidence ledger.
     await writeFile(
       join(repo.root, '.pipeline/task-status.json'),
       JSON.stringify(
@@ -398,7 +411,7 @@ describe('acceptance: the #733 no-diff stall shape reaches gate-pass (Evidence: 
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.build).not.toBe('done');
+      expect(result.value.build).toBe('done');
     }
     const evidenceRaw = await taskEvidenceRaw(repo);
     expect(evidenceRaw ?? '').not.toMatch(/evidence:skipped/);

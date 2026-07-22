@@ -1754,6 +1754,17 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
 
     const ctx = { projectRoot: repoDir, planPath };
 
+    // Task 10 (#773): the build predicate itself no longer derives
+    // completion from git-trailer evidence (deriveCompletion/evidenceStamps
+    // were removed from checkStepCompletion's 'build' path); it only trusts
+    // task-status.json row status. Real commit evidence is now reconciled
+    // by conductor.ts's auto-heal step (deriveCompletion +
+    // applyDerivedCompletion), which runs whenever the gate reports
+    // not-done — mirror that here, the same way conductor.ts does.
+    const { deriveCompletion, applyDerivedCompletion } = await import('../../src/engine/autoheal.js');
+    const derived = await deriveCompletion(repoDir, planPath);
+    await applyDerivedCompletion(repoDir, derived);
+
     // (a) Build gate: all tasks commit-evidenced within «merge-base»..HEAD.
     const gateVerdict = await checkStepCompletion(repoDir, 'build', ctx);
     expect(gateVerdict.done).toBe(true);
@@ -1822,10 +1833,21 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     const ctx = { projectRoot: repoDir, planPath };
     const verdict = await checkStepCompletion(repoDir, 'build', ctx);
 
-    // The upstream commit is outside «merge-base»..HEAD (it IS the merge
-    // base), so it can never be accepted as this branch's Task 1 evidence —
-    // the gate must report the task unresolved rather than pass.
+    // Task 10 (#773): the build predicate no longer derives completion
+    // from git-trailer evidence at all (deriveCompletion/evidenceStamps
+    // were removed from this gate) — it only trusts task-status.json row
+    // status directly. Since this feature branch never lands its own
+    // Task: 1 evidence, and nothing here reconciles task-status.json from
+    // git (that reconciliation is conductor.ts's auto-heal step, calling
+    // deriveCompletion + applyDerivedCompletion — see the sibling test
+    // above), the seeded row for Task 1 stays 'pending' and the gate
+    // correctly reports not-done. The «merge-base»..HEAD evidence-scoping
+    // behavior this test used to exercise now lives solely in
+    // deriveCompletion itself (see autoheal.test.ts), which is exactly
+    // what would reject the coincidental upstream trailer if conductor's
+    // auto-heal step were invoked here — this gate-level check confirms
+    // the structural predicate alone never mistakes an unresolved plan
+    // task for done.
     expect(verdict.done).toBe(false);
-    expect(verdict.reason).toMatch(/pending|not completed/i);
   });
 });

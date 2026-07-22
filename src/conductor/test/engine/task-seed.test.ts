@@ -123,7 +123,14 @@ Content
       expect(task2.status).toBe('pending');
     });
 
-    it('resets to pending if evidence stamp is missing', async () => {
+    // Task 10 (#773): this used to pin the H8 anti-forgery invariant — a
+    // 'completed' row with no matching evidence-sidecar stamp was demoted
+    // back to 'pending' on re-seed. That cross-check is retired: the build
+    // predicate (and now seedTaskStatus itself) no longer consults the
+    // evidence sidecar at all — real completion authority moved to
+    // build_review's completeness rubric. A terminal row now survives
+    // re-seed regardless of whether a sidecar stamp exists for it.
+    it('preserves a completed row across re-seed even with no matching evidence stamp (anti-forgery cross-check retired)', async () => {
       // Setup: task-status.json with completed task but no evidence
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(
@@ -134,10 +141,8 @@ Content
       );
 
       // A PRESENT-but-empty sidecar: post-cutover state, so this is NOT a
-      // first seed — the H8 migration grandfather does not apply, and an
-      // unstamped 'completed' row is a forged/agent-asserted one that must
-      // demote. (First seed — sidecar absent — grandfathers terminal rows
-      // instead; that path is covered by the grandfather tests.)
+      // first seed. seedTaskStatus no longer reads this file to decide
+      // whether to preserve the row.
       await fsPromises.writeFile(
         join(dir, '.pipeline/task-evidence.json'),
         JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
@@ -160,7 +165,7 @@ Content
       const status = JSON.parse(content);
 
       const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('pending');
+      expect(task1.status).toBe('completed');
     });
   });
 

@@ -8,25 +8,36 @@ import { promisify } from 'node:util';
 import { CUSTOM_COMPLETION_PREDICATES, type CompletionContext } from '../../src/engine/artifacts.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RED integration specs for "The gate recomputes completion on every
-// evaluation and never trusts file rows" (ADR H6/H7,
+// Integration specs for "The gate recomputes completion on every evaluation
+// and never trusts file rows" (ADR H6/H7,
 // .docs/stories/prd-audit-kickback-preserves-task-status.md).
 //
-// Two kinds of assertion in this file:
+// Task 10 (#773) update: the H6/H7 cross-check this file originally pinned —
+// `CUSTOM_COMPLETION_PREDICATES.build` re-deriving completion from git
+// evidence and rejecting forged/uncorroborated task-status.json rows — has
+// been REMOVED from the build predicate. The predicate is now purely
+// structural: it seeds task-status.json from the plan (creating/rebuilding
+// the file when missing or corrupt) and trusts each row's `status` field
+// directly (completed/skipped), with no cross-check against git or the
+// evidence sidecar. Real completion authority for a forged/self-reported row
+// now lives in build_review's completeness rubric (a fail-closed, default-on
+// grader verdict), and git-evidence re-derivation happens separately, in
+// conductor.ts's own auto-heal step (`deriveCompletion` +
+// `applyDerivedCompletion`), which is NOT exercised by driving
+// `CUSTOM_COMPLETION_PREDICATES.build` directly as these specs do.
 //
-//  1. Specs that drive the EXISTING `CUSTOM_COMPLETION_PREDICATES.build`
-//     (artifacts.ts) directly, against a real isolated git repo + real plan +
-//     real `task-status.json` on disk. Today's implementation trusts the raw
-//     JSON rows (no git derivation at all), so these fail for the right
-//     reason: a forged/corrupt/deleted file currently produces the WRONG
-//     verdict because nothing re-derives from git.
+// Two kinds of assertion remain in this file:
+//
+//  1. Specs that drive `CUSTOM_COMPLETION_PREDICATES.build` (artifacts.ts)
+//     directly, against a real isolated git repo + real plan + real
+//     `task-status.json` on disk — now pinning the NEW structural-only
+//     behavior (seed-and-trust-rows, never crash on missing/corrupt file,
+//     never cross-check evidence).
 //
 //  2. A spec that dynamically imports `deriveCompletion` from
-//     `../../src/engine/autoheal.js` — the planned rework of
-//     `findMatchingCommit`/`attemptAutoHeal` (plan Task 7/10) — which does not
-//     exist yet at RED time. Per the `rekick-shipped-skip.acceptance.test.ts`
-//     convention, this is a dynamic import so a missing export fails only the
-//     specific test, not the whole file at collection time.
+//     `../../src/engine/autoheal.js` — unaffected by Task 10, since
+//     deriveCompletion itself (the autoheal surface) still re-derives from
+//     git evidence; it's just no longer called inline by the build gate.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const execFile = promisify(execFileCb);
@@ -134,7 +145,7 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
     expect(typeof second['1'].evidencedBy).toBe('string');
   });
 
-  it('negative: forged all-completed rows with zero commits must NOT pass the gate', async () => {
+  it('positive (Task 10, #773): a self-reported all-completed row set passes the gate — the git-evidence cross-check is retired', async () => {
     await writeFile(
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({
@@ -147,37 +158,43 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
 
     const result = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctxFor(join(dir, '.docs/plans/p.md')));
 
-    // Today's implementation trusts the raw JSON rows and returns done:true
-    // here — this assertion is the RED signal that recomputation from git
-    // evidence has not been wired in yet.
-    expect(result.done).toBe(false);
+    // The build predicate no longer re-derives from git or cross-checks the
+    // evidence sidecar — it trusts task-status.json row status directly.
+    // Whether the rows are actually corroborated by real work is now
+    // build_review's job, not this gate's.
+    expect(result.done).toBe(true);
   });
 
-  it('negative: task-status.json deleted mid-run — gate re-derives from evidence, never terminal "missing"', async () => {
+  it('negative: task-status.json deleted mid-run — gate re-seeds fresh pending rows rather than a terminal "missing"', async () => {
     await commitTrailer('1', 'src/a.ts');
     await commitTrailer('2', 'src/b.ts');
     // No task-status.json on disk at all (simulates an agent wholesale wipe).
 
     const result = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctxFor(join(dir, '.docs/plans/p.md')));
 
-    // Both plan tasks are evidenced by real trailer commits — the gate should
-    // re-seed + re-derive and report done:true. Today it just reports the
-    // static "missing .pipeline/task-status.json" reason regardless of git
-    // evidence, so this fails for the correct (not-yet-implemented) reason.
-    expect(result.done).toBe(true);
+    // Task 10 (#773): the predicate no longer derives completion from git at
+    // all, so real trailer commits alone do not resolve the re-seeded rows —
+    // that reconciliation is conductor.ts's separate auto-heal step
+    // (deriveCompletion + applyDerivedCompletion), not exercised here. What
+    // this spec pins is the non-terminal behavior: a missing file is
+    // re-seeded (fresh pending rows), never a permanent "missing" failure.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed/i);
   });
 
-  it('negative: corrupt JSON in task-status.json — gate rebuilds from seed+derive rather than treating it as terminal', async () => {
+  it('negative: corrupt JSON in task-status.json — gate rebuilds from seed rather than treating it as terminal', async () => {
     await commitTrailer('1', 'src/a.ts');
     await commitTrailer('2', 'src/b.ts');
     await writeFile(join(dir, '.pipeline/task-status.json'), '{ not valid json ][');
 
     const result = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctxFor(join(dir, '.docs/plans/p.md')));
 
-    // Same reasoning as the deleted-file case: today's predicate returns the
-    // static 'invalid JSON' reason unconditionally instead of rebuilding from
-    // git evidence.
-    expect(result.done).toBe(true);
+    // Task 10 (#773): same reasoning as the deleted-file case above — corrupt
+    // JSON is rebuilt into fresh pending rows (never a terminal failure), but
+    // resolving them to done requires conductor.ts's separate auto-heal step,
+    // not exercised by this direct predicate call.
+    expect(result.done).toBe(false);
+    expect(result.reason).toMatch(/pending|not completed/i);
   });
 
   it('regression pin: an attempt that committed evidenced work after a first miss must flip the SAME-run verdict from incomplete to done', async () => {
@@ -232,12 +249,16 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
     return planPath;
   }
 
-  it('negative: 17-task plan, 5 real + 9 forged-completed with zero commits — first gate evaluation fails naming the forged ids, and a repeat evaluation is byte-identical (#463)', async () => {
+  it('17-task plan, 5 real + 9 completed rows with zero commits — the build predicate trusts task-status.json rows directly (anti-forgery cross-check retired, #773 Task 10); only genuinely untouched rows are unresolved, and a repeat evaluation is byte-identical', async () => {
     const planPath = await write17TaskPlan();
 
-    // The exact #463 incident shape (see the "First seed never grandfathers"
-    // story's negative path): an agent forges `completed` rows for tasks
-    // 2,4-7,11-13,16 — 9 ids — with zero corroborating commits.
+    // Historical #463 shape: ids 2,4-7,11-13,16 (9 ids) have `completed` rows
+    // with zero corroborating commits. Per #773 Task 10, the build predicate
+    // no longer cross-checks rows against an independently re-derived
+    // evidence sidecar (the H6/H7/H8 anti-forgery check is retired) — real
+    // completion authority now lives in build_review's completeness rubric,
+    // not this structural predicate. So these rows are trusted like any
+    // other 'completed' row.
     const forgedIds = ['2', '4', '5', '6', '7', '11', '12', '13', '16'];
     // 5 REAL completions, each with a real evidencing commit + trailer, drawn
     // from the ids NOT in forgedIds.
@@ -246,11 +267,7 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
       await commitTrailer(id, `src/task-${id}.ts`);
     }
     // Remaining ids (14,15,17 — 3 of them) are left completely untouched: no
-    // row, no evidence, genuinely pending. Combined with the 9 forged ids,
-    // the build gate's unresolved set is these 12 — the CompletionResult's
-    // `reason` string only names the first 3 (in plan order) plus a "+N more"
-    // count (see artifacts.ts's `unresolved.slice(0, 3)`), so the assertions
-    // below check that count/prefix shape rather than a full per-id listing.
+    // row at all, genuinely pending.
 
     await writeFile(
       join(dir, '.pipeline/task-status.json'),
@@ -261,28 +278,16 @@ describe('integration: build gate recomputes completion on every evaluation (H6/
         ],
       }),
     );
-    // No .pipeline/task-evidence.json is written here at all — deriveCompletion
-    // (invoked inside the predicate) will create the real evidence stamps for
-    // the 5 real ids from git; the forged 9 must never gain a stamp since
-    // nothing corroborates them.
 
     const ctx = ctxFor(planPath);
 
     const first = await CUSTOM_COMPLETION_PREDICATES.build!(dir, ctx);
     expect(first.done).toBe(false);
     expect(typeof first.reason).toBe('string');
-    // 12 unresolved out of 17 (9 forged + 3 untouched) — never fewer, which
-    // would mean a forged id slipped through as resolved.
-    expect(first.reason).toMatch(/^12\/17 tasks pending\/not completed:/);
-    // The first 3 unresolved ids in plan order are forged ids (2, 4, 5) —
-    // proves the forged ids are the ones actually failing the gate, not
-    // coincidentally-absent real ones.
-    expect(first.reason).toContain('2, 4, 5');
-    expect(first.reason).toMatch(/\(\+9 more\)/);
-    // Real ids must never appear as pending in the named prefix.
-    for (const id of realIds) {
-      expect(first.reason).not.toMatch(new RegExp(`[:,]\\s*${id}\\b`));
-    }
+    // Only the 3 genuinely untouched ids are unresolved — the 9 rows with a
+    // 'completed' status, forged or not, are now trusted directly.
+    expect(first.reason).toMatch(/^3\/17 tasks pending\/not completed:/);
+    expect(first.reason).toContain('14, 15, 17');
 
     // Repeat the IDENTICAL evaluation (same repo, same files, no state
     // changes) — the failure reason must be byte-identical, proving there is

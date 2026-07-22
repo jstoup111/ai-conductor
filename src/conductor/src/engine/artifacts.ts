@@ -1045,22 +1045,27 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
-    // H6/H7/H8: the gate never trusts task-status.json rows. Every evaluation
-    // recomputes completion from git evidence (deriveCompletion) and writes
-    // it back (applyDerivedCompletion) so the on-disk file stays a fresh
-    // cache, but the pass/fail verdict itself is decided against the
-    // engine-only evidence sidecar (.pipeline/task-evidence.json): a task
-    // only counts as resolved when it has an evidenceStamps entry (real
-    // git-derived evidence, stamped by deriveCompletion). H8's first-seed
-    // migration-grandfather escape hatch has been retired (#463): the gate
-    // no longer accepts a bare migrationGrandfather entry as resolution, and
-    // task-seed.ts no longer stamps new grandfather entries. Any legacy
-    // migrationGrandfather ids left over from before the retirement are read
-    // by task-seed.ts only to avoid re-flagging already-migrated rows — they
-    // are never consulted by this gate. A forged 'completed' row with no
-    // evidenceStamps entry is never counted, even if task-status.json says
-    // otherwise — and a missing/corrupt/wiped task-status.json is never a
-    // terminal failure, since nothing here reads it as the source of truth.
+    // Task 10 (#773): the build predicate no longer gates on the per-task
+    // evidence-ledger (deriveCompletion/createTaskEvidence/evidenceStamps).
+    // Real completion authority now lives in the build_review step's
+    // completeness rubric (a fail-closed, default-on grader verdict) plus
+    // the existing outcome gates — the per-task commit-stamp ledger is being
+    // demoted to telemetry. This predicate is now purely structural: it
+    // confirms the plan seeded successfully and then trusts the
+    // task-status.json row status directly (completed/skipped), the same
+    // way the legacy no-context fallback below always has. It intentionally
+    // no longer cross-checks rows against an independently re-derived
+    // evidence sidecar — the H6/H7/H8 anti-forgery check ("a completed row
+    // with no evidenceStamps entry is never counted") is retired: a forged
+    // or stale 'completed' row is no longer this gate's concern, since
+    // build_review's completeness rubric now independently judges the real
+    // diff on every pass. Conductor.ts's own auto-heal call (unchanged,
+    // outside this file) still re-derives task-status.json from git
+    // evidence whenever this predicate reports not-done, so legitimate
+    // completions still get their rows flipped to 'completed' and the
+    // attribution/residue lane still dispatches on that path — this
+    // predicate simply no longer duplicates that derivation or requires an
+    // evidence stamp on top of it.
     if (ctx.projectRoot && ctx.planPath) {
       let planTaskIds: string[];
       try {
@@ -1077,36 +1082,28 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return { done: false, reason: 'no tasks in plan' };
       }
 
+      const statusPath = join(ctx.projectRoot, '.pipeline/task-status.json');
+      let raw: string;
       try {
-        const { deriveCompletion, applyDerivedCompletion } = await import('./autoheal.js');
-        const derived = await deriveCompletion(ctx.projectRoot, ctx.planPath);
-        await applyDerivedCompletion(ctx.projectRoot, derived);
-      } catch (err) {
+        raw = await readFile(statusPath, 'utf-8');
+      } catch {
         return {
           done: false,
-          reason: `failed to derive completion from git evidence: ${err instanceof Error ? err.message : String(err)}`,
+          reason: 'missing .pipeline/task-status.json — the pipeline skill must create it',
         };
       }
-
-      // evidenceStamps is the ONLY completion currency the gate accepts (#463).
-      // A real evidenceStamps entry (from deriveCompletion's own git-trailer
-      // scan) always counts regardless of the row's on-disk status, since it
-      // is independently re-derived from git every time — this is what makes
-      // a wiped/corrupt task-status.json non-terminal. The retired H8
-      // migrationGrandfather escape hatch is never consulted here: a
-      // grandfathered id with no evidence stamp is always unresolved,
-      // regardless of what task-status.json's row says.
-      let unresolved: string[];
+      let parsed: unknown;
       try {
-        const { createTaskEvidence } = await import('./task-evidence.js');
-        const evidence = await createTaskEvidence(ctx.projectRoot);
-        unresolved = planTaskIds.filter((id) => !evidence.evidenceStamps.has(id));
-      } catch (err) {
-        return {
-          done: false,
-          reason: `failed to read task-evidence sidecar: ${err instanceof Error ? err.message : String(err)}`,
-        };
+        parsed = JSON.parse(raw);
+      } catch {
+        return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }
+      const seededTasks = extractTasks(parsed);
+      const byId = new Map(seededTasks.map((t) => [t.id, t] as const));
+      const unresolved = planTaskIds.filter((id) => {
+        const t = byId.get(id);
+        return !t || (t.status !== 'completed' && t.status !== 'skipped');
+      });
 
       if (unresolved.length > 0) {
         const names = unresolved.slice(0, 3).join(', ');
