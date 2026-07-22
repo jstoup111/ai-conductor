@@ -105,6 +105,13 @@ credential or switching my billing.
   dispatch, then the feature HALTs (no sandbox provisioned, no `claude` spawned) with a
   reason containing: the token path, `claude setup-token`, and the config key for
   choosing a different mode.
+  > **Front-run note (2026-07-22, conflict-check for #498):** in daemon dispatch, the
+  > daemon-level missing-credential gate
+  > (adr-2026-07-22-daemon-level-missing-credential-gate) now parks the whole cycle
+  > BEFORE any feature dispatches, so this per-feature pre-flight normally never fires
+  > on a globally-missing token. Its semantics are unchanged and it remains the
+  > fail-closed backstop whenever it IS reached (races, mid-cycle deletion,
+  > non-daemon runs).
 
 #### Negative Paths
 - Given an empty or whitespace-only token file, when pre-flight runs, then it is treated
@@ -195,6 +202,12 @@ behavior, not an inferred flag.
 - Given an intentionally corrupted token value, when `claude -p` runs, then the failure
   output matches `AUTH_FAILURE_RE` — proving the existing signature classifies
   token-mode failures (backstop validity).
+  > **FALSIFIED (2026-07-22, verified live):** a corrupted token actually produces
+  > `Failed to authenticate. API Error: 401 Invalid bearer token`, which the current
+  > `AUTH_FAILURE_RE` does NOT match — this is the #484 retry-ladder burn. Superseded
+  > by FR-4 of `.docs/stories/build-auth-token-check-and-classify.md` and
+  > adr-2026-07-22-auth-failure-classification-observed-401-patterns, which extend the
+  > classification to the observed patterns.
 - Given an environment without a valid token available (CI without secrets), when the
   smoke suite runs, then the smoke SKIPS explicitly with a named reason — it never
   false-greens by asserting nothing (guarded-skip, mirrors the render-check pattern).
