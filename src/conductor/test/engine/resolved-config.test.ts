@@ -11,10 +11,36 @@ import {
   FALLBACK_EFFORT,
   FALLBACK_RETRIES,
   FALLBACK_REVIEW,
+  resolveBuildReviewConfig,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/resolved-config', () => {
+  describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
+    it('defaults to enabled when no build_review block is present at all', () => {
+      const resolved = resolveBuildReviewConfig(undefined);
+      expect(resolved.enabled).toBe(true);
+    });
+
+    it('defaults to enabled when config has no build_review key set', () => {
+      const config: HarnessConfig = {} as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.enabled).toBe(true);
+    });
+
+    it('still honors an explicit opt-out (enabled: false)', () => {
+      const config: HarnessConfig = { build_review: { enabled: false } } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.enabled).toBe(false);
+    });
+
+    it('still honors an explicit opt-in (enabled: true)', () => {
+      const config: HarnessConfig = { build_review: { enabled: true } } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config);
+      expect(resolved.enabled).toBe(true);
+    });
+  });
+
   describe('default tables', () => {
     it('has model/effort/retries/review for every registry step', async () => {
       const { ALL_STEPS } = await import('../../src/engine/steps.js');

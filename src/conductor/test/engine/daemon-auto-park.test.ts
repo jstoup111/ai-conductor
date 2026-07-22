@@ -18,7 +18,6 @@ import {
   readCompletionSignals,
   detectParkContradiction,
   checkAndAutoPark,
-  type CheckAndAutoParkOpts,
 } from '../../src/engine/daemon-auto-park.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -273,7 +272,6 @@ describe('engine/daemon-auto-park — Task 8 (#486)', () => {
     // Interactive mode should NOT write any marker
     const parkResult = await checkAndAutoPark(worktreeDir, SLUG, {
       daemon: false,
-      maxAttempts: MAX_ATTEMPTS,
       reason: `no completion evidence after ${MAX_ATTEMPTS} attempts`,
     });
 
@@ -313,7 +311,6 @@ describe('engine/daemon-auto-park — Task 8 (#486)', () => {
     // Step 2: Auto-park the slug (daemon:true)
     const parkResult = await checkAndAutoPark(worktreeDir, SLUG, {
       daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
       reason: `no completion evidence after ${MAX_ATTEMPTS} attempts`,
     });
     expect(parkResult.parked).toBe(true);
@@ -402,24 +399,24 @@ describe('engine/daemon-auto-park — Task 8 (#486)', () => {
   });
 });
 
-// ── Task 5 (RED): inherited-budget halt message (Story 2) ──
-//
-// Today, checkAndAutoPark composes a single reason string —
-// `no completion evidence after ${maxAttempts} attempts` — regardless of
-// whether the durable noEvidenceAttempts counter crossed the threshold
-// *during this cycle* or was already at/over the threshold when this cycle
-// began (e.g. inherited from a prior halted run via unpark/re-kick). These
-// tests assume a future mechanism (not implemented here) that lets the
-// caller supply the attempts count observed at cycle-start so the reason
-// can distinguish the two cases. Passing `cycleStartAttempts` today is a
-// no-op (the option doesn't exist on CheckAndAutoParkOpts yet) — that's the
-// point: case (b) documents the gap Task 6 must close.
-describe('engine/daemon-auto-park — Task 5 (RED): inherited-budget halt message', () => {
+// Feature #773 Task 13: the durable no-evidence counter park path is
+// deleted. checkAndAutoPark must never park from the task-evidence.json
+// noEvidenceAttempts counter alone — only an explicit caller-supplied
+// `reason` (e.g. empty/missing plan) can trigger a park.
+describe('engine/daemon-auto-park — Task 13 (#773): no-evidence counter park path removed', () => {
   let dir: string;
-  const SLUG = 'test-feature-task5';
+  const SLUG = 'test-feature-task13';
   const MAX_ATTEMPTS = 3;
 
-  async function seedAttempts(n: number): Promise<void> {
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-task13-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('a noEvidenceAttempts counter at/over threshold never parks without an explicit reason', async () => {
     const pipelineDir = join(dir, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
     await writeFile(
@@ -427,7 +424,7 @@ describe('engine/daemon-auto-park — Task 5 (RED): inherited-budget halt messag
       JSON.stringify(
         {
           evidenceStamps: {},
-          noEvidenceAttempts: n,
+          noEvidenceAttempts: MAX_ATTEMPTS,
           noEvidenceReasons: [],
           migrationGrandfather: [],
         },
@@ -436,167 +433,29 @@ describe('engine/daemon-auto-park — Task 5 (RED): inherited-budget halt messag
       ),
       'utf-8',
     );
-  }
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-task5-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  it('(a) threshold reached within the current cycle uses today\'s message (documents current behavior)', async () => {
-    // Cycle started at 2 attempts, one increment this cycle crossed the cap.
-    await seedAttempts(MAX_ATTEMPTS);
     const events: unknown[] = [];
 
     const result = await checkAndAutoPark(dir, SLUG, {
       daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      // Not yet a real option — documents the intended future seam.
-      cycleStartAttempts: MAX_ATTEMPTS - 1,
       emit: (evt) => events.push(evt),
-    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
+    });
 
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
+    expect(result.parked).toBe(false);
+    expect(events).toHaveLength(0);
   });
 
-  it('(b) counter already at/over threshold with zero increments this cycle must name an inherited budget (RED — not implemented yet)', async () => {
-    // Cycle started already at the cap — nothing was burned this cycle.
-    await seedAttempts(MAX_ATTEMPTS);
+  it('an explicit reason still parks regardless of the noEvidenceAttempts counter value', async () => {
     const events: unknown[] = [];
 
     const result = await checkAndAutoPark(dir, SLUG, {
       daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      cycleStartAttempts: MAX_ATTEMPTS,
+      reason: 'empty/missing plan',
       emit: (evt) => events.push(evt),
-    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
+    });
 
     expect(result.parked).toBe(true);
     const evt = events[0] as { reason: string };
-    // This is the new, currently-missing behavior: the reason must
-    // distinguish "inherited an already-exhausted budget" from "burned
-    // through the budget just now". Fails today because no such wording
-    // (or the underlying cycle-start comparison) exists yet.
-    expect(evt.reason.toLowerCase()).toContain('inherited');
-  });
-
-  it('(c) fresh-failure case (increments happened this cycle) never claims "inherited" (guard against over-triggering)', async () => {
-    // Cycle started at 0 attempts; all attempts were burned this cycle.
-    await seedAttempts(MAX_ATTEMPTS);
-    const events: unknown[] = [];
-
-    const result = await checkAndAutoPark(dir, SLUG, {
-      daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      cycleStartAttempts: 0,
-      emit: (evt) => events.push(evt),
-    } as CheckAndAutoParkOpts & { cycleStartAttempts: number });
-
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason.toLowerCase()).not.toContain('inherited');
+    expect(evt.reason).toBe('empty/missing plan');
   });
 });
 
-// ── Task 7: park reason names unresolved verify-only ids ──
-describe('Task 7: park reason names unresolved verify-only ids', () => {
-  let dir: string;
-  const SLUG = 'test-feature-task7';
-  const MAX_ATTEMPTS = 3;
-
-  async function seedAttempts(n: number): Promise<void> {
-    const pipelineDir = join(dir, '.pipeline');
-    await mkdir(pipelineDir, { recursive: true });
-    await writeFile(
-      join(pipelineDir, 'task-evidence.json'),
-      JSON.stringify(
-        {
-          evidenceStamps: {},
-          noEvidenceAttempts: n,
-          noEvidenceReasons: [],
-          migrationGrandfather: [],
-        },
-        null,
-        2,
-      ),
-      'utf-8',
-    );
-  }
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-task7-'));
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  });
-
-  it('all unresolved ids verify-only marked -> reason names them', async () => {
-    await seedAttempts(MAX_ATTEMPTS);
-    const events: unknown[] = [];
-
-    const result = await checkAndAutoPark(dir, SLUG, {
-      daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      verifyOnlyUnresolvedIds: ['4'],
-      emit: (evt) => events.push(evt),
-    });
-
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason).toContain('unresolved verify-only tasks: 4');
-  });
-
-  it('mixed residue -> generic clause and verify-only suffix appear distinctly', async () => {
-    await seedAttempts(MAX_ATTEMPTS);
-    const events: unknown[] = [];
-
-    const result = await checkAndAutoPark(dir, SLUG, {
-      daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      verifyOnlyUnresolvedIds: ['2'],
-      emit: (evt) => events.push(evt),
-    });
-
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason).toContain(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
-    expect(evt.reason).toContain('unresolved verify-only tasks: 2');
-  });
-
-  it('regression: no verifyOnlyUnresolvedIds passed -> reason byte-identical to today', async () => {
-    await seedAttempts(MAX_ATTEMPTS);
-    const events: unknown[] = [];
-
-    const result = await checkAndAutoPark(dir, SLUG, {
-      daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      emit: (evt) => events.push(evt),
-    });
-
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
-  });
-
-  it('regression: empty verifyOnlyUnresolvedIds array -> reason byte-identical to today', async () => {
-    await seedAttempts(MAX_ATTEMPTS);
-    const events: unknown[] = [];
-
-    const result = await checkAndAutoPark(dir, SLUG, {
-      daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
-      verifyOnlyUnresolvedIds: [],
-      emit: (evt) => events.push(evt),
-    });
-
-    expect(result.parked).toBe(true);
-    const evt = events[0] as { reason: string };
-    expect(evt.reason).toBe(`no completion evidence after ${MAX_ATTEMPTS} attempts`);
-  });
-});

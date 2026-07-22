@@ -823,8 +823,8 @@ Implement task 3.
   // dispatch path; the anchor-staleness guard itself lives inside
   // `runAttributionLane` (attribution-lane.ts:419-429), which parses the
   // verdict, coerces every result to `no-verdict` when `anchor.head` !=
-  // the current HEAD, and therefore passes an EMPTY `validated` array to
-  // `writeJudgedStamps`. This drives `runAttributionLane` directly (with a
+  // the current HEAD, so no task is ever considered validated and none is
+  // stamped. This drives `runAttributionLane` directly (with a
   // real temp `.pipeline` dir) so the guard is observed at the unit level:
   // stampedTaskIds is empty and no evidence stamp lands on disk for the
   // "satisfied"-labeled but stale-anchored verdict. Already covered
@@ -879,9 +879,9 @@ Implement task 3.
     // Gate does not advance: no task is stamped from a stale-anchor verdict.
     expect(result.stampedTaskIds).toEqual([]);
 
-    // No evidence stamp reaches the sidecar — writeJudgedStamps received an
-    // empty `validated` array (the guard coerced satisfied -> no-verdict
-    // before citation validation ever ran).
+    // No evidence stamp reaches the sidecar — runAttributionLane never stamps,
+    // and the guard coerced satisfied -> no-verdict before citation
+    // validation ever ran, so there is nothing to stamp anyway.
     const evidenceRaw = await readFile(
       join(dir, '.pipeline', 'task-evidence.json'),
       'utf-8',

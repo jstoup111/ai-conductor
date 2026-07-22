@@ -7,7 +7,7 @@ import {
   extractWiredIntoContracts,
   type WiredIntoParseResult,
 } from '../src/engine/wired-into';
-import { parsePlanTaskPaths } from '../src/engine/autoheal';
+import { parsePlanTaskPaths } from '../src/engine/plan-task-parse';
 
 describe('parseWiredIntoLine', () => {
   it('parses a single declared site', () => {

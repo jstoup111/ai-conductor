@@ -19,6 +19,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
 
+### Changed
+
+- `build_review`'s completeness rubric is now default-on and is the real build-completion
+  authority: it holistically judges plan-vs-diff completeness and fail-closes with a
+  self-heal kickback (bounded by `MAX_KICKBACKS_PER_GATE`) instead of leaning on per-task
+  evidence stamping. `Task:` commit trailers are now telemetry-only — they feed progress
+  and #757 resolved-count reporting plus attribution spot-audit sampling — and no longer
+  gate build-step completion. Attribution enforcement is demoted to advisory-only: it can
+  no longer block a commit or park the daemon (#773).
+
 ### Fixed
 
 - Sidecar evidence stamps (`Evidence: satisfied-by <sha>`) that cite a commit absent
@@ -66,6 +76,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   engine self-heals by executing that contract once (before spending retry budget),
   writing `.pipeline/acceptance-specs-red.json` at the worktree root, and re-validating
   via the existing validator — never masking a genuine non-RED failure (#741, supersedes #297)
+- The per-task evidence-ledger derivation engine, the attribution citation judge gate, the
+  no-evidence park counter, the evidence-based task-status reseed, and the commit-msg
+  fail-closed evidence rejection — all gating machinery built around `Task:` commit-trailer
+  stamping — are removed now that `build_review`'s completeness rubric is the default-on
+  completion authority and trailer stamping is telemetry-only (#773).
 
 ## Migration
 
@@ -3459,6 +3474,46 @@ EOF
   echo "Appended commented-out attribution_judge_cutover / attribution_audit_sample_pct" \
        "template to $CONFIG_FILE. Uncomment and set a cutover instant to opt in;" \
        "restart the daemon after editing."
+fi
+```
+
+## Migration
+
+#773 demotes per-task commit attribution/evidence from a gate to telemetry. Part of
+that change (Task 14, commit `98103bab`) edits the generated `commit-msg` git hook
+(`src/conductor/src/engine/git-hook-assets.ts` → `COMMIT_MSG_HOOK`): the hook no
+longer rejects a build-step commit for a missing `Task:` trailer, and no longer
+rejects an empty commit for a missing/unresolvable `Evidence: satisfied-by`/
+`Evidence: skipped` trailer. This is a **consumer-visible behavior change to
+installed hook wiring** — commits that a pre-upgrade hook would have rejected are
+now accepted (attribution is enforced advisorily via `build_review`'s completeness
+rubric instead).
+
+The hook script is materialized to `.pipeline/git-hooks/commit-msg` inside each
+worktree by `writeGitHooks` (`src/conductor/src/engine/worktree-prepare.ts`) when a
+worktree is prepared. New worktrees created after upgrading automatically get the
+new, non-rejecting hook. Worktrees that already existed before upgrading keep their
+stale, still-rejecting hook on disk until it is regenerated — regenerate it by
+re-running worktree prepare for the feature, or by deleting the on-disk hook so it
+gets rewritten:
+
+```bash migration
+# Refresh an existing worktree's commit-msg hook to the post-#773 (advisory,
+# non-rejecting) version. Safe to run repeatedly; writeGitHooks() always
+# overwrites both hook scripts with the current generated content.
+WORKTREE_ROOT="${1:-.}"
+HOOKS_DIR="$WORKTREE_ROOT/.pipeline/git-hooks"
+if [ ! -d "$WORKTREE_ROOT/.pipeline" ]; then
+  echo "No .pipeline/ found at $WORKTREE_ROOT — not a prepared conductor worktree;" \
+       "nothing to migrate."
+elif [ -f "$HOOKS_DIR/commit-msg" ]; then
+  rm -f "$HOOKS_DIR/commit-msg" "$HOOKS_DIR/prepare-commit-msg"
+  echo "Removed stale hook scripts at $HOOKS_DIR. Re-run 'conduct' (or restart the" \
+       "daemon build step) for this worktree to have worktree-prepare regenerate" \
+       "them with the post-#773 advisory (non-rejecting) commit-msg hook."
+else
+  echo "No commit-msg hook found at $HOOKS_DIR — nothing to migrate; it will be" \
+       "generated fresh (already advisory) the next time this worktree is prepared."
 fi
 ```
 

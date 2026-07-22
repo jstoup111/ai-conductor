@@ -187,15 +187,14 @@ export function createProgram(): Command {
         '  conduct task start rem-fr10-1      Start task with alphanumeric id\n',
     );
 
-  // Evidence subcommand (Task 19). NON-INTERACTIVE: dispatched by index.ts
-  // (detectEvidenceCommand) before the pipeline boots. Routes to evidence judge
-  // command. Declared here so `--help` lists it.
-  const evidence = program
+  // Evidence subcommand. The `judge` sub-subcommand (semantic attribution
+  // citation-judge GATING) was removed in feature #773 Task 12 — per-task
+  // commit-stamping is now telemetry only (see attribution-audit.ts's
+  // non-blocking spot-audit). Declared here (guide-only) so `--help` still
+  // lists it and reports removal via `dispatchEvidence`'s guide branch.
+  program
     .command('evidence')
-    .description('Semantic attribution evidence gate: resolve features to worktrees and judge completeness');
-  evidence
-    .command('judge <slug>')
-    .description('Resolve feature slug to worktree and run semantic attribution verification');
+    .description('Semantic attribution evidence gate (judge command removed — see spot-audit telemetry)');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep

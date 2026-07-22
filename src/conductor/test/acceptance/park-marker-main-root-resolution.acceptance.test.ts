@@ -160,14 +160,13 @@ describe('park-marker main-root resolution acceptance (#486): worktree-written m
     const parkMarker = await loadParkMarker();
     const worktreeDir = await initRepoWithWorktree('capped-feat');
 
-    // Seed the durable no-evidence counter past the cap, in the WORKTREE
-    // (where the build agent actually runs).
-    await incrementNoEvidenceAttempts(worktreeDir);
-    await incrementNoEvidenceAttempts(worktreeDir);
-    await incrementNoEvidenceAttempts(worktreeDir);
-
+    // Task 13/#773: the durable no-evidence counter park path was removed
+    // — checkAndAutoPark now only parks when an explicit `reason` is
+    // supplied (e.g. by the wall-clock/attempt-bound no-task-progress
+    // halt). Drive that explicit-reason path instead of the retired
+    // counter.
     const parkResult = await checkAndAutoPark(worktreeDir, 'capped-feat', {
-      maxAttempts: 3,
+      reason: 'build stalled: no task progress',
       daemon: true,
     });
     expect(parkResult.parked).toBe(true);
@@ -358,12 +357,12 @@ describe('park-marker main-root resolution acceptance (#486): daemon park/unpark
     expect(lines.some((l) => l.includes(absMainMarker))).toBe(true);
   });
 
-  it('happy: unpark from a worktree cwd resets the WORKTREE no-evidence counter (not the main root\'s), and dispatch is eligible again', async () => {
+  it('happy: unpark from a worktree cwd clears the marker at the resolved main root, and dispatch is eligible again (Task 13/#773: the no-evidence counter park path is retired — park now requires an explicit reason)', async () => {
     const worktreeDir = await initRepoWithWorktree('cli-unpark-feat');
-    await incrementNoEvidenceAttempts(worktreeDir);
-    await incrementNoEvidenceAttempts(worktreeDir);
-    await incrementNoEvidenceAttempts(worktreeDir);
-    await checkAndAutoPark(worktreeDir, 'cli-unpark-feat', { maxAttempts: 3, daemon: true });
+    await checkAndAutoPark(worktreeDir, 'cli-unpark-feat', {
+      reason: 'build stalled: no task progress',
+      daemon: true,
+    });
     expect(await fileExists(await markerPathAt(mainRoot, 'cli-unpark-feat'))).toBe(true);
 
     const lines: string[] = [];
@@ -374,10 +373,8 @@ describe('park-marker main-root resolution acceptance (#486): daemon park/unpark
 
     expect(code).toBe(0);
     expect(await fileExists(await markerPathAt(mainRoot, 'cli-unpark-feat'))).toBe(false);
-    expect(await readNoEvidenceAttempts(worktreeDir)).toBe(0);
 
     const parkResult = await checkAndAutoPark(worktreeDir, 'cli-unpark-feat', {
-      maxAttempts: 3,
       daemon: true,
     });
     expect(parkResult.parked).toBe(false);

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -12,6 +13,7 @@ import {
   writeStallHalt,
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
+import { CUSTOM_COMPLETION_PREDICATES } from '../../src/engine/artifacts.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -76,6 +78,57 @@ describe('task-progress', () => {
         JSON.stringify({ plan_ref: 'foo' }),
       );
       expect(await countResolvedTasks(dir)).toBe(0);
+    });
+
+    it('#757: counts distinct plan task-ids carried by Task: trailers on the branch, not via the deleted derivation engine', async () => {
+      // Set up a real git repo (no `.pipeline/task-status.json`-side status
+      // flip involved — this proves the count is sourced from commit
+      // trailers directly, per feature #773 Task 15).
+      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      // 4 plan tasks, all still `pending` in task-status.json — i.e. nothing
+      // here would count under the old completed/skipped-only logic.
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'pending' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+            { id: '4', status: 'pending' },
+          ],
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      // Task 1 and Task 3 have Task:-trailered commits; Task 2 and 4 do not.
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 1\n\nTask: 1'], { cwd: dir });
+
+      await writeFile(join(dir, 'b.txt'), 'b');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 3\n\nTask: 3'], { cwd: dir });
+
+      // Only task-ids 1 and 3 are resolved via trailers; 2 and 4 remain
+      // untouched pending — expect exactly 2, not 0 (old code) and not 4.
+      expect(await countResolvedTasks(dir)).toBe(2);
+    });
+
+    it('#773 Task 16: telemetry survives the gating demolition — countResolvedTasks is a pure read with no side effects (no writes, no throw) even against an empty/uninitialized project dir', async () => {
+      // Tasks 10-14 deleted the per-task evidence-ledger GATING apparatus
+      // (build predicate, citation judge, park counter, reseed/commit-msg
+      // rejection). Task 15 repointed this counter at Task: trailers +
+      // task-status.json as pure telemetry. This locks in that the read
+      // path never mutates project state (no .pipeline writes) and never
+      // throws, confirming it cannot itself gate or block a build.
+      await expect(countResolvedTasks(dir)).resolves.toBe(0);
+      const { readdir } = await import('node:fs/promises');
+      await expect(readdir(dir)).resolves.toEqual([]);
     });
   });
 
@@ -320,6 +373,18 @@ describe('task-progress', () => {
       // HALT should have first line of the original question
       expect(halt).toContain('First line question');
       expect(halt).toContain(detail);
+    });
+  });
+
+  // Task 16 (#773, verify-only): the demolition of the per-task
+  // evidence-ledger GATING apparatus (Tasks 10-14) and the repointing of
+  // resolved-count telemetry at Task:-trailered commits (Task 15, above)
+  // must leave the wiring_check gate — a same-named-but-unrelated gate,
+  // not part of the deleted evidence-ledger — completely untouched. This
+  // is a lock-in regression assertion, not new production behavior.
+  describe('Task 16: wiring_check gate survives the telemetry demotion (regression lock-in)', () => {
+    it('CUSTOM_COMPLETION_PREDICATES still registers wiring_check', () => {
+      expect(typeof CUSTOM_COMPLETION_PREDICATES.wiring_check).toBe('function');
     });
   });
 });

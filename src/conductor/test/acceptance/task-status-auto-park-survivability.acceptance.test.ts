@@ -130,15 +130,14 @@ afterEach(async () => {
 });
 
 describe('acceptance: no evidence after N attempts parks the feature, survivably (H2/H7, Slice 3)', () => {
-  it('happy: N consecutive no-evidence misses write a distinct auto-park marker, stop dispatch, and are visible to isOperatorParked', async () => {
-    const taskEvidence = await loadTaskEvidence();
+  it('happy: an explicit no-task-progress park reason writes a distinct auto-park marker, stops dispatch, and is visible to isOperatorParked (Task 13/#773: the durable no-evidence counter park path is retired — checkAndAutoPark now only parks on an explicit reason)', async () => {
     const autoPark = await loadAutoPark();
 
-    let last: { parked: boolean } = { parked: false };
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      await taskEvidence.incrementNoEvidenceAttempts(root);
-      last = await autoPark.checkAndAutoPark(root, SLUG, { maxAttempts: MAX_ATTEMPTS, daemon: true });
-    }
+    const last = await autoPark.checkAndAutoPark(root, SLUG, {
+      maxAttempts: MAX_ATTEMPTS,
+      daemon: true,
+      reason: 'build stalled: no task progress',
+    });
 
     expect(last.parked).toBe(true);
     expect(await isOperatorParked(root, SLUG)).toBe(true); // existence-based check still sees it
@@ -276,60 +275,11 @@ describe('acceptance: no evidence after N attempts parks the feature, survivably
   // `checkAndAutoPark` and `dispatchDaemonPark` together across two full
   // exhaust→park→unpark cycles, then confirms a plain restart (no unpark
   // verb) still leaves the counter untouched — only the unpark verb resets it.
-  it('regression: exhausted budget -> operator-park -> unpark -> 3 fresh attempts before re-park, repeated twice, with restart-survivability intact', async () => {
-    const taskEvidence = await loadTaskEvidence();
-    const autoPark = await loadAutoPark();
-
-    async function exhaustToPark(): Promise<void> {
-      // Drive exactly maxAttempts fresh increments through checkAndAutoPark,
-      // asserting it does NOT park before the budget is reached and DOES
-      // park on the Nth attempt — this is the "3 fresh attempts" bound.
-      let result: { parked: boolean } = { parked: false };
-      for (let i = 1; i <= MAX_ATTEMPTS; i++) {
-        await taskEvidence.incrementNoEvidenceAttempts(root);
-        result = await autoPark.checkAndAutoPark(root, SLUG, {
-          maxAttempts: MAX_ATTEMPTS,
-          daemon: true,
-        });
-        if (i < MAX_ATTEMPTS) {
-          expect(result.parked).toBe(false);
-        }
-      }
-      expect(result.parked).toBe(true);
-    }
-
-    for (let cycle = 1; cycle <= 2; cycle++) {
-      // 1. Exhaust the budget — auto-park fires on the 3rd fresh attempt.
-      await exhaustToPark();
-      expect(await isOperatorParked(root, SLUG)).toBe(true);
-
-      // 2. Operator parks explicitly on top (simulates an operator noticing
-      //    and confirming the park via the CLI verb, per Story 3).
-      const parkCode = await dispatchDaemonPark(
-        { kind: 'park', slug: SLUG },
-        { cwd: root, out: () => {} },
-      );
-      expect(parkCode).toBe(0);
-
-      // 3. Unpark — this MUST reset the durable counter to 0 (Task 2).
-      const unparkCode = await dispatchDaemonPark(
-        { kind: 'unpark', slug: SLUG },
-        { cwd: root, out: () => {} },
-      );
-      expect(unparkCode).toBe(0);
-      expect(await isOperatorParked(root, SLUG)).toBe(false);
-      expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(0);
-
-      // 4. Re-dispatch: must NOT immediately re-park using a stale inherited
-      //    count — it takes a full 3 fresh attempts again, both this cycle
-      //    and the next (proving the reset isn't a one-time fluke).
-    }
-
-    // Final sanity: after two full cycles, the slug is unparked and the
-    // counter sits at 0 (last unpark of the loop above).
-    expect(await isOperatorParked(root, SLUG)).toBe(false);
-    expect(await taskEvidence.readNoEvidenceAttempts(root)).toBe(0);
-  });
+  // Task 13/#773: the "exhausted budget -> re-park after N fresh attempts"
+  // regression test was removed — checkAndAutoPark's durable no-evidence
+  // counter budget path no longer exists; park now requires an explicit
+  // reason supplied by the caller (e.g. the wall-clock/attempt-bound
+  // no-task-progress halt), not a counter threshold.
 
   it('regression: a plain daemon restart (no unpark verb) does NOT reset the no-evidence counter — only unpark resets it', async () => {
     const taskEvidence = await loadTaskEvidence();

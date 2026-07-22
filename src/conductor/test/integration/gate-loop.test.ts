@@ -14,7 +14,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
-import { parsePlanTaskPaths } from '../../src/engine/autoheal.js';
+import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
@@ -930,7 +930,21 @@ describe('integration/gate-loop', () => {
         },
       };
 
-      await conductorWith(runner).run();
+      // build_review is default-on (#773 Task 4) — "flag off" now requires
+      // an explicit opt-out rather than relying on the (former) default.
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: false } },
+      } as never);
+
+      await conductor.run();
 
       expect(ran.filter((s) => s === 'build_review')).toHaveLength(0);
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
@@ -951,7 +965,21 @@ describe('integration/gate-loop', () => {
         run: async (step) => satisfy(step),
       };
 
-      await conductorWith(runner).run();
+      // build_review is default-on (#773 Task 4) — "flag off" now requires
+      // an explicit opt-out rather than relying on the (former) default.
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: false } },
+      } as never);
+
+      await conductor.run();
 
       const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
       expect(finalState.build_review).toBe('skipped');
@@ -1006,7 +1034,11 @@ describe('integration/gate-loop', () => {
     }
 
     async function runWithGraderVerdicts(
-      verdicts: Array<{ verdict: 'FAIL' | 'PASS'; reasons: string[] }>,
+      verdicts: Array<{
+        verdict: 'FAIL' | 'PASS';
+        reasons: string[];
+        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
+      }>,
     ): Promise<{
       buildRuns: number;
       retryReasons: string[];
@@ -1035,7 +1067,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: v.verdict,
                 reasons: v.reasons,
-                rubric: { tautology: false, scope: false, rootCause: false },
+                rubric: v.rubric ?? { tautology: false, scope: false, rootCause: false },
               }),
             );
             return { success: true };
@@ -1125,6 +1157,32 @@ describe('integration/gate-loop', () => {
         /grader returned FAIL without reasons/,
       );
     });
+
+    // Task 6 (#773): a FAIL driven SOLELY by rubric.completeness (all other
+    // rubric items PASS) must flow through this same kickback mechanism —
+    // no new routing code, per Task 5's finding that the predicate treats a
+    // completeness-only FAIL identically to any other rubric-item FAIL.
+    it('FAIL-completeness (rubric.completeness only) kicks back to build with the grader evidence, then PASS converges', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'FAIL',
+          reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        },
+        {
+          verdict: 'PASS',
+          reasons: [],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
+      expect(result.retryReasons.join('\n')).toContain(
+        'implementation addresses only part of the declared scope',
+      );
+      expect(result.completed).toBe(true);
+    });
   });
 
   describe('build_review retry cap HALTs (TS-6)', () => {
@@ -1188,6 +1246,74 @@ describe('integration/gate-loop', () => {
       // The HALT marker must carry the grader's evidence, not a generic message,
       // so the surfaced blocker tells the human what the grader actually flagged.
       expect(haltContents).toContain('always fails');
+    });
+
+    // Task 7 (#773): a completeness-only FAIL must be bounded by the SAME
+    // MAX_KICKBACKS_PER_GATE cap as any other rubric FAIL — repeated
+    // completeness FAILs must HALT rather than kick back forever. This is
+    // the wedge-proof regression lock for the failure mode the cap exists
+    // to prevent.
+    it('completeness-only FAIL repeated MAX_KICKBACKS_PER_GATE (2) times then HALTs, no further dispatch', async () => {
+      await writeState(statePath, { ...FRONT_DONE });
+      let buildRuns = 0;
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build') {
+            buildRuns++;
+            return satisfy('build');
+          }
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`incomplete implementation (attempt ${buildRuns})`],
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+              }),
+            );
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const config = { build_review: { enabled: true }, kickback_escalation: { enabled: false } };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config,
+      });
+
+      await conductor.run();
+
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      expect(halted).toBe(true);
+      expect(completed).toBe(false);
+      expect(buildRuns).toBe(3); // initial + 2 kickback rebuilds, capped there
+      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+      const haltContents = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      // The HALT marker must carry the grader's evidence, not a generic message,
+      // so the surfaced blocker tells the human what the grader actually flagged
+      // — even when the FAIL was driven solely by rubric.completeness.
+      expect(haltContents).toContain('incomplete implementation');
     });
 
     it('the build_review counter is independent of manualTestSelfHeals', async () => {
@@ -1628,6 +1754,24 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
 
     const ctx = { projectRoot: repoDir, planPath };
 
+    // Task 10 (#773): the build predicate itself no longer derives
+    // completion from git-trailer evidence (deriveCompletion/evidenceStamps
+    // were removed from checkStepCompletion's 'build' path); it only trusts
+    // task-status.json row status. Task 11 (#773) deleted the derivation
+    // engine (deriveCompletion/applyDerivedCompletion) entirely — real
+    // commit-trailer evidence is telemetry only now. Mark the rows completed
+    // directly, the way a real build step's own completion write-back does.
+    await writeFile(
+      join(repoDir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        plan_ref: '.docs/plans/p.md',
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'completed' },
+        ],
+      }),
+    );
+
     // (a) Build gate: all tasks commit-evidenced within «merge-base»..HEAD.
     const gateVerdict = await checkStepCompletion(repoDir, 'build', ctx);
     expect(gateVerdict.done).toBe(true);
@@ -1696,10 +1840,21 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     const ctx = { projectRoot: repoDir, planPath };
     const verdict = await checkStepCompletion(repoDir, 'build', ctx);
 
-    // The upstream commit is outside «merge-base»..HEAD (it IS the merge
-    // base), so it can never be accepted as this branch's Task 1 evidence —
-    // the gate must report the task unresolved rather than pass.
+    // Task 10 (#773): the build predicate no longer derives completion
+    // from git-trailer evidence at all (deriveCompletion/evidenceStamps
+    // were removed from this gate) — it only trusts task-status.json row
+    // status directly. Since this feature branch never lands its own
+    // Task: 1 evidence, and nothing here reconciles task-status.json from
+    // git (that reconciliation is conductor.ts's auto-heal step, calling
+    // deriveCompletion + applyDerivedCompletion — see the sibling test
+    // above), the seeded row for Task 1 stays 'pending' and the gate
+    // correctly reports not-done. The «merge-base»..HEAD evidence-scoping
+    // behavior this test used to exercise now lives solely in
+    // deriveCompletion itself (see autoheal.test.ts), which is exactly
+    // what would reject the coincidental upstream trailer if conductor's
+    // auto-heal step were invoked here — this gate-level check confirms
+    // the structural predicate alone never mistakes an unresolved plan
+    // task for done.
     expect(verdict.done).toBe(false);
-    expect(verdict.reason).toMatch(/pending|not completed/i);
   });
 });

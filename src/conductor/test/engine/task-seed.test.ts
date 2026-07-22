@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { seedTaskStatus, clearStaleMarker } from '../../src/engine/task-seed.js';
-import { deriveCompletion, applyDerivedCompletion } from '../../src/engine/autoheal.js';
 import { markerPath, writeBuildStepMarker } from '../../src/engine/attribution-enforcement.js';
 
 describe('task-seed', () => {
@@ -66,6 +65,45 @@ Content with \`src/file3.ts\`
     });
   });
 
+  describe('Task 14: reseed no longer restores rows from evidence stamps', () => {
+    it('creates a plan task not present in task-status.json as pending, even when an evidence stamp exists for it', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      // No task-status.json yet — task-status.json is the sole source of
+      // truth (Task 10, #773); an evidence stamp must NOT resurrect a row
+      // as 'completed' out of nowhere.
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-evidence.json'),
+        JSON.stringify({
+          evidenceStamps: {
+            '1': { sha: 'abc123', form: 'commit' },
+          },
+          noEvidenceAttempts: 0,
+          migrationGrandfather: [],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: First Task
+Content
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const statusPath = join(dir, '.pipeline/task-status.json');
+      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf-8'));
+      const task1 = status.tasks.find((t: any) => t.id === '1');
+      expect(task1).toBeDefined();
+      expect(task1.status).toBe('pending');
+      expect(task1.commit).toBeUndefined();
+    });
+  });
+
   describe('preserve completed rows', () => {
     it('preserves completed rows with engine stamps during re-seed', async () => {
       // Setup: existing task-status.json with a completed task
@@ -123,7 +161,14 @@ Content
       expect(task2.status).toBe('pending');
     });
 
-    it('resets to pending if evidence stamp is missing', async () => {
+    // Task 10 (#773): this used to pin the H8 anti-forgery invariant — a
+    // 'completed' row with no matching evidence-sidecar stamp was demoted
+    // back to 'pending' on re-seed. That cross-check is retired: the build
+    // predicate (and now seedTaskStatus itself) no longer consults the
+    // evidence sidecar at all — real completion authority moved to
+    // build_review's completeness rubric. A terminal row now survives
+    // re-seed regardless of whether a sidecar stamp exists for it.
+    it('preserves a completed row across re-seed even with no matching evidence stamp (anti-forgery cross-check retired)', async () => {
       // Setup: task-status.json with completed task but no evidence
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(
@@ -134,10 +179,8 @@ Content
       );
 
       // A PRESENT-but-empty sidecar: post-cutover state, so this is NOT a
-      // first seed — the H8 migration grandfather does not apply, and an
-      // unstamped 'completed' row is a forged/agent-asserted one that must
-      // demote. (First seed — sidecar absent — grandfathers terminal rows
-      // instead; that path is covered by the grandfather tests.)
+      // first seed. seedTaskStatus no longer reads this file to decide
+      // whether to preserve the row.
       await fsPromises.writeFile(
         join(dir, '.pipeline/task-evidence.json'),
         JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
@@ -160,7 +203,7 @@ Content
       const status = JSON.parse(content);
 
       const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('pending');
+      expect(task1.status).toBe('completed');
     });
   });
 
@@ -417,7 +460,7 @@ Content
       expect(status.tasks).toHaveLength(2);
     });
 
-    it('restores wiped file with evidence preserved', async () => {
+    it('Task 14: wiped file re-seeds as pending, no longer restored from evidence sidecar', async () => {
       // Setup: task-status.json with completed task
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       await fsPromises.writeFile(
@@ -465,10 +508,12 @@ Content
       const secondContent = await fsPromises.readFile(statusPath, 'utf-8');
       const status = JSON.parse(secondContent);
 
-      // Task 1 should be restored as completed (evidence preserved)
+      // Task 1 is NOT restored from the evidence sidecar (Task 14, #773) —
+      // task-status.json is the sole source of truth, so a wipe re-seeds
+      // the row fresh as pending.
       const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('completed');
-      expect(task1.commit).toBe('abc123');
+      expect(task1.status).toBe('pending');
+      expect(task1.commit).toBeUndefined();
     });
   });
 
@@ -786,83 +831,4 @@ Content
     });
   });
 
-  describe('legitimate completions survive sidecar deletion (Task 10 regression)', () => {
-    it('re-stamps a real commit-evidenced task from git after .pipeline/task-evidence.json is deleted', async () => {
-      // Real git repo with a real commit carrying a `Task: N` trailer and a
-      // path-corroborating file change — the only durable source of truth
-      // for completion under the new evidence model.
-      await execa('git', ['init', '-b', 'main'], { cwd: dir });
-      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
-      await fsPromises.writeFile(join(dir, 'README.md'), '# Test\n');
-      await execa('git', ['add', 'README.md'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
-
-      // getEvidenceRange requires a resolvable origin default branch to
-      // bound the commit range (fail-closed otherwise) — set up a bare
-      // "origin" the way a real clone would have one, pushed at the
-      // initial commit so the plan + work commits below are ahead of it.
-      const bareDir = await fsPromises.mkdtemp(join(tmpdir(), 'task-seed-origin-'));
-      await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
-      await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
-      await execa('git', ['push', '-u', 'origin', 'main'], { cwd: dir });
-
-      const planPath = join(dir, '.docs/plans/test.md');
-      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await fsPromises.writeFile(
-        planPath,
-        `# Plan
-
-## Task 1: Real task
-Content with \`src/real.ts\`
-`,
-      );
-      await execa('git', ['add', '.docs/plans/test.md'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
-
-      await fsPromises.mkdir(join(dir, 'src'), { recursive: true });
-      await fsPromises.writeFile(join(dir, 'src/real.ts'), 'export const real = true;\n');
-      await execa('git', ['add', 'src/real.ts'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'feat: implement real task\n\nTask: 1\n'], { cwd: dir });
-
-      const workCommitSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
-
-      // First pass: seed creates pending rows, then derive stamps the task
-      // from the git commit and writes the evidence sidecar, and
-      // applyDerivedCompletion writes that back to task-status.json (the
-      // same seed→derive→apply sequence the gate runs).
-      await seedTaskStatus(dir, planPath);
-      let derived = await deriveCompletion(dir, planPath);
-      expect(derived['1'].completed).toBe(true);
-      expect(derived['1'].evidencedBy).toBe(workCommitSha);
-      await applyDerivedCompletion(dir, derived);
-
-      const evidencePath = join(dir, '.pipeline/task-evidence.json');
-      const beforeDelete = JSON.parse(await fsPromises.readFile(evidencePath, 'utf-8'));
-      expect(beforeDelete.evidenceStamps['1']).toBeDefined();
-
-      // Delete the mutable sidecar — completion must not depend on it.
-      await fsPromises.rm(evidencePath, { force: true });
-
-      // Re-run seed + derive: the task must be re-discovered and re-stamped
-      // from git, not from the (now-deleted) sidecar.
-      await seedTaskStatus(dir, planPath);
-      derived = await deriveCompletion(dir, planPath);
-      expect(derived['1'].completed).toBe(true);
-      expect(derived['1'].evidencedBy).toBe(workCommitSha);
-      await applyDerivedCompletion(dir, derived);
-
-      const restamped = JSON.parse(await fsPromises.readFile(evidencePath, 'utf-8'));
-      expect(restamped.evidenceStamps['1']).toBeDefined();
-      expect(restamped.evidenceStamps['1'].sha).toBe(workCommitSha);
-
-      // task-status.json still counts the task as completed.
-      const statusPath = join(dir, '.pipeline/task-status.json');
-      const status = JSON.parse(await fsPromises.readFile(statusPath, 'utf-8'));
-      const task1 = status.tasks.find((t: any) => t.id === '1');
-      expect(task1.status).toBe('completed');
-
-      await fsPromises.rm(bareDir, { recursive: true, force: true });
-    });
-  });
 });

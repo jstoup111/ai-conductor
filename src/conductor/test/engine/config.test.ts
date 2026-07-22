@@ -1088,15 +1088,15 @@ complexity:
   });
 
   describe('build_review config field', () => {
-    it('resolves absent key to disabled, no warning', () => {
+    it('resolves absent key to enabled (default-on, #773 Task 4), no warning', () => {
       const result = validateConfig({ harness_version: '>=1.0.0' });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.config.build_review?.enabled).toBe(true);
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('resolves enabled:false to disabled, identical to absent', () => {
+    it('resolves enabled:false to an explicit opt-out (still honored)', () => {
       const result = validateConfig({ build_review: { enabled: false } });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -1104,7 +1104,7 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('resolves enabled:true to enabled', () => {
+    it('resolves enabled:true to enabled, identical to the default', () => {
       const result = validateConfig({ build_review: { enabled: true } });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -1112,28 +1112,28 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('resolves null to disabled silently', () => {
+    it('resolves null to enabled silently', () => {
       const result = validateConfig({ build_review: null });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.config.build_review?.enabled).toBe(true);
       expect(result.warnings).toHaveLength(0);
     });
 
-    it('resolves a non-object build_review value to disabled + one warning', () => {
+    it('resolves a non-object build_review value to enabled + one warning', () => {
       const result = validateConfig({ build_review: 'yes' });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.config.build_review?.enabled).toBe(true);
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });
 
-    it('resolves a non-boolean enabled value to disabled + one warning', () => {
+    it('resolves a non-boolean enabled value to enabled + one warning', () => {
       const result = validateConfig({ build_review: { enabled: 'banana' } });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.build_review?.enabled).toBe(false);
+      expect(result.config.build_review?.enabled).toBe(true);
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });

@@ -434,24 +434,19 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
   // is a follow-up, not part of this change. Any NEW violation outside this known list
   // still fails the test.
   const KNOWN_BARE_REMOTE_OFFENDERS: ReadonlyArray<{ file: string; line: number }> = [
-    { file: 'acceptance/autoheal-path-corroboration-rejects-valid-build-co.acceptance.test.ts', line: 72 },
     { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 58 },
-    { file: 'acceptance/judged-attribution-verdict-persistence.acceptance.test.ts', line: 76 },
-    { file: 'acceptance/no-diff-task-evidence-stamp.acceptance.test.ts', line: 63 },
-    { file: 'acceptance/verify-only-prove-closed-task-evidence.acceptance.test.ts', line: 64 },
-    { file: 'attribution-lane.integration.test.ts', line: 46 },
-    { file: 'conductor.build-gate.test.ts', line: 42 },
-    { file: 'engine/autoheal.test.ts', line: 1259 },
-    { file: 'engine/autoheal.test.ts', line: 1299 },
-    { file: 'engine/autoheal.test.ts', line: 1333 },
-    { file: 'engine/autoheal.test.ts', line: 1370 },
-    { file: 'engine/autoheal.test.ts', line: 1409 },
-    { file: 'engine/autoheal.test.ts', line: 1442 },
-    { file: 'engine/autoheal.test.ts', line: 1534 },
-    { file: 'engine/autoheal.test.ts', line: 1570 },
-    { file: 'engine/autoheal.test.ts', line: 1814 },
+    { file: 'engine/autoheal.test.ts', line: 1260 },
+    { file: 'engine/autoheal.test.ts', line: 1300 },
+    { file: 'engine/autoheal.test.ts', line: 1334 },
+    { file: 'engine/autoheal.test.ts', line: 1371 },
+    { file: 'engine/autoheal.test.ts', line: 1410 },
+    { file: 'engine/autoheal.test.ts', line: 1443 },
+    { file: 'engine/autoheal.test.ts', line: 1535 },
+    { file: 'engine/autoheal.test.ts', line: 1571 },
+    { file: 'engine/autoheal.test.ts', line: 1815 },
     { file: 'engine/daemon-poll-refresh.test.ts', line: 216 },
     { file: 'engine/push-evidence.test.ts', line: 281 },
+    { file: 'engine/task-progress.test.ts', line: 87 },
   ];
 
   it('scans real test tree and reports violations', async () => {

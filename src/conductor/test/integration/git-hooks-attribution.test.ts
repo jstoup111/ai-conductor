@@ -264,7 +264,7 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).not.toBe(0);
     });
 
-    it('rejects an empty commit with a bare Task: trailer (no Evidence: satisfied-by)', async () => {
+    it('accepts an empty commit with a bare Task: trailer (Task 14/#773: empty-commit Evidence: requirement is retired)', async () => {
       await writeFile(join(dir, 'k.txt'), 'k', 'utf-8');
       await git('add', 'k.txt');
       await git('commit', '-m', 'feat: seed file');
@@ -274,7 +274,7 @@ describe('integration/git-hooks-attribution', () => {
         '-m',
         'feat: empty commit\n\nTask: 7',
       );
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
     });
 
     it('lands an empty commit with Task: <id> and a resolvable Evidence: satisfied-by <sha>', async () => {
@@ -290,14 +290,14 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).toBe(0);
     });
 
-    it('rejects Evidence: satisfied-by pointing at a nonexistent sha', async () => {
+    it('accepts a commit with Evidence: satisfied-by pointing at a nonexistent sha (Task 14/#773: evidence trailers are telemetry, not a gate)', async () => {
       const res = await git(
         'commit',
         '--allow-empty',
         '-m',
         'feat: dangling evidence\n\nTask: 7\nEvidence: satisfied-by deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       );
-      expect(res.code).not.toBe(0);
+      expect(res.code).toBe(0);
     });
 
     it('warns (does not block) when the staged diff spans files mapped to two plan tasks', async () => {
@@ -508,22 +508,16 @@ describe('integration/git-hooks-attribution', () => {
   // --- Story 5: Loud-path composition — abstain, reject, self-stamp, accept ---
 
   describe('Story 5: Loud-path composition with #509 build-step-active gate', () => {
-    it('rejects an untrailered commit when build-step-active is present and no stamp exists', async () => {
+    it('accepts an untrailered commit when build-step-active is present and no stamp exists (Task 14/#773: unattributed-commit rejection is retired)', async () => {
       await createBuildStepActive();
       const res = await commitFile('u.txt', 'u', 'feat: no stamp during build step');
-      expect(res.code).not.toBe(0);
-      expect(res.stderr).toContain('add a Task: <id> trailer');
+      expect(res.code).toBe(0);
     });
 
-    it('accepts an explicit valid Task: 2 trailer on retry after rejection', async () => {
+    it('accepts an explicit valid Task: 2 trailer on a commit during a build step', async () => {
       await createBuildStepActive();
-      // First attempt without trailer should be rejected
-      const firstAttempt = await commitFile('v.txt', 'v', 'feat: first attempt');
-      expect(firstAttempt.code).not.toBe(0);
-
-      // Retry with explicit Task: 2 should be accepted
-      const retryRes = await commitFile('w.txt', 'w', 'feat: retry with task trailer\n\nTask: 2');
-      expect(retryRes.code).toBe(0);
+      const res = await commitFile('w.txt', 'w', 'feat: commit with task trailer\n\nTask: 2');
+      expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
       expect(msg).toMatch(/^Task: 2$/m);
     });

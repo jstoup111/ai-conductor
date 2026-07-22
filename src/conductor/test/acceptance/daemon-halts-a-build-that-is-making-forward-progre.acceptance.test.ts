@@ -292,7 +292,10 @@ describe('S3: zero-progress still parks at the existing threshold (negative, no 
     // no-evidence counter reaches its existing threshold, unaffected by this
     // feature's attempt_ceiling.
     expect(loopHaltEvents).toHaveLength(1);
-    expect(loopHaltEvents[0].reason).toMatch(/no completion evidence after 3 attempts/);
+    // Task 15/#773: the per-task evidence-counter halt reason ("no
+    // completion evidence after N attempts") was replaced by the
+    // wall-clock/attempt-bound no-task-progress halt.
+    expect(loopHaltEvents[0].reason).toMatch(/no task progress/);
 
     // NEW (T3/T7): lastResolvedCount must be stamped at EVERY build-step exit
     // path, including this pre-existing zero-progress park — not just the

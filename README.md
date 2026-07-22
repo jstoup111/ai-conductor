@@ -102,7 +102,7 @@ flowchart TB
   subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
     SCAN["backlog scan<br/>(specs on main · owner gate ·<br/>shipped-record dedup · priority order)"]
     WT["dispatch → git worktree<br/>+ per-worktree engine build"]
-    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → evidence gate<br/>(completion derived from commits)"]
+    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → telemetry only<br/>(completion gated by build_review completeness)"]
     HEAL["self-heal:<br/>retry escalation (effort→model) ·<br/>stall remediation · ci-fix on red PRs ·<br/>halt / park for the operator"]
     VAL["SHIP validators:<br/>manual_test · prd_audit ·<br/>architecture review (as built)"]
     FIN["finish: rebase → push →<br/>PR + committed shipped-record"]
@@ -124,7 +124,8 @@ flowchart TB
 - **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
   lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
 - **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
-  through the full SDLC with deterministic evidence gates, self-heals stalls and red CI,
+  through the full SDLC, gated on completion by `build_review`'s LLM-judged completeness
+  rubric (plan-vs-diff, fail-closed, self-heals via kickback), self-heals stalls and red CI,
   and opens the implementation PR with a committed shipped-record so the work is never
   re-dispatched.
 - **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
@@ -315,9 +316,10 @@ to capture proof that a task's code commits are load-bearing:
 
 Both hooks are written to `.pipeline/git-hooks/` and wired via git config (`core.hooksPath`)
 scoped to the worktree only — the host checkout is never affected. **Fail-open design:**
-if hook provisioning fails, the build continues (hooks are logged as skipped, not fatal);
-the engine's later evidence gate will derive completion from git trailers whether hooks ran
-or not.
+if hook provisioning fails, the build continues (hooks are logged as skipped, not fatal).
+`Task:` trailers are telemetry only (progress/resolved-count reporting and attribution
+spot-audit sampling) — they never gate build completion, so a missed stamp cannot block
+the build either way.
 
 **Chaining with repo's own hooks** — The wired hooks chain to the repository's own hooks
 (if any exist under `.git/hooks/`), so a repo's custom pre-commit linter or post-commit
@@ -360,8 +362,9 @@ trailer instructions), is invisible to the hook.
   (atomic temp-file + rename); an existing stamp for a *different* id is removed first (overlap
   guard). `Task: none` is a pass-through no-op.
 - `post-dispatch.sh` (`PostToolUse`) removes the `.pipeline/current-task` stamp if it still matches,
-  once the subagent returns. It never writes `completed` — task completion is still derived from the
-  evidence gate (#456/#463), not from the hooks.
+  once the subagent returns. It never writes `completed` — task completion is derived by
+  `build_review`'s completeness rubric (plan-vs-diff, LLM-judged, fail-closed), not from these
+  hooks; the stamps they write are telemetry only.
 
 **Fail-open vs. fail-closed:** the two failure regimes are deliberately different.
 - **Fail-open (exit 0, no state change):** the hook cannot parse the payload at all (e.g. malformed
@@ -1363,17 +1366,20 @@ When opening a PR against main:
 - If MINOR/MAJOR/undeterminable, the PR HALTs; manually record the approved version in
   `.pipeline/version-approval` to proceed
 
-### Attribution enforcement (inline build-work commits, `conduct-ts` only)
+### Attribution enforcement (inline build-work commits, `conduct-ts` only, advisory)
 
 Session-driven Claude sessions can commit or edit files directly, bypassing the
 per-task subagent dispatch the pipeline relies on for its `Task: <id>` commit trailer.
-Inline build-work attribution enforcement closes that gap with two engine-owned gate
+Inline build-work attribution enforcement flags that gap via two engine-owned
 surfaces (not new orchestrator rules — see `skills/pipeline/SKILL.md` → "Attribution
-enforcement (engine gate surfaces)"):
+enforcement (engine gate surfaces)"). As of #773, both surfaces are **advisory only**:
+they log/report unattributed activity but never block a commit, block a session
+mutation, or park the daemon. Build completion is decided solely by `build_review`'s
+completeness rubric (see below), not by attribution status.
 
-- **Surface A — commit-msg gate.** Rejects an unattributed build-step commit (no
+- **Surface A — commit-msg check.** Flags an unattributed build-step commit (no
   `Task:` trailer, dispatched while `.pipeline/build-step-active` is present).
-- **Surface B — session mutation gate.** Blocks `Edit`/`Write`/`NotebookEdit` calls
+- **Surface B — session mutation check.** Flags `Edit`/`Write`/`NotebookEdit` calls
   and `git commit` invocations issued directly in the orchestrator session (outside a
   stamped subagent dispatch) while a build step is active.
 
@@ -1382,126 +1388,51 @@ enforcement (engine gate surfaces)"):
 attribution_enforcement_cutover: "2026-07-01T00:00:00Z"   # ISO-8601 instant; absent = off
 ```
 
-- **Default off.** With the key absent (or set to a future instant), enforcement is
-  inactive and unattributed commits/mutations land unchanged — pre-feature behavior.
+- **Default off.** With the key absent (or set to a future instant), the checks are
+  inactive.
 - **Enable it** by setting `attribution_enforcement_cutover` to a past ISO-8601
-  timestamp — enforcement activates for any build step that dispatches after that
-  instant.
+  timestamp — the checks activate for any build step that dispatches after that
+  instant. Enabling it changes only what gets logged/reported; it still never blocks
+  a commit or a mutation.
 - **Requires an engine restart to take effect.** The daemon/conductor reads this
   value once at process start; editing the config file mid-run does not retroactively
   arm or disarm a build step already in flight.
 - **Exemptions (both surfaces):** a merge commit, an amend of a pre-enforcement
   commit, and an empty commit carrying a resolvable `Evidence: satisfied-by <sha>`
-  trailer are never blocked — these are legitimate patterns that predate or fall
-  outside normal attributed build work.
+  trailer are excluded from the advisory signal — these are legitimate patterns that
+  predate or fall outside normal attributed build work.
 
 
-### Semantic attribution verification lane (build evidence gate, `conduct-ts` only)
+### Task-stamp telemetry and attribution spot-audit (`conduct-ts` only)
 
-After the deterministic evidence gate evaluates provenance proxies (commit trailers,
-path corroboration), unresolved tasks may remain. The semantic verification lane
-runs an engine-embedded judge to validate those residue tasks by analyzing the
-candidate diffs and running scoped tests. The judge is disabled by default and
-controls whether the evidence gate reaches a green state for builds with real work
-but misattributed metadata.
+`Task:` commit trailers and session-hook stamps are pure telemetry (#773): they feed
+progress/resolved-count reporting and an attribution spot-audit sampling pass, but do
+not gate build completion. The former "semantic attribution verification lane" (an
+engine-embedded judge over provenance proxies) has been deleted along with the
+per-task evidence gate it fed; the spot-audit that remains is informational only and
+never controls whether a build step is allowed to finish.
 
-**Configuration:**
+**What changed in #773:** the semantic attribution citation-judge gate (`attribution_judge_cutover`,
+per-task SHA verification, `semantic-verified` evidence stamps, `pendingRetryHints`, the
+`conduct-ts evidence judge <slug>` manual CLI, and the associated no-evidence auto-park
+counter) has been deleted entirely — that machinery no longer exists. `conduct-ts evidence`
+is now a guide-only stub that reports the removal (`--help` still lists it for discoverability).
 
-```yaml
-# .ai-conductor/config.yml
+**What remains:**
+- **Telemetry stamping** — `Task: <id>` commit trailers and session-hook stamps still write,
+  and still feed progress/resolved-count reporting (#757).
+- **Spot-audit** — `attribution_audit_sample_pct` (default 10) still samples a fraction of
+  attribution events to `.pipeline/attribution-audit.jsonl` for measurement. It is purely
+  informational: it never blocks a commit, never blocks a build step, and never parks the
+  daemon.
+- **Completion authority** — build-step (and therefore task) completion is decided solely by
+  `build_review`'s completeness rubric: an LLM-judged, fail-closed, plan-vs-diff check that
+  runs as part of the standard `build_review` gate (default-on since #773) and self-heals via
+  kickback, bounded by `MAX_KICKBACKS_PER_GATE`, before HALTing for the operator.
 
-# Semantic attribution judgment gate cutover (ISO-8601 instant)
-# Absent or future date → judge lane disabled (default, no judgment runs)
-# Past date → judge lane enabled for unresolved task residue
-# Read once at daemon/conductor start; restart to apply
-attribution_judge_cutover: "2026-07-11T08:30:00Z"
-
-# Spot-audit sampling percentage for measurement (0-100, optional)
-# Default: 10 (sample 10% of audit events when judge is active)
-# Out-of-range values are clamped to [0, 100] with a startup warning
-# Inert when attribution_judge_cutover is absent (judgment gate controls audits)
-attribution_audit_sample_pct: 10
-```
-
-**How it works:**
-
-1. **Trigger** — after deterministic derivation, if unresolved tasks remain, the
-   cutover is active, and the residue is new (not memoized), the engine dispatches
-   the judge.
-
-2. **Memoization** — verdicts are keyed by `(HEAD sha, sorted residue ids)`. An
-   unchanged key never re-dispatches; the prior verdict (or abstention) is reused
-   at zero cost.
-
-3. **Judge dispatch** — fresh UUID session, `opus/high`, input-starved: only residue
-   task definitions, candidate commits (diffs not yet cited), and scoped test paths.
-   The session gets no maker transcript, prior verdicts, or task-status narrative.
-
-4. **Validation** — the engine mechanically verifies every cited SHA before stamping:
-   - Reachable from `HEAD` (`git merge-base --is-ancestor`)
-   - Not empty, not a bookkeeping commit (`CONDUCT_ENGINE_COMMIT`)
-   - Diff overlaps declared task paths (when provided)
-
-5. **Stamping** — validated verdicts become `semantic-verified` evidence stamps
-   (adr-2026-07-11-attribution-verdict-interface). Unsatisfied verdicts feed into
-   the next build try's `pendingRetryHints` (operator and agent both see exactly
-   which tasks remain unresolved).
-
-6. **Spot-audit** — the `attribution_audit_sample_pct` (default 10) samples a
-   fraction of audit events for separate measurement. Every judge dispatch emits a
-   fact to `.pipeline/attribution-audit.jsonl`, including the decision outcome;
-   spot-audit post-processes this ledger to measure judge accuracy over time
-   (adr-2026-07-11-attribution-spot-audit-measurement).
-
-**Safe defaults:**
-- Absent `attribution_judge_cutover` → judgment disabled, deterministic evidence only
-- Absent `attribution_audit_sample_pct` → defaults to 10% sampling
-- Both are inert when the judgment gate is inactive
-
-**Verify-only marker (#677):** a plan task can be marked prove-closed —
-legitimately expected to produce no commit (e.g. re-running an existing suite
-to confirm coverage) — with a `**Verify-only:** yes` line in its plan section.
-A gate-miss residue made up of (or including) marked task ids arms the judge
-lane for that class-scoped subset even when `attribution_judge_cutover` is
-dark/absent; an active cutover is unaffected and still judges the full
-residue. This prevents a verify-only task's absent commit from burning the
-`noEvidenceAttempts` counter and auto-parking an otherwise evaluator-APPROVED
-build. Pairs with an `Evidence: skipped <reason>` trailer accepted by the
-generated commit-msg hook as an alternative to `Task:` on an intentionally
-empty commit (a non-empty reason is required; bare empty commits are still
-rejected).
-
-**No-diff completion currency (#733):** a `**Type:** verification` plan marker
-is recognized in union with `**Verify-only:** yes` and arms the same judged-closure
-lane; and an `Evidence: skipped <reason>` commit itself mints an `evidenceStamps`
-entry (`form: 'evidence:skipped'`), so a no-diff task can resolve without ever
-reaching the judge.
-
-**Manual CLI (`conduct-ts evidence judge`):** the same lane the daemon runs automatically
-can be triggered by hand for a parked/halted feature:
-
-```bash
-conduct-ts evidence judge <slug>              # resolve <slug> to its worktree, run the judge
-conduct-ts evidence judge <slug> --dry-run    # judge only — print would-be stamps, write nothing
-```
-
-- Resolves `<slug>` to a registered worktree; unknown slug or unreachable worktree exits
-  non-zero and lists known slugs.
-- Refuses to run (non-zero exit, no writes) while `.pipeline/build-step-active` is present —
-  judging concurrently with an in-flight build step is rejected, not queued.
-- Prints a single JSON line: `{ before, after, stampedTaskIds, wouldStamp }` — unresolved-task
-  counts before/after the run, plus the task IDs actually stamped (`--dry-run` omits
-  `stampedTaskIds` and reports `wouldStamp` instead; no evidence sidecar write occurs).
-- **Recovery tail:** if the run fully resolves all residue (partial resolution leaves this
-  untouched), the CLI drops a stale `.pipeline/HALT` marker and writes `.pipeline/REKICK`,
-  the same signal the daemon's own re-kick sweep uses — so a manually-judged, now-green
-  feature is picked back up on the next poll instead of staying parked.
-
-See `src/conductor/README.md` → "Semantic attribution verification lane" for the full
-CLI/ledger/spot-audit detail.
-
-See `adr-2026-07-11-semantic-attribution-verification-lane.md` for the full design,
-constraints, and trade-offs.
+See `src/conductor/README.md` → "Attribution enforcement" and "Task-stamp telemetry" for
+implementation detail, and `.docs/decisions/` for the ADRs covering the original judge design
+(retained for history — the design itself is no longer active).
 
 
 ### OpenTelemetry observability (`conduct-ts` only)
@@ -2020,18 +1951,18 @@ See [`src/conductor/README.md`](src/conductor/README.md) for the gate-loop and d
 internals (verdicts, selector, kickback, worker pool, task-status, auto-park, remediation).
 
 **Task Status (engine-owned):** The engine is the single authority for
-`.pipeline/task-status.json`. Completion state is derived from git evidence (commits with
-`Task: <id>` trailers). The auto-heal step reconciles stale state before retrying a gate
-by matching commits to tasks and verifying no intermediate work was dropped. See
-`src/conductor/README.md` → "Task Status (engine-owned)".
+`.pipeline/task-status.json`. `Task: <id>` commit trailers are telemetry only — they update
+progress/resolved-count reporting (#757) but no longer derive or gate task completion.
+Build-step (and therefore task) completion is decided by `build_review`'s completeness
+rubric: an LLM-judged, fail-closed, plan-vs-diff check. See `src/conductor/README.md` →
+"Task Status (engine-owned)".
 
-**Auto-park on N-attempt trigger:** The daemon auto-parks after N consecutive no-evidence
-gate misses (where a gate found no new commit evidence since its prior attempt) or when the
-plan is empty/missing at seed time. This replaces infinite re-kick with a survivable halt.
-Unpark (`conduct daemon unpark <slug>`) resets the evidence counter and resumes. When the
-unresolved residue at park time includes `**Verify-only:** yes`-marked tasks (#677), the
-park reason names those task ids instead of only the generic message. See
-`src/conductor/README.md` → "Auto-park on N-attempt trigger".
+**Auto-park (#773 demotion):** the durable no-evidence-attempt counter park path has been
+deleted — commit-stamping telemetry no longer drives auto-park. Auto-park now fires only
+for an explicit, caller-supplied reason (e.g. an empty/missing plan at seed time); wall-clock
+and attempt bounds elsewhere in the daemon still provide a survivable halt for stuck builds.
+Unpark (`conduct daemon unpark <slug>`) clears the park marker and resumes. See
+`src/conductor/README.md` → "Auto-park".
 
 **Remediation (agentic gap routing):** When a SHIP gate blocks the daemon, the `/remediate`
 planner analyzes the gap and routes back to the appropriate step or halts for human triage.

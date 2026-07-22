@@ -1060,9 +1060,14 @@ describe('engine/artifacts', () => {
         await writePlan('### Task 1: First task\n**Story:** 1\n\n### Task 2: Second task\n**Story:** 2\n');
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
 
-        // First check creates the seeded file
+        // First check creates the seeded file. Task 10 (#773): the build
+        // predicate is now purely structural (plan seeded + all planned
+        // tasks present in task-status.json), but a freshly-seeded plan
+        // with no completed/skipped rows yet is still pending — it still
+        // requires task-status.json rows to actually be completed/skipped,
+        // it just no longer cross-checks them against the evidence ledger.
         const result1 = await checkStepCompletion(dir, 'build', ctx);
-        expect(result1.done).toBe(false); // pending tasks exist
+        expect(result1.done).toBe(false);
 
         // Verify file was created
         const statusPath = join(dir, '.pipeline/task-status.json');
@@ -1075,7 +1080,7 @@ describe('engine/artifacts', () => {
 
         // Re-check should re-seed the file
         const result2 = await checkStepCompletion(dir, 'build', ctx);
-        expect(result2.done).toBe(false); // still has pending
+        expect(result2.done).toBe(false); // re-seeded, still pending (no completed rows)
 
         // File should be recreated
         const second = JSON.parse(await readFile(statusPath, 'utf-8'));
@@ -1094,8 +1099,9 @@ describe('engine/artifacts', () => {
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
 
         // Predicate should handle corrupt JSON gracefully and rebuild
+        // (still pending — a freshly-reseeded plan has no completed rows).
         const result = await checkStepCompletion(dir, 'build', ctx);
-        expect(result.done).toBe(false); // has pending tasks
+        expect(result.done).toBe(false);
 
         // File should be rebuilt (valid JSON)
         const rebuilt = JSON.parse(await readFile(statusPath, 'utf-8'));
@@ -1108,79 +1114,31 @@ describe('engine/artifacts', () => {
 
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
         const result = await checkStepCompletion(dir, 'build', ctx);
-        // After seeding, both tasks are pending (no evidence/commits)
+        // After seeding, both tasks are pending (no completed rows yet).
         expect(result.done).toBe(false);
         expect(result.reason).toMatch(/pending|not completed/i);
       });
 
-      it('marks tasks as pending after seeding (without evidence commits)', async () => {
+      // Task 10 (#773): the build predicate demotes the per-task
+      // evidence-ledger gate (deriveCompletion/createTaskEvidence/
+      // evidenceStamps) to telemetry. It still trusts task-status.json row
+      // status (completed/skipped), exactly like the legacy no-context
+      // fallback always has — but it no longer cross-checks that status
+      // against an independently re-derived evidence sidecar. The old
+      // "forged completed row with no evidenceStamps entry" anti-forgery
+      // check is retired: a 'completed' row with NO evidence sidecar at all
+      // now passes, since build_review's completeness rubric is what
+      // actually judges the real diff on every pass.
+      it('passes on a forged-looking completed row with no evidence sidecar at all (anti-forgery check retired)', async () => {
         await writePlan('### Task 1: Task one\n**Story:** 1\n\n### Task 2: Task two\n**Story:** 2\n');
-        // Pre-write some completed tasks (forged state, no commit evidence).
-        // A PRESENT sidecar makes this a post-cutover state: without it, the
-        // first-seed H8 migration grandfather would (by design) preserve
-        // pre-cutover terminal rows — forgery detection is a post-cutover
-        // contract.
         await writeTasks([
           { id: '1', name: 'Task 1', status: 'completed' },
           { id: '2', name: 'Task 2', status: 'completed' },
         ]);
-        await writeFile(
-          join(dir, '.pipeline/task-evidence.json'),
-          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
-        );
 
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
         const result = await checkStepCompletion(dir, 'build', ctx);
-        // seedTaskStatus resets tasks without evidence to pending
-        // So gate should fail with pending tasks
-        expect(result.done).toBe(false);
-        expect(result.reason).toMatch(/pending|not completed/i);
-      });
-
-      it('detects all-completed forged rows as incomplete (no evidence)', async () => {
-        // This tests the acceptance criterion: forged all-completed rows + zero commits → gate fails
-        await writePlan('### Task 1: Task one\n**Story:** 1\n');
-        // Post-cutover state (sidecar present) — see the sibling test's note.
-        // Write task-status showing completed but no evidence commits
-        await writeTasks([{ id: '1', name: 'Task 1', status: 'completed' }]);
-        await writeFile(
-          join(dir, '.pipeline/task-evidence.json'),
-          JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
-        );
-
-        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
-        const result = await checkStepCompletion(dir, 'build', ctx);
-        // seedTaskStatus resets to pending → gate fails
-        expect(result.done).toBe(false);
-        expect(result.reason).toMatch(/pending|not completed/i);
-      });
-
-      it('rejects tasks resolved only via legacy migrationGrandfather, even with completed rows (#463)', async () => {
-        // Legacy sidecar: no evidenceStamps at all, but tasks 2 and 4 were
-        // grandfathered during the H8 migration. Their task-status.json rows
-        // are (forged/stale) 'completed'. Evidence stamps are the ONLY
-        // completion currency now — the grandfather escape hatch must be
-        // inert for gate resolution, regardless of row status.
-        await writePlan('### Task 2: Task two\n**Story:** 2\n\n### Task 4: Task four\n**Story:** 4\n');
-        await writeTasks([
-          { id: '2', name: 'Task two', status: 'completed' },
-          { id: '4', name: 'Task four', status: 'completed' },
-        ]);
-        await writeFile(
-          join(dir, '.pipeline/task-evidence.json'),
-          JSON.stringify({
-            evidenceStamps: {},
-            noEvidenceAttempts: 0,
-            migrationGrandfather: ['2', '4'],
-          }),
-        );
-
-        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
-        const result = await checkStepCompletion(dir, 'build', ctx);
-
-        expect(result.done).toBe(false);
-        expect(result.reason).toMatch(/2/);
-        expect(result.reason).toMatch(/4/);
+        expect(result).toEqual({ done: true });
       });
 
       it('loads a legacy sidecar with migrationGrandfather without error (backward-compat load)', async () => {
@@ -1201,7 +1159,11 @@ describe('engine/artifacts', () => {
         expect(evidence.migrationGrandfather.has('4')).toBe(true);
       });
 
-      it('accepts a task with a real evidence stamp regardless of row status', async () => {
+      // Task 10 (#773): a real evidenceStamps entry in the sidecar no
+      // longer overrides — or is even consulted alongside — a 'pending' row
+      // status. The predicate never reads the evidence sidecar at all now;
+      // only the task-status.json row status governs.
+      it('ignores the evidence sidecar entirely: a real evidence stamp does not override a pending row', async () => {
         await writePlan('### Task 2: Task two\n**Story:** 2\n');
         await writeTasks([{ id: '2', name: 'Task two', status: 'pending' }]);
         await writeFile(
@@ -1216,16 +1178,17 @@ describe('engine/artifacts', () => {
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
         const result = await checkStepCompletion(dir, 'build', ctx);
 
-        expect(result).toEqual({ done: true });
+        expect(result.done).toBe(false);
       });
 
-      // Regression (Task 10): a task legitimately completed via a real commit
-      // (Task: N trailer + path-corroborating changes) must keep passing the
-      // gate even if the mutable `.pipeline/task-evidence.json` sidecar is
-      // deleted out from under it. deriveCompletion re-derives evidence from
-      // git (the immutable source of truth) on every gate evaluation and
-      // re-writes the sidecar — the sidecar is a cache, never the source.
-      it('re-stamps and still passes the gate after the evidence sidecar is deleted (real commit)', async () => {
+      // Regression (Task 10, #773): a task implemented via a real commit
+      // AND explicitly marked 'completed' in task-status.json keeps passing
+      // the build predicate even with NO evidence sidecar present at all —
+      // the predicate no longer calls deriveCompletion/createTaskEvidence,
+      // so it never reads or writes `.pipeline/task-evidence.json`. Real
+      // commit evidence is no longer this gate's concern; it is now
+      // build_review's completeness rubric that judges actual completion.
+      it('passes on a structurally-seeded plan with a real commit and a completed row, without ever touching the evidence sidecar', async () => {
         await execa('git', ['init', '-b', 'main'], { cwd: dir });
         await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
         await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
@@ -1233,10 +1196,6 @@ describe('engine/artifacts', () => {
         await execa('git', ['add', 'README.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
 
-        // getEvidenceRange requires a resolvable origin default branch to
-        // bound the commit range — set up a bare "origin" the way a real
-        // clone would have one, pushed at the initial commit so the plan +
-        // work commits below are ahead of it.
         const bareDir = await mkdtemp(join(tmpdir(), 'artifacts-origin-'));
         await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
         await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: dir });
@@ -1246,32 +1205,30 @@ describe('engine/artifacts', () => {
         await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
 
-        // A real commit with a corroborating path change and the Task: N trailer.
+        // A real commit implementing the task, but with NO Task: N trailer
+        // and no evidence sidecar — build_review (not this predicate) is
+        // what judges whether the diff is actually complete.
         await mkdir(join(dir, 'src'), { recursive: true });
         await writeFile(join(dir, 'src/real.ts'), 'export const real = true;\n');
         await execa('git', ['add', 'src/real.ts'], { cwd: dir });
-        await execa('git', ['commit', '-m', 'feat: implement real task\n\nTask: 1\n'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: implement real task'], { cwd: dir });
+
+        // Mark the row completed directly — nothing in this predicate's
+        // code path does this derivation anymore (that's conductor.ts's
+        // own auto-heal call, exercised separately in gate-loop.test.ts).
+        await writeTasks([{ id: '1', name: 'Real task', status: 'completed' }]);
 
         const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
 
-        // First pass: seed + derive should stamp the task from the commit and pass.
-        const first = await checkStepCompletion(dir, 'build', ctx);
-        expect(first).toEqual({ done: true });
+        const result = await checkStepCompletion(dir, 'build', ctx);
+        expect(result).toEqual({ done: true });
 
+        // No evidence sidecar should have been created/consulted by this
+        // predicate — seedTaskStatus's own defensive sidecar init happened,
+        // but its contents are irrelevant to the verdict above.
         const sidecarPath = join(dir, '.pipeline/task-evidence.json');
-        const beforeDelete = JSON.parse(await readFile(sidecarPath, 'utf-8'));
-        expect(beforeDelete.evidenceStamps['1']).toBeDefined();
-
-        // Delete the mutable sidecar entirely.
-        await rm(sidecarPath, { force: true });
-
-        // Re-run seed + derive + gate: the task must be re-stamped from git
-        // and still count as completed, even though the sidecar was wiped.
-        const second = await checkStepCompletion(dir, 'build', ctx);
-        expect(second).toEqual({ done: true });
-
-        const restamped = JSON.parse(await readFile(sidecarPath, 'utf-8'));
-        expect(restamped.evidenceStamps['1']).toBeDefined();
+        const sidecar = JSON.parse(await readFile(sidecarPath, 'utf-8').catch(() => '{"evidenceStamps":{}}'));
+        expect(sidecar.evidenceStamps['1']).toBeUndefined();
 
         await rm(bareDir, { recursive: true, force: true });
       });
@@ -1320,9 +1277,11 @@ describe('engine/artifacts', () => {
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
 
-          // Main assertion: em-dash plan with evidence should PASS the gate
+          // Main assertion: the em-dash plan is recognized as non-empty (it
+          // may still report "pending" — Task 10 (#773) retired this
+          // predicate's own git-trailer-derived auto-completion, so a real
+          // commit alone no longer flips a row to 'completed' here).
           const result = await checkStepCompletion(dir, 'build', ctx);
-          expect(result).toEqual({ done: true });
 
           // Verify it does NOT report empty-plan or no-tasks-in-plan reason
           if (!result.done && result.reason) {
@@ -1399,7 +1358,6 @@ describe('engine/artifacts', () => {
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
 
           const result = await checkStepCompletion(dir, 'build', ctx);
-          expect(result).toEqual({ done: true });
 
           if (!result.done && result.reason) {
             expect(result.reason).not.toMatch(/empty|no tasks in plan|plan is empty/i);
@@ -1423,7 +1381,9 @@ describe('engine/artifacts', () => {
 
           // Must not be the empty/missing-plan false-positive (may still be
           // "pending" since there's no evidence in this test — that's fine).
-          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          }
         });
       });
 
@@ -1479,7 +1439,9 @@ describe('engine/artifacts', () => {
 
           // Not the empty/missing-plan false-negative; may still be
           // "pending" for lack of git evidence in this test.
-          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          }
         });
 
         it('#620 guard: bare title-less headers with a digit in the id ("### Task 1", "### Task t1") still count as task presence', async () => {
@@ -1497,7 +1459,9 @@ describe('engine/artifacts', () => {
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
           const result = await checkStepCompletion(dir, 'build', ctx);
 
-          expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          if (!result.done && result.reason) {
+            expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
+          }
         });
       });
     });
@@ -2302,6 +2266,32 @@ Task 1 → Task 2
         verdict: 'FAIL',
         reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
         rubric: { tautology: true, scope: true, rootCause: false },
+      });
+    });
+
+    it('accepts and round-trips a verdict containing rubric.completeness', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      });
+    });
+
+    it('validates a verdict where only rubric.completeness fails as overall FAIL (all-or-FAIL semantics)', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['implementation addresses only part of the task scope'],
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['implementation addresses only part of the task scope'],
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
       });
     });
 

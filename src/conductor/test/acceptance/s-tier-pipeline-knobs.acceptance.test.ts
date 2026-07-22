@@ -108,7 +108,9 @@ describe('S-tier pipeline knobs (#668)', () => {
   });
 
   describe('Story 6 (negative) — no evidence gate is tier-weakened for S', () => {
-    const gateSteps = ['build', 'build_review', 'wiring_check', 'manual_test', 'rebase', 'finish'] as const;
+    // manual_test is intentionally excluded (ADR D5, #775): S-tier features
+    // legitimately skip manual testing.
+    const gateSteps = ['build', 'build_review', 'wiring_check', 'rebase', 'finish'] as const;
 
     it('never tier-skips any build/SHIP-tail gate for S', () => {
       for (const step of gateSteps) {

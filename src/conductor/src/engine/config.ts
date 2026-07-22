@@ -679,39 +679,41 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
-  // build_review — opt-in judgement gate at the build → manual_test seam.
+  // build_review — default-on judgement gate at the build → manual_test seam
+  // (replacement completion authority, #773 Task 4).
   // Contract (total — never throws, never undefined):
-  //   C1  absent / null → { enabled: false } (no warning)
+  //   C1  absent / null → { enabled: true } (no warning)
   //   C2  { enabled: true|false } → as given (no warning)
   //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
-  //       { enabled: false } + one warning
+  //       { enabled: true } + one warning (fail-open to the new default,
+  //       never silently opt a project out of the replacement authority)
   if (obj.build_review !== undefined && obj.build_review !== null) {
     if (isPlainObject(obj.build_review)) {
       const br = obj.build_review as Record<string, unknown>;
       const unknownKey = Object.keys(br).find((k) => k !== 'enabled');
       if (unknownKey !== undefined) {
         warnings.push(
-          `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to disabled.`,
+          `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
         );
-        obj.build_review = { enabled: false };
+        obj.build_review = { enabled: true };
       } else if (br.enabled === undefined) {
-        obj.build_review = { enabled: false };
+        obj.build_review = { enabled: true };
       } else if (typeof br.enabled === 'boolean') {
         obj.build_review = { enabled: br.enabled };
       } else {
         warnings.push(
-          `build_review.enabled has invalid value ${JSON.stringify(br.enabled)}, falling back to disabled.`,
+          `build_review.enabled has invalid value ${JSON.stringify(br.enabled)}, falling back to enabled.`,
         );
-        obj.build_review = { enabled: false };
+        obj.build_review = { enabled: true };
       }
     } else {
       warnings.push(
-        `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to disabled.`,
+        `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
       );
-      obj.build_review = { enabled: false };
+      obj.build_review = { enabled: true };
     }
   } else {
-    obj.build_review = { enabled: false };
+    obj.build_review = { enabled: true };
   }
 
   // ci_watch — CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).

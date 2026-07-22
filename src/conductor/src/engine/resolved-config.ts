@@ -518,10 +518,11 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// build_review configuration (opt-in judgement gate at the build → manual_test seam)
+// build_review configuration (default-on judgement gate at the build →
+// manual_test seam — replacement completion authority, #773 Task 4)
 // ────────────────────────────────────────────────────────────────────────────
 
-export const DEFAULT_BUILD_REVIEW_ENABLED = false;
+const DEFAULT_BUILD_REVIEW_ENABLED = true;
 
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
@@ -530,8 +531,10 @@ export interface ResolvedBuildReviewConfig {
 
 /**
  * Resolve the `build_review` block to concrete settings.
- * Absent/malformed block defaults to disabled (safe-by-default) — mirrors
- * `resolveMergeableAutoresolve` above. Validation and warning emission for
+ * Absent/malformed block defaults to ENABLED (#773 Task 4) — build_review's
+ * completeness rubric item is the replacement completion authority once the
+ * per-task evidence gate is retired. Projects may still explicitly opt out
+ * via `build_review.enabled: false`. Validation and warning emission for
  * malformed input happens in `validateConfig`; this resolver assumes a
  * validated (or absent) block and only applies the default.
  */

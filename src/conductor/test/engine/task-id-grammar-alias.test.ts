@@ -5,14 +5,11 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import {
   parsePlanTasks,
-  parsePlanTaskPaths,
   taskTrailerMatches,
   canonicalTaskId,
-  deriveCompletion,
-  reconcileStatusFromStamps,
 } from '../../src/engine/autoheal.js';
+import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
-import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 // #636: #615 widened plan-header parsing to accept `### T<N> — Title` but
 // normalized those ids to BARE numbers, orphaning the T-prefixed rows,
@@ -151,92 +148,6 @@ More prose.
       expect(t3.status).toBe('in_progress');
       const t4 = status.tasks.find((t: any) => t.id === 'T4');
       expect(t4.status).toBe('in_progress');
-    });
-  });
-
-  describe('deriveCompletion resolves both trailer grammars against a T<N> plan', () => {
-    let dir: string;
-    let originDir: string;
-    const git = (args: string[]) => execa('git', args, { cwd: dir });
-    beforeEach(async () => {
-      dir = await fsPromises.mkdtemp(join(tmpdir(), 'grammar-derive-'));
-      originDir = await fsPromises.mkdtemp(join(tmpdir(), 'grammar-origin-'));
-      await execa('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: originDir });
-      await git(['init', '-q', '-b', 'main']);
-      await git(['config', 'user.email', 't@t.com']);
-      await git(['config', 'user.name', 'T']);
-      await git(['commit', '-q', '--allow-empty', '-m', 'root']);
-      // Publish `main` to origin so deriveCompletion's evidence-range ladder
-      // (merge-base origin/main..HEAD) resolves; work commits land on top.
-      await git(['remote', 'add', 'origin', originDir]);
-      await git(['push', '-q', 'origin', 'main']);
-    });
-    afterEach(async () => {
-      await fsPromises.rm(dir, { recursive: true, force: true });
-      await fsPromises.rm(originDir, { recursive: true, force: true });
-    });
-
-    async function commitFile(path: string, body: string, trailer: string) {
-      const abs = join(dir, path);
-      await fsPromises.mkdir(join(dir, path, '..'), { recursive: true }).catch(() => {});
-      await fsPromises.writeFile(abs, body);
-      await git(['add', '-A']);
-      await git(['commit', '-q', '-m', `work\n\nTask: ${trailer}`]);
-    }
-
-    it('a T-prefixed trailer (Task: T1) completes the T1 task', async () => {
-      const planPath = join(dir, '.docs/plans/p.md');
-      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await fsPromises.writeFile(
-        planPath,
-        `# Plan\n\n### T1 — first\n\n**Files:** \`src/a.ts\`\n`,
-      );
-      await commitFile('src/a.ts', 'export const a = 1;\n', 'T1');
-
-      const derived = await deriveCompletion(dir, planPath);
-      expect(derived['T1']?.completed).toBe(true);
-    });
-
-    it('a bare trailer (Task: 0) completes the T0 task (rtk case)', async () => {
-      const planPath = join(dir, '.docs/plans/p.md');
-      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await fsPromises.writeFile(
-        planPath,
-        `# Plan\n\n### T0 — zero\n\n**Files:** \`bin/x.sh\`\n`,
-      );
-      await commitFile('bin/x.sh', 'echo hi\n', '0');
-
-      const derived = await deriveCompletion(dir, planPath);
-      expect(derived['T0']?.completed).toBe(true);
-    });
-  });
-
-  describe('reconcileStatusFromStamps aliases stamp id ↔ row id', () => {
-    let dir: string;
-    beforeEach(async () => {
-      dir = await fsPromises.mkdtemp(join(tmpdir(), 'grammar-recon-'));
-      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
-    });
-    afterEach(async () => {
-      await fsPromises.rm(dir, { recursive: true, force: true });
-    });
-
-    it('a bare-keyed stamp advances a T-prefixed in_progress row', async () => {
-      await fsPromises.writeFile(
-        join(dir, '.pipeline/task-status.json'),
-        JSON.stringify({ tasks: [{ id: 'T3', name: 'Task 3', status: 'in_progress' }] }, null, 2),
-      );
-      const evidence = await createTaskEvidence(dir);
-      evidence.evidenceStamps.set('3', { sha: 'deadbeefdeadbeef', form: 'trailer' });
-      await evidence.write();
-
-      const res = await reconcileStatusFromStamps(dir);
-      expect(res.synced).toContain('T3');
-      const status = JSON.parse(
-        await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'),
-      );
-      expect(status.tasks.find((t: any) => t.id === 'T3').status).toBe('completed');
-      expect(res.orphanStamps).not.toContain('3');
     });
   });
 });

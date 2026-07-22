@@ -1,14 +1,15 @@
-// autoheal.ts imports parsing helpers from this module, creating a circular
-// module dependency. This module reaches back for only the one grammar
-// constant it needs (kept in lockstep per the TASK_ID_PATTERN comment
-// further below). ESM circular imports resolve in whichever direction the
-// entry point first pulls the cycle in, so AUTOHEAL_TASK_ID_PATTERN is NOT
-// guaranteed to be initialized yet when this module's top level runs (e.g.
-// when something imports autoheal.ts before wired-into.ts, which is the
-// real production path via conductor.ts). PLAN_TASK_HEADER below is
-// therefore built lazily on first use — never referenced at module
-// top-level — so both import orderings are safe.
-import { TASK_ID_PATTERN as AUTOHEAL_TASK_ID_PATTERN } from './autoheal.js';
+// plan-task-parse.ts imports WIRED_INTO_LINE from this module, creating a
+// circular module dependency. This module reaches back for only the one
+// grammar constant it needs (kept in lockstep per the TASK_ID_PATTERN
+// comment further below). ESM circular imports resolve in whichever
+// direction the entry point first pulls the cycle in, so
+// AUTOHEAL_TASK_ID_PATTERN is NOT guaranteed to be initialized yet when this
+// module's top level runs (e.g. when something imports plan-task-parse.ts
+// before wired-into.ts, which is the real production path via
+// conductor.ts). PLAN_TASK_HEADER below is therefore built lazily on first
+// use — never referenced at module top-level — so both import orderings
+// are safe.
+import { TASK_ID_PATTERN as AUTOHEAL_TASK_ID_PATTERN } from './plan-task-parse.js';
 
 // A task's **Wired-into:** line is the authoring-time declaration of which
 // call site(s) actually reach the new code (the wiring reachability gate).

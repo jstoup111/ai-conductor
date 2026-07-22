@@ -1,20 +1,20 @@
 // daemon-auto-park.ts — the single trigger primitive for the survivable
-// auto-park (ADR "last resort" + H7 durable counter, plan Task 23, #280
-// reconciliation).
+// auto-park (ADR "last resort", plan Task 23, #280 reconciliation).
 //
-// When a daemon feature's plan yields NO completion evidence after N gate
-// evaluations (durable sidecar counter — survives engine restarts and
-// re-kicks), or the plan is empty/missing at seed time, the feature must STOP
-// dispatching visibly instead of looping: a `.daemon/parked/<slug>` marker
-// with machine provenance (`auto-parked: <reason>`), which the existing
-// existence-based `isOperatorParked` check and the re-kick sweep both honor.
-// Interactive runs (daemon: false) NEVER park — they keep the stall-REPL and
-// recovery-menu path.
+// When a daemon feature's plan is empty/missing at seed time, the feature
+// must STOP dispatching visibly instead of looping: a `.daemon/parked/<slug>`
+// marker with machine provenance (`auto-parked: <reason>`), which the
+// existing existence-based `isOperatorParked` check and the re-kick sweep
+// both honor. Interactive runs (daemon: false) NEVER park — they keep the
+// stall-REPL and recovery-menu path.
+//
+// Feature #773 Task 13 removed the durable no-evidence counter park path
+// (the commit-stamping evidence ledger is demoted to non-gating telemetry) —
+// a park now fires only for an explicit caller-supplied `reason`.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeAutoPark } from './park-marker.js';
-import { readNoEvidenceAttempts } from './task-evidence.js';
 
 export interface CompletionSignals {
   summaryTasksCompleted: number;
@@ -99,36 +99,17 @@ export async function detectParkContradiction(
 }
 
 export interface CheckAndAutoParkOpts {
-  /** Park once the durable no-evidence counter reaches this many attempts. */
-  maxAttempts: number;
   /** Auto-park is a DAEMON-layer behavior; interactive runs never park. */
   daemon: boolean;
   /**
-   * Snapshot of the durable no-evidence counter observed at the start of
-   * this dispatch cycle. When the counter was already at/over `maxAttempts`
-   * before this cycle burned any attempts (e.g. inherited from a prior
-   * halted run via unpark/re-kick), the composed reason names the budget as
-   * inherited rather than implying it was exhausted just now. Optional —
-   * omitting it preserves today's wording (same-cycle crossing).
-   */
-  cycleStartAttempts?: number;
-  /**
    * Explicit immediate-park reason (e.g. 'empty/missing plan' at seed time).
-   * When set, the counter is not consulted — the condition is already
-   * terminal for dispatch.
+   * A park only fires when this is set — the no-evidence durable-counter
+   * park path was removed (Feature #773 Task 13: the commit-stamping
+   * evidence ledger is demoted to non-gating telemetry).
    */
   reason?: string;
   /** Optional event sink; receives one `auto_park` event when a park fires. */
   emit?: (evt: unknown) => void;
-  /**
-   * Ids of unresolved/residue tasks that the CALLER has already determined
-   * are marked `**Verify-only:** yes` in the plan. Only consulted in the
-   * no-evidence-counter branch (never the explicit `opts.reason` seed-time
-   * path). When non-empty, the composed reason gains a distinct suffix
-   * ` — unresolved verify-only tasks: <ids>`. Omitting it (or passing an
-   * empty array) produces byte-identical reason text to today.
-   */
-  verifyOnlyUnresolvedIds?: string[];
 }
 
 /**
@@ -146,28 +127,11 @@ export async function checkAndAutoPark(
     return { parked: false };
   }
 
-  let reason: string | null = null;
-  if (opts.reason !== undefined) {
-    reason = opts.reason;
-  } else {
-    const attempts = await readNoEvidenceAttempts(projectRoot);
-    if (attempts >= opts.maxAttempts) {
-      const inherited =
-        opts.cycleStartAttempts !== undefined &&
-        opts.cycleStartAttempts >= opts.maxAttempts;
-      reason = inherited
-        ? `no completion evidence — inherited an already-exhausted budget of ${opts.maxAttempts} attempts`
-        : `no completion evidence after ${opts.maxAttempts} attempts`;
-      if (opts.verifyOnlyUnresolvedIds && opts.verifyOnlyUnresolvedIds.length > 0) {
-        reason += ` — unresolved verify-only tasks: ${opts.verifyOnlyUnresolvedIds.join(', ')}`;
-      }
-    }
-  }
-
-  if (reason === null) {
+  if (opts.reason === undefined) {
     return { parked: false };
   }
 
+  const reason = opts.reason;
   await writeAutoPark(projectRoot, slug, reason);
   opts.emit?.({ type: 'auto_park', slug, reason });
   return { parked: true };
