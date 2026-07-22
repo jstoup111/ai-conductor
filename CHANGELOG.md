@@ -3580,6 +3580,19 @@ fi
 ## [Unreleased]
 
 ### Fixed
+- conduct-ts: `build_review` graded the diff against the **wrong feature's plan**
+  when several plans are present in `.docs/plans/` (the norm in a daemon worktree,
+  which carries the whole repo's plan history). `runBuildReview` resolved the plan
+  with an unscoped `.docs/plans/*.md` `sort()[last]` guess — the exact #407
+  anti-pattern the build step already avoids — so it graded against the
+  alphabetically-last plan (e.g. `writing-system-tests-red-exit-gate`) while the
+  build step built the correct feature (`build-progress-1-based-display`). The
+  grader then FAILed the build on a spurious scope/completeness mismatch against an
+  entirely unrelated plan. Fixed by resolving through the slug-scoped
+  `resolveFeaturePlanPath` (the same resolver the build step uses), which fails
+  closed on ambiguity rather than grading someone else's plan. Regression test
+  (`test/engine/build-review-plan-resolution.test.ts`).
+
 - conduct-ts: the `engineer` routing adapter (Phase 9.3) built its provider call
   as `provider.invoke({ prompt } as any)`, omitting the **required** `sessionId`
   and `resume` fields of `InvokeOptions`. The `as any` cast hid the type error;
