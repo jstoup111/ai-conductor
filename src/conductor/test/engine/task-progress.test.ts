@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import {
   countResolvedTasks,
   haltMarkerExists,
@@ -76,6 +77,45 @@ describe('task-progress', () => {
         JSON.stringify({ plan_ref: 'foo' }),
       );
       expect(await countResolvedTasks(dir)).toBe(0);
+    });
+
+    it('#757: counts distinct plan task-ids carried by Task: trailers on the branch, not via the deleted derivation engine', async () => {
+      // Set up a real git repo (no `.pipeline/task-status.json`-side status
+      // flip involved — this proves the count is sourced from commit
+      // trailers directly, per feature #773 Task 15).
+      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      // 4 plan tasks, all still `pending` in task-status.json — i.e. nothing
+      // here would count under the old completed/skipped-only logic.
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'pending' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+            { id: '4', status: 'pending' },
+          ],
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      // Task 1 and Task 3 have Task:-trailered commits; Task 2 and 4 do not.
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 1\n\nTask: 1'], { cwd: dir });
+
+      await writeFile(join(dir, 'b.txt'), 'b');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 3\n\nTask: 3'], { cwd: dir });
+
+      // Only task-ids 1 and 3 are resolved via trailers; 2 and 4 remain
+      // untouched pending — expect exactly 2, not 0 (old code) and not 4.
+      expect(await countResolvedTasks(dir)).toBe(2);
     });
   });
 

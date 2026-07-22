@@ -1,11 +1,23 @@
 import { readFile, unlink, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { listCommitsWithTrailers, canonicalTaskId } from './autoheal.js';
 
 /**
- * Count of tasks that are either `completed` or `skipped` (i.e. resolved and
- * not pending further work) in `.pipeline/task-status.json`. Returns 0 when
- * the file is absent or unparseable — callers treat "no data" as "no
- * progress" which is the safe default.
+ * Count of distinct plan task-ids that are "resolved" — i.e. either already
+ * `completed`/`skipped` in `.pipeline/task-status.json` (gate-authority /
+ * `conduct task done` marked), OR carried by a `Task:` trailer on a commit
+ * on the current branch. Returns 0 when the status file is absent or
+ * unparseable — callers treat "no data" as "no progress" which is the safe
+ * default.
+ *
+ * #757/#773 Task 15: this used to be sourced (indirectly, via task-status.json
+ * completion) from the per-task evidence-ledger derivation engine
+ * (`deriveCompletion`/`applyDerivedCompletion`), which feature #773 deleted
+ * (Task 11) — that engine was never re-wired into the live build loop, so the
+ * resolved-count silently stalled at whatever task-status.json already had.
+ * The count now reads `Task:`-trailered commits directly (telemetry only,
+ * non-gating) so it advances even when nothing has explicitly flipped a row's
+ * status.
  *
  * Used by the build-step stall circuit breaker: if the count doesn't move
  * between two consecutive retries, the retries aren't actually producing
@@ -26,13 +38,53 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
   } catch {
     return 0;
   }
-  return countFromParsed(parsed);
+
+  const tasks = normalizeTasks(parsed);
+  if (tasks.length === 0) return 0;
+
+  const resolved = new Set<string>();
+  for (const t of tasks) {
+    if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined) {
+      resolved.add(t.id);
+    }
+  }
+
+  // Union in plan task-ids carried by `Task:` trailers on the branch. Best
+  // effort: non-git directories or git failures degrade to no additional
+  // ids (fail-soft), matching countResolvedTasks's overall "no data means no
+  // progress" default.
+  const trailerIds = await distinctTaskTrailerIds(projectRoot);
+  const planIds = new Set(tasks.map((t) => t.id).filter((id): id is string => id !== undefined));
+  for (const id of trailerIds) {
+    const canonical = canonicalTaskId(id);
+    const match = planIds.has(id)
+      ? id
+      : [...planIds].find((p) => canonicalTaskId(p) === canonical);
+    if (match !== undefined) resolved.add(match);
+  }
+
+  return resolved.size;
 }
 
-function countFromParsed(parsed: unknown): number {
-  return normalizeTasks(parsed).filter(
-    (t) => t.status === 'completed' || t.status === 'skipped',
-  ).length;
+/**
+ * Distinct raw `Task:` trailer values across commits on the current branch
+ * (per `listCommitsWithTrailers`'s merge-base-relative range). Fails soft to
+ * an empty set on any git error (non-repo dir, no commits, etc.) — trailer
+ * sourcing is a best-effort addition, never a hard requirement.
+ */
+async function distinctTaskTrailerIds(projectRoot: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  try {
+    const commits = await listCommitsWithTrailers(projectRoot);
+    for (const commit of commits) {
+      for (const value of commit.trailers['Task'] ?? []) {
+        ids.add(value);
+      }
+    }
+  } catch {
+    // fail-soft — no trailer data available
+  }
+  return ids;
 }
 
 /** A task row after tolerating both the new array shape and the legacy
