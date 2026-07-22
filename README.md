@@ -1836,6 +1836,19 @@ dedicated test coverage (950+ tests). See the feature comparison in
   session (`attemptStartedAt`), not just the conductor-run start (`sessionStartedAt`) — a
   re-dispatched judging session that fails to rewrite its verdict file scores "no fresh
   verdict" instead of silently re-scoring a prior attempt's verdict forever.
+- **Code-validity verdict preservation on re-dispatch/resume** (#817): those same judged
+  gates (`build_review`, `prd_audit`, `architecture_review_as_built`, `manual_test`) also
+  validate against **current code state**, not just evidence-file timestamp. Each `PASS`
+  verdict is stamped with the HEAD SHA it was judged against; when a feature is
+  re-dispatched or resumed and the code under that gate's declared surface (`GATE_SURFACE`)
+  is unchanged since the stamp, the verdict is preserved and the gate is skipped instead of
+  re-run — so a re-dispatched feature no longer re-pays a completed, still-valid judged gate
+  (e.g. the ~17 min `build_review`) purely because the evidence file predates the new
+  session. A stamped baseline that is missing, unreachable (rebase/reset-orphaned), or whose
+  delta can't be computed always falls back to re-running (fail-closed). Opt-out via the
+  additive `gate_code_validity.enabled` config key (default `true`); setting it `false`
+  restores exact pre-feature mtime-only behavior. See `src/conductor/README.md` and
+  `.docs/decisions/adr-2026-07-22-gate-evidence-code-validity-on-redispatch.md`.
 - **Wiring reachability gate** (`wiring_check`, gating, always-on, all tiers): sits strictly
   between `build_review` and `manual_test` (`build → build_review → wiring_check →
   manual_test → ...`), verifying that new production surface is actually *called*, not just

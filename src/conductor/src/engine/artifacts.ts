@@ -8,6 +8,10 @@ import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
+import type { GitRunner } from './rebase.js';
+import { makeGitRunner } from './rebase.js';
+import { gateVerdictStillValid } from './gate-code-validity.js';
+import { resolveGateCodeValidityConfig } from './config.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -318,6 +322,86 @@ const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 ]);
 
 /**
+ * True when `step`'s already-stamped verdict is still preserve-worthy per
+ * `gateVerdictStillValid` (gate-code-validity-on-redispatch, #817) — the SAME
+ * check `CUSTOM_COMPLETION_PREDICATES` uses to decide whether to skip a
+ * re-run (Task 5/6). Called by the sweep BELOW `sweepStaleReviewArtifacts`
+ * before it deletes a stale artifact: without this check the sweep would
+ * unconditionally delete a still-valid verdict before the completion
+ * predicate ever gets a chance to preserve it, silently defeating the whole
+ * feature on the resume/kickback path this sweep guards (invariant C5 —
+ * sweep and predicate must never disagree about validity, or you get a
+ * self-contradicting state).
+ *
+ * Reads the SAME codeStamp source each predicate reads for its step
+ * (`manual_test`'s fail-evidence marker, `prd_audit`/
+ * `architecture_review_as_built`'s sidecar) — never re-derives it. Missing/
+ * unreadable/unparseable source, or no `codeStamp`, → false (delete as
+ * today). `build_review` and other non-sweep steps are never asked (the
+ * caller only calls this for `STALE_SWEEP_STEPS`).
+ */
+async function sweptArtifactStillValid(
+  dir: string,
+  step: StepName,
+  config?: HarnessConfig,
+): Promise<boolean> {
+  if (!resolveGateCodeValidityConfig(config).enabled) return false;
+  const git = makeGitRunner(dir);
+  const ctx = { projectRoot: dir, git };
+
+  try {
+    if (step === 'manual_test') {
+      const raw = await readFile(join(dir, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8');
+      const marker = JSON.parse(raw) as ManualTestFailEvidence;
+      // Mirrors the predicate's own cleanPass guard (Task 6): a marker
+      // carrying failRows/headSha (the whitewash-guard's unresolved-FAIL
+      // shape, #367) must never be spared here, or a laundering marker
+      // could bypass the guard.
+      const cleanPass =
+        marker.codeStamp != null &&
+        marker.headSha === undefined &&
+        (marker.failRows === undefined || marker.failRows.length === 0);
+      if (!cleanPass) return false;
+      return (
+        (await gateVerdictStillValid(ctx, 'manual_test', marker.codeStamp)) === 'preserve'
+      );
+    }
+    if (step === 'prd_audit') {
+      const raw = await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf-8');
+      const marker = JSON.parse(raw) as GateCodeStampMarker;
+      if (!marker.codeStamp) return false;
+      const validity = await gateVerdictStillValid(ctx, 'prd_audit', marker.codeStamp);
+      if (validity !== 'preserve') return false;
+      // Mirrors the predicate's own premise re-check (Task 6): the sidecar's
+      // presence signals "last recorded verdict was a PASS", but the report
+      // about to be swept can diverge from what it was stamped from — never
+      // spare a report that does not itself currently read clean.
+      return findUnalignedFrRows(await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8')).length === 0;
+    }
+    if (step === 'architecture_review_as_built') {
+      const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
+      const marker = JSON.parse(raw) as GateCodeStampMarker;
+      if (!marker.codeStamp) return false;
+      const validity = await gateVerdictStillValid(
+        ctx,
+        'architecture_review_as_built',
+        marker.codeStamp,
+      );
+      if (validity !== 'preserve') return false;
+      // Mirrors the predicate's own premise re-check (Task 6).
+      const verdict = parseAsBuiltVerdict(
+        await readFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'utf-8'),
+      );
+      return verdict !== null && /^APPROVED\b/i.test(verdict);
+    }
+  } catch {
+    // No sidecar/marker, unreadable, or unparseable — fall through to false
+    // (delete as today).
+  }
+  return false;
+}
+
+/**
  * Before a freshness-gated re-review step (re)runs, delete its `.pipeline/`
  * run-evidence artifact(s) when they predate this session, so the step CANNOT be
  * satisfied by reusing a stale artifact the agent declined to rewrite. With the
@@ -332,18 +416,24 @@ const STALE_SWEEP_STEPS: ReadonlySet<StepName> = new Set<StepName>([
  *
  * No-op for non-sweep steps, when `sessionStartedAt` is undefined (legacy state
  * / opt-out — fail open), and for artifacts already fresh this session (e.g. a
- * within-session retry must not lose attempt 1's output). Returns the paths
- * removed, for logging. Best-effort: an unlink race is swallowed.
+ * within-session retry must not lose attempt 1's output). A stale artifact
+ * whose codeStamp still validates (gate-code-validity-on-redispatch, #817 —
+ * `sweptArtifactStillValid` above) is also SPARED, so the completion predicate
+ * can preserve it (Story 7 / invariant C5) instead of forcing a needless
+ * re-run. Returns the paths removed, for logging. Best-effort: an unlink race
+ * is swallowed.
  */
 export async function sweepStaleReviewArtifacts(
   dir: string,
   step: StepName,
   sessionStartedAt: number | undefined,
+  config?: HarnessConfig,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
+    if (await sweptArtifactStillValid(dir, step, config)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);
@@ -470,6 +560,16 @@ export interface CompletionContext {
    * (fail-closed "evidence not found" when no fixture exists).
    */
   wiringProbe?: () => Promise<WiringEvidence>;
+  /**
+   * Injectable git runner for the gate-code-validity-on-redispatch decision
+   * (`gateVerdictStillValid`, #817): a judged gate's stamped PASS verdict can
+   * be preserved across re-dispatch when the code hasn't changed in its
+   * surface since the stamp. Absent → predicates default to
+   * `makeGitRunner(dir)` (same convention as `Conductor`'s own call sites,
+   * e.g. `conductor.ts`'s `const git = makeGitRunner(this.projectRoot);`),
+   * so real callers need not wire this; tests inject a scratch-repo runner.
+   */
+  git?: GitRunner;
 }
 
 /**
@@ -479,6 +579,20 @@ export interface CompletionContext {
  * exist). Gitignored run evidence, not a committed design artifact.
  */
 export const MANUAL_TEST_FAIL_EVIDENCE = '.pipeline/manual-test-fail-evidence.json';
+
+/**
+ * Shape of `MANUAL_TEST_FAIL_EVIDENCE`. `codeStamp` is additive
+ * (gate-code-validity-on-redispatch, #817) — the HEAD SHA the surrounding
+ * manual_test verdict was formed against, written alongside (not in place
+ * of) the pre-existing `headSha` FAIL-laundering guard (#367). A marker
+ * written before this field existed still parses (codeStamp absent).
+ */
+export interface ManualTestFailEvidence {
+  observedAt?: number;
+  headSha?: string;
+  failRows?: string[];
+  codeStamp?: string | null;
+}
 
 /**
  * True when a fresh (this-session) fail-evidence marker (#367) at markerPath
@@ -887,6 +1001,13 @@ export interface BuildReviewVerdict {
    * validation only guards the shape needed to route PASS vs FAIL safely). */
   reasons?: string[];
   rubric: BuildReviewRubric;
+  /** The HEAD SHA this verdict was formed against (gate-code-validity-on-
+   * redispatch, #817). Additive/optional — absent on legacy verdicts or when
+   * `stampCode` had no HEAD to record (non-git checkout). Written at judge
+   * dispatch (Task 3); consumed by the re-dispatch preservation check
+   * (Task 5) to decide whether a PASS verdict can be trusted without a
+   * re-run. Never required for a verdict to parse. */
+  codeStamp?: string | null;
 }
 
 /**
@@ -902,7 +1023,13 @@ export interface BuildReviewVerdict {
 export function validateBuildReviewVerdict(
   ev: unknown,
 ):
-  | { ok: true; verdict: 'PASS' | 'FAIL'; reasons?: string[]; rubric: BuildReviewRubric }
+  | {
+      ok: true;
+      verdict: 'PASS' | 'FAIL';
+      reasons?: string[];
+      rubric: BuildReviewRubric;
+      codeStamp?: string | null;
+    }
   | { ok: false; reason: string } {
   if (typeof ev !== 'object' || ev === null) {
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
@@ -932,6 +1059,7 @@ export function validateBuildReviewVerdict(
     verdict: 'PASS' | 'FAIL';
     reasons?: string[];
     rubric: BuildReviewRubric;
+    codeStamp?: string | null;
   } = {
     ok: true,
     verdict: e.verdict,
@@ -940,7 +1068,80 @@ export function validateBuildReviewVerdict(
   if (Array.isArray(e.reasons)) {
     result.reasons = e.reasons as string[];
   }
+  if (typeof e.codeStamp === 'string' || e.codeStamp === null) {
+    result.codeStamp = e.codeStamp;
+  }
   return result;
+}
+
+/**
+ * Return the current HEAD SHA to stamp onto a freshly-written judged-gate
+ * verdict (gate-code-validity-on-redispatch, #817), or `null` when no HEAD
+ * is available (non-git checkout, or `ctx.getHeadSha` is absent/throws).
+ * Reuses the sanctioned HEAD-read (`CompletionContext.getHeadSha`, the same
+ * one `wiring_check` uses) rather than introducing a new git call site.
+ * Never throws — safe to call unconditionally at every verdict write point.
+ */
+export async function stampCode(ctx: CompletionContext): Promise<string | null> {
+  if (!ctx.getHeadSha) return null;
+  try {
+    return await ctx.getHeadSha();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sidecar code-stamp marker shape for `prd_audit` and
+ * `architecture_review_as_built` (gate-code-validity-on-redispatch, #817).
+ * Unlike `build_review` (a JSON verdict) or `manual_test` (which already has
+ * a `headSha`-bearing JSON marker), these two gates' verdicts live in
+ * markdown reports — so `codeStamp` is recorded in a small adjacent JSON
+ * sidecar rather than inline in the report text. Task 4 writes this at
+ * judge dispatch; Task 6 reads it on the completion check. Purely additive:
+ * absence of the sidecar (or of `codeStamp` within it) means "no stamp",
+ * which falls back to today's mtime-freshness behavior.
+ */
+export interface GateCodeStampMarker {
+  codeStamp?: string | null;
+}
+
+/** Sidecar path for prd_audit's code stamp (see `GateCodeStampMarker`). */
+export const PRD_AUDIT_CODE_STAMP = '.pipeline/prd-audit-code-stamp.json';
+
+/**
+ * Sidecar path for architecture_review_as_built's code stamp (see
+ * `GateCodeStampMarker`).
+ */
+export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
+  '.pipeline/architecture-review-as-built-code-stamp.json';
+
+/**
+ * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
+ * exit. Best-effort — never throws, never blocks returning `done: true`.
+ */
+async function writeGateCodeStamp(
+  dir: string,
+  sidecarPath: string,
+  ctx: CompletionContext,
+): Promise<void> {
+  const codeStamp = await stampCode(ctx);
+  await writeFile(
+    join(dir, sidecarPath),
+    JSON.stringify({ codeStamp } satisfies GateCodeStampMarker, null, 2),
+    'utf-8',
+  ).catch(() => {});
+}
+
+async function writePrdAuditCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
+  await writeGateCodeStamp(dir, PRD_AUDIT_CODE_STAMP, ctx);
+}
+
+async function writeArchitectureReviewAsBuiltCodeStamp(
+  dir: string,
+  ctx: CompletionContext,
+): Promise<void> {
+  await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
@@ -1206,6 +1407,38 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   manual_test: async (dir, ctx): Promise<CompletionResult> => {
     const file = join(dir, '.pipeline/manual-test-results.md');
     const markerPath = join(dir, MANUAL_TEST_FAIL_EVIDENCE);
+
+    // gate-code-validity-on-redispatch (#817, Task 6): before falling into
+    // the mtime-freshness check below, see if a stamped clean-PASS marker
+    // can be trusted as-is because the code hasn't changed in manual_test's
+    // (all-runtime) surface since it was formed. Only a marker that is
+    // UNAMBIGUOUSLY a clean prior PASS may preserve — one carrying
+    // failRows/headSha (the whitewash-guard's own unresolved-FAIL shape,
+    // #367) must never be short-circuited here, or a laundering marker
+    // could bypass the guard below. Missing marker, parse failure, no
+    // codeStamp, or any FAIL/whitewash residue all fall through unchanged
+    // to the existing logic (invariant C2/C3).
+    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+      try {
+        const raw = await readFile(markerPath, 'utf-8');
+        const marker = JSON.parse(raw) as ManualTestFailEvidence;
+        const cleanPass =
+          marker.codeStamp != null &&
+          marker.headSha === undefined &&
+          (marker.failRows === undefined || marker.failRows.length === 0);
+        if (cleanPass) {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'manual_test', marker.codeStamp);
+          if (validity === 'preserve') {
+            return { done: true };
+          }
+        }
+      } catch {
+        // No marker, unreadable, or unparseable — fall through to the
+        // existing mtime-based logic, which handles all of those cases itself.
+      }
+    }
+
     let content: string;
     try {
       content = await readFile(file, 'utf-8');
@@ -1312,6 +1545,26 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         }
       }
     }
+    // Additive PASS-path telemetry (gate-code-validity-on-redispatch, #817):
+    // record the HEAD sha the current PASS verdict was formed against, in
+    // the same marker file used by the FAIL-path whitewash guard above.
+    // Merge onto any existing marker content (there should be none at this
+    // point on the fresh-flip path, but merging is defensive) rather than
+    // clobbering fields the guard depends on. Best-effort — never blocks
+    // returning done:true.
+    if (headSha) {
+      let existing: ManualTestFailEvidence = {};
+      try {
+        existing = JSON.parse(await readFile(markerPath, 'utf-8')) as ManualTestFailEvidence;
+      } catch {
+        existing = {};
+      }
+      await writeFile(
+        markerPath,
+        JSON.stringify({ ...existing, codeStamp: headSha }, null, 2),
+        'utf-8',
+      ).catch(() => {});
+    }
     return { done: true };
   },
 
@@ -1323,6 +1576,47 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // the PRD is amended (DECIDE) and the audit re-run. Mirrors manual_test:
   // presence + freshness + no blocking rows.
   prd_audit: async (dir, ctx): Promise<CompletionResult> => {
+    // gate-code-validity-on-redispatch (#817, Task 6): before the
+    // freshness/report-parsing checks below, see if the last recorded PASS
+    // (the sidecar is written ONLY on the PASS path — Task 4 — so its mere
+    // presence with a codeStamp IS the "last verdict was a pass" signal) can
+    // be trusted as-is because the code hasn't changed in prd_audit's
+    // (feature-runtime) surface since it was formed. Missing sidecar, parse
+    // failure, or no codeStamp all fall through unchanged to the existing
+    // mtime-based logic (invariant C2/C3).
+    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+      try {
+        const raw = await readFile(join(dir, PRD_AUDIT_CODE_STAMP), 'utf-8');
+        const marker = JSON.parse(raw) as GateCodeStampMarker;
+        if (marker.codeStamp) {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', marker.codeStamp);
+          if (validity === 'preserve') {
+            // The sidecar's presence signals "last recorded verdict was a
+            // PASS" (Task 4 writes it only on the PASS path), but the report
+            // it was stamped from can diverge from the CURRENT report on disk
+            // (a later run may have rewritten the report to a blocking
+            // verdict without also rewriting/removing the sidecar) — never
+            // preserve past a report that does not itself currently read
+            // clean. Re-check the premise directly against present content.
+            const preCheckFiles = await findArtifactFiles(dir, 'prd_audit');
+            if (preCheckFiles.length > 0) {
+              let stillClean = true;
+              for (const f of preCheckFiles) {
+                if (findUnalignedFrRows(await readFile(f, 'utf-8')).length > 0) {
+                  stillClean = false;
+                  break;
+                }
+              }
+              if (stillClean) return { done: true };
+            }
+          }
+        }
+      } catch {
+        // No sidecar, unreadable, or unparseable — fall through.
+      }
+    }
+
     const files = await findArtifactFiles(dir, 'prd_audit');
     if (files.length === 0) {
       return {
@@ -1364,6 +1658,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const passF = fresh[0];
     const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
       verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
@@ -1379,6 +1674,42 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // unless the literal word BLOCKED appeared), which let a no-ADR / garbled
   // verdict slip through marked `done` and the loop end without DONE or HALT.
   architecture_review_as_built: async (dir, ctx): Promise<CompletionResult> => {
+    // gate-code-validity-on-redispatch (#817, Task 6): mirrors prd_audit's
+    // preserve-check above — the sidecar is written ONLY on the clean-
+    // APPROVED PASS path (Task 4), so its mere presence with a codeStamp IS
+    // the "last verdict was a pass" signal.
+    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+      try {
+        const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
+        const marker = JSON.parse(raw) as GateCodeStampMarker;
+        if (marker.codeStamp) {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const validity = await gateVerdictStillValid(
+            { projectRoot: dir, git },
+            'architecture_review_as_built',
+            marker.codeStamp,
+          );
+          if (validity === 'preserve') {
+            // Mirrors prd_audit's premise re-check above: the sidecar's
+            // presence signals "last recorded verdict was APPROVED", but the
+            // CURRENT report on disk can diverge from what it was stamped
+            // from — never preserve past a report that does not itself
+            // currently parse as a clean APPROVED.
+            const preCheckFiles = await findArtifactFiles(dir, 'architecture_review_as_built');
+            if (preCheckFiles.length > 0) {
+              const content = await readFile(preCheckFiles[0], 'utf-8');
+              const verdict = parseAsBuiltVerdict(content);
+              if (verdict !== null && /^APPROVED\b/i.test(verdict)) {
+                return { done: true };
+              }
+            }
+          }
+        }
+      } catch {
+        // No sidecar, unreadable, or unparseable — fall through.
+      }
+    }
+
     const files = await findArtifactFiles(dir, 'architecture_review_as_built');
     if (files.length === 0) {
       return {
@@ -1428,6 +1759,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const passF = fresh[0];
     const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
     return {
       done: true,
       verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
@@ -1444,6 +1776,38 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const floor = verdictFreshnessFloor(ctx);
     const cmpFloor = verdictFreshnessComparand(ctx);
     const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
+
+    // gate-code-validity-on-redispatch (#817): before falling into the
+    // mtime-freshness check below, see if a stamped PASS verdict can be
+    // trusted as-is because the code hasn't changed in its surface since it
+    // was formed — this is what lets a re-dispatched feature skip a
+    // completed build_review whose evidence predates the current attempt
+    // but whose stamped code is still current. Read regardless of mtime
+    // freshness; only a valid stamped PASS can preserve, everything else
+    // (missing file, parse failure, FAIL, no codeStamp) falls through
+    // unchanged to the existing mtime-based logic (invariant C2).
+    if (resolveGateCodeValidityConfig(ctx.config).enabled) {
+      try {
+        const raw = await readFile(path, 'utf-8');
+        const parsed: unknown = JSON.parse(raw);
+        const preCheck = validateBuildReviewVerdict(parsed);
+        if (preCheck.ok && preCheck.verdict === 'PASS' && preCheck.codeStamp) {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'build_review', preCheck.codeStamp);
+          if (validity === 'preserve') {
+            const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+            return {
+              done: true,
+              verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+            };
+          }
+        }
+      } catch {
+        // No file, unreadable, or unparseable — fall through to the existing
+        // mtime-based logic, which handles all of those cases itself.
+      }
+    }
+
     if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.

@@ -201,6 +201,34 @@ judging attempt that fails to rewrite `.pipeline/prd-audit.md` or
 `.pipeline/architecture-review-as-built.md` scores "no fresh verdict" rather than reusing the
 prior attempt's verdict.
 
+**Code-validity verdict preservation on re-dispatch/resume (#817).** The mtime-freshness floor
+above only guards *within* a dispatch; historically, every *cross*-dispatch re-entry (resume,
+daemon re-kick) unconditionally moved `session_started_at` forward and re-ran any judged gate
+whose verdict file predated it — even when the code the verdict was judged against hadn't
+changed. `build_review`, `prd_audit`, `architecture_review_as_built`, and `manual_test` now
+stamp each recorded `PASS` verdict with a `codeStamp` (the HEAD SHA it was judged against, an
+additive field on the verdict JSON — the same model `wiring_check`'s `evidence.head` already
+used, see below). On the completion check, before the mtime rejection applies, a shared
+`gate-code-validity` helper resolves the stamped baseline, computes `baseline..HEAD`, and
+partitions it against the gate's declared `GATE_SURFACE`:
+- surface **unchanged** → the verdict is preserved and the step reads `done` — no re-judge.
+- surface **hit**, baseline **unreachable** (rebase/reset-orphaned), or delta **uncomputable**
+  → re-run (fail-closed; mirrors the #766 sidecar-stamp-reachability stance and
+  `adr-2026-07-20-post-rebase-delta-aware-invalidation.md`'s invalidate-on-uncomputable rule).
+- a verdict with **no** `codeStamp` (authored pre-feature, or the flag below is off) falls back
+  to the mtime-only behavior described above.
+
+`sweepStaleReviewArtifacts` gates its delete on the same validity check, so a still-valid
+prior-session verdict isn't deleted before the completion predicate can preserve it. Config
+(`gate_code_validity:` key, `types/config.ts` `GateCodeValidityConfig`):
+
+| Key | Type | Default | Effect |
+|---|---|---|---|
+| `gate_code_validity.enabled` | `boolean` | `true` | `false` reverts all four gates to pure mtime-freshness (no stamp read/write/preserve) — exact pre-feature behavior. |
+
+See `.docs/decisions/adr-2026-07-22-gate-evidence-code-validity-on-redispatch.md` for the full
+design and alternatives considered.
+
 `architecture_review_as_built` also **skips when `architecture_review` was skipped** — for the
 Small tier (both share `skippableForTiers: ['S']`) and, via `skipWhenSkipped: 'architecture_review'`,
 whenever the DECIDE-phase review was skipped for any reason (config-disable / `when:`). With no

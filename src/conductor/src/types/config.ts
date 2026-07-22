@@ -279,6 +279,22 @@ export interface KickbackEscalationConfig {
 }
 
 /**
+ * Gate-code-validity-on-redispatch kill-switch (gate-code-validity-on-redispatch,
+ * #817, Task 8): master on/off switch for the `gateVerdictStillValid` preserve
+ * check that lets `build_review`/`prd_audit`/`architecture_review_as_built`/
+ * `manual_test` completion predicates (and `sweepStaleReviewArtifacts`) reuse a
+ * stale-mtime PASS verdict whose stamped code surface is unchanged, instead of
+ * forcing a re-run. Absent block resolves to `{ enabled: true }` (feature ON by
+ * default — mirrors `KickbackEscalationConfig`'s pattern). `enabled: false`
+ * restores pre-feature behavior EXACTLY: pure mtime-freshness, zero reads of
+ * any codeStamp/sidecar/git-diff.
+ */
+export interface GateCodeValidityConfig {
+  /** Master on/off switch for the code-validity preserve check. Omitted → true. */
+  enabled?: boolean;
+}
+
+/**
  * Retry-routing config kill-switch (retry_routing): master on/off switch for
  * classifying a retry as "rerun" vs "route" (rather than always re-dispatching
  * the same step). Absent block resolves to the documented default (owned by
@@ -401,6 +417,11 @@ export interface HarnessConfig {
    * `{ enabled: true }`. See `KickbackEscalationConfig`.
    */
   kickback_escalation?: KickbackEscalationConfig;
+  /**
+   * Gate-code-validity-on-redispatch kill-switch (#817, Task 8). Absent block
+   * resolves to `{ enabled: true }`. See `GateCodeValidityConfig`.
+   */
+  gate_code_validity?: GateCodeValidityConfig;
   /**
    * Retry-routing kill-switch. Absent block resolves to defaults owned by
    * runtime resolution (not this type). See `RetryRoutingConfig`.
