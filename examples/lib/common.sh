@@ -67,3 +67,66 @@ resolve_prompt() {
       ;;
   esac
 }
+
+# run_with_timeout <secs> <cmd...> — run cmd, killing it (and returning
+# non-zero) if it is still running after <secs>. Prefers the system
+# `timeout` binary (coreutils / macOS via `gtimeout`); falls back to a
+# portable bash-only watchdog if neither is on PATH.
+run_with_timeout() {
+  local secs="$1"
+  shift
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+
+  "$@" &
+  local cmd_pid=$!
+  (
+    sleep "$secs"
+    kill -TERM "$cmd_pid" 2>/dev/null
+  ) &
+  local watchdog_pid=$!
+
+  local status
+  wait "$cmd_pid"
+  status=$?
+  kill "$watchdog_pid" 2>/dev/null
+  wait "$watchdog_pid" 2>/dev/null
+  return "$status"
+}
+
+# assert_checkpoint <flow> <tier> <predicate> [reason] [timeout_secs] —
+# evaluate <predicate> (a string eval'd as a shell command/test) via
+# run_with_timeout. Prints "PASS <flow>/<tier>" and returns 0 if the
+# predicate succeeds; prints "FAIL <flow>/<tier>: <reason>" and returns
+# non-zero if it fails; prints "FAIL <flow>/<tier>: timeout" and returns
+# non-zero if it is killed for exceeding <timeout_secs> (default 10).
+assert_checkpoint() {
+  local flow="$1"
+  local tier="$2"
+  local predicate="$3"
+  local reason="${4:-checkpoint not met}"
+  local timeout_secs="${5:-10}"
+
+  run_with_timeout "$timeout_secs" bash -c "$predicate"
+  local exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    echo "PASS ${flow}/${tier}"
+    return 0
+  fi
+
+  if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
+    echo "FAIL ${flow}/${tier}: timeout"
+  else
+    echo "FAIL ${flow}/${tier}: ${reason}"
+  fi
+  return 1
+}
