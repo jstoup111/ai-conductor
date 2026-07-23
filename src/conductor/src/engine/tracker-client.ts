@@ -49,7 +49,7 @@ export function makeProductionGh(): GhRunner {
 }
 
 /** Minimal shape of an assigned issue as returned by `gh issue list ... --json`. */
-export interface AssignedIssue {
+interface AssignedIssue {
   number: number;
   title: string;
   body: string;
