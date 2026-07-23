@@ -102,7 +102,7 @@ export type EngineerDispatch =
   | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
-  | { kind: 'worktree'; project: string; idea: string }
+  | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
   | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
@@ -176,9 +176,15 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     if (!project || !idea) {
       return { kind: 'guide' };
     }
-    const unk = findUnknownFlag(argv, ['--project', '--idea']);
+    // Optional intake claim context (Task 1): present when the idea came from an
+    // intake envelope (github-issues) — carries the Desired-outcome bullets to
+    // stage into the worktree's .pipeline/ BEFORE any DECIDE artifact is authored.
+    // Absent for human-typed ideas (no staging, no error — Story 1 negative path).
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const body = parseFlag(argv, '--body') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body']);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
-    return { kind: 'worktree', project, idea };
+    return { kind: 'worktree', project, idea, sourceRef, body };
   }
 
   if (subCmd === 'land') {
@@ -715,7 +721,7 @@ export async function dispatchEngineer(
     // makes zero mutation to the primary tree and returns exit 1. Prints
     // `{ slug, branch, worktreePath, reconcile }` on success.
     case 'worktree': {
-      const { project: projectName, idea } = dispatch;
+      const { project: projectName, idea, sourceRef, body } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -733,7 +739,10 @@ export async function dispatchEngineer(
       }
 
       try {
-        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m));
+        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m), {
+          sourceRef,
+          body,
+        });
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
       } catch (err: unknown) {

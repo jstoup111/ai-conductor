@@ -24,6 +24,7 @@ import {
   type WorktreeReconcile,
 } from '../worktree-shared.js';
 import { deriveDefaultBranch, slugify } from './authoring.js';
+import { stageIntakeOutcomes } from './outcome-staging.js';
 
 export interface EngineerWorktree {
   slug: string;
@@ -54,6 +55,7 @@ export async function createEngineerWorktree(
   canonicalPath: string,
   idea: string,
   log?: (m: string) => void,
+  claim?: { sourceRef?: string | null; body?: string | null },
 ): Promise<EngineerWorktree> {
   const slug = slugify(idea);
   const branch = `spec/${slug}`;
@@ -88,6 +90,13 @@ export async function createEngineerWorktree(
           'Refusing to reuse it to avoid a silent stale-artifact land — remove it and retry (FR-11).',
       );
     }
+  }
+
+  // Task 1 (Story 1 happy path): stage the intake's Desired-outcome bullets into
+  // the worktree's gitignored .pipeline/ BEFORE any DECIDE artifact is authored.
+  // No-op for chat/CLI-originated ideas (no sourceRef/body) — Story 1 negative path.
+  if (claim?.sourceRef && claim?.body) {
+    await stageIntakeOutcomes(worktreePath, claim.sourceRef, claim.body);
   }
 
   return { slug, branch, worktreePath, reconcile: res.reconcile };
