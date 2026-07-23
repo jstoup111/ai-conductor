@@ -548,6 +548,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: <sourceRef> positional (required), --pr-url <url> (required, must be http:// or https://), --branch <branch> (optional).\n' +
     'Mutates: stamps the ledger entry with prUrl (and branch, if given), recovering from a stranded claimed-but-undelivered state.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (recovery path, alternative to forget).',
+  unclaim:
+    'engineer unclaim <sourceRef> — requeue a claimed ledger entry back to pending (single-idea recovery).\n' +
+    'Flags: <sourceRef> positional (required, must not start with --).\n' +
+    'Mutates: flips the ledger entry from claimed to pending, preserving capturedAt; refuses (acted:false) as a non-error on absent or non-claimed entries.\n' +
+    'Loop fit: out-of-band maintenance op — recovers a stale/stranded claim so it can be re-claimed; not a step in claim → worktree → land → handoff → resolve/forget.',
   'migrate-issue-deps':
     'engineer migrate-issue-deps [--confirm] — one-time migration of prose-based issue dependency references to structured links.\n' +
     'Flags: --confirm (optional — without it, dry-run only: proposes changes with zero writes; with it, applies via the GET-before-POST writer).\n' +
@@ -571,6 +576,7 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
+      '  conduct-ts engineer unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
       '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
@@ -1193,14 +1199,37 @@ export async function dispatchEngineer(
     // ── unclaim ─────────────────────────────────────────────────────────────
     // `conduct-ts engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
     // requeue a claimed ledger entry back to pending, preserving capturedAt.
+    // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
+    // A non-claimed (terminal) entry refuses and directs the operator to
+    // resolve/forget instead (Story 4, FR-6) — also NOT an error.
     case 'unclaim': {
       const { sourceRef } = dispatch;
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
 
+      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (!entry) {
+        print(JSON.stringify({ kind: 'unclaim', sourceRef, found: false }));
+        return 0;
+      }
+
+      if (entry.status !== 'claimed') {
+        print(
+          JSON.stringify({
+            kind: 'unclaim',
+            sourceRef,
+            found: true,
+            acted: false,
+            status: entry.status,
+            reason: `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`,
+          }),
+        );
+        return 0;
+      }
+
       const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
 
-      print(JSON.stringify({ kind: 'unclaim', sourceRef, acted }));
+      print(JSON.stringify({ kind: 'unclaim', sourceRef, found: true, acted }));
       return 0;
     }
 
