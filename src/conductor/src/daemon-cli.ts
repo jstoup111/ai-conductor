@@ -46,6 +46,7 @@ import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger }
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
+import { makeProductionGh } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
@@ -916,10 +917,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // and idempotent — a gh failure or a halted build (no pr_url) never affects
     // the feature outcome.
     const finalState = await readState(stateFilePath);
-    const ghRunner = async (args: string[], opts: { cwd: string }) => {
-      const r = await execFile('gh', args, { cwd: opts.cwd });
-      return { stdout: String(r.stdout) };
-    };
+    const ghRunner = makeProductionGh();
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
       sourceRef: item.sourceRef,
@@ -1059,10 +1057,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // D3 (fail-closed): when neither the user-config owner nor a gh login resolves,
   // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
   // ADR-1 naming: `daemonOwner`, never a bare `owner`.
-  const ownerGh: GhRunner = async (args, o) => {
-    const { stdout } = await execFile('gh', args, { cwd: o.cwd });
-    return { stdout: String(stdout) };
-  };
+  const ownerGh: GhRunner = makeProductionGh();
   const ownerGit = makeGitRunner(projectRoot);
 
   // Task 13: Construct ONE priority resolver per daemon run (process-local state,
@@ -1133,7 +1128,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // createBlockerResolver() never leaks stale verdicts across polls. The
       // real `gh` binary backs the runner in production, the only production
       // caller of createGhBlockerRunner().
-      makeResolver: () => createBlockerResolver({ run: createGhBlockerRunner() }),
+      makeResolver: () => createBlockerResolver({ run: createGhBlockerRunner(), cwd: projectRoot }),
       // Priority resolution (Task 13): post-gate ordering by issue priority bands.
       // The resolver is constructed once per daemon run with process-local caching
       // (no disk persistence). Passed to discover() for ordering and available to
@@ -1422,13 +1417,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 }
 
                 // Create a gh runner (wrapper around gh commands)
-                const ghRunner = async (args: string[]) => {
-                  const result = await execFile('gh', args, {
-                    cwd: entry.repoCwd,
-                    encoding: 'utf-8',
-                  });
-                  return { stdout: result.stdout || '' };
-                };
+                const productionGh = makeProductionGh();
+                const ghRunner = async (args: string[]) =>
+                  productionGh(args, { cwd: entry.repoCwd });
 
                 // Create a suite runner (executes the suite command in the worktree)
                 const runSuite = async (projectRoot: string) => {
@@ -1532,13 +1523,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                   return;
                 }
 
-                const ghRunner = async (args: string[]) => {
-                  const result = await execFile('gh', args, {
-                    cwd: entry.repoCwd,
-                    encoding: 'utf-8',
-                  });
-                  return { stdout: result.stdout || '' };
-                };
+                const productionGh = makeProductionGh();
+                const ghRunner = async (args: string[]) =>
+                  productionGh(args, { cwd: entry.repoCwd });
 
                 const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
 
