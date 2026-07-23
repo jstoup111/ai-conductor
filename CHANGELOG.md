@@ -12,6 +12,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The SHIP-tail validation group (`manual_test ∥ prd_audit ∥ architecture_review_as_built`)
+  never engaged — and every validator ran strictly serially, with zero `parallel_started`
+  events — in any repo whose group ENTRY member is skipped (e.g. this repo's own
+  `steps.manual_test.disable: true` self-host config): the serial walk's skip branches
+  `continue`d before the engagement code, which was keyed to `members[0]`. Engagement is now
+  keyed to the group's first NON-skipped member, so the surviving members fan out at width 2+.
+  A `done` member (kickback/resume re-entry) still anchors engagement, keeping mid-loop
+  re-entries on the pre-existing serial walk and its gap-aware kickback machinery.
 - `src/conductor`'s test suite no longer risks polluting the operator's real engineer signals
   store. `resolveEngineerDir` defaults to `~/.ai-conductor/engineer/` when
   `$AI_CONDUCTOR_ENGINEER_DIR` is unset, so an un-stubbed test could otherwise write
