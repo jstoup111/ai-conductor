@@ -75,7 +75,10 @@ flowchart TB
   through the full SDLC, gated on completion by `build_review`'s LLM-judged completeness
   rubric (plan-vs-diff, fail-closed, self-heals via kickback), self-heals stalls and red CI,
   and opens the implementation PR with a committed shipped-record so the work is never
-  re-dispatched.
+  re-dispatched. Gate-writeback's other-owner skip notices (no PR, terminal PR state, no
+  `Source-Ref`) are suppressed from the daemon log by default and re-surfaced by setting
+  `daemon_verbose: true` in `.ai-conductor/config.yml` (see [Conductor CLI
+  Reference](src/conductor/README.md#gate-write-back-owner-gated-prissue-announcement-tasks-17-21)).
 - **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
   escalates, and signs off version bumps.
 

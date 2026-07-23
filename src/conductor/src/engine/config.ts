@@ -204,6 +204,8 @@ export function validateConfig(
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
     'kickback_escalation',
+    // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
+    'daemon_verbose',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -476,6 +478,12 @@ export function validateConfig(
   if (obj.assess !== undefined) {
     const err = validateAssessBlock(obj.assess);
     if (err) return { ok: false, error: err };
+  }
+
+  // daemon_verbose — controls default-off verbose skip logging in gate-writeback.
+  // Absent is allowed; the default-off behavior is applied at the wiring site.
+  if (obj.daemon_verbose !== undefined && typeof obj.daemon_verbose !== 'boolean') {
+    return errVal('daemon_verbose must be a boolean');
   }
 
   // mergeable_autoresolve

@@ -863,6 +863,21 @@ mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
 `src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
 `test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
 
+**`daemon_verbose` (#840).** Gate-writeback's other-owner skip notices — a suppressed
+`announceGatedPr` (no PR yet, or a terminal `MERGED`/`CLOSED`/not-found PR state) and a
+suppressed `announceGatedIssue` (missing/unparseable `Source-Ref`) — are default-off log
+noise: they fire on every `discover()` pass for gated specs the daemon can't act on yet and
+otherwise crowd out the daemon's own start/resume/status lines. Set `daemon_verbose: true`
+in `.ai-conductor/config.yml` to re-surface them for debugging; the default (unset or
+`false`) suppresses them while still emitting the daemon's own-work log lines. Validated in
+`engine/config.ts` (must be boolean), typed on `HarnessConfig.daemon_verbose` in
+`types/config.ts`, and threaded into `gatedWritebackDeps.verbose` in `daemon-cli.ts`.
+
+```yaml
+# .ai-conductor/config.yml
+daemon_verbose: true   # default: false — suppresses gate-writeback other-owner skip notices
+```
+
 #### Attribution enforcement: inline build-work commits (#505, advisory since #773)
 
 A Claude session driving a build step can commit or mutate files directly, bypassing

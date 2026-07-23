@@ -29,6 +29,7 @@ interface GateWritebackDeps {
   runGh?: GhRunner;
   cwd: string;
   log?: (msg: string) => void;
+  verbose?: boolean;
 }
 
 interface GateWritebackModule {
@@ -115,7 +116,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     };
     const logs: string[] = [];
 
-    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
     expect(ghCalled).toBe(false);
     expect(logs.some((l) => l.includes('nothing to announce on an issue') && l.includes('no usable Source-Ref'))).toBe(true);

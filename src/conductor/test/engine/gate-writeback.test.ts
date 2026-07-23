@@ -214,6 +214,15 @@ describe('gate-writeback (Task 17)', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('suppression preserves non-throwing: gh throwing on the merge-state lookup at verbose:false still resolves without throwing (Task 5)', async () => {
+      const gh: GhRunner = async () => {
+        throw new Error('boom: prMergeState lookup failed');
+      };
+      await expect(
+        announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {}, verbose: false }),
+      ).resolves.toBeUndefined();
+    });
+
     // ── Task 19: write-back failure semantics (S6 NP-1..NP-5) ──────────────
 
     it('FR-8: announces (label + comment) when the target PR is already MERGED', async () => {
@@ -238,7 +247,7 @@ describe('gate-writeback (Task 17)', () => {
         { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
       ]);
       const logs: string[] = [];
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
       expect(calls.length).toBe(1);
       expect(
         logs.some((m) => m.includes(`(PR ${PR_URL} is CLOSED) — will retry if it revives`)),
@@ -253,14 +262,25 @@ describe('gate-writeback (Task 17)', () => {
       const logs: string[] = [];
       const warnedSkips = new Set<string>();
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       expect(calls.length).toBe(2);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
       expect(gateLines.length).toBe(1);
       expect(gateLines[0]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
       expect(warnedSkips.has(`${SPEC.slug}:pr-terminal`)).toBe(true);
+    });
+
+    it('terminal-PR-state skip is suppressed by default (verbose: false) — zero [gate-writeback] log lines', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+      expect(calls.length).toBe(1);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(0);
     });
 
     it('PT-2: never throws even when gh errors on a later pass with a shared warnedSkips set present', async () => {
@@ -285,8 +305,8 @@ describe('gate-writeback (Task 17)', () => {
       ]);
       const logs: string[] = [];
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
       expect(calls.length).toBe(2);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
@@ -301,13 +321,13 @@ describe('gate-writeback (Task 17)', () => {
 
       // Pass 1: no PR yet for slug S — no-pr reason logged.
       const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
-      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       // Pass 2: same slug S now has a CLOSED PR — pr-terminal reason logged.
       const { gh: closedGh, calls: closedCalls } = fakeGh([
         { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
       ]);
-      await announceGatedPr(SPEC, PR_URL, { runGh: closedGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, PR_URL, { runGh: closedGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       expect(noPrCalls.length).toBe(0);
       expect(closedCalls.length).toBe(1);
@@ -379,18 +399,66 @@ describe('gate-writeback (Task 17)', () => {
       const { gh, calls } = fakeGh([]);
       const logs: string[] = [];
 
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
       expect(calls.length).toBe(0);
       expect(logs.some((m) => m.includes('nothing to announce for gated spec') && m.includes('(no PR)'))).toBe(true);
+    });
+
+    it('NP-4v: at default verbosity (verbose: false), no-PR skip logs nothing and makes zero gh calls', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+
+      expect(calls.length).toBe(0);
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
+    });
+
+    it('NP-4v2: at default verbosity, repeated no-PR skips across calls stay silent', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+
+      expect(calls.length).toBe(0);
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
+    });
+
+    it('Task 8: at default verbosity, the daemon\'s own-work log lines share the sink but the no-PR skip notice stays suppressed', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const log = (m: string) => logs.push(m);
+
+      // Simulate the daemon logging its own operational lines (start/resume/
+      // status) on the SAME log sink passed into gate-writeback deps — these
+      // are unrelated to gate-writeback's own [gate-writeback]-prefixed skip
+      // notices and must never be affected by its suppression logic.
+      log('[daemon] starting scan pass');
+      log('[daemon] resumed 2 in-flight builds');
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log, verbose: false });
+
+      log('[daemon] scan pass complete, status: idle');
+
+      expect(calls.length).toBe(0);
+      // Own-work lines are all still present, in order.
+      expect(logs).toEqual([
+        '[daemon] starting scan pass',
+        '[daemon] resumed 2 in-flight builds',
+        '[daemon] scan pass complete, status: idle',
+      ]);
+      // The gate-writeback no-PR skip notice never made it onto the sink.
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
     });
 
     it('NP-4b: without a warnedSkips set, repeated no-PR skips log on every call (no dedup)', async () => {
       const { gh, calls } = fakeGh([]);
       const logs: string[] = [];
 
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
       expect(calls.length).toBe(0);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
@@ -404,8 +472,8 @@ describe('gate-writeback (Task 17)', () => {
       const logs: string[] = [];
       const warnedSkips = new Set<string>();
 
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       expect(calls.length).toBe(0);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
@@ -419,10 +487,10 @@ describe('gate-writeback (Task 17)', () => {
       const warnedSkips = new Set<string>();
       const OTHER_SPEC = { ...SPEC, slug: '2026-07-05-gizmo' };
 
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(OTHER_SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       expect(calls.length).toBe(0);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
@@ -440,10 +508,10 @@ describe('gate-writeback (Task 17)', () => {
       const firstRunSkips = new Set<string>();
       const secondRunSkips = new Set<string>();
 
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips, verbose: true });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: firstRunSkips, verbose: true });
       // Simulated daemon restart: brand-new Set, same slug.
-      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: secondRunSkips });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips: secondRunSkips, verbose: true });
 
       expect(calls.length).toBe(0);
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
@@ -457,7 +525,7 @@ describe('gate-writeback (Task 17)', () => {
 
       // Pass 1: no PR yet — skip is logged and recorded in the shared Set.
       const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
-      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
       expect(noPrCalls.length).toBe(0);
       expect(warnedSkips.has(`${SPEC.slug}:no-pr`)).toBe(true);
 
@@ -475,6 +543,73 @@ describe('gate-writeback (Task 17)', () => {
       expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
       expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
       expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+    });
+
+    it('NP-9v: a default-verbosity-suppressed no-PR skip never blocks a later real announcement for the same slug', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // Pass 1: no PR yet, verbose: false — skip is fully silent (no log,
+      // no gh call) but the dedup guard only wraps the log call.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: false });
+      expect(noPrCalls.length).toBe(0);
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
+
+      // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
+      // exists. Suppressing the earlier skip's log must never block the
+      // real announce work (label ensure+add, comment upsert).
+      const { gh: realGh, calls: realCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
+        { stdout: '' }, // ensureLabel
+        { stdout: '' }, // addLabel
+        { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+        { stdout: '' }, // create comment
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
+      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
+      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+    });
+
+    it('Task 6: verbose:true with a falsy prUrl re-surfaces exactly one no-PR notice', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(`nothing to announce for gated spec "${SPEC.slug}" (no PR)`);
+    });
+
+    it('Task 6: verbose:true re-surfaces the terminal-PR-state notice', async () => {
+      const { gh, calls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'CLOSED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) },
+      ]);
+      const logs: string[] = [];
+
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+
+      expect(calls.length).toBe(1);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(`(PR ${PR_URL} is CLOSED) — will retry if it revives`);
+    });
+
+    it('Task 6: verbose:true with a shared warnedSkips Set still dedups repeated no-PR skips to one log line', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+
+      expect(calls.length).toBe(0);
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
     });
 
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
@@ -531,6 +666,23 @@ describe('gate-writeback (Task 17)', () => {
       expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_LABEL))).toBe(false);
     });
 
+    it('suppression preserves other-owner silent-skip (#691): zero gh calls and zero [gate-writeback] skip lines at verbose:false with a valid Source-Ref (Task 5)', async () => {
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        return { stdout: '' };
+      };
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+
+      expect(calls.length).toBe(0);
+      expect(logs.filter((m) => m.includes('[gate-writeback]')).length).toBe(0);
+    });
+
     it('absent marker (sourceRef undefined) skips silently — zero gh calls', async () => {
       let ghCalled = false;
       const gh: GhRunner = async () => {
@@ -553,8 +705,8 @@ describe('gate-writeback (Task 17)', () => {
       const logs: string[] = [];
       const warnedSkips = new Set<string>();
 
-      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedIssue(SPEC, undefined, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       expect(ghCalled).toBe(false);
       expect(
@@ -570,8 +722,8 @@ describe('gate-writeback (Task 17)', () => {
       const gh: GhRunner = async () => ({ stdout: '' });
       const logs: string[] = [];
 
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
       const matches = logs.filter((m) =>
         m.includes(
@@ -589,7 +741,7 @@ describe('gate-writeback (Task 17)', () => {
       };
       const logs: string[] = [];
 
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
 
       expect(ghCalled).toBe(false);
       expect(
@@ -601,13 +753,23 @@ describe('gate-writeback (Task 17)', () => {
       ).toBe(true);
     });
 
+    it('no-Source-Ref skip is suppressed by default (verbose: false) — zero [gate-writeback] log lines', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(0);
+    });
+
     it('malformed Source-Ref skip is deduped across repeated calls with a shared warnedSkips set', async () => {
       const gh: GhRunner = async () => ({ stdout: '' });
       const logs: string[] = [];
       const warnedSkips = new Set<string>();
 
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       const matches = logs.filter((m) =>
         m.includes(
@@ -617,17 +779,42 @@ describe('gate-writeback (Task 17)', () => {
       expect(matches).toHaveLength(1);
     });
 
+    it('Task 6: verbose:true re-surfaces the no-Source-Ref notice', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: true });
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+      expect(gateLines[0]).toContain(
+        `nothing to announce on an issue for gated spec "${SPEC.slug}" (no usable Source-Ref, got "not-a-ref") — will retry when one exists`,
+      );
+    });
+
+    it('Task 6: verbose:true with a shared warnedSkips Set still dedups repeated no-Source-Ref skips to one log line', async () => {
+      const gh: GhRunner = async () => ({ stdout: '' });
+      const logs: string[] = [];
+      const warnedSkips = new Set<string>();
+
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
+
+      const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
+      expect(gateLines.length).toBe(1);
+    });
+
     it('RT-2: PR and issue skip reasons dedupe independently under a shared warnedSkips set — both lines log', async () => {
       const warnedSkips = new Set<string>();
       const logs: string[] = [];
 
       // PR path: no PR yet for slug S — no-pr reason logged.
       const { gh: noPrGh } = fakeGh([]);
-      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       // Issue path: same slug S, malformed Source-Ref — no-source-ref reason logged.
       const issueGh: GhRunner = async () => ({ stdout: '' });
-      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: issueGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedIssue(SPEC, 'not-a-ref', { runGh: issueGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: true });
 
       const gateLines = logs.filter((m) => m.startsWith('[gate-writeback]'));
       expect(gateLines.length).toBe(2);
