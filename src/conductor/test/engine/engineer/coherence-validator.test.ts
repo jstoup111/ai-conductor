@@ -8,7 +8,11 @@
 //   - three distinct error kinds, never collapsed into one generic error
 
 import { describe, it, expect } from 'vitest';
-import { parseCoherenceArtifact } from '../../../src/engine/engineer/coherence-validator.js';
+import {
+  parseCoherenceArtifact,
+  crossCheckIds,
+  type CrossCheckInputs,
+} from '../../../src/engine/engineer/coherence-validator.js';
 
 const WELL_FORMED = `# Coherence Map
 
@@ -109,5 +113,148 @@ describe('parseCoherenceArtifact', () => {
     if (missing.ok || empty.ok || unparseable.ok) return;
     const reasons = new Set([missing.reason, empty.reason, unparseable.reason]);
     expect(reasons.size).toBe(3);
+  });
+});
+
+describe('crossCheckIds', () => {
+  const STORIES_TEXT = `# Stories
+
+## Story 1: Widget shipping
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+
+## Story 2: Widget returns
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when returned, then it is refunded.
+`;
+
+  const PLAN_TEXT = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Ship widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/ship.ts
+`;
+
+  const PRD_TEXT = `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`;
+
+  const OUTCOME_BULLETS = ['- Ship widgets reliably.', '- Support returns.'];
+
+  const WELL_FORMED_REAL = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "ship widgets" |
+| outcome | outcome-2 | story-2 | covered | "support returns" |
+| fr | FR-1 | story-1 | covered | "FR-1: widgets" |
+| fr | FR-2 | story-2 | covered | "FR-2: widgets" |
+| story | story-1 | task-1, task-2 | covered | "As a user..." |
+| story | story-2 | task-1 | covered | "As a user..." |
+| task | task-1 | story-1 | covered | "Task 1: build widget" |
+| task | task-2 | story-1 | covered | "Task 2: ship widget" |
+`;
+
+  function inputsFor(overrides: Partial<CrossCheckInputs> = {}): CrossCheckInputs {
+    return {
+      storiesText: STORIES_TEXT,
+      planText: PLAN_TEXT,
+      prdText: PRD_TEXT,
+      outcomeCount: OUTCOME_BULLETS.length,
+      ...overrides,
+    };
+  }
+
+  function parsedRows(text: string) {
+    const result = parseCoherenceArtifact(text);
+    if (!result.ok) throw new Error('fixture must parse');
+    return result.rows;
+  }
+
+  it('passes when every cited id resolves against real stories/plan/PRD/outcome inputs', () => {
+    const result = crossCheckIds(parsedRows(WELL_FORMED_REAL), inputsFor());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('rejects a row citing a fabricated story id, naming the row', () => {
+    const withFabrication = WELL_FORMED_REAL.replace(
+      '| task | task-1 | story-1 | covered | "Task 1: build widget" |',
+      '| task | task-1 | story-99 | covered | "Task 1: build widget" |',
+    );
+    const result = crossCheckIds(parsedRows(withFabrication), inputsFor());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fabricated-id');
+    expect(result.rowClass).toBe('task');
+    expect(result.rowId).toBe('task-1');
+    expect(result.fabricatedId).toBe('story-99');
+  });
+
+  it('rejects a row citing a fabricated task id, naming the row', () => {
+    const withFabrication = WELL_FORMED_REAL.replace(
+      '| story | story-1 | task-1, task-2 | covered | "As a user..." |',
+      '| story | story-1 | task-1, task-99 | covered | "As a user..." |',
+    );
+    const result = crossCheckIds(parsedRows(withFabrication), inputsFor());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fabricated-id');
+    expect(result.rowClass).toBe('story');
+    expect(result.rowId).toBe('story-1');
+    expect(result.fabricatedId).toBe('task-99');
+  });
+
+  it('rejects a row citing a fabricated FR id, naming the row', () => {
+    const withFabrication = WELL_FORMED_REAL.replace(
+      '| fr | FR-1 | story-1 | covered | "FR-1: widgets" |',
+      '| fr | FR-99 | story-1 | covered | "FR-1: widgets" |',
+    );
+    const result = crossCheckIds(parsedRows(withFabrication), inputsFor());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fabricated-id');
+    expect(result.rowClass).toBe('fr');
+    expect(result.rowId).toBe('FR-99');
+  });
+
+  it('rejects a row citing a fabricated outcome id, naming the row', () => {
+    const withFabrication = WELL_FORMED_REAL.replace(
+      '| outcome | outcome-1 | story-1 | covered | "ship widgets" |',
+      '| outcome | outcome-99 | story-1 | covered | "ship widgets" |',
+    );
+    const result = crossCheckIds(parsedRows(withFabrication), inputsFor());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fabricated-id');
+    expect(result.rowClass).toBe('outcome');
+    expect(result.rowId).toBe('outcome-99');
+  });
+
+  it('rejects a task row citing an id that resolves to no known class (nonexistent id in cited-ids)', () => {
+    const withFabrication = WELL_FORMED_REAL.replace(
+      '| task | task-2 | story-1 | covered | "Task 2: ship widget" |',
+      '| task | task-2 | story-1, ghost-id | covered | "Task 2: ship widget" |',
+    );
+    const result = crossCheckIds(parsedRows(withFabrication), inputsFor());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fabricated-id');
+    expect(result.rowClass).toBe('task');
+    expect(result.rowId).toBe('task-2');
+    expect(result.fabricatedId).toBe('ghost-id');
   });
 });

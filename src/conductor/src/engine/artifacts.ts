@@ -2703,7 +2703,7 @@ export async function readRemediationPlan(
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
 
-interface StoryBlock {
+export interface StoryBlock {
   id?: string;
   text: string;
 }
@@ -2712,7 +2712,7 @@ interface StoryBlock {
  * Split a stories file into per-story blocks on `## Story <id>:` headings.
  * Single-story files (no such heading) return one block spanning the file.
  */
-function splitStoryBlocks(content: string): StoryBlock[] {
+export function splitStoryBlocks(content: string): StoryBlock[] {
   const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;
   const blocks: StoryBlock[] = [];
   let current: { id: string; lines: string[] } | null = null;
