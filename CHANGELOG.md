@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
+  complete: the build step's own completion predicate only checked
+  `.pipeline/task-status.json` rows and missed tasks resolved solely via `Task:` trailer
+  commits, so the exit gate stayed structurally unsatisfiable and the loop re-dispatched
+  already-committed tasks until the stall breaker misread "all done" as "no progress" and
+  HALTed. The build exit predicate now shares the same trailer-union resolution
+  (`resolveTaskIds` = rows ∪ `Task:`-trailered commits) the stall breaker already used, so an
+  all-evidenced build routes on to `build_review` — the sole completion authority — instead
+  of false-stalling (#859).
 - The SHIP-tail validation group (`manual_test ∥ prd_audit ∥ architecture_review_as_built`)
   never engaged — and every validator ran strictly serially, with zero `parallel_started`
   events — in any repo whose group ENTRY member is skipped (e.g. this repo's own

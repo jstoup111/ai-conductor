@@ -200,7 +200,19 @@ build_progress_halt:
   dispatch_ceiling: 20   # per-spec cap on cross-dispatch progress-gated re-kicks
 ```
 
-Omit the block entirely to get the defaults above. See `../src/conductor/README.md` for the
+Omit the block entirely to get the defaults above.
+
+**`no_task_progress` semantics (#859, adr-2026-07-23-trailer-union-build-step-routing).**
+The build step's own completion predicate and the stall breaker's resolved-count now share
+one resolver: a plan task id is resolved if it has a `completed`/`skipped` row in
+`.pipeline/task-status.json` **or** a matching `Task:` trailer on the branch. A genuine
+stall — no task resolved by either signal, count not advancing across attempts — still
+halts exactly as before; that behavior is unchanged. What changed is builds where every
+task is evidenced only via commit trailers (no rows): previously the exit gate couldn't see
+those trailers, so it kept re-dispatching at 100% completion until the breaker misread "all
+done" as "no progress" and false-HALTed `no_task_progress`. Now such a build's exit gate is
+satisfied and it hands off normally to `build_review` (the completion authority) instead of
+false-stalling. See `../src/conductor/README.md` for the
 implementation details.
 
 **Kickback→build no-op escalation (`kickback_escalation`).** A kickback→build re-entry
