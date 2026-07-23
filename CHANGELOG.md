@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- Source-ref parsing/formatting is now generalized behind a canonical tagged
+  `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
+  and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
+  markers and the ledger. Five duplicate ref-parsing implementations were retired
+  in favor of the shared shim, with no behavior change for existing GitHub refs.
+
 ### Fixed
 
 - Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
