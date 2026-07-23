@@ -9,7 +9,8 @@ import {
   assembleBuildReviewInputs,
   MergeBaseError,
 } from '../../src/engine/build-review-inputs.js';
-import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
+import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results (same pattern
 // as test/engine/rebase.test.ts's fakeGit).
@@ -201,6 +202,55 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+  });
+
+  // Regression fixture for the stale-tracking-ref incident (#870/#872): a
+  // bare "remote" advances past the clone's local `origin/main` tracking
+  // ref (merged-PR content lands after the clone last synced), the clone's
+  // `feat` branch is rebased onto the TRUE remote head (a healthy rebase),
+  // and then the clone's tracking ref is rolled back to simulate a worktree
+  // that never re-fetched. Pre-Task-3, `assembleBuildReviewInputs` computed
+  // its merge-base against the stale local `origin/main`, which would
+  // wrongly bundle the merged-PR-only content into the graded diff. Post-
+  // Task-3 (`resolveFreshBase`), the base resolution detects the mismatch,
+  // fetches, and grades only the branch's own commits.
+  describe('real two-repo fixture (setupStaleTrackingRefFixture)', () => {
+    let dir: string;
+    let planPath: string;
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-stale-ref-'));
+      planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Plan body\n\nStale-ref regression fixture.\n', 'utf-8');
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('grades only the feat branch commits, not merged-PR-only content that arrived after the tracking ref went stale', async () => {
+      const fixture = await setupStaleTrackingRefFixture(dir);
+      const git = makeGitRunner(fixture.repo);
+
+      const result = await assembleBuildReviewInputs(git, planPath);
+
+      expect(result.diff).not.toContain(fixture.mergedOnlyPath);
+      expect(result.diff).toContain('feat.txt');
+      expect(result.diff).toContain('feature work');
+
+      // A stale-ref mismatch was detected and resolved: the tracking ref at
+      // resolution time differed from the true remote head, so the base
+      // ended up fresh (post-fetch) rather than silently graded stale.
+      expect(result.trackingRefSha).toBe(fixture.staleTrackingSha);
+      expect(result.remoteHeadSha).toBe(fixture.freshRemoteSha);
+      expect(result.trackingRefSha).not.toBe(result.remoteHeadSha);
+      expect(result.baseKind).toBe('remote');
+      // `fresh` means "tracking ref already matched the remote head, no
+      // fetch needed" — here the mismatch was detected and a fetch was
+      // required, so `fresh` is correctly `false` per the documented
+      // semantics on `BuildReviewInputs.fresh`.
+      expect(result.fresh).toBe(false);
     });
   });
 });
