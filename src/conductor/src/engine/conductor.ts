@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
+import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -323,6 +324,18 @@ export interface StepRunResult {
    * set when the grader ran and produced a real FAIL.
    */
   graderDispatchFailed?: boolean;
+  /**
+   * Task 3 (per-feature token accounting): token usage reported by the
+   * provider for this invocation, when available. Forwarded from
+   * `InvokeResult.tokenUsage` on the success path so callers can attribute
+   * cost/tokens to the step and feature.
+   */
+  tokenUsage?: TokenUsage;
+  /**
+   * Task 3 (per-feature token accounting): the resolved model string actually
+   * used for this invocation (post model-availability/ladder resolution).
+   */
+  model?: string;
 }
 
 /**
