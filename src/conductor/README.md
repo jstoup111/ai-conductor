@@ -2104,6 +2104,26 @@ after draining any in-flight workers to completion. This enables safe cleanup wh
 repository has been removed without leaving the daemon process orphaned. See `engine/daemon-deps.ts` 
 for the concrete implementation.
 
+**Engineer-signals leak guard (#861)** — `resolveEngineerDir` defaults to the operator's real
+`~/.ai-conductor/engineer/` when `$AI_CONDUCTOR_ENGINEER_DIR` is unset, so an un-stubbed test
+would otherwise pollute the live `signals.jsonl` with `test-project` telemetry. Two layers,
+matching the tmux-leak-guard shape:
+- **Prevent (`test/setup.ts`)** — the vitest global setupFile redirects
+  `$AI_CONDUCTOR_ENGINEER_DIR` to a fresh per-run `mkdtempSync` tmpdir for the whole test
+  process, but only if a test hasn't already set the var itself (a suite intentionally
+  poisoning it still wins). Process-scoped: a concurrent real daemon in another process,
+  or a test injecting `env`/`home` directly into `resolveEngineerDir`, is unaffected.
+- **Detect (`test/signals-leak-guard.ts`, wired into `test/global-setup.ts`)** — snapshots the
+  **real** engineer dir's `test-project`-tagged line count in `signals.jsonl` before/after the
+  run (`snapshotEngineerSignals`/`diffEngineerSignals`); if the count increased, teardown throws
+  naming the delta (fail-closed), mirroring `tmux-leak-guard.ts`/`pipeline-leak-guard.ts`. A
+  snapshot read error degrades to a `console.error` warning instead of failing the suite
+  (fail-safe, matching the tmux-guard's indeterminate-state policy).
+- **Clean (`bin/quarantine-engineer-signals`)** — an operator-invoked, idempotent maintenance
+  script that partitions the real `signals.jsonl` into kept (real + malformed) and quarantined
+  (`test-project`) lines, backs up the original, and prints kept/quarantined counts;
+  `--dry-run` reports counts without mutating.
+
 **Deep-seam tmux guard** (`engine/daemon-tmux.ts`, `defaultTmuxRunner`) — during testing, the 
 default tmux runner checks the `AI_CONDUCTOR_NO_REAL_EXEC` kill-switch environment variable before 
 creating a real tmux daemon session. When the kill-switch is set and a `new-session` call targets 
