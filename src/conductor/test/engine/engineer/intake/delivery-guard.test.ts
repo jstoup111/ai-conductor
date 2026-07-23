@@ -1522,6 +1522,82 @@ describe('Task 5: createDeliveryGuardedQueue — reaps stale claimed entries to 
   });
 });
 
+// ─── Plan-Task 6: reap respects the window, never touches non-claimed entries ──
+// (.docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md, Task 6 —
+// distinct from the pre-existing "Task 6" describe blocks above, which belong to
+// an unrelated, earlier plan's task numbering.)
+
+describe('Plan-Task 6: createDeliveryGuardedQueue — reap never touches fresh or terminal entries', () => {
+  it('fresh claimed entry (age <= window) is NOT reaped and NOT announced', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+
+    const freshEntry = {
+      source: 'test-source',
+      sourceRef: 'fresh-idea',
+      status: 'claimed',
+      lastSeenAt: new Date().toISOString(), // just now — well within the window
+    };
+
+    (ledger as any).list = async () => [freshEntry];
+    (ledger as any).get = async () => undefined;
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('fresh-idea'))).toBe(false);
+  });
+
+  it('old done entry is never reaped by the stale-claim rule (non-claimed status is untouched)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+
+    const doneEntry = {
+      source: 'test-source',
+      sourceRef: 'done-idea',
+      status: 'done',
+      prUrl: 'https://github.com/owner/repo/pull/900',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — would be stale if claimed
+    };
+
+    (ledger as any).list = async () => [doneEntry];
+    (ledger as any).get = async () => undefined;
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('done-idea'))).toBe(false);
+  });
+});
+
 // ─── Task 9: issue-state probe scoped to parseable github-issues envelopes ────
 
 describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable github-issues envelopes', () => {
