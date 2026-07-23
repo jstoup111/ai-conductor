@@ -985,6 +985,14 @@ export async function runDaemon(
 
     if (deps.staleEngineChecker.check() !== 'stale') return false;
 
+    // A full stale-and-suppression evaluation just ran for this boundary —
+    // the idle-boundary re-check below is redundant if it's the very next
+    // check reached (e.g. this dispatch attempt errors/parks the item and the
+    // loop goes idle before anything else changes). One-shot: consumed by the
+    // very next idle-boundary check, so a later genuine staleness change is
+    // still observed (#598 Task 15).
+    staleAlreadyHandledByPreflight = true;
+
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
     if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
     if (inFlight.size !== 0) return false; // re-verify after the async suppression check
@@ -1000,6 +1008,15 @@ export async function runDaemon(
   // Task 20: Track episode state to detect when it ends so we can sweep
   // episode-caused HALTs and recover them via the existing rekick path.
   let wasEpisodeActive = false;
+
+  // Set whenever the dispatch-boundary preflight (`rebuildAndMaybeRestartForStaleEngine`)
+  // has run its full refresh/rebuild/check/suppression chain this run. The
+  // idle-boundary stale re-check further below is redundant once the preflight
+  // has already made this decision for the current source/build (nothing
+  // changes between preflight calls), so it's skipped while this is set —
+  // fixes #598 Task 15's regression where both independently invoked
+  // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
+  let staleAlreadyHandledByPreflight = false;
 
   while (true) {
     if (deps.shouldStop?.()) {
@@ -1206,7 +1223,13 @@ export async function runDaemon(
           options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
           deps.staleEngineChecker !== undefined; // gate 4: checker armed
 
-        if (shouldCheckStale && deps.staleEngineChecker) {
+        // One-shot consume: only the very next idle-boundary reach after a
+        // preflight-covered stale evaluation is skipped (#598 Task 15) — a
+        // later genuine staleness change is still observed on subsequent ticks.
+        const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
+        staleAlreadyHandledByPreflight = false;
+
+        if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
           const verdict = deps.staleEngineChecker.check();
 
           // Task 13: Handle stale verdict with in-flight re-verify
