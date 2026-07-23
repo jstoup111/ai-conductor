@@ -4,6 +4,9 @@ The TypeScript rewrite of the bash `bin/conduct`. Same CLI surface, richer inter
 typed state machine, event-driven UI, completion-gate checks, engine-side auto-heal for
 stale pipeline state, and 545+ tests.
 
+For runnable end-to-end scenarios exercising this engine, see
+[`examples/README.md`](../../examples/README.md).
+
 ## Layout
 
 ```
