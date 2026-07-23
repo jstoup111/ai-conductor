@@ -14,9 +14,13 @@
 - **Negative (no sourceRef):** Given authoring/landing with no `sourceRef` (hand-authored
   spec), when the spec is committed, then NO `.docs/intake/<slug>.md` is written and the
   commit is unchanged from today.
-- **Negative (malformed ref):** Given a `sourceRef` that does not match `owner/repo#<digits>`,
+- **Negative (malformed ref):** Given a `sourceRef` that is truly malformed — matching
+  neither `owner/repo#<digits>` nor a valid Jira key (e.g. `proj_123!`, `not-a-ref`) —
   when authoring/landing runs, then the malformed value is NOT written (treated as absent)
   and the run does not throw.
+  > **Scope note (2026-07-22, conflict resolution for generalize-source-ref-parsing):**
+  > "malformed" no longer means "non-GitHub". Valid Jira keys (`PROJ-123`) are written
+  > losslessly per `.docs/stories/generalize-source-ref-parsing-formatting-to-suppor.md`.
 
 ## Story 2 — Spec PR links without closing (FR-2, FR-6, FR-7)
 
@@ -44,7 +48,8 @@
   `discoverBacklog` runs, then the item is still produced with `sourceRef` undefined and the
   feature remains buildable.
 - **Negative (garbled content):** Given `.docs/intake/<slug>.md` present but with no valid
-  `Source-Ref:` line, when parsed, then `sourceRef` is undefined (no throw).
+  `Source-Ref:` line (neither GitHub ref nor Jira key — see 2026-07-22 scope note above),
+  when parsed, then `sourceRef` is undefined (no throw).
 
 ## Story 4 — Implementation PR closes the issue (FR-4, FR-6, FR-7)
 
