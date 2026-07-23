@@ -1180,6 +1180,72 @@ describe('Task 7: createDeliveryGuardedQueue — closed last candidate returns n
   });
 });
 
+// ─── Task 8: claim guard fails safe on unknown/throwing issue state ─────────
+
+describe('Task 8: createDeliveryGuardedQueue — fails safe on unknown/throwing issue state', () => {
+  it('getIssueState resolves unknown (unparseable gh output) → candidate delivered, no forget call, ledger untouched', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    // Unparseable stdout → getIssueState resolves 'unknown', not 'closed'.
+    const { runner: gh } = makeFakeGh('not valid json');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(forgetCalls).toHaveLength(0);
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('gh runner throws during issue-state probe → candidate delivered, no forget call, no crash', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    // gh throws unconditionally on every call (including the issue-state probe).
+    const gh = async () => {
+      throw new Error('gh command failed');
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+
+    let threw = false;
+    let claimed: any;
+    try {
+      claimed = await guarded.claim();
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(claimed).toEqual(candidate);
+    expect(forgetCalls).toHaveLength(0);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
 // ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
 
 describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {
