@@ -20,6 +20,8 @@
 // This module only proposes edges from prose; it does not write to any
 // platform and does not classify non-matches (that belongs to Task 23/24).
 
+import { parseSourceRef } from './issue-ref.js';
+
 /** One deterministically-parsed dependency edge. */
 export interface DependencyEdge {
   /** The issue whose body was parsed (the blocked issue), e.g. "acme/app#230". */
@@ -204,16 +206,6 @@ export function parseDependencyProse(input: DependencyProseInput): DependencyPro
 import type { GhRunner } from '../tracker-client.js';
 export type { GhRunner };
 
-/** Parse `owner/repo#N` into its repo-slug + issue-number parts, or null if malformed. */
-function parseRef(ref: string): { repo: string; number: string } | null {
-  const hash = ref.lastIndexOf('#');
-  if (hash <= 0 || hash === ref.length - 1) return null;
-  const repo = ref.slice(0, hash);
-  const number = ref.slice(hash + 1);
-  if (!/^\d+$/.test(number)) return null;
-  return { repo, number };
-}
-
 /** Parse a GitHub API `repository_url` (e.g. `https://api.github.com/repos/acme/app`) into `owner/repo`. */
 function repoFromRepositoryUrl(repositoryUrl: string): string | null {
   const m = repositoryUrl.match(/\/repos\/([^/]+\/[^/]+)$/);
@@ -327,8 +319,8 @@ export async function createDependencyLinks(
   const targetIdByRef = new Map<string, number | null>();
 
   for (const edge of edges) {
-    const source = parseRef(edge.source);
-    const target = parseRef(edge.target);
+    const source = parseSourceRef(edge.source);
+    const target = parseSourceRef(edge.target);
     if (!source || !target) {
       log(`createDependencyLinks: skipping unparseable edge ${edge.source} -> ${edge.target}`);
       continue;
