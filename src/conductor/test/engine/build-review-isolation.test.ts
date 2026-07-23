@@ -60,6 +60,7 @@ describe('build_review input isolation', () => {
     await writeFile(join(dir, 'base.txt'), 'base\n');
     await git('add', '.');
     await git('commit', '-m', 'initial commit on base');
+    await git('remote', 'add', 'origin', dir);
     await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
     await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
 
