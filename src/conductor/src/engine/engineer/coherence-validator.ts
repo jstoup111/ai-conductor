@@ -270,3 +270,52 @@ export function crossCheckIds(
 
   return { ok: true };
 }
+
+// --- Outcome-coverage layer (Task 7) ---
+
+/** Verdicts treated as affirmative coverage for the outcome-coverage layer. */
+const NEGATIVE_VERDICTS: ReadonlySet<string> = new Set(['gap', 'missing', 'uncovered', 'fail']);
+
+export type OutcomeCoverageResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'outcome-gap';
+      /** The `outcome-<n>` id (1-indexed) of the uncovered bullet. */
+      gapId: string;
+      /** The verbatim staged outcome bullet with no affirmative coverage. */
+      bullet: string;
+    };
+
+/**
+ * Set-difference check: every staged intake outcome bullet must have a
+ * corresponding `outcome-<n>` row in the coherence artifact with an
+ * affirmative verdict. A bullet with no row at all, or whose row carries a
+ * negative verdict (gap/missing/uncovered/fail), is reported as a gap naming
+ * the `outcome-<n>` id and quoting the bullet verbatim — never silently
+ * dropped.
+ *
+ * This layer only checks presence/verdict of the outcome row itself; whether
+ * the row's cited ids resolve to real stories/tasks is `crossCheckIds`'s
+ * (Task 6) job, and callers are expected to run that check too (a coverage
+ * row citing a fabricated story id is rejected there, not here).
+ */
+export function checkOutcomeCoverage(
+  rows: CoherenceRow[],
+  outcomeBullets: string[],
+): OutcomeCoverageResult {
+  const outcomeRowsById = new Map<string, CoherenceRow>();
+  for (const row of rows) {
+    if (row.rowClass === 'outcome') outcomeRowsById.set(row.id, row);
+  }
+
+  for (let n = 1; n <= outcomeBullets.length; n++) {
+    const gapId = `outcome-${n}`;
+    const row = outcomeRowsById.get(gapId);
+    if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase())) {
+      return { ok: false, reason: 'outcome-gap', gapId, bullet: outcomeBullets[n - 1] };
+    }
+  }
+
+  return { ok: true };
+}

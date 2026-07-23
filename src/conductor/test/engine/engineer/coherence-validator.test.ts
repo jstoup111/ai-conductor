@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseCoherenceArtifact,
   crossCheckIds,
+  checkOutcomeCoverage,
   type CrossCheckInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
@@ -256,5 +257,79 @@ describe('crossCheckIds', () => {
     expect(result.rowClass).toBe('task');
     expect(result.rowId).toBe('task-2');
     expect(result.fabricatedId).toBe('ghost-id');
+  });
+});
+
+describe('checkOutcomeCoverage', () => {
+  const BULLETS = ['- Ship widgets reliably.', '- Support returns.'];
+
+  function rowsFrom(text: string) {
+    const result = parseCoherenceArtifact(text);
+    if (!result.ok) throw new Error('fixture must parse');
+    return result.rows;
+  }
+
+  it('passes silently when every outcome bullet has an affirmative row', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+| outcome | outcome-2 | story-2 | covered | "Support returns." |
+`;
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('reports a gap outcome-<n> quoting the bullet when a bullet has no row', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+`;
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('outcome-gap');
+    expect(result.gapId).toBe('outcome-2');
+    expect(result.bullet).toBe('- Support returns.');
+  });
+
+  it('reports a gap outcome-<n> when the matching row has a negative verdict', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+| outcome | outcome-2 | story-2 | gap | "Support returns." |
+`;
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('outcome-gap');
+    expect(result.gapId).toBe('outcome-2');
+    expect(result.bullet).toBe('- Support returns.');
+  });
+
+  it('surfaces a gap when coverage is asserted via a nonexistent story id (reuses the fabrication path)', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+| outcome | outcome-2 | story-99 | covered | "Support returns." |
+`;
+    const rows = rowsFrom(text);
+    const crossCheck = crossCheckIds(rows, {
+      storiesText: `# Stories\n\n## Story 1: Widget shipping\n\n### Acceptance Criteria\n#### Happy Path\n- Given a widget, when shipped, then it arrives.\n`,
+      planText: null,
+      prdText: null,
+      outcomeCount: BULLETS.length,
+    });
+    expect(crossCheck.ok).toBe(false);
+    if (crossCheck.ok) return;
+    expect(crossCheck.reason).toBe('fabricated-id');
+    expect(crossCheck.fabricatedId).toBe('story-99');
   });
 });
