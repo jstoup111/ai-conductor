@@ -10,6 +10,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- HARNESS.md's "Docs track features" rule no longer names the harness repo's own `docs/`
+  guides (`docs/configuration.md`, `docs/daemon-operations.md`). HARNESS.md is ingested into
+  every consumer project, where those files don't exist and "in this repo" is ambiguous; the
+  rule is now generic ("when the project keeps dedicated guides beyond the README, update them
+  too"). The harness-repo-specific pointers already live in this repo's `CLAUDE.md` (#842).
+
 ### Added
 
 - The engineer **`land` gate now enforces Mermaid rendering** (#810). A broken diagram used to ship
