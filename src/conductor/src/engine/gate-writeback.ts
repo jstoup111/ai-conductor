@@ -94,6 +94,8 @@ function logSkipOnce(
   msg: string,
   verbose?: boolean,
 ): void {
+  if (verbose !== true) return;
+
   if (warnedSkips) {
     const key = `${slug}:${reason}`;
     if (warnedSkips.has(key)) return;
