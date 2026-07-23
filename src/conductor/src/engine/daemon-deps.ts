@@ -39,6 +39,11 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /**
+   * Echo `bin/setup`'s full output into the log on success (`daemon_verbose`).
+   * Default false: a one-line summary instead. Failure output is unaffected.
+   */
+  verbose?: boolean;
   /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
   runSetupTriage?: (
     error: SetupFailureError,
@@ -91,7 +96,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log),
+    prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log, { verbose: cfg.verbose ?? false }),
 
     runConductor: (wt, item) => cfg.runConductorInWorktree(wt, item),
 

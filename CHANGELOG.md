@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Daemon log: a successful `bin/setup` no longer echoes its entire output into
+  `.daemon/daemon.log`. That passthrough was 55% of the log (3,875 of 6,990 lines in one
+  observed run — 748 of them blank, plus `publish-engine`'s raw `{"versionId":…}` JSON) and
+  is only read when setup *fails*, where `SetupFailureError.outputTail` already carries a
+  50-line tail. The default now emits a single `setup: N line(s) of output suppressed`
+  summary; `daemon_verbose: true` restores the full echo. Blank lines are dropped in both
+  modes and failure behavior is unchanged.
 - Source-ref parsing/formatting is now generalized behind a canonical tagged
   `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
