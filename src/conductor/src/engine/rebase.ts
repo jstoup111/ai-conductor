@@ -143,6 +143,38 @@ export async function resolveBase(
   return { ref: `origin/${defaultBranch}`, kind: 'remote', branch: defaultBranch };
 }
 
+/**
+ * A fresh-base resolution: everything `resolveBase` returns, plus the
+ * ls-remote freshness evidence (Task 2, ai-conductor
+ * build-review-grades-plan-vs-diff-against-a-stale-o). `fresh: true` means the
+ * tracking ref already matched `ls-remote`'s reported head (no fetch was
+ * needed); `fresh: false` covers both "fetched a stale ref" and "no remote /
+ * probe failure — degraded to local" (`remoteHeadSha` is `null` in the latter
+ * case).
+ */
+export interface FreshBaseResolution extends ResolvedBase {
+  trackingRefSha: string | null;
+  remoteHeadSha: string | null;
+  fresh: boolean;
+}
+
+/**
+ * TODO(build-review-grades-plan-vs-diff-against-a-stale-o, Task 1-2): shared
+ * fresh-base resolver — probes `refs/remotes/origin/<default>` against
+ * `git ls-remote origin <default>`, fetching + recomputing on any mismatch,
+ * fail-soft to `{fresh:false, remoteHeadSha:null}` on any git/network error or
+ * missing origin. Not yet implemented; this stub only exists so acceptance
+ * specs load and fail on assertion rather than on import.
+ */
+export async function resolveFreshBase(
+  _git: GitRunner,
+  _opts: { probeOnly?: boolean },
+): Promise<FreshBaseResolution> {
+  throw new Error(
+    'resolveFreshBase is not implemented yet (build-review-grades-plan-vs-diff-against-a-stale-o, Task 1-2)',
+  );
+}
+
 // ── Satisfied predicate (FR-4) ───────────────────────────────────────────────
 
 /**
