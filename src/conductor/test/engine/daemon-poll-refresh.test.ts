@@ -215,7 +215,7 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
 
   beforeEach(async () => {
     originDir = await mkdtemp(join(tmpdir(), 'origin-ff-'));
-    await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
 
     repoDir = await mkdtemp(join(tmpdir(), 'repo-ff-'));
     await execFile('git', ['clone', '-q', originDir, repoDir]);
