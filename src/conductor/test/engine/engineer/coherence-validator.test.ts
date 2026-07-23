@@ -14,6 +14,7 @@ import {
   checkOutcomeCoverage,
   checkFrCoverage,
   checkStoryCoverage,
+  checkOrphanTasks,
   type CrossCheckInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
@@ -505,5 +506,96 @@ Just some prose, no story headings at all.
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('unparseable-stories');
+  });
+});
+
+describe('checkOrphanTasks', () => {
+  const STORIES_TEXT = `# Stories
+
+## Story 1: Widget shipping
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+`;
+
+  it('treats a task citing an existing story id as covered', () => {
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Type:** happy-path
+**Files:** src/widget.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('treats an infrastructure task with a non-empty declared purpose as covered', () => {
+    const planText = `# Plan
+
+### Task 2: Test scaffolding
+**Story:** none (infrastructure: test scaffolding for S2)
+**Type:** infrastructure
+**Files:** test/setup.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('treats a refactor task with a non-empty declared purpose as covered', () => {
+    const planText = `# Plan
+
+### Task 3: Cleanup
+**Story:** none (refactor: dedupe helper functions)
+**Type:** refactor
+**Files:** src/util.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('reports task-<id> when a task cites only nonexistent story ids', () => {
+    const planText = `# Plan
+
+### Task 4: Build gizmo
+**Story:** Story 99 (happy path)
+**Type:** happy-path
+**Files:** src/gizmo.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('orphan-task');
+    expect(result.gapId).toBe('task-4');
+  });
+
+  it('reports task-<id> for an infrastructure task with an empty/missing **Story:** line', () => {
+    const planText = `# Plan
+
+### Task 5: Scaffolding
+**Story:**
+**Type:** infrastructure
+**Files:** test/setup.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('orphan-task');
+    expect(result.gapId).toBe('task-5');
+  });
+
+  it('reports task-<id> when there is no **Story:** line and the type is not infrastructure/refactor', () => {
+    const planText = `# Plan
+
+### Task 6: Mystery work
+**Type:** happy-path
+**Files:** src/mystery.ts
+`;
+    const result = checkOrphanTasks(STORIES_TEXT, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('orphan-task');
+    expect(result.gapId).toBe('task-6');
   });
 });

@@ -500,3 +500,123 @@ export function checkFrCoverage(
 
   return { ok: true };
 }
+
+// --- Orphan-task layer (Task 10) ---
+
+export type OrphanTaskResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'orphan-task';
+      /** The `task-<id>` id of the orphan task. */
+      gapId: string;
+      /** The task's title, taken from its `### Task <id>: <title>` heading. */
+      title: string;
+    };
+
+/** A parsed plan task block: id, title, and its raw `**Story:**`/`**Type:**` lines. */
+interface PlanTaskBlock {
+  id: string;
+  title: string;
+  text: string;
+}
+
+/** Split plan text into `### Task <id>: <title>` blocks. */
+function extractTaskBlocks(planText: string): PlanTaskBlock[] {
+  const taskHeadingRe = /^###\s+Task\s+([A-Za-z0-9._-]+)\s*:?\s*(.*)$/i;
+  const blocks: PlanTaskBlock[] = [];
+  let current: { id: string; title: string; lines: string[] } | null = null;
+  for (const line of planText.split('\n')) {
+    const headingMatch = line.match(taskHeadingRe);
+    if (headingMatch) {
+      if (current) blocks.push({ id: current.id, title: current.title, text: current.lines.join('\n') });
+      current = { id: headingMatch[1], title: headingMatch[2].trim(), lines: [line] };
+    } else if (current) {
+      current.lines.push(line);
+    }
+  }
+  if (current) blocks.push({ id: current.id, title: current.title, text: current.lines.join('\n') });
+  return blocks;
+}
+
+/** The raw text of a task block's `**Story:**` line, or null if absent. */
+function extractStoryLineRaw(blockText: string): string | null {
+  const m = blockText.match(/^[ \t]*\*\*Story:\*\*[ \t]*(.*)$/im);
+  return m ? m[1].trim() : null;
+}
+
+/** The raw text of a task block's `**Type:**` line, or null if absent. */
+function extractTypeLineRaw(blockText: string): string | null {
+  const m = blockText.match(/^[ \t]*\*\*Type:\*\*[ \t]*(.*)$/im);
+  return m ? m[1].trim() : null;
+}
+
+/** Story ids (e.g. `1`, `1.2`) cited on a task block's `**Story:**` line(s). */
+function extractCitedStoryIdsFromBlock(blockText: string): string[] {
+  const ids: string[] = [];
+  const storyRefRe = /\*\*Story:\*\*[ \t]*(?:story|epic)?[ \t]*([A-Za-z0-9.\-]+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = storyRefRe.exec(blockText)) !== null) {
+    const id = m[1];
+    if (/^(n\/?a|prerequisite|none|all)$/i.test(id)) continue;
+    ids.push(id);
+  }
+  return ids;
+}
+
+const SUPPORTING_TYPES: ReadonlySet<string> = new Set(['infrastructure', 'refactor']);
+
+/** True when a `**Story:**` line's raw text declares a non-empty supporting purpose. */
+function declaresSupportingPurpose(storyLineRaw: string | null): boolean {
+  if (!storyLineRaw) return false;
+  const trimmed = storyLineRaw.trim();
+  if (trimmed.length === 0) return false;
+  if (/^(none|n\/a)$/i.test(trimmed)) return false;
+  return true;
+}
+
+/**
+ * Orphan-task rule (FR-5), mechanical form (per
+ * adr-2026-07-22-coherence-gate-placement-and-validation-split): a plan task
+ * is covered iff its `**Story:**` line cites at least one story id present
+ * in the stories file, OR its `**Type:**` is `infrastructure` or `refactor`
+ * AND its `**Story:**` line declares a non-empty supporting purpose (e.g.
+ * `none (infrastructure: test scaffolding for S2)`). Anything else — a task
+ * citing only nonexistent story ids, an infrastructure/refactor task with an
+ * empty/missing `**Story:**` line, or a task with no `**Story:**` line whose
+ * type is not infrastructure/refactor — is an orphan, reported naming the
+ * `task-<id>` id and the task's title.
+ */
+export function checkOrphanTasks(
+  storiesText: string | null,
+  planText: string | null,
+): OrphanTaskResult {
+  const storyIds = new Set<string>();
+  for (const block of splitStoryBlocks(storiesText ?? '')) {
+    if (block.id) storyIds.add(block.id);
+  }
+
+  const taskBlocks = extractTaskBlocks(planText ?? '');
+
+  for (const task of taskBlocks) {
+    const storyLineRaw = extractStoryLineRaw(task.text);
+    const typeLineRaw = extractTypeLineRaw(task.text);
+    const type = (typeLineRaw ?? '').trim().toLowerCase();
+
+    const citedStoryIds = extractCitedStoryIdsFromBlock(task.text);
+    const citesRealStory = citedStoryIds.some((id) => storyIds.has(id));
+    if (citesRealStory) continue;
+
+    const isSupportingType = SUPPORTING_TYPES.has(type);
+    if (isSupportingType && declaresSupportingPurpose(storyLineRaw)) continue;
+
+    return {
+      ok: false,
+      reason: 'orphan-task',
+      gapId: `task-${task.id}`,
+      title: task.title,
+    };
+  }
+
+  return { ok: true };
+}
