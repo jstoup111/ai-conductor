@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# quarantine-engineer-signals — one-shot, operator-invoked maintenance sweep
+# that quarantines `"project":"test-project"`-tagged lines out of the real
+# engineer signals.jsonl store (T5, jstoup111/ai-conductor#861).
+#
+# Backs up the original signals.jsonl before mutating it, preserves every
+# real / malformed line byte-for-byte and in original order, and appends
+# quarantined lines to a sibling signals.jsonl.test-quarantine file.
+# Idempotent — a second run quarantines 0 additional lines.
+#
+# Usage:
+#   bin/quarantine-engineer-signals [--dry-run]
+
+HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CONDUCTOR_DIR="${HARNESS_DIR}/src/conductor"
+
+cd "$CONDUCTOR_DIR"
+exec npx tsx "${CONDUCTOR_DIR}/src/quarantine-engineer-signals-cli.ts" "$@"
