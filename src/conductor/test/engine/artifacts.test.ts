@@ -1567,6 +1567,84 @@ describe('engine/artifacts', () => {
           }
         });
       });
+
+      // Task 6 (trailer-union build completion plan): the halt-marker check,
+      // plan-validation, and status-file read guards run BEFORE the
+      // resolveTaskIds union call and must still fail closed unchanged by
+      // its introduction.
+      describe('Task 6: fail-closed guards precede the resolveTaskIds union call', () => {
+        it('fails with the missing-status-file reason when .pipeline/task-status.json does not exist and cannot be seeded', async () => {
+          // A plan exists but projectRoot/planPath are omitted from ctx, so
+          // seeding never runs and no task-status.json is created — the
+          // read guard must reject before ever reaching the resolver.
+          await writePlan('### Task 1: Task one\n**Story:** 1\n');
+          const result = await checkStepCompletion(dir, 'build', {});
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/missing .pipeline\/task-status\.json/);
+        });
+
+        it('fails with the invalid-JSON reason when task-status.json cannot be parsed and re-seeding is bypassed', async () => {
+          await writePlan('### Task 1: Task one\n**Story:** 1\n');
+          const statusPath = join(dir, '.pipeline/task-status.json');
+          await mkdir(dirname(statusPath), { recursive: true });
+          await writeFile(statusPath, 'not valid json {');
+
+          // Passing ctx without projectRoot/planPath skips seedTaskStatus
+          // entirely, so the corrupt file reaches the JSON.parse guard as-is.
+          const result = await checkStepCompletion(dir, 'build', {});
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/invalid JSON in \.pipeline\/task-status\.json/);
+        });
+
+        it('fails with the empty-plan reason when the plan file has no task headings', async () => {
+          await writePlan('# Notes\n\nJust prose, no task headings here.\n');
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/plan is empty or contains no tasks/);
+        });
+
+        it('fails with the halt-marker reason even when every task is fully trailer-evidenced (halt check short-circuits before the resolver)', async () => {
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+          await writePlan(
+            '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+          // Fully trailer-evidence both tasks via real commits...
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/one.ts'), 'export const one = true;\n');
+          await execa('git', ['add', 'src/one.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task one\n\nTask: 1\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/two.ts'), 'export const two = true;\n');
+          await execa('git', ['add', 'src/two.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task two\n\nTask: 2\n'], { cwd: dir });
+
+          // ...and also mark the rows completed, so the union resolver
+          // would report full completion if it were ever consulted.
+          await writeTasks([
+            { id: '1', name: 'First task', status: 'completed' },
+            { id: '2', name: 'Second task', status: 'completed' },
+          ]);
+
+          // But a halt marker is present — this must win regardless.
+          await createFile(HALT_MARKER, 'user requested exit; awaiting recovery REPL');
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/halt-user-input-required/);
+        });
+      });
     });
   });
 
