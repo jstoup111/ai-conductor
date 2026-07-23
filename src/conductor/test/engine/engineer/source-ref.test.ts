@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseWorkRef } from '../../../src/engine/engineer/source-ref.js';
+import { formatWorkRef, parseWorkRef } from '../../../src/engine/engineer/source-ref.js';
 
 describe('parseWorkRef — GitHub grammar', () => {
   it('parses a well-formed owner/repo#N ref', () => {
@@ -40,5 +40,25 @@ describe('parseWorkRef — Jira grammar', () => {
     ['ref containing a hash', 'PROJ-123#extra'],
   ])('never yields kind "jira" for %s (%j)', (_label, input) => {
     expect(parseWorkRef(input)?.kind).not.toBe('jira');
+  });
+});
+
+describe('formatWorkRef — round-trip identity', () => {
+  it.each(['acme/app#49', 'owner/repo#1', 'a/b/c#123', 'PROJ-123', 'AB2C-7'])(
+    'formats then re-parses to an equivalent WorkRef for %s',
+    (sourceRef) => {
+      const ref = parseWorkRef(sourceRef);
+      expect(ref).not.toBeNull();
+      expect(formatWorkRef(ref!)).toBe(sourceRef);
+      expect(parseWorkRef(formatWorkRef(ref!))).toEqual(ref);
+    },
+  );
+
+  it('does not trim whitespace when parsing (negative path)', () => {
+    expect(parseWorkRef(' PROJ-123 ')).toBeNull();
+  });
+
+  it('throws for a malformed WorkRef that would not re-parse', () => {
+    expect(() => formatWorkRef({ kind: 'github', repo: '', number: '' })).toThrow();
   });
 });

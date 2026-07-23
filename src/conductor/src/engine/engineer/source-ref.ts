@@ -41,3 +41,19 @@ export function parseWorkRef(sourceRef: string | undefined | null): WorkRef | nu
   if (!/^\d+$/.test(number)) return null;
   return { kind: 'github', repo, number };
 }
+
+/**
+ * Format a `WorkRef` back into its sourceRef string form. Guards against
+ * emitting malformed output by re-parsing the formatted string and throwing
+ * if it does not structurally match the input `WorkRef`.
+ */
+export function formatWorkRef(ref: WorkRef): string {
+  const formatted = ref.kind === 'github' ? `${ref.repo}#${ref.number}` : ref.key;
+
+  const reparsed = parseWorkRef(formatted);
+  if (!reparsed || reparsed.kind !== ref.kind || JSON.stringify(reparsed) !== JSON.stringify(ref)) {
+    throw new Error(`formatWorkRef: formatted output "${formatted}" does not re-parse to an equivalent WorkRef`);
+  }
+
+  return formatted;
+}
