@@ -1280,7 +1280,10 @@ export async function dispatchEngineer(
     // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
     // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
     // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
-    // forget (drop); open → requeueClaimed.
+    // forget (drop); open → requeueClaimed. A liveness read that errors, returns
+    // unknown, or can't be attempted (unparseable sourceRef) NEVER forgets
+    // (fail-safe, Story 7 negative) — the error is surfaced per-entry and the
+    // batch continues for the rest of the run.
     case 'requeue': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
@@ -1292,12 +1295,40 @@ export async function dispatchEngineer(
       const entries = await ledger.list();
       const requeued: string[] = [];
       const dropped: string[] = [];
+      const errors: Array<{ sourceRef: string; error: string }> = [];
 
       for (const entry of entries) {
         if (!isStaleClaim(entry, now, windowMs)) continue;
 
         const parsed = parseSourceRef(entry.sourceRef);
-        const issueState = parsed ? await getIssueState(gh, parsed.repo, parsed.issue) : 'unknown';
+        if (!parsed) {
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: `unparseable sourceRef "${entry.sourceRef}" — cannot confirm issue liveness`,
+          });
+          continue;
+        }
+
+        let issueState: 'open' | 'closed' | 'unknown';
+        try {
+          issueState = await getIssueState(gh, parsed.repo, parsed.issue);
+        } catch (err: unknown) {
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+
+        if (issueState === 'unknown') {
+          // Fail-safe (Story 7 negative): never forget on an unconfirmed-closed
+          // signal — surface the error and continue with the rest of the batch.
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: 'issue liveness state unknown — not forgotten (fail-safe)',
+          });
+          continue;
+        }
 
         if (issueState === 'closed') {
           await ledger.forget(entry.source, entry.sourceRef);
@@ -1314,6 +1345,7 @@ export async function dispatchEngineer(
           kind: 'requeue',
           requeued,
           dropped,
+          errors,
           count: requeued.length,
         }),
       );

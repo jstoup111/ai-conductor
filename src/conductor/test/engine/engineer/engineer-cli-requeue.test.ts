@@ -68,10 +68,12 @@ describe('engineer requeue --stale: happy path (Task 11)', () => {
       await import('node:fs/promises').then((fs) => fs.writeFile(ledgerPath, JSON.stringify(raw, null, 2)));
 
       const { out, err, opts } = captureOut();
+      // Issues are open — liveness (Task 12/13) never drops anything in this test.
+      const gh = async () => ({ stdout: JSON.stringify({ state: 'OPEN' }) });
 
       const code = await dispatchEngineer(
         { kind: 'requeue', stale: true, olderThan: '24h' },
-        { ...opts(), engineerDir: engDir },
+        { ...opts(), engineerDir: engDir, gh },
       );
 
       expect(code).toBe(0);
