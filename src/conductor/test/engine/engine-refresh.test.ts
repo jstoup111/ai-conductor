@@ -169,3 +169,110 @@ describe("probeStampedShaBehindOrigin (Task 9, TI-4 HP3/NP3/NP4)", () => {
     expect(result.outcome).toBe("undeterminable");
   });
 });
+
+describe("loop-level composition: throttle + probe + warner across boundaries (Task 12)", () => {
+  const OK = (stdout = ""): GitResult => ({ exitCode: 0, stdout, stderr: "" });
+  const FAIL = (stderr = ""): GitResult => ({ exitCode: 1, stdout: "", stderr });
+
+  /**
+   * Simulates one quiescent-boundary tick: consults the throttle first (as
+   * production wiring does — Tasks 3/6/7), only performing the fetch/probe
+   * and possible warn when the throttle allows it.
+   */
+  async function runBoundary(
+    throttle: ReturnType<typeof createRefreshThrottle>,
+    warner: ReturnType<typeof createStalenessWarner>,
+    git: GitRunner,
+    stampedSha: string,
+    fetchCounter: { count: number },
+  ): Promise<void> {
+    if (!throttle.shouldRun()) return;
+    throttle.markRan();
+    fetchCounter.count += 1;
+    const result = await probeStampedShaBehindOrigin(git, stampedSha);
+    if (result.outcome === "behind" && result.originHead && result.defaultBranch) {
+      warner.warn("origin-advanced", result.originHead, result.defaultBranch);
+    }
+  }
+
+  it("repeated quiescent boundaries inside one throttle window: exactly one fetch, zero warnings from throttled-skip boundaries", async () => {
+    let clock = 1000;
+    const throttle = createRefreshThrottle(5000, () => clock);
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    const fetchCounter = { count: 0 };
+    // Stamp is current w.r.t. origin — the one fetch that does happen must
+    // not warn either, so any lines captured would only ever come from a
+    // throttled-skip boundary (which must never happen).
+    const git = fakeGit({
+      remote: OK("origin\n"),
+      "symbolic-ref refs/remotes/origin/HEAD": OK("refs/remotes/origin/main\n"),
+      "fetch origin main": OK(),
+      "rev-parse origin/main": OK("deadbeef\n"),
+      "merge-base --is-ancestor": OK(),
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await runBoundary(throttle, warner, git, "deadbeef", fetchCounter);
+      clock += 500; // well within the 5000ms window
+    }
+
+    expect(fetchCounter.count).toBe(1);
+    expect(lines).toHaveLength(0);
+  });
+
+  it("window expiry: the next boundary after the throttle window elapses performs a fresh fetch", async () => {
+    let clock = 1000;
+    const throttle = createRefreshThrottle(5000, () => clock);
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    const fetchCounter = { count: 0 };
+    const git = fakeGit({
+      remote: OK("origin\n"),
+      "symbolic-ref refs/remotes/origin/HEAD": OK("refs/remotes/origin/main\n"),
+      "fetch origin main": OK(),
+      "rev-parse origin/main": OK("deadbeef\n"),
+      "merge-base --is-ancestor": OK(),
+    });
+
+    await runBoundary(throttle, warner, git, "deadbeef", fetchCounter);
+    clock += 1000; // inside window — should be a throttled skip
+    await runBoundary(throttle, warner, git, "deadbeef", fetchCounter);
+    expect(fetchCounter.count).toBe(1);
+
+    clock += 5000; // window has now elapsed
+    await runBoundary(throttle, warner, git, "deadbeef", fetchCounter);
+    expect(fetchCounter.count).toBe(2);
+  });
+
+  it("persistent dirty/stale condition sustained across many boundaries: exactly one warning fires, no re-fire until originHead changes", async () => {
+    let clock = 1000;
+    const throttle = createRefreshThrottle(5000, () => clock);
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    const fetchCounter = { count: 0 };
+    let originHead = "deadbeef";
+    const git = fakeGit({
+      remote: OK("origin\n"),
+      "symbolic-ref refs/remotes/origin/HEAD": OK("refs/remotes/origin/main\n"),
+      "fetch origin main": OK(),
+      "rev-parse origin/main": () => OK(`${originHead}\n`),
+      "merge-base --is-ancestor": FAIL(), // determinably behind, every boundary
+    });
+
+    // Many boundaries, each past the throttle window so every one actually fetches.
+    for (let i = 0; i < 6; i++) {
+      clock += 6000; // always past the 5000ms window
+      await runBoundary(throttle, warner, git, "cafef00d", fetchCounter);
+    }
+
+    expect(fetchCounter.count).toBe(6);
+    expect(lines).toHaveLength(1);
+
+    // originHead advances — a new warning is now allowed.
+    originHead = "beadfeed";
+    clock += 6000;
+    await runBoundary(throttle, warner, git, "cafef00d", fetchCounter);
+    expect(lines).toHaveLength(2);
+  });
+});
