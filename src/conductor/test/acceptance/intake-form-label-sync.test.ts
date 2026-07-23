@@ -231,5 +231,38 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       expect(result.priorityLabel).toBe('priority: high');
       expect(result.sizeLabel).toBe('size: L');
     });
+
+    it('a Jira ref in the Depends-on list is skipped non-fatally — no gh call is made for it', async () => {
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+
+      const result = await syncIssueLabels(
+        { priority: 'medium', size: 'S', dependsOn: ['PROJ-123'] },
+        'acme/app#206',
+        { gh: gh.run, cwd: '.' },
+      );
+
+      expect(result.linked).not.toContain('PROJ-123');
+      expect(result.badRefs).not.toContain('PROJ-123');
+      // Non-fatal: sync still completes and applies priority/size labels.
+      expect(result.priorityLabel).toBe('priority: medium');
+      expect(result.sizeLabel).toBe('size: S');
+      // No blocked_by-dependency traffic was issued for the Jira ref.
+      expect(gh.calls.some((c) => c.args.some((a) => a.includes('dependencies/blocked_by')))).toBe(false);
+    });
+
+    it('a ref the strict regex rejects (contains a space) is still rejected — strict-set is unchanged/no wider than before', async () => {
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+
+      const result = await syncIssueLabels(
+        { priority: 'medium', size: 'S', dependsOn: ['a b/c#1'] },
+        'acme/app#207',
+        { gh: gh.run, cwd: '.' },
+      );
+
+      expect(result.badRefs).toEqual(expect.arrayContaining(['a b/c#1']));
+      expect(result.linked).not.toContain('a b/c#1');
+    });
   });
 });

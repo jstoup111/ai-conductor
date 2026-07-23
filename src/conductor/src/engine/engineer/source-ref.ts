@@ -43,6 +43,19 @@ export function parseWorkRef(sourceRef: string | undefined | null): WorkRef | nu
 }
 
 /**
+ * Strict `owner/repo#N` grammar used by call sites (e.g. label-sync) that
+ * must not widen their accepted set to include Jira or other lenient
+ * `parseWorkRef` grammars. Deliberately restrictive: `[\w.-]+/[\w.-]+#\d+`,
+ * no whitespace, no leading/trailing slop. Returns the GitHub `WorkRef` shape
+ * or null.
+ */
+export function strictSlugGithubRef(ref: string): GithubWorkRef | null {
+  const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(ref);
+  if (!m) return null;
+  return { kind: 'github', repo: m[1], number: m[2] };
+}
+
+/**
  * Format a `WorkRef` back into its sourceRef string form. Guards against
  * emitting malformed output by re-parsing the formatted string and throwing
  * if it does not structurally match the input `WorkRef`.
