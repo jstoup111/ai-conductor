@@ -83,8 +83,8 @@ export interface GateWritebackDeps {
 /**
  * Log a skip notice at most once per (slug, reason) key for the lifetime of
  * the given `warnedSkips` set. Repeated calls with the same key are silent
- * no-ops after the first. When `warnedSkips` is undefined, always logs
- * (no dedup state to track against).
+ * no-ops after the first. Requires `verbose: true` to log at all; when
+ * `warnedSkips` is undefined, dedup is skipped but the verbose gate still applies.
  */
 function logSkipOnce(
   log: ((msg: string) => void) | undefined,
