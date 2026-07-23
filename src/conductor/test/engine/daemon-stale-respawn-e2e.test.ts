@@ -269,6 +269,164 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     );
   });
 
+  describe('refreshEngineSource wired before rebuildEngine (Task 7, non-fatal)', () => {
+    it('called before rebuildEngine at the pre-dispatch boundary when staleGatesArmed and inFlight empty', async () => {
+      const callOrder: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        callOrder.push('refresh');
+      });
+      const rebuildEngine = vi.fn(async () => {
+        callOrder.push('rebuild');
+      });
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(callOrder).toEqual(['refresh', 'rebuild']);
+    });
+
+    it('not called again for the second dispatch while the first feature is still in flight', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // Let the dispatch loop start both features; the first ('f0') stays in
+      // flight (never resolved), so the second's pre-dispatch evaluation
+      // window has inFlight non-empty and must skip the refresh call — it
+      // fired exactly once, for the very first (fully-idle) dispatch.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('not called when gates are unarmed (not self-host)', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'stale' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+    });
+
+    it('throwing refreshEngineSource is logged and non-fatal: flow continues into rebuildEngine/check(), no restart triggered by the throw', async () => {
+      const logs: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1); // continued past the throw
+      expect(requestRestart).not.toHaveBeenCalled(); // 'current' verdict, no restart
+      expect(res.stoppedReason).toBe('idle_timeout'); // no crash, feature still dispatched
+      expect(logs.some((m) => m.toLowerCase().includes('refresh'))).toBe(true);
+    });
+
+    it('suppression path still short-circuits: refreshEngineSource + rebuildEngine run, but suppressed identity prevents restart', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'a',
+          targetIdentity: () => 'b',
+        },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        isSuppressed: async () => true,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+  });
+
   describe('real tmux: session survives, new pid, marker consumed, hyphen marker untouched', () => {
     it(
       'session-hosted stale-engine restart never leaves the daemon stopped',

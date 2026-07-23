@@ -135,7 +135,9 @@ describe('daemon-backlog — fastForwardRoot (per-poll root advance)', () => {
       { match: ['status', '--porcelain'], result: { stdout: ' M src/foo.ts\n' } },
     ]);
     await fastForwardRoot('/fake/repo', (m) => logs.push(m), git);
-    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+    // Task 1: the dirty-skip outcome now probes origin (fetch, no merge) to
+    // populate `behindOrigin`/`originHead` for TI-4's staleness warnings.
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(true);
     expect(calls.some((c) => c[0] === 'merge')).toBe(false);
     expect(logs.join('\n')).toMatch(/LEAK-SUSPECT/);
   });

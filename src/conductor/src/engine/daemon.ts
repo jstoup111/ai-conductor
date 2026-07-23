@@ -928,6 +928,19 @@ export async function runDaemon(
     if (!staleGatesArmed || !deps.staleEngineChecker) return false;
     if (inFlight.size !== 0) return false;
 
+    // Task 7: fast-forward the engine source before rebuilding, so the
+    // rebuild reflects a merge that landed on origin since the last refresh.
+    // Never fatal — a failed refresh degrades to whatever source is on disk.
+    if (deps.refreshEngineSource) {
+      try {
+        await deps.refreshEngineSource();
+      } catch (err) {
+        log(
+          `[daemon] engine source refresh failed: ${err instanceof Error ? err.message : String(err)}; continuing with current source`,
+        );
+      }
+    }
+
     // Gap A (#309): rebuild so the untracked `dist` reflects fast-forwarded
     // source; without this the content-hash checker never sees merge-driven
     // drift. Never fatal — a failed rebuild degrades to the current engine.
