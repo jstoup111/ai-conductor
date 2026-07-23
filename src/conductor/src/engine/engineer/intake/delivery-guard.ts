@@ -23,11 +23,14 @@ export type IssueState = 'open' | 'closed' | 'unknown';
  * a discriminated state. Handles errors gracefully — if gh throws or stdout
  * is unparseable, returns 'unknown' instead of crashing.
  */
-export async function getIssueState(gh: GhRunner, issue: string): Promise<IssueState> {
+export async function getIssueState(gh: GhRunner, repo: string, issue: string): Promise<IssueState> {
   try {
-    const { stdout } = await gh(['issue', 'view', issue, '--json', 'state', '-q', '.state'], {
-      cwd: process.cwd(),
-    });
+    const { stdout } = await gh(
+      ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'],
+      {
+        cwd: process.cwd(),
+      },
+    );
 
     const trimmed = (stdout || '').trim();
     let state: string | undefined;
@@ -182,7 +185,7 @@ export function createDeliveryGuardedQueue(
             logger.info(`Unparseable sourceRef ${sourceRef}, skipping issue-state probe`);
           }
           if (parsed) {
-            const issueState = await getIssueState(deps.gh, parsed.issue);
+            const issueState = await getIssueState(deps.gh, parsed.repo, parsed.issue);
             if (issueState === 'closed') {
               // Closed issue — forget the ledger entry and drop the candidate,
               // then continue scanning for the next one.

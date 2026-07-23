@@ -1072,6 +1072,8 @@ describe('Task 5: createDeliveryGuardedQueue — probes issue state for github-i
 
     expect(claimed).toEqual(candidate);
     expect(calls.length).toBeGreaterThan(0);
+    expect(calls[0].args).toContain('--repo');
+    expect(calls[0].args[calls[0].args.indexOf('--repo') + 1]).toBe('owner/repo');
   });
 });
 
