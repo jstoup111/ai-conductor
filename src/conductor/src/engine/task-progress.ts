@@ -42,27 +42,8 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
   const tasks = normalizeTasks(parsed);
   if (tasks.length === 0) return 0;
 
-  const resolved = new Set<string>();
-  for (const t of tasks) {
-    if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined) {
-      resolved.add(t.id);
-    }
-  }
-
-  // Union in plan task-ids carried by `Task:` trailers on the branch. Best
-  // effort: non-git directories or git failures degrade to no additional
-  // ids (fail-soft), matching countResolvedTasks's overall "no data means no
-  // progress" default.
-  const trailerIds = await distinctTaskTrailerIds(projectRoot);
-  const planIds = new Set(tasks.map((t) => t.id).filter((id): id is string => id !== undefined));
-  for (const id of trailerIds) {
-    const canonical = canonicalTaskId(id);
-    const match = planIds.has(id)
-      ? id
-      : [...planIds].find((p) => canonicalTaskId(p) === canonical);
-    if (match !== undefined) resolved.add(match);
-  }
-
+  const planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
+  const resolved = await resolveTaskIds(projectRoot, planIds);
   return resolved.size;
 }
 
