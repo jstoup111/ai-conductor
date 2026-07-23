@@ -25,7 +25,12 @@ for t in "${targets[@]}"; do
     echo "FAIL: link target $t does not exist on disk"
     fail=1
   fi
-  if ! grep -Eq "\($t/?\)" README.md; then
+  if [ "$t" = "docs/runbooks" ]; then
+    if ! grep -Eq '\(docs/runbooks/[^)]+\)|\(docs/runbooks/?\)' README.md; then
+      echo "FAIL: README.md Documentation section missing link to $t"
+      fail=1
+    fi
+  elif ! grep -Eq "\($t/?\)" README.md; then
     echo "FAIL: README.md Documentation section missing link to $t"
     fail=1
   fi
