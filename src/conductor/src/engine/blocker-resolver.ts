@@ -5,6 +5,7 @@
 // consumer (daemon gate + intake) depends on this resolver's verdict.
 
 import { parseSourceRef } from './engineer/issue-ref.js';
+import type { GhRunner } from './tracker-client.js';
 
 /** A reference to a single GitHub issue, as returned by `parseSourceRef`. */
 export interface IssueRef {
@@ -19,11 +20,21 @@ export type BlockerVerdict =
   | { kind: 'indeterminate'; detail: string }
   | { kind: 'cycle'; members: IssueRef[] };
 
-/** Injected shell-out to `gh`, mirroring the GhRunner DI pattern used elsewhere. */
-export type BlockerRunner = (args: string[]) => Promise<{ stdout: string }>;
+/**
+ * Injected shell-out to `gh`. Uses the canonical `GhRunner` seam from
+ * `tracker-client.ts` — every real production runner requires a `cwd`, so
+ * this resolver forwards one on every invocation (see `BlockerResolverDeps.cwd`).
+ */
+export type BlockerRunner = GhRunner;
 
 export interface BlockerResolverDeps {
   run: BlockerRunner;
+  /**
+   * Working directory forwarded to `run` on every `gh` invocation. Optional
+   * for backward compatibility with callers that construct `run` as a
+   * closure already bound to a cwd; defaults to `process.cwd()`.
+   */
+  cwd?: string;
 }
 
 export interface BlockerResolver {
@@ -148,7 +159,10 @@ async function resolveUncached(sourceRef: string, deps: BlockerResolverDeps): Pr
 
   let stdout: string;
   try {
-    ({ stdout } = await deps.run(['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`]));
+    ({ stdout } = await deps.run(
+      ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
+      { cwd: deps.cwd ?? process.cwd() },
+    ));
   } catch (err: unknown) {
     // Network/API failure — isolated to this ref; never throw into the scan loop.
     const detail = err instanceof Error ? err.message : String(err);

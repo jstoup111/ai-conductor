@@ -15,8 +15,8 @@ const execFile = promisify(execFileCb);
 
 /** Creates a BlockerRunner that shells `gh <args>` via the real `gh` binary. */
 export function createGhBlockerRunner(): BlockerRunner {
-  return async (args: string[]) => {
-    const { stdout } = await execFile('gh', args);
+  return async (args: string[], opts: { cwd: string }) => {
+    const { stdout } = await execFile('gh', args, { cwd: opts.cwd });
     return { stdout };
   };
 }

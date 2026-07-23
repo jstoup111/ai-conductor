@@ -7,19 +7,20 @@ import { describe, it, expect } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createBlockerResolver } from '../../src/engine/blocker-resolver.js';
-import type { BlockerRunner } from '../../src/engine/blocker-resolver.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
 import { createGhBlockerRunner } from '../../src/engine/gh-blocker-runner.js';
 
 const execFile = promisify(execFileCb);
 
 interface Call {
   args: string[];
+  cwd: string;
 }
 
-function makeRunner(stdout: string): { run: BlockerRunner; calls: Call[] } {
+function makeRunner(stdout: string): { run: GhRunner; calls: Call[] } {
   const calls: Call[] = [];
-  const run: BlockerRunner = async (args) => {
-    calls.push({ args: [...args] });
+  const run: GhRunner = async (args, opts) => {
+    calls.push({ args: [...args], cwd: opts.cwd });
     return { stdout };
   };
   return { run, calls };
@@ -33,6 +34,16 @@ describe('createBlockerResolver', () => {
     const verdict = await resolver.resolve('owner/repo#5');
 
     expect(verdict).toEqual({ kind: 'unblocked' });
+  });
+
+  it('forwards the configured cwd to the runner on every invocation', async () => {
+    const { run, calls } = makeRunner('[]');
+    const resolver = createBlockerResolver({ run, cwd: '/tmp/scratch-cwd' });
+
+    await resolver.resolve('owner/repo#5');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cwd).toBe('/tmp/scratch-cwd');
   });
 
   it('returns blocked with the blocker ref when blocked_by has an open issue', async () => {
@@ -161,7 +172,7 @@ describe('createBlockerResolver', () => {
   });
 
   it('returns indeterminate when the runner throws (network/API failure)', async () => {
-    const run: BlockerRunner = async () => {
+    const run: GhRunner = async () => {
       throw new Error('gh: connection reset');
     };
     const resolver = createBlockerResolver({ run });
@@ -185,7 +196,7 @@ describe('createBlockerResolver', () => {
 
   it('isolates errors per ref: one throwing ref does not affect another that succeeds', async () => {
     const calls: string[] = [];
-    const run: BlockerRunner = async (args) => {
+    const run: GhRunner = async (args) => {
       calls.push(args.join(' '));
       if (args.some((a) => a.includes('repos/owner/repoA'))) {
         throw new Error('boom for A');
@@ -212,7 +223,7 @@ describe('createBlockerResolver', () => {
         },
       ]);
 
-    const run: BlockerRunner = async (args) => {
+    const run: GhRunner = async (args) => {
       const path = args[1] ?? '';
       if (path.includes('/issues/1/')) {
         return { stdout: blockedByOf('2') };
@@ -248,7 +259,7 @@ describe('createBlockerResolver', () => {
         },
       ]);
 
-    const run: BlockerRunner = async (args) => {
+    const run: GhRunner = async (args) => {
       const path = args[1] ?? '';
       if (path.includes('/issues/1/')) {
         return { stdout: blockedByOf('2') }; // A blocked_by B
@@ -274,7 +285,7 @@ describe('createBlockerResolver', () => {
     // entry for B->A is closed — so the path back to A is broken and this
     // is not a cycle. Since B's only blocker (A) is closed, B itself is
     // unblocked, which also means A has no *open* path back through B.
-    const run: BlockerRunner = async (args) => {
+    const run: GhRunner = async (args) => {
       const path = args[1] ?? '';
       if (path.includes('/issues/1/')) {
         return {
