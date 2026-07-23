@@ -29,7 +29,10 @@ export type IssueRefKeyword = 'Closes' | 'Refs';
  * (e.g. a Jira key) or unparseable input. A null result means "no usable issue
  * reference" — every caller treats that as a no-op rather than an error.
  */
-export function parseSourceRef(sourceRef: string | undefined | null): { repo: string; number: string } | null {
+/** Shared `{repo, number}` shape returned by GitHub-style issue-ref parsers. */
+export type ParsedIssueRef = { repo: string; number: string };
+
+export function parseSourceRef(sourceRef: string | undefined | null): ParsedIssueRef | null {
   const r = parseWorkRef(sourceRef);
   return r?.kind === 'github' ? { repo: r.repo, number: r.number } : null;
 }

@@ -162,6 +162,20 @@ describe('backfillIntakeLabels — isolated single-issue failure', () => {
   });
 });
 
+describe('backfillIntakeLabels — Jira-shaped ref', () => {
+  it('routes a Jira-shaped ref to failed (not a HALT) and makes no gh call for it', async () => {
+    const { gh, calls } = fakeGh();
+    const issues: BacklogIssue[] = [{ ref: 'PROJ-123', body: '', labels: [] }];
+
+    const report = await backfillIntakeLabels(issues, { gh, cwd: '.' });
+
+    expect(report.failed).toHaveLength(1);
+    expect(report.failed[0].ref).toBe('PROJ-123');
+    expect(report.halted).toBe(false);
+    expect(calls.filter((c) => c[0] === 'api')).toHaveLength(0);
+  });
+});
+
 describe('backfillIntakeLabels — never HALTs, never prompts', () => {
   it('never writes a HALT marker file for a mix of success and failure', async () => {
     const { gh } = fakeGh({ failOn: { 40: 'boom' } });

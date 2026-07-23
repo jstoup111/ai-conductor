@@ -13,6 +13,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extractPrUrl } from './state.js';
+import type { ParsedIssueRef } from './engineer/issue-ref.js';
 
 const execFileP = promisify(execFileCb);
 
@@ -47,7 +48,7 @@ export function makeProductionGit(): GitRunner {
  * by the REST labels endpoint. Returns null for anything that isn't a
  * recognizable github.com pull/issue URL.
  */
-export function parseIssueRef(url: string): { repo: string; number: string } | null {
+export function parseIssueRef(url: string): ParsedIssueRef | null {
   const m = url.match(/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/(\d+)/);
   if (!m) return null;
   return { repo: m[1], number: m[2] };
