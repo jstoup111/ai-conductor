@@ -107,6 +107,12 @@ describe('parseIntakeSourceRef', () => {
     expect(parseIntakeSourceRef('Source-Ref: not-a-ref')).toBeUndefined();
     expect(parseIntakeSourceRef('Source-Ref: acme/app#abc')).toBeUndefined();
   });
+  it('parses a valid Jira Source-Ref line', () => {
+    expect(parseIntakeSourceRef('# x\n\nSource-Ref: PROJ-123\n')).toBe('PROJ-123');
+  });
+  it('returns undefined for a garbled Jira-shaped ref', () => {
+    expect(parseIntakeSourceRef('Source-Ref: proj_123!')).toBeUndefined();
+  });
 });
 
 describe('writeIntakeMarker', () => {
