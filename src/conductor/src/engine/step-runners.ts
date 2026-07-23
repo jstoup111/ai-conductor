@@ -22,6 +22,8 @@ import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from 
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
+import { runPerTaskCommitFloor, renderPerTaskFloorReport } from './per-task-commit-floor.js';
+import { resolveBuildReviewConfig } from './resolved-config.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
@@ -892,6 +894,52 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
+    // Per-task "work happened at all" floor (#781): purely additive,
+    // non-blocking telemetry computed alongside the grader dispatch. It
+    // NEVER feeds buildGraderPrompt/inputs, never changes `success`, and
+    // never triggers a kickback — it only prepends advisory lines to this
+    // step's own `output` and writes a sidecar artifact for observability.
+    // Guarded end-to-end: runPerTaskCommitFloor is already fail-soft
+    // internally, but the try/catch here ensures literally nothing from this
+    // telemetry path can throw and fail the build_review step.
+    const buildReviewConfig = resolveBuildReviewConfig(this.config);
+    let floorAdvisoryLines: string[] = [];
+    if (buildReviewConfig.perTaskFloor) {
+      try {
+        // Fall back to the relative `.pipeline` dir when this.pipelineDir is
+        // unset (mirrors the finish-record fallback above): the daemon always
+        // passes the worktree's absolute pipelineDir, but callers that don't
+        // (e.g. direct/test invocation) still get a usable artifact path.
+        const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+        const floorReport = await runPerTaskCommitFloor({
+          projectRoot: this.projectDir,
+          planPath,
+          taskStatusPath: join(effectivePipelineDir, 'task-status.json'),
+        });
+        if (this.pipelineDir) {
+          await this.ensurePipelineDir();
+        } else {
+          await mkdir(effectivePipelineDir, { recursive: true });
+        }
+        await writeFile(
+          join(effectivePipelineDir, 'per-task-floor.json'),
+          JSON.stringify(floorReport, null, 2),
+          'utf-8',
+        );
+        if (floorReport.gaps.length > 0) {
+          floorAdvisoryLines = renderPerTaskFloorReport(floorReport);
+          for (const line of floorAdvisoryLines) {
+            console.warn(`WARNING: ${line}`);
+          }
+        }
+      } catch {
+        // Fail-soft: telemetry must never fail the build_review step.
+      }
+    }
+
+    const prependFloorAdvisory = (output: string): string =>
+      floorAdvisoryLines.length > 0 ? `${floorAdvisoryLines.join('\n')}\n\n${output}` : output;
+
     const prompt = buildGraderPrompt(inputs);
 
     // Fresh one-shot session — never contaminate the main conductor session,
@@ -937,7 +985,7 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (result.success) {
       await this.stampBuildReviewVerdict();
-      return { success: true, output: result.output };
+      return { success: true, output: prependFloorAdvisory(result.output) };
     }
 
     // Full-ladder exhaustion: every attempted model reported unavailable.

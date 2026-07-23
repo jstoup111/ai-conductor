@@ -148,6 +148,12 @@ exact commit form and the sibling `Evidence: satisfied-by <sha>` form). Do not f
 throwaway code change onto a task just to produce a corroborating commit when the task's
 own acceptance criteria are already met.
 
+**Authoring note:** `build_review` also runs a non-blocking, advisory per-task
+work-happened floor that flags any plan task with no `Task:`-trailered commit as a "gap"
+(warning only, never a HALT). If you're authoring a task you know will legitimately produce
+no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
+doesn't flag it.
+
 ### 4. Task Ordering Rules
 
 1. **Infrastructure first** — Database migrations, model definitions, route setup

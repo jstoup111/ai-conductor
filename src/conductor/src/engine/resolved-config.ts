@@ -523,10 +523,12 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 // ────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
+const DEFAULT_PER_TASK_FLOOR_ENABLED = true;
 
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
+  perTaskFloor: boolean;
 }
 
 /**
@@ -542,5 +544,9 @@ export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildR
   const block = config?.build_review;
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
+    perTaskFloor:
+      typeof block?.perTaskFloor === 'boolean'
+        ? block.perTaskFloor
+        : DEFAULT_PER_TASK_FLOOR_ENABLED,
   };
 }

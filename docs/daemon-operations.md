@@ -550,6 +550,19 @@ daemon liveness model (`ensureRunning`, one-per-repo `O_EXCL` mutex, stale-pid r
 
 Handles API rate limits by waiting for reset and auto-retrying.
 
+#### Per-task work-happened floor (advisory, `build_review`)
+
+Alongside `build_review`'s blocking completeness rubric, an opt-in-by-default (`build_review.perTaskFloor`,
+default `true`) **advisory-only** floor checks that every plan task id has *some* sign of
+work: a commit carrying its `Task:` trailer, a `**Verify-only:** yes` marker on the task in
+the plan, or a `status: 'skipped'` row for it in `.pipeline/task-status.json`. Unlike the
+completeness rubric, it does no path/SHA corroboration and never blocks, kicks back, or
+HALTs — a task failing all three checks is a "gap," recorded to
+`.pipeline/per-task-floor.json` and surfaced as `WARNING` lines prepended to the
+`build_review` step output for an operator to notice. Escape hatches: mark a legitimately
+no-commit task `**Verify-only:** yes` in the plan (see `../skills/plan/SKILL.md`), or record it
+as `skipped` in task-status.
+
 ### Claim-time delivery guard and recovery
 
 The engineer's intake system is resilient to duplicate captures and write-back failures:
