@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { createRefreshThrottle } from "../../src/engine/engine-refresh.js";
+import {
+  createRefreshThrottle,
+  createStalenessWarner,
+} from "../../src/engine/engine-refresh.js";
 
 describe("createRefreshThrottle", () => {
   it("allows the first call when it has never run", () => {
@@ -23,5 +26,46 @@ describe("createRefreshThrottle", () => {
     throttle.markRan();
     clock += 5001; // window has elapsed
     expect(throttle.shouldRun()).toBe(true);
+  });
+});
+
+describe("createStalenessWarner", () => {
+  it("emits a warning containing the cause and all three reload commands", () => {
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    warner.warn("origin-advanced", "sha123", "main");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("origin-advanced");
+    expect(lines[0]).toContain("git pull --ff-only origin main");
+    expect(lines[0]).toContain("npm run build");
+    expect(lines[0]).toContain("conduct daemon restart");
+  });
+
+  it("dedups repeated calls with the same cause and originHead", () => {
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    warner.warn("origin-advanced", "sha123", "main");
+    warner.warn("origin-advanced", "sha123", "main");
+    warner.warn("origin-advanced", "sha123", "main");
+    expect(lines).toHaveLength(1);
+  });
+
+  it("re-arms when originHead changes for the same cause", () => {
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    warner.warn("origin-advanced", "sha123", "main");
+    warner.warn("origin-advanced", "sha456", "main");
+    expect(lines).toHaveLength(2);
+  });
+
+  it("tracks distinct causes independently for the same originHead", () => {
+    const lines: string[] = [];
+    const warner = createStalenessWarner((msg) => lines.push(msg));
+    warner.warn("origin-advanced", "sha123", "main");
+    warner.warn("build-failed", "sha123", "main");
+    expect(lines).toHaveLength(2);
+    warner.warn("origin-advanced", "sha123", "main");
+    warner.warn("build-failed", "sha123", "main");
+    expect(lines).toHaveLength(2);
   });
 });
