@@ -106,7 +106,7 @@ walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
 - [Observability](docs/observability.md) — logs, metrics, and monitoring the daemon and skills
 - [Intake](docs/intake.md) — filing issues that seed the DECIDE phase
 - [Architecture](docs/architecture.md) — how engineer, daemon, and operator roles fit together
-- [Runbooks](docs/runbooks/) — step-by-step procedures for operational incidents
+- [Runbooks](docs/runbooks/emergency-stop-a-running-feature.md) — step-by-step procedures for operational incidents
 - [Conductor CLI Reference](src/conductor/README.md) — `conduct-ts` internals and CLI flags
 
 ## Key Design Principles

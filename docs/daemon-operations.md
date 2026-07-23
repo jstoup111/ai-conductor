@@ -159,7 +159,7 @@ resolve), the daemon does not immediately halt. Instead:
 - **Budget** — stall remediations share the existing `remediationRounds` counter (capped by
   `MAX_KICKBACKS_PER_GATE`; no new counter was added). Blocking `prd_audit` gaps draw from the
   same shared pool, so a run with both a build stall and a prd-audit gap can exhaust the budget
-  faster than either alone. See `src/conductor/README.md` → "Daemon build-stall remediation" for
+  faster than either alone. See `../src/conductor/README.md` → "Daemon build-stall remediation" for
   the implementation (`readHaltMarkerContent`, `writeStallQuestionEvidence`, `writeStallHalt`).
 
 A blocking SHIP gate tries to self-heal before it halts: the conductor dispatches the
@@ -178,7 +178,7 @@ engine executes that recorded contract once — before spending retry budget —
 marker at the authoritative worktree-root path, and re-validates via the existing
 validator. An absent/malformed contract still fails the step with an explicit reason
 (the self-heal never guesses a command), and a genuinely non-RED suite still fails
-validation after execution. See `src/conductor/README.md` → "Acceptance-red self-heal"
+validation after execution. See `../src/conductor/README.md` → "Acceptance-red self-heal"
 for the implementation.
 
 **Progress-aware build halt (`build_progress_halt`).** A build step that keeps resolving
@@ -200,7 +200,7 @@ build_progress_halt:
   dispatch_ceiling: 20   # per-spec cap on cross-dispatch progress-gated re-kicks
 ```
 
-Omit the block entirely to get the defaults above. See `src/conductor/README.md` for the
+Omit the block entirely to get the defaults above. See `../src/conductor/README.md` for the
 implementation details.
 
 **Kickback→build no-op escalation (`kickback_escalation`).** A kickback→build re-entry
@@ -216,7 +216,7 @@ kickback_escalation:
 
 Omit the block entirely to get `enabled: true`. This only gates the zero-progress escalation
 (D2); the route-into-no-op guard that recomputes build completion before routing a kickback
-(D1) is fail-closed correctness and always stays active. See `src/conductor/README.md` for
+(D1) is fail-closed correctness and always stays active. See `../src/conductor/README.md` for
 implementation details.
 
 **Rerun-vs-route retry classifier (`retry_routing`).** In daemon mode, a completion-check miss on
@@ -238,7 +238,7 @@ retry_routing:
 Omit the block entirely to get `enabled: true`. Setting `enabled: false` disables this classifier
 completely — only the original `prd_audit`-only short-circuit runs, and the other two verdict
 steps burn their full retry budget before routing at `step_failed`, exactly as before this
-feature. See `src/conductor/README.md` for the implementation details.
+feature. See `../src/conductor/README.md` for the implementation details.
 
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
@@ -258,7 +258,7 @@ dispatch used at finish time (capped by `rebase_resolution_attempts`), and an ac
 resolution must pass acceptance guards (rebase clean, branch current, no dropped commits) and,
 if configured, a fail-closed `suiteCommand` before a lease-protected
 `git push --force-with-lease`. Any failure at any stage escalates to `needs-remediation`
-instead of retrying blindly. See `src/conductor/README.md` → "Auto-resolve conflicts on open
+instead of retrying blindly. See `../src/conductor/README.md` → "Auto-resolve conflicts on open
 watched PRs" for the full pipeline.
 
 On by default (`ci_watch: { enabled: true }`, no config needed), the daemon also watches each
@@ -270,7 +270,7 @@ resolution takes precedence) or already carries `needs-remediation`. A green res
 `ci-failed` label and resets the attempt counter; exhausting both attempts escalates exactly
 once — sticky `needs-remediation` label, an upserted comment with the failure history, and a
 HALT-grade `ci_failed` event tailed by the halt-monitor. Set `ci_watch: { enabled: false }` to
-opt out. See `src/conductor/README.md` → "CI feedback loop on shipped PRs" for the full
+opt out. See `../src/conductor/README.md` → "CI feedback loop on shipped PRs" for the full
 pipeline.
 
 **Docs-only PRs skip the heavy CI jobs.** `.github/workflows/ci.yml` runs a `changes` job
@@ -302,7 +302,7 @@ skips blocked ideas and claims the oldest **unblocked** one, reporting a distinc
 outcome (never confused with an empty queue) when every pending idea is stuck. A one-time
 `conduct-ts engineer migrate-issue-deps [--confirm]` command migrates repos whose issues
 describe dependencies as prose into real GitHub issue-dependency links so the gate can see them.
-See [`src/conductor/README.md`](src/conductor/README.md#dependency-ordered-intake-and-dispatch)
+See [`../src/conductor/README.md`](../src/conductor/README.md#dependency-ordered-intake-and-dispatch)
 for details.
 
 **Claim ordering honors priority bands.** `conduct-ts engineer claim` serves pending
@@ -323,7 +323,7 @@ to `.pipeline/HALT.cleared`, clearing `.pipeline/HALT`) so parked work retries
 automatically on the event most likely to unblock it, resuming **rebase-first** so the
 advanced base is integrated before the failed gate re-checks. A plain restart with no
 advance leaves every marker intact. See
-[`src/conductor/README.md`](src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
+[`../src/conductor/README.md`](../src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
 
 The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
@@ -365,7 +365,7 @@ your tmux session, window layout, and any operator windows. The pane survives th
 (remain-on-exit armed), so you stay connected in color. If the daemon is busy (features
 in-flight), the restart queues durably via `.daemon/RESTART-PENDING` and fires when idle.
 Restart also relinks skills preflight (self-host only), ensuring a fresh harness is active.
-See [`src/conductor/README.md`](src/conductor/README.md#daemon-lifecycle-controls-pause-resume-restart)
+See [`../src/conductor/README.md`](../src/conductor/README.md#daemon-lifecycle-controls-pause-resume-restart-adr-2026-07-04-durable-pause-marker--adr-2026-07-04-respawn-in-place-restart)
 for the full lifecycle flow, including stale-engine auto-restart, respawn-in-place, and
 headless fallback behavior.
 
@@ -387,7 +387,7 @@ re-consulted **immediately before dispatch**, not only at initial pool selection
 where a park written between selection and dispatch was previously ignored. The status dashboard's
 PARKED group takes absolute precedence over every other group (HALTED, ELIGIBLE, etc.) — a parked
 slug always shows there and nowhere else. See
-[`src/conductor/README.md`](src/conductor/README.md#operator-park--unpark) for details.
+[`../src/conductor/README.md`](../src/conductor/README.md#operator-park--unpark) for details.
 
 **Event-driven re-dispatch on HALT clear.** When a parked (halted) feature's `.pipeline/HALT` marker is cleared — either by a human operator, base-branch re-kick, or another process — the daemon detects the change via filesystem watch (chokidar) and immediately re-dispatches the feature without waiting for the next idle poll. This reduces recovery latency from up to 60 seconds (idle-poll window) to sub-second response times when HALT is cleared live.
 
@@ -423,7 +423,7 @@ dispatch boundary — not only when the backlog drains — ensures freshly-merge
 built on stale engine code (the rebuild is required because build artifacts are untracked, so a
 merge alone never moves `dist`). It never interrupts an in-flight build. Enable with
 `auto_restart_on_stale_engine: true` in your project config; ignored in non-self-host
-environments and disabled in once-mode runs. See `src/conductor/README.md` → "Daemon lifecycle
+environments and disabled in once-mode runs. See `../src/conductor/README.md` → "Daemon lifecycle
 controls" for the full handshake and suppression flow. Requires PR #215 respawn transport for
 deployment.
 
@@ -439,7 +439,7 @@ files, delete untracked strays, log one WARN naming the culprit branch and heale
 proceed with fast-forward. Unexplained dirty trees escalate from a one-line skip to a loud
 LEAK-SUSPECT WARN with per-file diff-stat so stalls are never silent. Operator work is safe:
 heal requires whole-tree byte-identity to a known branch, so ambiguous dirtystate keeps hands off.
-See `src/conductor/README.md` → "Main-checkout leak triage and auto-heal" for the detailed
+See `../src/conductor/README.md` → "Main-checkout leak triage and auto-heal" for the detailed
 implementation and guarantee model.
 
 **Setup-failure triage (self-host only).** When `bin/setup` fails while preparing a daemon
@@ -447,7 +447,7 @@ worktree, a bounded two-stage recovery runs instead of leaving the wedge for an 
 untangle blind: dirty state is first quarantined to a `wip/setup-quarantine-<slug>` branch and
 setup is retried once at clean HEAD; if it still fails, exactly one fix-session is dispatched
 with the setup error tail, and the engine mechanically verifies the success contract (setup
-exits 0, tree clean) rather than trusting the agent's report. See `src/conductor/README.md` →
+exits 0, tree clean) rather than trusting the agent's report. See `../src/conductor/README.md` →
 "Setup-failure triage" for the detailed stage flow.
 
 **Write-fence sandbox for self-host builds (self-host only).** When a self-host build runs in a
@@ -456,7 +456,7 @@ outside the build worktree. Edit, Write, MultiEdit, and NotebookEdit targeting p
 harness root but outside `.worktrees/` are blocked with guidance to use the worktree path; Bash
 commands referencing main-checkout paths are heuristically screened and blocked (the deterministic
 leak-triage/auto-heal layer backstops any misses). The fence never fires on worktree-internal
-paths, OS temp directories, or unrelated repos. See `src/conductor/README.md` → "Write-fence
+paths, OS temp directories, or unrelated repos. See `../src/conductor/README.md` → "Write-fence
 sandbox for self-host builds" for the implementation and boundary cases.
 
 ### Rate-Limit Episode Coordination
@@ -520,7 +520,7 @@ and could slip past merge-order sweeps as mergeable — **a critical safety gap.
 
 All operations are **best-effort** and **non-throwing** — they never block daemon progress. The
 reconciliation sweep is idempotent (never removes halt markers, only re-asserts them). See
-`src/conductor/README.md` → "Halt-PR presentation reliability" for the implementation reference.
+`../src/conductor/README.md` → "Halt-PR presentation reliability" for the implementation reference.
 
 Engineer mode (`conduct-ts` only) — an **agent-hosted, human-gated** loop that turns a free-form
 idea into a routed, lesson-informed **spec PR**. It never builds and never merges (a merged spec PR
@@ -545,7 +545,7 @@ Every write is gated on your confirmation (decline = zero writes); authoring is 
 isolated** (repo A never touches sibling repo B; a stale target path fails fast) and multi-repo
 **fan-out** authors each confirmed target independently. A no-remote target still commits the spec on
 a branch (PR step is a non-fatal skip). Registry/store locations come from `$AI_CONDUCTOR_REGISTRY` /
-`$AI_CONDUCTOR_ENGINEER_DIR`. See `src/conductor/README.md` for the full flow and the pidfile-lock
+`$AI_CONDUCTOR_ENGINEER_DIR`. See `../src/conductor/README.md` for the full flow and the pidfile-lock
 daemon liveness model (`ensureRunning`, one-per-repo `O_EXCL` mutex, stale-pid reclaim).
 
 Handles API rate limits by waiting for reset and auto-retrying.
@@ -576,7 +576,7 @@ The command is **idempotent** — running it multiple times on the same entry wi
 
 **Integration: resolve + claim compose.** After resolve marks an entry delivered, a subsequent `engineer claim` with a duplicate envelope for that entry invokes the delivery guard, which heals and drops it — completing the recovery cycle end-to-end.
 
-See `src/conductor/README.md` for the full implementation details.
+See `../src/conductor/README.md` for the full implementation details.
 
 ### Brain Loop Supervision
 
@@ -593,12 +593,12 @@ conduct-ts brain stop    # kill the session
   per-repo) running `conduct-ts intake-loop --continuous`. Idempotent — calling it again
   while already running prints `brain loop already running.` instead of spawning a duplicate.
 - **`brain status`** reports `brain loop: running|stopped` plus `queued: <n>` read from the
-  status surface written by the loop (see `src/conductor/README.md` → "Intake Loop Automation").
+  status surface written by the loop (see `../src/conductor/README.md` → "Intake Loop Automation").
 - **`brain stop`** kills the tmux session; safe to call when nothing is running.
 - **Alternative to cron, zero-token execution.** The loop only polls GitHub via `gh` and
   writes to the local ledger/inbox — it never spawns `claude` or opens a PR, so running it
   continuously costs no model tokens.
 - **Single-writer guarantee.** When the brain loop is live, the interactive
   `conduct-ts engineer` launcher's manual pre-poll is skipped (see
-  `src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
+  `../src/conductor/README.md` → "Intake Loop Automation") so the two paths never race the
   same ledger.

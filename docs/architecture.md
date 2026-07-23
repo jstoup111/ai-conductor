@@ -95,7 +95,7 @@ tech-context use generic skill behavior.
 The TypeScript rewrite behind `conduct-ts`. Three-layer architecture —
 Engine / Execution / UI — with typed events, pluggable UI renderers, and
 dedicated test coverage (950+ tests). See the feature comparison in
-[Choosing a Conductor](#choosing-a-conductor); implementation notes below.
+[Choosing a Conductor](choosing-a-conductor.md#choosing-a-conductor); implementation notes below.
 
 - **`bin/conduct-ts`** is a thin shell wrapper around `src/conductor/dist/index.js`.
 - **Engine** owns state machine, gates, completion checks, auto-heal logic.
@@ -118,7 +118,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   `build` and `manual_test`, recording an objective PASS/FAIL verdict on the diff before it
   reaches the more expensive manual-test step. A FAIL kicks back to `build` with the
   reasons (bounded retries, then HALT); absent config preserves the legacy
-  `build → manual_test` topology unchanged. See `src/conductor/README.md` → "Judgement gate
+  `build → manual_test` topology unchanged. See `../src/conductor/README.md` → "Judgement gate
   at the build → manual_test seam" for config, cap/HALT behavior, and the cost trade-off.
   SHIP-tail verdict checks (`build_review`, `prd_audit`, `architecture_review_as_built`)
   require their verdict artifact's mtime to be fresh relative to the **per-attempt** judging
@@ -136,7 +136,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   session. A stamped baseline that is missing, unreachable (rebase/reset-orphaned), or whose
   delta can't be computed always falls back to re-running (fail-closed). Opt-out via the
   additive `gate_code_validity.enabled` config key (default `true`); setting it `false`
-  restores exact pre-feature mtime-only behavior. See `src/conductor/README.md` and
+  restores exact pre-feature mtime-only behavior. See `../src/conductor/README.md` and
   `.docs/decisions/adr-2026-07-22-gate-evidence-code-validity-on-redispatch.md`.
 - **Wiring reachability gate** (`wiring_check`, gating, always-on, all tiers): sits strictly
   between `build_review` and `manual_test` (`build → build_review → wiring_check →
@@ -150,14 +150,14 @@ dedicated test coverage (950+ tests). See the feature comparison in
   advisory-only findings; contract-bearing plans (one or more `Wired-into:` lines) are
   fully blocking. `inert` waivers resolve against on-disk paths (no network) or `gh issue
   view` for issue refs (open = waived, closed or `gh` error = fail-closed gap). See
-  `src/conductor/README.md` → "Wiring reachability gate" for the full breakdown.
+  `../src/conductor/README.md` → "Wiring reachability gate" for the full breakdown.
 - **Manual-test FAIL routing + whitewash guard** (#367): `manual_test` is gating (locked —
   overrides and config disables are rejected) so a failing manual test can never be silently
   skipped. In daemon runs a manual_test that keeps FAILing kicks back to `build` with the
   FAIL rows as evidence (bounded, then HALT). The gate records the HEAD sha when it sees
   FAIL rows and refuses a FAIL→PASS rewrite with no new commits — a claimed fix must exist
   as commits. Results are append-only per attempt (`## Attempt N` sections; the latest
-  section is the verdict). See `src/conductor/README.md` → "Daemon manual-test routing".
+  section is the verdict). See `../src/conductor/README.md` → "Daemon manual-test routing".
 - **Parallel SHIP validation phase** (#469, auto mode only): when an auto-mode run
   (`inline`/`daemon`) reaches the SHIP validators, `manual_test`, `prd_audit`, and
   `architecture_review_as_built` fan out as a **concurrent validation group** instead of the
@@ -173,7 +173,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   HALT parity); a branch with no verdict HALTs loudly. SIGINT mid-group persists each settled
   member's `done`, and a resumed run re-dispatches only unfinished members. Interactive runs
   are untouched — members execute via the pre-existing serial walk with their normal
-  checkpoints. See `src/conductor/README.md` → "Parallel validation phase".
+  checkpoints. See `../src/conductor/README.md` → "Parallel validation phase".
 - **Rebase-on-latest before finish**: an engine-native `rebase` gate (no Claude dispatch)
   rebases the worktree branch onto the **discovered** origin default branch (fetched; falls
   back to the local base — no hardcoded `main`) before the PR is opened, so it's never built
@@ -221,7 +221,7 @@ dedicated test coverage (950+ tests). See the feature comparison in
   for correctness. A fresh clone or a wiped `.daemon/` directory therefore never re-dispatches
   or re-kicks a spec whose implementation already merged, and a renamed-but-unchanged spec is
   still caught by content-hash match. See
-  [`src/conductor/README.md`](src/conductor/README.md) for the full dedup contract.
+  [`../src/conductor/README.md`](../src/conductor/README.md) for the full dedup contract.
 - **Engineer memory store** (daemon only): on each feature completion the daemon emits a
   structured learning signal + a narrative to a cross-project store at
   `~/.ai-conductor/engineer/` (override with `$AI_CONDUCTOR_ENGINEER_DIR`). `signals.jsonl` holds
@@ -249,14 +249,14 @@ dedicated test coverage (950+ tests). See the feature comparison in
   `ASDF_NODEJS_VERSION` so the bundle runs on its required Node even when your shell's
   default is older.
 
-See [`src/conductor/README.md`](src/conductor/README.md) for the gate-loop and daemon
+See [`../src/conductor/README.md`](../src/conductor/README.md) for the gate-loop and daemon
 internals (verdicts, selector, kickback, worker pool, task-status, auto-park, remediation).
 
 **Task Status (engine-owned):** The engine is the single authority for
 `.pipeline/task-status.json`. `Task: <id>` commit trailers are telemetry only — they update
 progress/resolved-count reporting (#757) but no longer derive or gate task completion.
 Build-step (and therefore task) completion is decided by `build_review`'s completeness
-rubric: an LLM-judged, fail-closed, plan-vs-diff check. See `src/conductor/README.md` →
+rubric: an LLM-judged, fail-closed, plan-vs-diff check. See `../src/conductor/README.md` →
 "Task Status (engine-owned)".
 
 **Auto-park (#773 demotion):** the durable no-evidence-attempt counter park path has been
@@ -264,13 +264,13 @@ deleted — commit-stamping telemetry no longer drives auto-park. Auto-park now 
 for an explicit, caller-supplied reason (e.g. an empty/missing plan at seed time); wall-clock
 and attempt bounds elsewhere in the daemon still provide a survivable halt for stuck builds.
 Unpark (`conduct daemon unpark <slug>`) clears the park marker and resumes. See
-`src/conductor/README.md` → "Auto-park".
+`../src/conductor/README.md` → "Auto-park".
 
 **Remediation (agentic gap routing):** When a SHIP gate blocks the daemon, the `/remediate`
 planner analyzes the gap and routes back to the appropriate step or halts for human triage.
 Three entry points (prd_audit, finish verification, architecture_review_as_built) and
 deterministic task-id assignment keep task ledgers coherent across DECIDE rework. See
-`src/conductor/README.md` → "Remediation (agentic gap routing)".
+`../src/conductor/README.md` → "Remediation (agentic gap routing)".
 
 Build and install:
 

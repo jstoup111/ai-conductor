@@ -152,7 +152,7 @@ conductor:
 ### Model fallback ladder (`conduct-ts` only)
 
 Skills and daemon steps are pinned to a preferred model (e.g. Fable for `rebase`,
-`remediate`, `debugging` — see [Model Selection](HARNESS.md#model-selection)). If that
+`remediate`, `debugging` — see [Model Selection](../HARNESS.md#model-selection)). If that
 model is ever detected unavailable, the daemon no longer fails the step — it walks the
 `model_fallback_ladder` and retries with the next model down until one succeeds.
 
