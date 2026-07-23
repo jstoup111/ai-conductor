@@ -23,6 +23,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Spec (DECIDE only): missing `.pipeline/session-hooks/*.sh` scripts no longer need to
+  terminally HALT a build. The build preflight will re-provision the scripts (and re-merge
+  their `.claude/settings.local.json` wiring) in place, log the repair under a
+  `[session-hooks]` prefix, re-stat the filesystem, and proceed — halting only when the
+  repair itself cannot write. The gate is repaired rather than removed: `pre-dispatch.sh`'s
+  `.pipeline/current-task` stamp still feeds two live gating consumers (the #505 Surface B
+  mutation gate, and the `Task:` trailer → `resolveTaskIds` → `countResolvedTasks` →
+  `no_task_progress` stall breaker), so the removal proposed in #896 would have silently
+  disarmed enforcement. Artifacts only; no engine change in this PR (#896).
+
 - Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
   complete: the build step's own completion predicate only checked
   `.pipeline/task-status.json` rows and missed tasks resolved solely via `Task:` trailer
