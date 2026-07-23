@@ -347,6 +347,18 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
     ).rejects.toThrow(/outcome-\d+/i);
   });
+
+  it('negative: an outcome row with an affirmative verdict but a blank Cited-Ids cell is refused with an outcome gap id', async () => {
+    // outcome-2's row keeps its "covered" verdict but cites zero stories.
+    const blankCited = COHERENCE.replace(
+      '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n',
+      '| outcome | outcome-2 |          | covered | "outcome 2 maps to story 1"  |\n',
+    );
+    const wt = await seedWorktree('coherence demo', { coherence: blankCited });
+    await expect(
+      landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(/outcome-\d+/i);
+  });
 });
 
 // ── Story 4 (FR-3): every PRD FR maps through stories to tasks ─────────────────

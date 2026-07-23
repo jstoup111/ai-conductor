@@ -306,14 +306,17 @@ export type OutcomeCoverageResult =
  * the `outcome-<n>` id and quoting the bullet verbatim — never silently
  * dropped.
  *
- * This layer only checks presence/verdict of the outcome row itself; whether
- * the row's cited ids resolve to real stories/tasks is `crossCheckIds`'s
+ * This layer checks presence/verdict of the outcome row itself AND that it
+ * cites at least one real story id (`storyIds`) — a row with an affirmative
+ * verdict but zero story citations is still a gap. Whether the row's cited
+ * ids resolve to real stories/tasks/FRs in general is `crossCheckIds`'s
  * (Task 6) job, and callers are expected to run that check too (a coverage
  * row citing a fabricated story id is rejected there, not here).
  */
 export function checkOutcomeCoverage(
   rows: CoherenceRow[],
   outcomeBullets: string[],
+  storyIds: Set<string>,
 ): OutcomeCoverageResult {
   const outcomeRowsById = new Map<string, CoherenceRow>();
   for (const row of rows) {
@@ -323,7 +326,8 @@ export function checkOutcomeCoverage(
   for (let n = 1; n <= outcomeBullets.length; n++) {
     const gapId = `outcome-${n}`;
     const row = outcomeRowsById.get(gapId);
-    if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase())) {
+    const citesStory = !!row && row.citedIds.some((id) => storyIds.has(id));
+    if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()) || !citesStory) {
       return { ok: false, reason: 'outcome-gap', gapId, bullet: outcomeBullets[n - 1] };
     }
   }
@@ -830,7 +834,11 @@ export type ValidateCoherenceResult =
 export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCoherenceResult {
   const gaps: CoherenceGap[] = [];
 
-  const outcomeResult = checkOutcomeCoverage(inputs.rows, inputs.outcomeBullets);
+  const outcomeResult = checkOutcomeCoverage(
+    inputs.rows,
+    inputs.outcomeBullets,
+    extractStoryIds(inputs.storiesText),
+  );
   if (!outcomeResult.ok) {
     gaps.push({
       layer: 'outcome',

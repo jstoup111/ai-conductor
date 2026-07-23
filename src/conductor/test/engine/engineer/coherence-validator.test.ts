@@ -313,7 +313,11 @@ describe('checkOutcomeCoverage', () => {
 | outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
 | outcome | outcome-2 | story-2 | covered | "Support returns." |
 `;
-    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    const result = checkOutcomeCoverage(
+      rowsFrom(text),
+      BULLETS,
+      new Set(['story-1', 'story-2']),
+    );
     expect(result).toEqual({ ok: true });
   });
 
@@ -324,7 +328,7 @@ describe('checkOutcomeCoverage', () => {
 | --- | --- | --- | --- | --- |
 | outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
 `;
-    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS, new Set(['story-1', 'story-2']));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
@@ -340,7 +344,39 @@ describe('checkOutcomeCoverage', () => {
 | outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
 | outcome | outcome-2 | story-2 | gap | "Support returns." |
 `;
-    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS);
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS, new Set(['story-1', 'story-2']));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('outcome-gap');
+    expect(result.gapId).toBe('outcome-2');
+    expect(result.bullet).toBe('- Support returns.');
+  });
+
+  it('reports a gap outcome-<n> when the row has an affirmative verdict but a blank Cited-Ids cell', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+| outcome | outcome-2 |  | covered | "Support returns." |
+`;
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS, new Set(['story-1', 'story-2']));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('outcome-gap');
+    expect(result.gapId).toBe('outcome-2');
+    expect(result.bullet).toBe('- Support returns.');
+  });
+
+  it('reports a gap outcome-<n> when the row cites only a non-story id despite an affirmative verdict', () => {
+    const text = `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "Ship widgets reliably." |
+| outcome | outcome-2 | task-1 | covered | "Support returns." |
+`;
+    const result = checkOutcomeCoverage(rowsFrom(text), BULLETS, new Set(['story-1', 'story-2']));
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
