@@ -11,18 +11,31 @@
 /** A parsed GitHub `owner/repo#N` reference. */
 export type GithubWorkRef = { kind: 'github'; repo: string; number: string };
 
+/** A parsed Jira `PROJ-123` reference. */
+export type JiraWorkRef = { kind: 'jira'; key: string };
+
 /** Discriminated union over all supported work-ref grammars. */
-export type WorkRef = GithubWorkRef;
+export type WorkRef = GithubWorkRef | JiraWorkRef;
+
+/** Grammar for a Jira issue key: an uppercase project prefix, then `-`, then digits. */
+export const JIRA_KEY_GRAMMAR = /^[A-Z][A-Z0-9]+-\d+$/;
 
 /**
  * Parse a sourceRef string into a `WorkRef`, or null if it matches no known
- * grammar. Currently recognizes only the GitHub `owner/repo#N` grammar.
+ * grammar. Recognizes the GitHub `owner/repo#N` grammar and the Jira
+ * `PROJ-123` grammar. Jira is only checked when the ref contains no `#`,
+ * keeping the two grammars disjoint.
  */
 export function parseWorkRef(sourceRef: string | undefined | null): WorkRef | null {
   if (!sourceRef) return null;
 
   const hash = sourceRef.lastIndexOf('#');
-  if (hash <= 0 || hash === sourceRef.length - 1) return null;
+  if (hash <= 0 || hash === sourceRef.length - 1) {
+    if (!sourceRef.includes('#') && JIRA_KEY_GRAMMAR.test(sourceRef)) {
+      return { kind: 'jira', key: sourceRef };
+    }
+    return null;
+  }
   const repo = sourceRef.slice(0, hash);
   const number = sourceRef.slice(hash + 1);
   if (!/^\d+$/.test(number)) return null;
