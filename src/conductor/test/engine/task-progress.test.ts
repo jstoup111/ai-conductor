@@ -152,7 +152,7 @@ describe('task-progress', () => {
     });
 
     it('trailers-only: pins countResolvedTasks to 2 when rows are all pending but 2 have Task: trailers', async () => {
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
@@ -183,7 +183,7 @@ describe('task-progress', () => {
     });
 
     it('mixed rows + trailers + alias: pins countResolvedTasks to 4 (union of completed/skipped rows and trailer/alias matches)', async () => {
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
@@ -233,7 +233,7 @@ describe('task-progress', () => {
 
   describe('resolveTaskIds', () => {
     it('resolves completed rows, skipped rows, trailer-only ids, and canonical alias trailers', async () => {
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
@@ -269,7 +269,7 @@ describe('task-progress', () => {
     });
 
     it('ignores a phantom Task trailer whose id is not in planIds', async () => {
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
