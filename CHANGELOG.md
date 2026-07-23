@@ -20,6 +20,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- `examples/` — runnable example script per `conduct-ts` flow at S/M/L tiers.
 - The engineer **`land` gate now enforces Mermaid rendering** (#810). A broken diagram used to ship
   because the render check was skill prose (run at the agent's discretion) and fail-opened when
   `mmdc` was absent. `landSpec` now re-runs the render check over this idea's authored
