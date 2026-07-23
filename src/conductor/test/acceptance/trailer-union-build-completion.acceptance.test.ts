@@ -194,21 +194,48 @@ describe('#859 trailer-union build completion (real Conductor.run() loop)', () =
     expect(stepOrder.indexOf('build_review')).toBeGreaterThan(stepOrder.indexOf('build'));
   });
 
-  it('halt marker present alongside full trailer evidence → build does NOT exit; marker precedence is unchanged', async () => {
+  it('halt marker present alongside INCOMPLETE trailer evidence → build does NOT exit; marker precedence is unchanged', async () => {
+    // NOTE: this scenario deliberately leaves task 5 unresolved (no row, no
+    // trailer commit), matching the established pattern in
+    // conductor.test.ts's 'interactive mode with halt marker → runInteractive
+    // called, remediate NOT dispatched' test. `clearHaltMarker` runs
+    // unconditionally as soon as a stall is detected — including
+    // `halt_marker` — BEFORE the interactive/daemon branch is even
+    // evaluated (conductor.ts's build-stall handling block; pre-existing,
+    // unchanged by #859/T4-T9). So by the time `runInteractive` returns and
+    // the loop rechecks `checkStepCompletion`, the marker is already gone —
+    // if every task also happened to be fully evidenced (e.g. via
+    // trailer-union resolution), the recheck would legitimately succeed and
+    // the loop would proceed to `build_review`, per the documented
+    // interactive-recheck design in skills/pipeline/SKILL.md ("Re-checks the
+    // completion predicate once the REPL exits... Either succeeds... or
+    // falls into the normal recovery menu"). That is correct, unchanged
+    // product behavior — not a trailer-union regression — so it must not be
+    // asserted against here. What #859's story actually promises
+    // ("halt_marker stall routing fires exactly as today") is that the
+    // *initial* stall is classified/routed as `halt_marker` (not silently
+    // absorbed by trailer-union resolution) and the REPL hand-off happens —
+    // both asserted below. To also prove the loop still won't fabricate
+    // `build_review` out of a halt when the underlying evidence remains
+    // genuinely incomplete after the REPL, task 5 is left unresolved.
     await writePlanAndStatus(dir, 5, []); // zero completed rows
-    for (let i = 1; i <= 5; i++) {
-      await commitWithTaskTrailer(dir, String(i), i); // full trailer evidence
+    for (let i = 1; i <= 4; i++) {
+      await commitWithTaskTrailer(dir, String(i), i); // tasks 1-4 trailer-resolved
     }
+    // task 5 has no row and no trailer commit — evidence stays incomplete
+    // even after the halt marker is cleared and the REPL exits.
     await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'scope mismatch');
 
     const { conductor, runner, stallEvents } = makeConductor(3);
     await conductor.run();
 
-    // The halt marker must win even though every task is trailer-resolved —
-    // an explicit halt is never overridden by evidence.
+    // The initial stall is still classified/routed as halt_marker, and the
+    // REPL hand-off still happens — that routing is unchanged by #859.
     expect(stallEvents.some((e) => e.reason === 'halt_marker')).toBe(true);
-    expect(stepOrder).not.toContain('build_review');
     expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    // With task 5 genuinely unresolved, the post-REPL recheck still fails,
+    // so the loop must not fabricate a path to build_review.
+    expect(stepOrder).not.toContain('build_review');
   });
 
   it('genuine stall (no trailers, no completed rows, count pinned across attempts) still halts no_task_progress; build_review is never reached', async () => {
