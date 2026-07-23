@@ -900,6 +900,24 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
+    // Task 4: base-freshness telemetry. Guarded so a malformed/missing field
+    // on `inputs` can never throw and never block/fail the build_review
+    // step — this is pure fire-and-forget telemetry the conductor turns into
+    // a `build_review_base` event after this runner returns.
+    let baseFreshness: StepRunResult['baseFreshness'];
+    try {
+      baseFreshness = {
+        mergeBase: inputs.mergeBase,
+        trackingRefSha: inputs.trackingRefSha,
+        remoteHeadSha: inputs.remoteHeadSha,
+        fresh: inputs.fresh,
+      };
+    } catch {
+      baseFreshness = undefined;
+    }
+    const withBaseFreshness = (r: StepRunResult): StepRunResult =>
+      baseFreshness ? { ...r, baseFreshness } : r;
+
     // Per-task "work happened at all" floor (#781): purely additive,
     // non-blocking telemetry computed alongside the grader dispatch. It
     // NEVER feeds buildGraderPrompt/inputs, never changes `success`, and
@@ -976,22 +994,22 @@ export class DefaultStepRunner implements StepRunner {
     this.callCount++;
 
     if (result.authFailure) {
-      return { success: false, output: result.output, authFailure: true };
+      return withBaseFreshness({ success: false, output: result.output, authFailure: true });
     }
     if (result.rateLimited) {
-      return {
+      return withBaseFreshness({
         success: false,
         output: result.output,
         rateLimited: true,
         waitSeconds: result.waitSeconds ?? 300,
-      };
+      });
     }
     if (result.sessionExpired) {
-      return { success: false, output: result.output, sessionExpired: true };
+      return withBaseFreshness({ success: false, output: result.output, sessionExpired: true });
     }
     if (result.success) {
       await this.stampBuildReviewVerdict();
-      return { success: true, output: prependFloorAdvisory(result.output) };
+      return withBaseFreshness({ success: true, output: prependFloorAdvisory(result.output) });
     }
 
     // Full-ladder exhaustion: every attempted model reported unavailable.
@@ -999,11 +1017,11 @@ export class DefaultStepRunner implements StepRunner {
     // #814: this is a grader-DISPATCH failure (no model could run the grader),
     // not a returned FAIL — flag it so the conductor backs off and names it.
     if (result.modelUnavailable && attemptedModels.length > 1) {
-      return {
+      return withBaseFreshness({
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
         graderDispatchFailed: true,
-      };
+      });
     }
 
     // #814: generic grader-dispatch failure — the grader session ended without
@@ -1017,7 +1035,7 @@ export class DefaultStepRunner implements StepRunner {
       typeof result.output === 'string' && result.output.trim().length > 0
         ? result.output
         : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
-    return { success: false, output: graderOutput, graderDispatchFailed: true };
+    return withBaseFreshness({ success: false, output: graderOutput, graderDispatchFailed: true });
   }
 
   /**

@@ -336,6 +336,19 @@ export interface StepRunResult {
    * used for this invocation (post model-availability/ladder resolution).
    */
   model?: string;
+  /**
+   * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
+   * freshness evidence from `assembleBuildReviewInputs`, set on every
+   * `runBuildReview` return path once inputs were successfully assembled.
+   * Pure telemetry — the conductor emits a `build_review_base` event from
+   * it and never lets it affect step outcome.
+   */
+  baseFreshness?: {
+    mergeBase: string;
+    trackingRefSha: string | null;
+    remoteHeadSha: string | null;
+    fresh: boolean;
+  };
 }
 
 /**
@@ -3284,6 +3297,26 @@ export class Conductor {
             // just below (it needs a live attemptStartedAt to gate verdict
             // freshness) — cleared unconditionally right after that check
             // completes, further down.
+          }
+
+          // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
+          // base-freshness telemetry. Fire-and-forget: emitted whenever
+          // runBuildReview successfully assembled grader inputs (any outcome
+          // after that point — success, dispatch failure, rate limit, etc.
+          // all carry `baseFreshness`), guarded so telemetry can never fail
+          // or block the build_review step itself.
+          if (step.name === 'build_review' && result.baseFreshness) {
+            try {
+              await emitTracked({
+                type: 'build_review_base',
+                mergeBase: result.baseFreshness.mergeBase,
+                trackingRefSha: result.baseFreshness.trackingRefSha,
+                remoteHeadSha: result.baseFreshness.remoteHeadSha,
+                fresh: result.baseFreshness.fresh,
+              });
+            } catch {
+              // Never block/fail build_review over telemetry emission.
+            }
           }
 
           // Task 3 (#671): unattributed-dispatch loud signal. Fires at the

@@ -1818,6 +1818,16 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
+    case 'build_review_base': {
+      // Task 4: dim one-liner summarizing base-freshness evidence for this
+      // grading — routine telemetry, not a warning, so it stays dim
+      // regardless of `fresh` (mirrors session_reset's styling).
+      const base = event.mergeBase.slice(0, 12);
+      log(
+        `${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}`)}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —

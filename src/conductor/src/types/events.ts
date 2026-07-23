@@ -82,6 +82,22 @@ export type ConductorEvent =
       mtimeMs?: number;
       floorMs?: number;
     }
+  | {
+      /**
+       * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
+       * base-freshness telemetry emitted once per build_review grading,
+       * right after `assembleBuildReviewInputs` resolves — regardless of
+       * how the grading itself turns out. Lets operators see whether the
+       * diff was graded against a freshly-fetched remote head (`fresh:
+       * true`) or a stale tracking ref / no-remote local fallback
+       * (`fresh: false`). Pure telemetry: never affects step outcome.
+       */
+      type: 'build_review_base';
+      mergeBase: string;
+      trackingRefSha: string | null;
+      remoteHeadSha: string | null;
+      fresh: boolean;
+    }
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';

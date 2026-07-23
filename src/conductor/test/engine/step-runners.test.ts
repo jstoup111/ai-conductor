@@ -1347,6 +1347,69 @@ TIER: M`,
       expect(opts.prompt).not.toContain('Wrong plan.');
     });
 
+    // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
+    // freshness telemetry, carried on StepRunResult so the conductor can
+    // emit a `build_review_base` event without step-runners.ts owning event
+    // emission itself.
+    it('attaches baseFreshness from assembleBuildReviewInputs on success', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(result.baseFreshness).toEqual({
+        mergeBase: 'abc123',
+        trackingRefSha: null,
+        remoteHeadSha: null,
+        fresh: false,
+      });
+    });
+
+    it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'no models available',
+        exitCode: 1,
+        modelUnavailable: true,
+      });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+      expect(result.baseFreshness).toEqual({
+        mergeBase: 'abc123',
+        trackingRefSha: null,
+        remoteHeadSha: null,
+        fresh: false,
+      });
+    });
+
+    it('does not set baseFreshness when input assembly itself fails', async () => {
+      const invoke = vi.fn();
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const failingGit = async () => ({ exitCode: 1, stdout: '', stderr: 'no merge base' });
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: failingGit,
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+      expect(result.baseFreshness).toBeUndefined();
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
     it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: false,

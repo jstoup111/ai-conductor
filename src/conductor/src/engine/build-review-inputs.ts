@@ -16,6 +16,9 @@ export interface BuildReviewInputs {
   diff: string;
   /** Raw contents of the plan file at `planPath`. */
   planBody: string;
+  /** The resolved `git merge-base <baseRef> HEAD` sha the diff was computed
+   * from — the exact commit the grader's diff is anchored to. */
+  mergeBase: string;
   /** The ref the diff's merge-base was computed against (`origin/<default>`
    * or a local branch on fallback). */
   baseRef: string;
@@ -90,6 +93,7 @@ export async function assembleBuildReviewInputs(
   return {
     diff: diffResult.stdout,
     planBody,
+    mergeBase: mergeBaseSha,
     baseRef,
     baseKind: resolution.kind,
     trackingRefSha: resolution.trackingRefSha,
