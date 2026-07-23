@@ -25,6 +25,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   every consumer project, where those files don't exist and "in this repo" is ambiguous; the
   rule is now generic ("when the project keeps dedicated guides beyond the README, update them
   too"). The harness-repo-specific pointers already live in this repo's `CLAUDE.md` (#842).
+- Escalation-ladder docs (`HARNESS.md`, `src/conductor/README.md`) said attempt 3+ bumps the
+  model one tier; corrected to the implemented cumulative `(attempt − 2)`-tier formula with a
+  cost note for retry budgets deeper than 3 (#713).
 
 ### Added
 
