@@ -81,6 +81,9 @@ flowchart TB
 
 ## Quick Start
 
+See [`examples/README.md`](examples/README.md) for runnable, end-to-end walkthroughs
+(inline/interactive/daemon/engineer/intake-loop scenarios at S/M/L tiers).
+
 ```bash
 cd your-project/
 claude
