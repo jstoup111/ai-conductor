@@ -8,6 +8,7 @@
 //   'unknown'           — gh throws, stdout unparseable, or state unrecognized
 
 import { describe, it, expect } from 'vitest';
+import type { GuardLedger } from '../../../../src/engine/engineer/intake/delivery-guard.js';
 
 async function loadDeliveryGuard() {
   return import('../../../../src/engine/engineer/intake/delivery-guard.js') as Promise<any>;
@@ -1017,6 +1018,236 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
   });
 });
 
+// ─── Task 4: GuardLedger exposes forget() ────────────────────────────────────
+
+describe('Task 4: GuardLedger interface — exposes forget()', () => {
+  it('a ledger stub implementing forget(source, sourceRef) satisfies the GuardLedger contract used by the guard constructor', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { runner: gh } = makeFakeGh('');
+
+    const forgetCalls: Array<[string, string]> = [];
+    // Type-level assertion: GuardLedger must declare forget(source, sourceRef).
+    // If the interface doesn't declare it, this fails to compile (RED).
+    const ledgerWithForget: GuardLedger = {
+      async get() {
+        return undefined;
+      },
+      async record() {},
+      async transition() {},
+      async reopen() {},
+      async forget(source: string, sourceRef: string) {
+        forgetCalls.push([source, sourceRef]);
+      },
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledgerWithForget, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    // forget() is callable through the ledger the guard was constructed with
+    await ledgerWithForget.forget('test-source', 'idea-1');
+    expect(forgetCalls).toEqual([['test-source', 'idea-1']]);
+  });
+});
+
+// ─── Task 5: claim guard probes issue state for github-issues envelopes (open → deliver) ────
+
+describe('Task 5: createDeliveryGuardedQueue — probes issue state for github-issues, open delivers', () => {
+  it('pending github-issues candidate with OPEN issue → delivered, getIssueState probe reached (gh invoked)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const { runner: gh, calls } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[0].args).toContain('--repo');
+    expect(calls[0].args[calls[0].args.indexOf('--repo') + 1]).toBe('owner/repo');
+  });
+});
+
+// ─── Task 6: claim guard drops closed issue and continues scan ──────────────
+
+describe('Task 6: createDeliveryGuardedQueue — closed issue dropped, scan continues', () => {
+  it('closed github-issues candidate followed by open candidate → closed forgotten+acked, open candidate returned', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const openCandidate = makeEnvelope('idea-1', 'test-source');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([
+      closedCandidate,
+      openCandidate,
+    ]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#42') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(openCandidate);
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#42']]);
+    expect(releasedEnvelopes).toContain(closedCandidate);
+    expect(releasedEnvelopes).not.toContain(openCandidate);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
+// ─── Task 7: closed last/only candidate returns null; ENOENT-on-ack is benign ──
+
+describe('Task 7: createDeliveryGuardedQueue — closed last candidate returns null; ack ENOENT benign', () => {
+  it('single closed github-issues candidate → forgotten+dropped, claim() returns null (empty queue)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#99', 'github-issues');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([closedCandidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#99') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toBeNull();
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#99']]);
+    expect(releasedEnvelopes).toContain(closedCandidate);
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('single closed candidate, queue.ack throws ENOENT → swallowed, claim() still returns null', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#100', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([closedCandidate]);
+    const enoentError = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+    enoentError.code = 'ENOENT';
+    queue.ack = async () => {
+      throw enoentError;
+    };
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#100') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    let threw = false;
+    let claimed: any;
+    try {
+      const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+      claimed = await guarded.claim();
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(claimed).toBeNull();
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#100']]);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
+// ─── Task 8: claim guard fails safe on unknown/throwing issue state ─────────
+
+describe('Task 8: createDeliveryGuardedQueue — fails safe on unknown/throwing issue state', () => {
+  it('getIssueState resolves unknown (unparseable gh output) → candidate delivered, no forget call, ledger untouched', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    // Unparseable stdout → getIssueState resolves 'unknown', not 'closed'.
+    const { runner: gh } = makeFakeGh('not valid json');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(forgetCalls).toHaveLength(0);
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('gh runner throws during issue-state probe → candidate delivered, no forget call, no crash', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    // gh throws unconditionally on every call (including the issue-state probe).
+    const gh = async () => {
+      throw new Error('gh command failed');
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+
+    let threw = false;
+    let claimed: any;
+    try {
+      claimed = await guarded.claim();
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(claimed).toEqual(candidate);
+    expect(forgetCalls).toHaveLength(0);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
 // ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
 
 describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {
@@ -1191,5 +1422,41 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
     // Third claim should return null (queue exhausted)
     const third = await guarded2.claim();
     expect(third).toBeNull();
+  });
+});
+
+// ─── Task 9: issue-state probe scoped to parseable github-issues envelopes ────
+
+describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable github-issues envelopes', () => {
+  it('non-github-issues candidate → delivered, getIssueState probe never invoked (gh not called)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1', 'test-source');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh, calls } = makeFakeGh('OPEN');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('github-issues candidate with unparseable sourceRef → delivered, probe skipped, diagnostic logged', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('not-a-valid-ref', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh, calls } = makeFakeGh('OPEN');
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('not-a-valid-ref'))).toBe(true);
   });
 });

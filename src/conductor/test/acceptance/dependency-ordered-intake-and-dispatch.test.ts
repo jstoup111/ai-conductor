@@ -860,16 +860,18 @@ describe('Flow C2 — live path through the engineer CLI claim command', () => {
     expect(stillClaimable?.sourceRef).toBe('acme/app#1');
     expect((await ledger.get('github-issues', 'acme/app#1'))?.status).toBe('pending');
 
-    // No branch switches — the ONLY gh traffic on the claim path is the
-    // dependency lookup (`api .../dependencies/blocked_by`); no `checkout`,
-    // `branch`, or `switch` call is ever made.
+    // No branch switches — the claim path's `gh` traffic is limited to the
+    // dependency lookup (`api .../dependencies/blocked_by`) and the closed-issue
+    // guard's state probe (`issue view <n> --json state -q .state`); no
+    // `checkout`, `branch`, or `switch` call is ever made.
     expect(gh.calls.length).toBeGreaterThan(0);
     for (const call of gh.calls) {
       expect(call).not.toContain('checkout');
       expect(call).not.toContain('switch');
       expect(call[0]).not.toBe('branch');
-      expect(call[0]).toBe('api');
+      expect(['api', 'issue']).toContain(call[0]);
     }
+    expect(gh.calls.some((call) => call[0] === 'issue')).toBe(true);
   });
 
   it('all-queued-ideas-blocked → the CLI emits the all-blocked shape with per-entry blockers, distinct from the empty-queue shape', async () => {

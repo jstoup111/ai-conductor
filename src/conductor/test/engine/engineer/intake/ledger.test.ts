@@ -53,3 +53,22 @@ describe('transition() writebackPending marker (#290)', () => {
     expect(entry?.prUrl).toBe('https://x/pr/1');
   });
 });
+
+describe('list() enumerator', () => {
+  it('returns all LedgerEntry records regardless of status', async () => {
+    const l = createLedger(join(dir, 'ledger.json'));
+    await l.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await l.record({ source: 'github-issues', sourceRef: 'o/a#2' });
+    await l.transition('github-issues', 'o/a#2', 'done');
+    await l.record({ source: 'github-issues', sourceRef: 'o/a#3' });
+    await l.transition('github-issues', 'o/a#3', 'claimed');
+
+    const entries = await l.list();
+
+    expect(entries).toHaveLength(3);
+    const statuses = entries.map((e) => e.status).sort();
+    expect(statuses).toEqual(['claimed', 'done', 'pending']);
+    const refs = entries.map((e) => e.sourceRef).sort();
+    expect(refs).toEqual(['o/a#1', 'o/a#2', 'o/a#3']);
+  });
+});

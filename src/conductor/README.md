@@ -3310,6 +3310,14 @@ After `engineer resolve` marks an entry delivered, a subsequent `engineer claim`
 
 **Modules:** `engine/engineer/resolve.ts` (resolve command dispatch), `intake/ledger.ts` (ledger transitions).
 
+#### Closed-issue guard (engineer claim) and brain reconciliation sweep
+
+`engineer claim` never hands out a closed GitHub issue, and the brain intake sweep independently reconciles any that slip through between polls:
+
+- **Claim-time guard.** Before delivering a `github-issues`-sourced candidate with a pending/unseen ledger entry, the delivery guard (`engine/engineer/intake/delivery-guard.ts`) probes the backing issue's state via `gh issue view --json state`. If the issue is `closed`, the ledger entry is forgotten, the queue candidate is dropped (acked, tolerating a benign already-deleted race), and the guard continues scanning for the next candidate — the closed issue is never served to the session. Open, null (unparseable sourceRef), or a probe throw all fall through to normal delivery — **fail-safe**: a `gh` failure never blocks a legitimate claim.
+- **Brain reconciliation sweep (`reconcileClosedIssues`, `engine/engineer/intake/reconcile-closed-issues.ts`).** Runs on every intake loop tick (`intake/intake-loop.ts`), scanning `pending`, `github-issues`-sourced ledger entries. For each whose backing issue has since closed, it forgets the ledger entry and drops the matching inbox envelope — so a closed issue can't be claimed later even if it was queued before the claim-time guard could catch it. Supports `dryRun` (reports what would be forgotten without mutating), and isolates each entry's failure with a per-entry try/catch so one bad probe doesn't abort the rest of the sweep. Summary shape: `{ scanned, forgotten, errors }`.
+- **Reopen re-ingestion.** A forgotten (closed) issue is not permanently excluded — if the issue is later reopened, the existing intake poll re-ingests it normally via the ledger's `known` check, since `forget` clears the entry rather than blocklisting the sourceRef.
+
 ### Priority scheduling for daemon backlog ordering
 
 The daemon can reorder eligible features by GitHub issue priority labels, honoring

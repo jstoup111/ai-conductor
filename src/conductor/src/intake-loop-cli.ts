@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { runIntakeLoop, type IntakeLoopDeps } from './engine/engineer/intake/intake-loop.js';
 import { createNotifier } from './engine/engineer/intake/notifier.js';
+import { reconcileClosedIssues, type GetIssueState } from './engine/engineer/intake/reconcile-closed-issues.js';
 import { buildIntake, makeProductionGh } from './engine/engineer-cli.js';
 import { resolveEngineerDir } from './engine/engineer-store.js';
 import { sendNotification } from './ui/notifications.js';
@@ -84,6 +85,8 @@ export interface DispatchIntakeLoopOpts {
   log?: (msg: string) => void;
   /** Injected for tests: overrides `console.error`. */
   printErr?: (msg: string) => void;
+  /** Injected for tests: overrides the real `gh` CLI runner used for polling and issue-state probes. */
+  gh?: ReturnType<typeof makeProductionGh>;
   engineerDir?: string;
   registryPath?: string;
 }
@@ -128,13 +131,31 @@ export async function dispatchIntakeLoop(
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? (() => new Date());
   const engineerDir = opts.engineerDir ?? resolveEngineerDir({});
+  const gh = opts.gh ?? makeProductionGh();
 
-  const { queue, adapter } = build({
+  const { ledger, queue, adapter } = build({
     engineerDir,
     registryPath: opts.registryPath,
-    gh: makeProductionGh(),
+    gh,
     printErr,
   });
+
+  // Brain sweep (Task 16): reconcile the intake ledger against closed GitHub
+  // issues so a closed issue can't be claimed again. Reuses the same `gh`
+  // runner already wired for the poll adapter — `gh issue view <n> --repo
+  // <repo> --json state -q .state`, modeled on halt-issues' getIssueState.
+  const getIssueState: GetIssueState = async (repo, issue) => {
+    try {
+      const result = await gh(['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'], {
+        cwd: engineerDir,
+      });
+      const state = result.stdout.trim().toLowerCase();
+      return state === 'open' || state === 'closed' ? state : null;
+    } catch {
+      return null;
+    }
+  };
+  const reconcile = () => reconcileClosedIssues({ ledger, queue, getIssueState }, { dryRun: false });
 
   const statusPath = join(engineerDir, 'intake-status.json');
   const notifier = makeNotifier({
@@ -161,6 +182,7 @@ export async function dispatchIntakeLoop(
     sleep,
     now,
     log,
+    reconcile,
   };
 
   await loop(deps, { intervalMs: cmd.intervalMs, once: cmd.once });

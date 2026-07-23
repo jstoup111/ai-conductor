@@ -63,6 +63,8 @@ export interface Ledger {
   ): Promise<void>;
   get(source: string, sourceRef: string): Promise<LedgerEntry | undefined>;
   forget(source: string, sourceRef: string): Promise<void>;
+  /** Enumerate all entries in the ledger, regardless of status. */
+  list(): Promise<LedgerEntry[]>;
   /**
    * Make a previously-`done` entry re-eligible: reset status to 'pending' and
    * increment `attempts` (the churn counter). Used by github-issues re-eligibility
@@ -174,6 +176,11 @@ export function createLedger(path: string): Ledger {
         delete store[key];
         await saveStore(path, store);
       }
+    },
+
+    async list(): Promise<LedgerEntry[]> {
+      const store = await loadStore(path);
+      return Object.values(store);
     },
 
     async reopen(source: string, sourceRef: string): Promise<void> {

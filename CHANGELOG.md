@@ -21,6 +21,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Added
 
 - `examples/` — runnable example script per `conduct-ts` flow at S/M/L tiers.
+- **`engineer claim` never hands out a closed GitHub issue, and the brain intake sweep
+  reconciles closed issues out of the ledger/inbox.** On claim, `github-issues` candidates
+  now get an issue-state probe (`gh issue view --json state`) before delivery; a `closed`
+  result forgets the ledger entry and drops the queue candidate, then continues scanning for
+  the next one — open/null/probe-failure candidates deliver normally (fail-safe on unknown
+  state). Separately, `reconcileClosedIssues` runs on every intake loop tick, scanning
+  `pending` github-issues ledger entries and forgetting any whose backing issue has since
+  closed (dropping the matching inbox envelope too); supports `dryRun` and isolates one
+  entry's failure from the rest of the batch. A closed-and-forgotten issue still re-ingests
+  automatically if reopened, via the existing poll + ledger `known` check.
 - The engineer **`land` gate now enforces Mermaid rendering** (#810). A broken diagram used to ship
   because the render check was skill prose (run at the agent's discretion) and fail-opened when
   `mmdc` was absent. `landSpec` now re-runs the render check over this idea's authored
