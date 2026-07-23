@@ -14,11 +14,7 @@
 import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
 import { restAddLabelArgs } from '../../pr-labels.js';
 import { parseSourceRef } from '../issue-ref.js';
-
-export type FileIssueGhRunner = (
-  args: string[],
-  opts: { cwd: string },
-) => Promise<{ stdout: string }>;
+import type { TrackerClient } from '../../tracker-client.js';
 
 export interface FileIntakeIssueOpts {
   title: string;
@@ -31,7 +27,8 @@ export interface FileIntakeIssueOpts {
 }
 
 export interface FileIntakeIssueDeps {
-  gh: FileIssueGhRunner;
+  tracker: TrackerClient;
+  gh: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
   cwd: string;
   prompt?: (question: string) => Promise<string>;
 }
@@ -132,10 +129,10 @@ export async function fileIntakeIssue(
   }
 
   // ── Create the issue ─────────────────────────────────────────────────────
-  const createArgs = ['issue', 'create', '--title', opts.title, '--body', opts.body];
-  if (opts.repo) createArgs.push('--repo', opts.repo);
-  const { stdout } = await deps.gh(createArgs, { cwd: deps.cwd });
-  const issueUrl = stdout.trim();
+  const issueUrl = await deps.tracker.createIssue(
+    { title: opts.title, body: opts.body, repo: opts.repo },
+    deps.cwd,
+  );
   const ref = issueUrlToRef(issueUrl);
 
   const result: FileIntakeIssueResult = {
