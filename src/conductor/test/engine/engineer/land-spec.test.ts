@@ -337,6 +337,31 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(marker).not.toContain('Source-Ref:');
   });
 
+  it('Story 4 (generalize-source-ref): landSpec with a Jira sourceRef commits the marker with Source-Ref: PROJ-123 verbatim', async () => {
+    // Multi-step acceptance flow for a Jira-originated idea: landSpec writes
+    // the intake marker, commits it, and the committed content round-trips the
+    // Jira key losslessly — today writeIntakeMarker validates via the
+    // GitHub-only parseSourceRef (issue-ref.ts), so a Jira ref is treated as
+    // "no usable sourceRef" and the Source-Ref: line is silently omitted. This
+    // acceptance test is RED until intake-marker.ts switches its validity
+    // check to parseWorkRef (Task 7 of the implementation plan).
+    const worktree = await seedValidWorktree();
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    const result = await landSpec(target(), 'dep bump', worktree, 'PROJ-123', {
+      ownerConfig: {},
+      gh,
+    });
+
+    const { stdout: marker } = await execFile(
+      'git',
+      ['show', `${result.branch}:.docs/intake/dep-bump.md`],
+      { cwd: worktree },
+    );
+    expect(marker).toContain('Source-Ref: PROJ-123');
+    expect(marker).toContain('Owner: bob');
+  });
+
   it('Task 7 (negative): multi-plan worktree keys the marker to the NEWEST resolved plan only', async () => {
     // Two plans exist under .docs/plans/: an older one that must NOT win, and
     // a newer one (backdated the older, not the newer) that findNewestFile()
