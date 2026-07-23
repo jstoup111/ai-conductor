@@ -188,9 +188,13 @@ skills declare `model: opus` in their SKILL.md frontmatter).
 > it deliberately raises capability so the re-run changes the odds. On a step's failed
 > attempt the loop escalates from the resolved base `(model, effort)`, indexed by the
 > 1-based attempt: **attempt 1** runs the base; **attempt 2** bumps effort one level
-> (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model one
-> tier up the capability ladder (`haiku→sonnet→opus→fable`). Bumps are capped — an effort
-> already at `max` or a model already at `fable` is a no-op rung, never an error. The
+> (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model
+> **(attempt − 2) tiers** up the capability ladder (`haiku→sonnet→opus→fable`) —
+> attempt 3 is one tier, attempt 4 two tiers (e.g. a base `sonnet` reaches `fable`),
+> capped at `fable`. Bumps are capped — an effort
+> already at `max` or a model already at `fable` is a no-op rung, never an error. A
+> retry budget deeper than 3 authorizes one further tier per extra attempt, so deep
+> budgets escalate to premium models. The
 > model bump expresses *intent* only; it still routes through the #186 availability ladder
 > above, which substitutes a live model if the escalated tier is dead (escalation ascends
 > for upgrade-on-retry; availability descends for substitute-on-dead). Because escalation
