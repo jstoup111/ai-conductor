@@ -90,6 +90,12 @@ export interface TrackerClient {
   upsertIssueBody(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
   /** `gh issue comment <ref> --body <body> -R <repo>` — comment on an issue in a specific repo. */
   upsertIssueComment(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
+  /** `gh pr view <url> --json state,mergedAt` — PR state + merge timestamp for reopen checks. */
+  viewPullRequest(url: string, cwd: string): Promise<{ state?: string; mergedAt?: string | null }>;
+  /** `gh label create <name> -R <repo>` — create a label (idempotent; caller swallows "already exists"). */
+  createLabel(repo: string, name: string, cwd: string): Promise<void>;
+  /** `gh api --method DELETE repos/<repo>/issues/<number>/labels/<name>` — remove a label via REST. */
+  removeIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
 }
 
 /** Error thrown when a `GhRunner` invocation rejects; carries argv/stderr/exit-code and, if
@@ -253,6 +259,25 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
 
     async upsertIssueComment(repo, issueRef, body, cwd) {
       await runOrThrow(runner, ['issue', 'comment', issueRef, '--body', body, '-R', repo], { cwd });
+    },
+
+    async viewPullRequest(url, cwd) {
+      const { stdout } = await runOrThrow(runner, ['pr', 'view', url, '--json', 'state,mergedAt'], {
+        cwd,
+      });
+      return parseJsonOrThrow('viewPullRequest', stdout || '{}');
+    },
+
+    async createLabel(repo, name, cwd) {
+      await runOrThrow(runner, ['label', 'create', name, '-R', repo], { cwd });
+    },
+
+    async removeIssueLabel(repo, number, label, cwd) {
+      await runOrThrow(
+        runner,
+        ['api', '--method', 'DELETE', `repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`],
+        { cwd },
+      );
     },
   };
 }

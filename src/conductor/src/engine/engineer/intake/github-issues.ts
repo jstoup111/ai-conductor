@@ -16,7 +16,7 @@ import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } 
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
-import { restAddLabelArgs, restRemoveLabelArgs } from '../../pr-labels.js';
+import { createGithubTrackerClient, type TrackerClient } from '../../tracker-client.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +105,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? (() => randomUUID());
   const log = deps.log ?? (() => {});
+  const tracker: TrackerClient = createGithubTrackerClient(gh);
 
   // Per-instance write-back de-dup: a (sourceRef\0status) that has been posted
   // once in this process is not posted again. Cross-process duplicates cannot
@@ -155,10 +156,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
     let pr: { state?: string; mergedAt?: string | null };
     try {
-      const { stdout } = await gh(['pr', 'view', entry.prUrl, '--json', 'state,mergedAt'], {
-        cwd: repo.path,
-      });
-      pr = JSON.parse(stdout || '{}');
+      pr = await tracker.viewPullRequest(entry.prUrl, repo.path);
     } catch {
       return null; // PR lookup failed → leave the entry unchanged.
     }
@@ -180,9 +178,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     // Strip the handled label so a human sees it is back in flight; non-fatal.
     try {
       const ghRepo = repo.ghRepo ?? repo.name;
-      await gh(restRemoveLabelArgs(ghRepo, String(issue.number), HANDLED_LABEL), {
-        cwd: repo.path,
-      });
+      await tracker.removeIssueLabel(ghRepo, issue.number, HANDLED_LABEL, repo.path);
     } catch {
       // best-effort — a stuck label must not block re-routing.
     }
@@ -213,11 +209,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
         let issues: RawIssue[];
         try {
-          const { stdout } = await gh(
-            ['issue', 'list', '--assignee', '@me', '--state', 'open', '--json', 'number,title,body,labels', '-R', ghRepo],
-            { cwd: repo.path },
-          );
-          issues = JSON.parse(stdout || '[]') as RawIssue[];
+          issues = (await tracker.listAssignedIssues(ghRepo, repo.path)) as RawIssue[];
         } catch (err: unknown) {
           // FR-27: a failing repo (auth/availability) is isolated — log and move on.
           const msg = err instanceof Error ? err.message : String(err);
@@ -298,7 +290,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
         const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
         try {
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+          await tracker.commentOnIssue(repo, Number(number), body, repoPath);
         } catch (err) {
           return fail(err, [commentCmd]);
         }
@@ -306,21 +298,21 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
         const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
         try {
-          await gh(['issue', 'comment', number, '-R', repo, '--body', body], { cwd: repoPath });
+          await tracker.commentOnIssue(repo, Number(number), body, repoPath);
         } catch (err) {
           return fail(err, [commentCmd]);
         }
 
         // Ensure the label exists before applying it (auto-create; ignore "already exists").
         try {
-          await gh(['label', 'create', HANDLED_LABEL, '-R', repo], { cwd: repoPath });
+          await tracker.createLabel(repo, HANDLED_LABEL, repoPath);
         } catch {
           // label already present — not an error.
         }
 
         const labelCmd = `gh api repos/${repo}/issues/${number}/labels -f "labels[]=${HANDLED_LABEL}"`;
         try {
-          await gh(restAddLabelArgs(repo, number, HANDLED_LABEL), { cwd: repoPath });
+          await tracker.addIssueLabel(repo, Number(number), HANDLED_LABEL, repoPath);
         } catch (err) {
           return fail(err, [labelCmd]);
         }

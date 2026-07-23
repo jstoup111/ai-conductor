@@ -295,4 +295,41 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
       { args: ['issue', 'comment', '12', '--body', 'a comment', '-R', 'owner/repo'], opts: { cwd: '.' } },
     ]);
   });
+
+  it('viewPullRequest: matches github-issues.ts maybeReopen `gh pr view <url> --json state,mergedAt`', async () => {
+    const { runner, calls } = fakeRunner('{"state":"CLOSED","mergedAt":null}');
+    const client = createGithubTrackerClient(runner);
+
+    const result = await client.viewPullRequest('https://github.com/o/r/pull/9', '.');
+
+    expect(calls).toEqual([
+      { args: ['pr', 'view', 'https://github.com/o/r/pull/9', '--json', 'state,mergedAt'], opts: { cwd: '.' } },
+    ]);
+    expect(result).toEqual({ state: 'CLOSED', mergedAt: null });
+  });
+
+  it('createLabel: matches github-issues.ts report() `gh label create <name> -R <repo>`', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.createLabel('owner/repo', 'engineer:handled', '.');
+
+    expect(calls).toEqual([
+      { args: ['label', 'create', 'engineer:handled', '-R', 'owner/repo'], opts: { cwd: '.' } },
+    ]);
+  });
+
+  it('removeIssueLabel: matches pr-labels.ts restRemoveLabelArgs REST DELETE shape', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.removeIssueLabel('owner/repo', 42, 'engineer:handled', '.');
+
+    expect(calls).toEqual([
+      {
+        args: ['api', '--method', 'DELETE', 'repos/owner/repo/issues/42/labels/engineer%3Ahandled'],
+        opts: { cwd: '.' },
+      },
+    ]);
+  });
 });
