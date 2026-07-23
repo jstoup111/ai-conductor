@@ -109,6 +109,7 @@ export type EngineerDispatch =
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
+  | { kind: 'unclaim'; sourceRef: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean }
   | { kind: 'reject'; sub: string; flag: string }
@@ -116,7 +117,7 @@ export type EngineerDispatch =
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
+  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'resolve',
   'migrate-issue-deps',
 ] as const;
 
@@ -241,6 +242,18 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     const unk = findUnknownFlag(argv, []);
     if (unk) return { kind: 'reject', sub: 'forget', flag: unk };
     return { kind: 'forget', sourceRef };
+  }
+
+  if (subCmd === 'unclaim') {
+    // `conduct-ts engineer unclaim <sourceRef>` — requeue a claimed ledger entry
+    // back to pending (single-idea recovery, FR-5).
+    const sourceRef = argv[4];
+    if (!sourceRef || sourceRef.startsWith('--')) {
+      return { kind: 'guide' };
+    }
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'unclaim', flag: unk };
+    return { kind: 'unclaim', sourceRef };
   }
 
   if (subCmd === 'resolve') {
@@ -1174,6 +1187,20 @@ export async function dispatchEngineer(
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── unclaim ─────────────────────────────────────────────────────────────
+    // `conduct-ts engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
+    // requeue a claimed ledger entry back to pending, preserving capturedAt.
+    case 'unclaim': {
+      const { sourceRef } = dispatch;
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+
+      const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
+
+      print(JSON.stringify({ kind: 'unclaim', sourceRef, acted }));
       return 0;
     }
 
