@@ -476,7 +476,7 @@ export class ClaudeProvider implements LLMProvider {
     // from stdin when no positional prompt is given, which has no length limit.
     const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
     if (hasPrompt) {
-      args.push('--print', '--output-format', 'text');
+      args.push('--print', '--output-format', 'json');
     }
 
     // Stream stdout/stderr to terminal while also capturing for analysis.
@@ -505,8 +505,10 @@ export class ClaudeProvider implements LLMProvider {
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
 
+    const { output: parsedOutput, tokenUsage } = parseJsonResult(stdout);
+
     // Combine stdout + stderr so the caller has full context
-    const output = stderr ? `${stdout}\n${stderr}`.trim() : stdout;
+    const output = stderr ? `${parsedOutput}\n${stderr}`.trim() : parsedOutput;
 
     // Detect missing binary (exit 127 or ENOENT in stderr)
     if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {
@@ -535,8 +537,6 @@ export class ClaudeProvider implements LLMProvider {
     const authFailure = !rateLimited && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
-    const tokenUsage = parseTokenUsage(stdout);
-
     let deadline: number | undefined;
     let waitSeconds: number | undefined;
     if (rateLimited) {
