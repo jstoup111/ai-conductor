@@ -115,7 +115,8 @@ done. (Interactively, if `mmdc` isn't installed this command skips with exit 0 s
 false-fails on a box without a browser.)
 
 > **This is machinery-enforced, not a reminder.** The engineer **`land` gate** re-runs the render
-> check over every `.docs/**/*.md` and **fail-closed rejects the spec** if any Mermaid block does
+> check over the spec's own authored (new/modified) `.docs/**/*.md` — not the inherited `.docs/`
+> history — and **fail-closed rejects the spec** if any Mermaid block does
 > not render — and, unlike the interactive command, it also rejects when diagrams are present but
 > `mmdc` is unavailable (an unvalidated diagram never lands). So a broken diagram cannot reach a
 > merged spec regardless of whether this step was run by hand. Install `@mermaid-js/mermaid-cli`

@@ -14,7 +14,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - The engineer **`land` gate now enforces Mermaid rendering** (#810). A broken diagram used to ship
   because the render check was skill prose (run at the agent's discretion) and fail-opened when
-  `mmdc` was absent. `landSpec` now re-runs the render check over every `.docs/**/*.md` and
+  `mmdc` was absent. `landSpec` now re-runs the render check over this idea's authored
+  (new/modified) `.docs/**/*.md` — never the inherited `.docs/` history — and
   **fail-closed rejects the spec** if any Mermaid block fails to render — and also rejects when
   diagrams are present but cannot be validated (`mmdc` missing), so an unvalidated diagram never
   lands. The `/architecture-diagram` skill documents that this is machinery-enforced, not a
