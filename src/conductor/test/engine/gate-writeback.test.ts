@@ -498,6 +498,34 @@ describe('gate-writeback (Task 17)', () => {
       expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
     });
 
+    it('NP-9v: a default-verbosity-suppressed no-PR skip never blocks a later real announcement for the same slug', async () => {
+      const warnedSkips = new Set<string>();
+      const logs: string[] = [];
+
+      // Pass 1: no PR yet, verbose: false — skip is fully silent (no log,
+      // no gh call) but the dedup guard only wraps the log call.
+      const { gh: noPrGh, calls: noPrCalls } = fakeGh([]);
+      await announceGatedPr(SPEC, '', { runGh: noPrGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips, verbose: false });
+      expect(noPrCalls.length).toBe(0);
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
+
+      // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
+      // exists. Suppressing the earlier skip's log must never block the
+      // real announce work (label ensure+add, comment upsert).
+      const { gh: realGh, calls: realCalls } = fakeGh([
+        { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
+        { stdout: '' }, // ensureLabel
+        { stdout: '' }, // addLabel
+        { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
+        { stdout: '' }, // create comment
+      ]);
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+
+      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
+      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
+      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+    });
+
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
