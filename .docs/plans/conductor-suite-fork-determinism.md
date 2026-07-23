@@ -147,21 +147,35 @@ projects. Skip this task if Task 8 is already green ×N after hardening.
 - **Dependencies:** Task 6 (and gated by Task 8's result)
 - Est: 15 min (conditional)
 
-### Task 8 — Verify determinism ×N and prove no flake-masking
+### Task 8 — Verify determinism and prove no flake-masking
 
-Run the full `src/conductor` suite N ≥ 10 consecutive times under `pool: forks,
-maxForks: 3`; require N green runs. Then run a deliberately-broken control (invert one
-assertion / insert a genuine hang) and confirm it fails **every** run. Confirm the diff
-introduces no `test.retry`, no widened `testTimeout`, no tolerance threshold. This is the
-Story 6 gate. Also add the `CHANGELOG.md [Unreleased]` entry here (implementation PR).
+*(Amended 2026-07-23 by operator direction: the original "full suite ×N ≥ 10" wall time
+exceeds the build stall window and re-verifies files this feature never touched; the
+targeted form below is equally probative where fork-nondeterminism actually lives.)*
+
+Verification, all under `pool: forks, maxForks: 3`:
+
+1. **Full `src/conductor` suite ×2 consecutive green runs** (end-to-end proof).
+2. **Hardened files ×10 consecutive green runs** — the test files this branch touched
+   (mechanically: `git diff --name-only origin/main...HEAD -- '*.test.ts'`), run as one
+   scoped `vitest run <files>` invocation per round.
+3. Run a deliberately-broken control (invert one assertion / insert a genuine hang) and
+   confirm it fails **both** of 2 consecutive runs; revert the control.
+4. Confirm the diff introduces no `test.retry`, no widened `testTimeout`, no tolerance
+   threshold.
+
+This is the Story 6 gate. Also add the `CHANGELOG.md [Unreleased]` entry here
+(implementation PR). Commit the run tally (counts + green/red per round) in the commit
+message or an evidence note so progress is visible between rounds.
 
 - **Files:** `CHANGELOG.md`; no source changes beyond reverting the throwaway control
 - **Dependencies:** Tasks 2, 3, 4, 6 (and Task 7 if it was triggered)
-- Est: 12 min (plus N-run wall time)
+- Est: 12 min (plus ~2 full-suite runs + 10 scoped runs wall time)
 
 ## Verification (build-exit)
 
-- [ ] Full suite green ×N (N ≥ 10) under `pool: forks, maxForks: 3`.
+- [ ] Full suite green ×2 AND branch-touched test files green ×10, under
+      `pool: forks, maxForks: 3` (per amended Task 8).
 - [ ] Deliberately-broken control fails every run (deterministic red).
 - [ ] No `test.retry`, no timeout inflation, no tolerance threshold anywhere in the diff.
 - [ ] `BuildProgressWatcher` production construction (no `now`) behaves byte-identically.

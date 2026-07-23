@@ -12,6 +12,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `src/conductor`'s test suite is now deterministic under `pool: forks, maxForks: 3`.
+  Object-heavy real-git fixtures previously raced on shared filesystem state across
+  concurrent forked workers; they now build isolated repos via a shared
+  `initTestRepo` helper. `BuildProgressWatcher` gained an injectable clock seam so
+  elapsed-time decisions no longer depend on wall-clock timing that could vary
+  between concurrent forks. Verified: full suite green ×2 and the branch's touched
+  test files green ×10, all under `pool: forks, maxForks: 3`, plus a deliberately-broken
+  control that failed both control runs (#573).
 - HARNESS.md's "Docs track features" rule no longer names the harness repo's own `docs/`
   guides (`docs/configuration.md`, `docs/daemon-operations.md`). HARNESS.md is ingested into
   every consumer project, where those files don't exist and "in this repo" is ambiguous; the

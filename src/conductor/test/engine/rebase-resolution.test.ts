@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
+import { initTestRepo } from '../fixtures/git-repo.js';
 import {
   performRebase,
   makeGitRunner,
@@ -54,9 +55,7 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
   // single feature commit ("feat: change a") to replay.
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
     await writeFile(join(repo, 'a.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
@@ -220,9 +219,7 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
   // A repo whose ONLY conflict is on a .md (docs) file.
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-docs-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
     await writeFile(join(repo, 'notes.md'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
@@ -274,9 +271,7 @@ describe('engine/rebase — runGatedRebaseResolution (shared gate, real git)', (
 
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'gated-resolution-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
     await writeFile(join(repo, 'a.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
@@ -440,9 +435,7 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
 
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'commits-preserved-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
     await writeFile(join(repo, 'a.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
@@ -494,9 +487,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
    */
   it('.docs/ add/add conflict: both versions kept and staged', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-addadd-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init without .docs file
     await writeFile(join(repo, 'README.md'), 'base\n');
@@ -545,9 +536,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
    */
   it('.docs/ rename/rename conflict: both renamed versions kept and staged', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-rename-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: create a .docs file to rename
     await execFile('mkdir', ['-p', join(repo, '.docs')], {});
@@ -593,9 +582,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
    */
   it('.docs/ resolver rejects mixed .docs/ + non-.docs/ conflicts', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-mixed-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init with both files
     await execFile('mkdir', ['-p', join(repo, '.docs')], {});
@@ -643,9 +630,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
    */
   it('.docs/ resolved files are properly committed and in the final tree', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-staging-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init without .docs file
     await writeFile(join(repo, 'README.md'), 'base\n');
@@ -697,9 +682,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
    */
   it('non-conflicted .docs/ files remain unchanged during resolution', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-unchanged-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init with a stable .docs file
     await execFile('mkdir', ['-p', join(repo, '.docs')], {});
@@ -766,9 +749,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
    */
   it('rejects .docs/ edit conflict (content divergence) — not add/add or rename/rename', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-edit-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: create a .docs file with initial content
     await execFile('mkdir', ['-p', join(repo, '.docs')], {});
@@ -812,9 +793,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
    */
   it('rejects when any conflict is outside .docs/', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-outside-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init with a src file
     await execFile('mkdir', ['-p', join(repo, 'src')], {});
@@ -859,9 +838,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
    */
   it('rejects mixed .docs/ add/add + src/ edit — does not partially resolve', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-docs-mixed-addadd-edit-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: init with a src file
     await execFile('mkdir', ['-p', join(repo, '.docs')], {});
@@ -928,9 +905,7 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
    */
   it('CHANGELOG + code conflict: CHANGELOG resolved, code remains', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-code-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: CHANGELOG + code file
     const baseChangelog = `# Changelog
@@ -1008,9 +983,7 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
    */
   it('CHANGELOG-only conflict: fully resolved', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-only-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: CHANGELOG with [Unreleased]
     const baseChangelog = `# Changelog
@@ -1081,9 +1054,7 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
    */
   it('.docs/-only add/add conflict: resolved by keep-both', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-docs-addadd-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: no .docs file
     await writeFile(join(repo, 'README.md'), 'base\n');
@@ -1132,9 +1103,7 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
    */
   it('mixed CHANGELOG + .docs/ conflicts: both resolved', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-mixed-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: CHANGELOG + .docs exists
     const baseChangelog = `# Changelog
@@ -1216,9 +1185,7 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
    */
   it('non-.docs/ non-CHANGELOG conflict: remains unresolved', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-other-'));
-    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
-    await g(['config', 'user.email', 't@t.com']);
-    await g(['config', 'user.name', 'T']);
+    await initTestRepo(repo);
 
     // Base: source file
     await execFile('mkdir', ['-p', join(repo, 'src')], {});

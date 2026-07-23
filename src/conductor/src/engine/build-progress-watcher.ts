@@ -117,6 +117,12 @@ export interface BuildProgressWatcherOptions {
   step: StepName;
   featureSlug?: string;
   config?: Pick<HarnessConfig, 'build_progress'>;
+  /**
+   * Injectable time source for elapsed-time decisions (quiet-episode and
+   * heartbeat checks, `lastChangeAt`/`lastEmitAt` stamps). Defaults to
+   * `Date.now` — omit in production; tests inject a controllable clock.
+   */
+  now?: () => number;
 }
 
 /**
@@ -175,6 +181,7 @@ export class BuildProgressWatcher {
   private readonly step: StepName;
   private readonly featureSlug?: string;
   private readonly resolvedConfig: ResolvedBuildProgressConfig;
+  private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshot: TickSnapshot | null = null;
   private lastEmitAt: number | null = null;
@@ -197,6 +204,7 @@ export class BuildProgressWatcher {
     this.step = opts.step;
     this.featureSlug = opts.featureSlug;
     this.resolvedConfig = resolveBuildProgressConfig(opts.config ?? {});
+    this.now = opts.now ?? Date.now;
   }
 
   /** No-op if already started, or if `build_progress.enabled` is false. */
@@ -301,7 +309,7 @@ export class BuildProgressWatcher {
       // no-op until that happens.
       if (this.lastChangeAt !== null && !this.quietFired) {
         const quietMs = this.resolvedConfig.quiet_minutes * 60 * 1000;
-        const quietElapsed = Date.now() - this.lastChangeAt;
+        const quietElapsed = this.now() - this.lastChangeAt;
         if (quietElapsed >= quietMs) {
           this.quietFired = true;
           await this.events.emit({
@@ -322,8 +330,8 @@ export class BuildProgressWatcher {
       // per heartbeat period so subscribers (daemon-log, UI, OTel) see a
       // liveness signal even when nothing moved.
       const heartbeatMs = this.resolvedConfig.heartbeat_minutes * 60 * 1000;
-      if (!this.stopped && this.lastEmitAt !== null && Date.now() - this.lastEmitAt >= heartbeatMs) {
-        this.lastEmitAt = Date.now();
+      if (!this.stopped && this.lastEmitAt !== null && this.now() - this.lastEmitAt >= heartbeatMs) {
+        this.lastEmitAt = this.now();
         await this.events.emit({
           type: 'build_progress',
           step: this.step,
@@ -365,13 +373,13 @@ export class BuildProgressWatcher {
     // Change-driven tick — (re-)arm the quiet episode: bump lastChangeAt and
     // clear quietFired so a later quiet stretch can fire build_no_progress
     // again.
-    this.lastChangeAt = Date.now();
+    this.lastChangeAt = this.now();
     this.quietFired = false;
 
     // Change-driven emission resets the heartbeat clock so a heartbeat never
     // fires immediately on the heels of a real change (no interleaved
     // duplicates).
-    this.lastEmitAt = Date.now();
+    this.lastEmitAt = this.now();
     await this.events.emit({
       type: 'build_progress',
       step: this.step,
