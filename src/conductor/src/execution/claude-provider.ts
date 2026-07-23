@@ -412,6 +412,52 @@ function parseTokenUsage(stdout: string): TokenUsage | undefined {
   return undefined;
 }
 
+/**
+ * Parse the payload produced by `claude --print --output-format json`: a
+ * single JSON result object on stdout (not the stream-json per-line format
+ * handled by parseTokenUsage above). Falls back to raw stdout passthrough
+ * on any parse failure — never fabricates a zero-cost tokenUsage.
+ */
+export function parseJsonResult(stdout: string): { output: string; tokenUsage?: TokenUsage } {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    if (typeof parsed.result !== 'string') {
+      return { output: stdout, tokenUsage: undefined };
+    }
+    const output = parsed.result;
+    const usageRaw = parsed.usage as Record<string, unknown> | undefined;
+    let tokenUsage: TokenUsage | undefined;
+    if (
+      usageRaw &&
+      typeof usageRaw.input_tokens === 'number' &&
+      typeof usageRaw.output_tokens === 'number'
+    ) {
+      tokenUsage = {
+        input: usageRaw.input_tokens,
+        output: usageRaw.output_tokens,
+      };
+      if (typeof usageRaw.cache_read_input_tokens === 'number') {
+        tokenUsage.cacheRead = usageRaw.cache_read_input_tokens;
+      }
+      if (typeof usageRaw.cache_creation_input_tokens === 'number') {
+        tokenUsage.cacheCreation = usageRaw.cache_creation_input_tokens;
+      }
+      if (typeof parsed.total_cost_usd === 'number') {
+        tokenUsage.costUsd = parsed.total_cost_usd;
+      }
+      if (typeof parsed.num_turns === 'number') {
+        tokenUsage.numTurns = parsed.num_turns;
+      }
+      if (typeof parsed.duration_ms === 'number') {
+        tokenUsage.durationMs = parsed.duration_ms;
+      }
+    }
+    return { output, tokenUsage };
+  } catch {
+    return { output: stdout, tokenUsage: undefined };
+  }
+}
+
 export class ClaudeProvider implements LLMProvider {
   /**
    * Run Claude with --print mode. Captures output for analysis.
@@ -430,7 +476,7 @@ export class ClaudeProvider implements LLMProvider {
     // from stdin when no positional prompt is given, which has no length limit.
     const hasPrompt = typeof options.prompt === 'string' && options.prompt.length > 0;
     if (hasPrompt) {
-      args.push('--print', '--output-format', 'text');
+      args.push('--print', '--output-format', 'json');
     }
 
     // Stream stdout/stderr to terminal while also capturing for analysis.
@@ -459,8 +505,10 @@ export class ClaudeProvider implements LLMProvider {
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
 
+    const { output: parsedOutput, tokenUsage } = parseJsonResult(stdout);
+
     // Combine stdout + stderr so the caller has full context
-    const output = stderr ? `${stdout}\n${stderr}`.trim() : stdout;
+    const output = stderr ? `${parsedOutput}\n${stderr}`.trim() : parsedOutput;
 
     // Detect missing binary (exit 127 or ENOENT in stderr)
     if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {
@@ -489,8 +537,6 @@ export class ClaudeProvider implements LLMProvider {
     const authFailure = !rateLimited && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
-    const tokenUsage = parseTokenUsage(stdout);
-
     let deadline: number | undefined;
     let waitSeconds: number | undefined;
     if (rateLimited) {

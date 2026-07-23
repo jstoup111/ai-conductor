@@ -76,6 +76,17 @@ pagination, untracked TODOs, workarounds needing follow-up stories, vulnerable d
 
 Review token/context consumption for this feature cycle and identify optimization opportunities.
 
+**Data source (read before analyzing):** Read `.docs/shipped/<slug>.md`'s `## Cost` block
+(written by `conduct shipped-record` at ship time; equivalently `conduct kpi` for this feature)
+for the real `input`/`output`/`cache_read`/`cache_creation`/`cost_usd`/`dispatches`/`retries`/
+`halts`/`unmetered` figures. Use these real numbers for every quantitative token/cost figure in
+this section — never estimate or guess a token/cost total.
+- If `.docs/shipped/<slug>.md` does not exist yet (retro run before ship), or it exists but has
+  no `## Cost` block (pre-#537 feature), or the block's `unmetered.count > 0` (accounting
+  degraded for some steps), state plainly `unmetered/absent` for the affected token/cost
+  figures in the retro output. Do not omit the line and do not fabricate a number — write
+  `unmetered/absent` explicitly.
+
 **Analyze:**
 - Which skills or subagent dispatches consumed the most context? (Count dispatches, estimate scope)
 - Were there redundant file reads, unnecessary explorations, or overly broad subagent prompts?
@@ -115,7 +126,7 @@ Save to `.docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 ```markdown
 # Retro: [Feature Name]
-**Date:** YYYY-MM-DD | **Stats:** N tasks, M rework cycles, K interventions, N tests passing
+**Date:** YYYY-MM-DD | **Stats:** N tasks, M rework cycles, K interventions, N tests passing, Cost: [real figures from `.docs/shipped/<slug>.md`'s `## Cost` block, or `unmetered/absent`]
 
 ## Part A: Harness
 - **H-1:** [what, where, severity, fix]
@@ -131,6 +142,7 @@ Save to `.docs/retros/YYYY-MM-DD-<feature-name>.md`:
 
 ## Part C: Context Efficiency
 ### Context Efficiency
+[Real Cost-block figures for this feature, or `unmetered/absent` if no `## Cost` block exists — never an estimate]
 - **C-1:** [what, where, impact, proposed change]
 
 **Proposed changes:**

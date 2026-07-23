@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
+import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -323,6 +324,18 @@ export interface StepRunResult {
    * set when the grader ran and produced a real FAIL.
    */
   graderDispatchFailed?: boolean;
+  /**
+   * Task 3 (per-feature token accounting): token usage reported by the
+   * provider for this invocation, when available. Forwarded from
+   * `InvokeResult.tokenUsage` on the success path so callers can attribute
+   * cost/tokens to the step and feature.
+   */
+  tokenUsage?: TokenUsage;
+  /**
+   * Task 3 (per-feature token accounting): the resolved model string actually
+   * used for this invocation (post model-availability/ladder resolution).
+   */
+  model?: string;
 }
 
 /**
@@ -2989,6 +3002,7 @@ export class Conductor {
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
         pendingRetryHints.delete(step.name);
         let successOutput: string | undefined;
+        let stepResult: StepRunResult | undefined;
 
         // D4 keying (Slice B): snapshot plan artifacts BEFORE the plan step runs
         // so the DECIDE-tail owner stamping targets only the plan(s) authored in
@@ -4154,6 +4168,7 @@ export class Conductor {
                     if (recheck.done) {
                       succeeded = true;
                       successOutput = result.output;
+                      stepResult = result;
                     }
                     break;
                   }
@@ -4225,6 +4240,7 @@ export class Conductor {
 
           succeeded = true;
           successOutput = result.output;
+          stepResult = result;
           break;
         }
 
@@ -5124,7 +5140,15 @@ export class Conductor {
           }
           state[step.name] = 'done';
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
-          await emitTracked({ type: 'step_completed', step: step.name, status: 'done', tail });
+          await emitTracked({
+            type: 'step_completed',
+            step: step.name,
+            status: 'done',
+            tail,
+            tokenUsage: stepResult?.tokenUsage,
+            model: stepResult?.model,
+            unmetered: stepResult?.tokenUsage ? undefined : true,
+          });
 
           // Store PR URL from finish step output. Prefer state-file write
           // (skill-authored, survives recovery/interactive fixes), fall back to

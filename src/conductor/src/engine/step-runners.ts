@@ -554,7 +554,12 @@ export class DefaultStepRunner implements StepRunner {
           this.wasSessionMarkerFoundOnInit = true;
         }
       }
-      return { success: true, output: result.output };
+      return {
+        success: true,
+        output: result.output,
+        tokenUsage: result.tokenUsage,
+        model: effectiveModel,
+      };
     }
 
     // Full-ladder exhaustion: every attempted model reported unavailable.
@@ -564,10 +569,11 @@ export class DefaultStepRunner implements StepRunner {
       return {
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+        model: effectiveModel,
       };
     }
 
-    return { success: false, output: result.output };
+    return { success: false, output: result.output, model: effectiveModel };
   }
 
   async resetSession(): Promise<void> {

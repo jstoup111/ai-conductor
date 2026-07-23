@@ -260,11 +260,13 @@ export class OtelVisualizer implements VisualizerPlugin {
 
     this.spanManager = new SpanManager(tracer, ctx.onWarning, {
       onStepClose: (step, durationMs, retryCount) => {
-        // tokenUsage is passed below via handleEvent; stashed per-step.
-        // We retrieve it here from the pending map.
+        // tokenUsage/model are passed below via handleEvent; stashed per-step.
+        // We retrieve them here from the pending maps.
         const tokenUsage = this.pendingTokenUsage.get(step);
         this.pendingTokenUsage.delete(step);
-        this.metricsRecorder.onStepClose(step, durationMs, retryCount, tokenUsage);
+        const model = this.pendingModel.get(step);
+        this.pendingModel.delete(step);
+        this.metricsRecorder.onStepClose(step, durationMs, retryCount, tokenUsage, model);
       },
     });
   }
@@ -274,6 +276,13 @@ export class OtelVisualizer implements VisualizerPlugin {
    * callback can pass it to MetricsRecorder. Keyed by step name.
    */
   private readonly pendingTokenUsage = new Map<string, TokenUsage | undefined>();
+
+  /**
+   * Stash model from step_completed events so the SpanManager's onStepClose
+   * callback can pass it to MetricsRecorder. Keyed by step name. Mirrors
+   * pendingTokenUsage exactly, including orphan-path cleanup.
+   */
+  private readonly pendingModel = new Map<string, string | undefined>();
 
   // ── VisualizerPlugin contract ──────────────────────────────────────────────
 
@@ -384,20 +393,24 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.spanManager.onStepStarted(event);
         break;
       case 'step_completed':
-        // Stash tokenUsage before onStepCompleted closes the span and fires onStepClose.
+        // Stash tokenUsage/model before onStepCompleted closes the span and fires onStepClose.
         this.pendingTokenUsage.set(event.step, event.tokenUsage);
+        this.pendingModel.set(event.step, event.model);
         this.spanManager.onStepCompleted(event);
         // Cleanup: on the orphan path (no open span), onStepClose never fires and
         // the entry would leak. onStepClose deletes the entry synchronously when it
         // runs; if it did, this is a no-op. If it didn't (orphan), we clean up here.
         this.pendingTokenUsage.delete(event.step);
+        this.pendingModel.delete(event.step);
         break;
       case 'step_failed':
         // No tokenUsage on failed steps — stash undefined so MetricsRecorder skips.
         this.pendingTokenUsage.set(event.step, undefined);
+        this.pendingModel.set(event.step, undefined);
         this.spanManager.onStepFailed(event);
         // Same orphan-path cleanup as step_completed above.
         this.pendingTokenUsage.delete(event.step);
+        this.pendingModel.delete(event.step);
         break;
       case 'step_retry':
         this.spanManager.onStepRetry(event);

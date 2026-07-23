@@ -90,6 +90,7 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
 import {
   detectHaltIssuesSweepCommand,
@@ -489,6 +490,16 @@ async function main(): Promise<void> {
   const evidenceCmd = detectEvidenceCommand(process.argv);
   if (evidenceCmd) {
     const code = await dispatchEvidence(evidenceCmd, { cwd: process.cwd() });
+    process.exit(code);
+  }
+
+  // Kpi subcommand (`kpi`, Task 7) runs NON-INTERACTIVELY and exits — prints a
+  // read-only per-feature token/cost report over committed `.docs/shipped/*.md`
+  // Cost blocks (Task 6). Mirrors the evidence-cli dispatch pattern; always
+  // exits 0.
+  const kpiCmd = detectKpiCommand(process.argv);
+  if (kpiCmd) {
+    const code = await dispatchKpi(kpiCmd, { cwd: process.cwd() });
     process.exit(code);
   }
 

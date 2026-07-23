@@ -66,6 +66,36 @@ describe('DefaultStepRunner', () => {
     expect(opts.cwd).toBe('/wt/feature-x');
   });
 
+  // Task 3 (per-feature token accounting): the autonomous dispatch path must
+  // forward the provider's tokenUsage and the resolved model string onto the
+  // StepRunResult so downstream cost accounting can attribute usage per step.
+  it('forwards tokenUsage and resolved model on successful autonomous run', async () => {
+    const tokenUsage = {
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      costUsd: 0.0123,
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        tokenUsage,
+      } satisfies InvokeResult),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+    const result = await runner.run('build', emptyState); // build is autonomous → invoke()
+
+    expect(result.tokenUsage).toEqual(tokenUsage);
+    expect(result.model).toBeTruthy();
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(result.model).toBe(opts.model);
+  });
+
   it('passes correct prompt for build (pipeline)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

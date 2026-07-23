@@ -1215,6 +1215,53 @@ on every base-SHA advance).
   wipes exactly like the code it documents. A record-write failure degrades gracefully
   (single warn, exit 0) and never blocks shipping; `discard`/`keep` finishes never write one.
 
+  **`## Cost` block (per-feature token accounting, #537).** `shipped-record` also appends a
+  `## Cost` section to the record, **after** the frontmatter's closing `---` fence, so the
+  existing frontmatter parser and stem/hash dedup above are unaffected. The block summarizes
+  `computeCostRollup(worktreeDir)` — an aggregation of that feature's `.pipeline/events.jsonl`
+  `step_completed` events (each of which now carries `tokenUsage`/`model`, captured from the
+  `--output-format json` Claude CLI dispatch) into total tokens, `costUsd`, dispatch/retry/halt
+  counts, and an `unmetered` count for any step where usage wasn't captured (never silently
+  dropped):
+
+  ```
+  ## Cost
+  input: 98214
+  output: 30216
+  cache_read: 512000
+  cache_creation: 8192
+  cost_usd: 1.923
+  dispatches: 14
+  retries: 2
+  halts: 0
+  unmetered: count: 0, duration_ms: 0
+  ```
+
+  It is appended **after** the frontmatter's closing `---` fence, so `parseShippedRecord`
+  (which only reads up to that fence) and stem/hash dedup are unaffected. A rollup error
+  (missing/corrupt `.pipeline/events.jsonl`) degrades gracefully — it's logged and the
+  `## Cost` block is simply omitted, never blocking ship.
+
+  **`conduct kpi` — tokens-per-shipped-feature report.** A read-only subcommand
+  (`kpi-cli.ts` / `kpi-report.ts`) that scans every committed `.docs/shipped/*.md`, parses
+  each record's `## Cost` block, and prints a per-feature line (input/output/total tokens,
+  `cost_usd`) plus an aggregate/trend total across all shipped features:
+
+  ```
+  $ conduct kpi
+  KPI report — tokens per shipped feature
+
+  - billing-export: input=98214 output=30216 tokens=128430 cost_usd=1.923
+  - daemon-per-feature-token-accounting: input=... output=... tokens=... cost_usd=... [PARTIAL — unmetered dispatches present]
+
+  Aggregate / trend across 2 feature(s): total tokens=... (input=..., output=...), total cost_usd=...
+  ```
+
+  A feature whose Cost block reports `unmetered.count > 0` is marked
+  `[PARTIAL — unmetered dispatches present]` rather than silently averaged in as complete
+  data. `conduct kpi` never throws: a missing/empty `.docs/shipped/`, a record with no Cost
+  block, or a malformed Cost block are all tolerated and reported gracefully.
+
 - **Discovery dedup (`discoverBacklog`, `daemon-backlog.ts`).** Every poll lists
   `.docs/shipped/*.md` off the **base-branch tree** (one listing per poll, not one per
   candidate) and skips any candidate whose stem matches a committed record. A candidate is
