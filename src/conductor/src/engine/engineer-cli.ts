@@ -1135,12 +1135,20 @@ export async function dispatchEngineer(
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
+      // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
+      // operator's `stale_claim_window_hours` override reaches the reap pass below —
+      // same load path as index.ts's top-level `loadConfig(projectRoot)`. Best-effort:
+      // an absent/invalid config falls back to resolveStaleClaimWindowMs's default.
+      const claimConfigResult = await loadConfig(process.cwd());
+      const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
+
       // Wrap the queue with the delivery guard decorator (Task 8: integration point).
       // The guard is transparent to claimUnblocked; it only filters/heals problematic
       // candidates via ledger + gh state checks.
       const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
         gh,
         logger: { info: (msg) => printErr(msg) },
+        config: claimConfig,
       });
 
       // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
@@ -1289,8 +1297,14 @@ export async function dispatchEngineer(
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
 
+      // Same project-level config load as the `claim` case, so an operator's
+      // `stale_claim_window_hours` override also governs the bulk requeue default
+      // (an explicit `--older-than` still takes precedence per-invocation).
+      const requeueConfigResult = await loadConfig(process.cwd());
+      const requeueConfig = requeueConfigResult.ok ? requeueConfigResult.config : undefined;
+
       const parsedOlderThan = parseDurationMs(dispatch.olderThan);
-      const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs();
+      const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs(requeueConfig);
       const now = Date.now();
 
       const entries = await ledger.list();

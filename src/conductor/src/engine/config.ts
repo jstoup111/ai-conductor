@@ -310,6 +310,8 @@ export function validateConfig(
     'reconcile_parked_auto_cleanup',
     // Step-heartbeat stall watchdog threshold (step-heartbeat.ts).
     'step_heartbeat_stall_minutes',
+    // Stale-claim reap window override (engineer-unclaim-requeue-verb-stale-claimed-ledger).
+    'stale_claim_window_hours',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
