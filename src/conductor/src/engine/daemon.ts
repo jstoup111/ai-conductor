@@ -372,6 +372,18 @@ export interface DaemonDeps {
    */
   refreshEngineSource?: () => Promise<void>;
 
+  /**
+   * Advisory-only staleness probe (Task 9, TI-4 HP3) invoked at the SAME
+   * quiescent pre-dispatch boundary as `refreshEngineSource`/`rebuildEngine`
+   * whenever the stale-gates chain declines (self-heal disabled: non-self-host
+   * OR the auto-restart flag off). Unlike `refreshEngineSource`, this path
+   * NEVER rebuilds and NEVER restarts — it only warns (via the injected
+   * implementation's own deduped warner) when the daemon's boot-stamped
+   * engine source SHA is determinably behind origin. A throw is caught and
+   * logged; never fatal, never propagates.
+   */
+  probeEngineStaleness?: () => Promise<void>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -925,7 +937,24 @@ export async function runDaemon(
    * an in-flight build. Reuses the shipped suppression + requestRestart path.
    */
   const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
-    if (!staleGatesArmed || !deps.staleEngineChecker) return false;
+    if (!staleGatesArmed || !deps.staleEngineChecker) {
+      // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
+      // is off) — the checker/rebuild/restart chain never runs, but still
+      // advisory-probe for staleness at the same quiescent boundary so an
+      // operator running without auto-restart gets warned. Quiescent-only,
+      // never rebuilds, never restarts. Non-fatal: a throw is logged and
+      // swallowed.
+      if (inFlight.size === 0 && deps.probeEngineStaleness) {
+        try {
+          await deps.probeEngineStaleness();
+        } catch (err) {
+          log(
+            `[daemon] engine staleness probe failed: ${err instanceof Error ? err.message : String(err)}; continuing`,
+          );
+        }
+      }
+      return false;
+    }
     if (inFlight.size !== 0) return false;
 
     // Task 7: fast-forward the engine source before rebuilding, so the

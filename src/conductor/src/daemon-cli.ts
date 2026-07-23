@@ -43,7 +43,11 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
-import { createRefreshThrottle, createStalenessWarner } from './engine/engine-refresh.js';
+import {
+  createRefreshThrottle,
+  createStalenessWarner,
+  probeStampedShaBehindOrigin,
+} from './engine/engine-refresh.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -1348,6 +1352,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
             };
           })()
         : undefined,
+      // Task 9 (TI-4 HP3/NP3/NP4): advisory-only staleness probe, wired
+      // UNCONDITIONALLY — it only ever fires at the quiescent boundary where
+      // the armed self-heal gate (staleGatesArmed) declines, i.e. self-host
+      // is off, or the auto-restart flag is off. NEVER rebuilds, NEVER
+      // restarts. Shares the same throttle mechanism as refreshEngineSource
+      // above (TI-2) so a daemon running without self-heal still doesn't
+      // fetch origin on every idle poll. Uses the boot-read `engineSourceSha`
+      // (Task 8) so the ancestry check reflects exactly what this daemon
+      // booted with, not a re-read mid-run.
+      probeEngineStaleness: (() => {
+        const minIntervalMs =
+          (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+        const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+        const warner = createStalenessWarner(log);
+        const git = makeGitRunner(projectRoot);
+        return async () => {
+          if (!throttle.shouldRun()) return;
+          throttle.markRan();
+          const result = await probeStampedShaBehindOrigin(git, engineSourceSha);
+          if (result.outcome === 'behind' && result.originHead && result.defaultBranch) {
+            warner.warn('self-heal-disabled', result.originHead, result.defaultBranch);
+          }
+        };
+      })(),
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks

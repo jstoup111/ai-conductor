@@ -427,6 +427,149 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     });
   });
 
+  describe('advisory probeEngineStaleness when self-heal is disabled (Task 9, quiescent-only)', () => {
+    it('HP3: probe is invoked at the quiescent (pre-dispatch) boundary when staleGatesArmed is false (not self-host)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails -> staleGatesArmed false
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      // Never rebuilds or restarts from the advisory branch.
+      expect(rebuildEngine).not.toHaveBeenCalled();
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('HP3: probe is invoked when the flag is off even under self-host', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: false, // gate 3 fails -> staleGatesArmed false
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked when staleGatesArmed is true (armed path handles refresh instead)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).not.toHaveBeenCalled();
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked while a build is in flight (quiescent-only)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // f0 dispatches first (quiescent, fires probe), stays in flight; f1's
+      // pre-dispatch evaluation window has inFlight non-empty and must skip.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('a throwing probe is logged and non-fatal (no crash, no restart)', async () => {
+      const logs: string[] = [];
+      const probeEngineStaleness = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+      expect(logs.some((m) => m.toLowerCase().includes('staleness probe') || m.toLowerCase().includes('probe'))).toBe(true);
+    });
+  });
+
   describe('real tmux: session survives, new pid, marker consumed, hyphen marker untouched', () => {
     it(
       'session-hosted stale-engine restart never leaves the daemon stopped',
