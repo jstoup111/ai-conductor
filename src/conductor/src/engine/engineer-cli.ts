@@ -55,9 +55,10 @@ import {
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
 import { ghIssueLabelReader } from './backlog-priority.js';
-import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
+import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/delivery-guard.js';
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
+import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { makeProductionGh } from './tracker-client.js';
 
@@ -1277,7 +1278,9 @@ export async function dispatchEngineer(
 
     // ── requeue ───────────────────────────────────────────────────────────────
     // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
-    // of the whole stranded claimed class (Story 6, FR-8).
+    // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
+    // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
+    // forget (drop); open → requeueClaimed.
     case 'requeue': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
@@ -1288,9 +1291,20 @@ export async function dispatchEngineer(
 
       const entries = await ledger.list();
       const requeued: string[] = [];
+      const dropped: string[] = [];
 
       for (const entry of entries) {
         if (!isStaleClaim(entry, now, windowMs)) continue;
+
+        const parsed = parseSourceRef(entry.sourceRef);
+        const issueState = parsed ? await getIssueState(gh, parsed.repo, parsed.issue) : 'unknown';
+
+        if (issueState === 'closed') {
+          await ledger.forget(entry.source, entry.sourceRef);
+          dropped.push(entry.sourceRef);
+          continue;
+        }
+
         const { acted } = await ledger.requeueClaimed(entry.source, entry.sourceRef);
         if (acted) requeued.push(entry.sourceRef);
       }
@@ -1299,6 +1313,7 @@ export async function dispatchEngineer(
         JSON.stringify({
           kind: 'requeue',
           requeued,
+          dropped,
           count: requeued.length,
         }),
       );
