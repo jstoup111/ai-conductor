@@ -12,6 +12,8 @@
 
 import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
+import { makeGitRunner, type GitRunner } from '../rebase.js';
+import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
 
 /** The four row classes a coherence artifact row may belong to. */
 export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task';
@@ -732,8 +734,14 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
 
 // --- Aggregated deterministic gap report (Task 12) ---
 
-/** The five coverage/consistency layers a gap can originate from, in fixed report order. */
-export type CoherenceGapLayer = 'outcome' | 'fr' | 'story' | 'orphan-task' | 'coverage-table';
+/** The six coverage/consistency layers a gap can originate from, in fixed report order. */
+export type CoherenceGapLayer =
+  | 'outcome'
+  | 'fr'
+  | 'story'
+  | 'orphan-task'
+  | 'coverage-table'
+  | 'duplicate-claim';
 
 /** Fixed layer ordering used to sort an aggregated gap list before rendering. */
 const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
@@ -742,6 +750,7 @@ const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
   'story',
   'orphan-task',
   'coverage-table',
+  'duplicate-claim',
 ];
 
 /**
@@ -875,4 +884,124 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
 
   if (gaps.length === 0) return { ok: true };
   return { ok: false, gaps, report: renderGapReport(gaps) };
+}
+
+// --- Duplicate-claim scan (Task 14, offline) ---
+//
+// Per adr-2026-07-22-coherence-waiver-and-duplicate-claim: the BLOCKING check
+// reads only local git state — any `.docs/intake/*.md` reachable on the
+// repo's default branch carrying the same `Source-Ref` as this spec's own
+// sourceRef is a duplicate claim, refused naming the conflicting slug
+// (waivable as `duplicate:<ref>`). This never touches the network; it is
+// `git ls-tree`/`git show` against the already-fetched default branch only.
+// The advisory open-PR warn path (separate function below) reuses
+// overlap-scan.ts and is fail-open — it never blocks `scanDuplicateClaim`'s
+// verdict.
+
+export type DuplicateClaimResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'duplicate-claim';
+      /** `duplicate:<ref>` — the waiver-vocabulary gap id for this duplicate. */
+      gapId: string;
+      /** The slug of the pre-existing intake marker that already claims this ref. */
+      conflictingSlug: string;
+      /** A ready-to-aggregate gap, shaped like the five-layer validator's gaps. */
+      gap: CoherenceGap;
+    };
+
+/** `.docs/intake/<slug>.md` path -> slug, or null for a non-intake-marker path. */
+function slugFromIntakeMarkerPath(path: string): string | null {
+  const m = path.match(/^\.docs\/intake\/([^/]+)\.md$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Offline duplicate-intake-claim scan: does any `.docs/intake/*.md` marker
+ * already committed on the repo's default branch carry the SAME `Source-Ref`
+ * as `sourceRef` (this spec's own claim)?
+ *
+ * Reads git state only (`ls-tree` to enumerate, `show` to read blob contents
+ * at the default-branch ref) — never the network, never the working tree.
+ * `excludeSlug` (this spec's own slug, when its marker may already be present
+ * on the default branch, e.g. a re-land) is skipped so a spec never flags
+ * itself as its own duplicate.
+ *
+ * No usable `sourceRef` (unparseable/absent) is nothing to check against —
+ * trivially passes, since a hand-authored non-intake spec makes no claim.
+ */
+export async function scanDuplicateClaim(
+  repoPath: string,
+  defaultBranch: string,
+  sourceRef: string | undefined | null,
+  options: { git?: GitRunner; excludeSlug?: string } = {},
+): Promise<DuplicateClaimResult> {
+  const ref = sourceRef?.trim();
+  if (!ref) return { ok: true };
+
+  const git = options.git ?? makeGitRunner(repoPath);
+
+  const lsTree = await git(['ls-tree', '-r', '--name-only', defaultBranch, '--', '.docs/intake']);
+  if (lsTree.exitCode !== 0) return { ok: true };
+
+  const paths = lsTree.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  for (const path of paths) {
+    const slug = slugFromIntakeMarkerPath(path);
+    if (!slug || slug === options.excludeSlug) continue;
+
+    const show = await git(['show', `${defaultBranch}:${path}`]);
+    if (show.exitCode !== 0) continue;
+
+    const match = show.stdout.match(/^Source-Ref:\s*(\S+)/im);
+    if (!match) continue;
+    const candidateRef = match[1].trim();
+
+    if (candidateRef.toLowerCase() === ref.toLowerCase()) {
+      const gapId = `duplicate:${ref}`;
+      return {
+        ok: false,
+        reason: 'duplicate-claim',
+        gapId,
+        conflictingSlug: slug,
+        gap: {
+          layer: 'duplicate-claim',
+          gapId,
+          artifact: 'intake',
+          item: `${ref} is already claimed by intake marker \`.docs/intake/${slug}.md\``,
+        },
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+// --- Advisory open-PR overlap warn (fail-open, reuses overlap-scan.ts) ---
+
+/**
+ * Advisory-only wrapper around `overlap-scan.ts`'s `runOverlapScan`, scoped
+ * to this spec's `sourceRef` (the "--source-ref" reuse hook called for by
+ * the ADR) so a coherence-check warn can flag an open sibling spec PR
+ * claiming the same intake before either merges.
+ *
+ * Fail-open by construction: any thrown error (network error, unreachable
+ * remote, etc.) is caught and swallowed into `null` — the warn is skipped,
+ * never blocking `land`. `runOverlapScan` itself already degrades individual
+ * step failures into `skipNotes` rather than throwing, but this wrapper is
+ * the last line of defense for anything that still throws (e.g. an injected
+ * `git`/`resolver` that rejects outright).
+ */
+export async function advisoryDuplicateClaimWarn(
+  args: RunOverlapScanArgs,
+): Promise<OverlapReport | null> {
+  try {
+    return await runOverlapScan(args);
+  } catch {
+    return null;
+  }
 }

@@ -7,7 +7,7 @@
 //   - corrupted/unparseable table → 'unparseable-coherence-artifact'
 //   - three distinct error kinds, never collapsed into one generic error
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseCoherenceArtifact,
   crossCheckIds,
@@ -18,10 +18,37 @@ import {
   checkCoverageTableConsistency,
   renderGapReport,
   validateCoherence,
+  scanDuplicateClaim,
+  advisoryDuplicateClaimWarn,
   type CrossCheckInputs,
   type CoherenceGap,
   type ValidateCoherenceInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
+import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-waiver.js';
+import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
+import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
+
+// A scripted GitRunner: matches argv prefixes to canned results, and records
+// every invocation so tests can assert zero-network-call behavior.
+function fakeGit(
+  script: Array<{ match: string[]; result: Partial<GitResult> }>,
+): { git: GitRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  const git: GitRunner = async (args) => {
+    calls.push(args);
+    for (const entry of script) {
+      if (entry.match.every((tok, i) => args[i] === tok)) {
+        return {
+          exitCode: entry.result.exitCode ?? 0,
+          stdout: entry.result.stdout ?? '',
+          stderr: entry.result.stderr ?? '',
+        };
+      }
+    }
+    return { exitCode: 1, stdout: '', stderr: '' };
+  };
+  return { git, calls };
+}
 
 const WELL_FORMED = `# Coherence Map
 
@@ -798,5 +825,140 @@ No tasks yet.
     expect(report).toContain('FR-3 is not cited by any story');
     // Not generic-only: the specific id must appear, not just a bare "gap" word.
     expect(report).not.toMatch(/^# Coherence gaps\n\nNo gaps found\.\n$/);
+  });
+});
+
+describe('scanDuplicateClaim (Task 14, offline)', () => {
+  const REF = 'acme/app#527';
+
+  it('reports a duplicate:<ref> gap naming the conflicting slug when a default-branch intake marker carries the same Source-Ref', async () => {
+    const { git, calls } = fakeGit([
+      {
+        match: ['ls-tree', '-r', '--name-only', 'main', '--', '.docs/intake'],
+        result: { exitCode: 0, stdout: '.docs/intake/other-spec.md\n' },
+      },
+      {
+        match: ['show', 'main:.docs/intake/other-spec.md'],
+        result: { exitCode: 0, stdout: `# Intake origin: other-spec\n\nSource-Ref: ${REF}\n` },
+      },
+    ]);
+
+    const result = await scanDuplicateClaim('/repo', 'main', REF, { git });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('duplicate-claim');
+    expect(result.gapId).toBe(`duplicate:${REF}`);
+    expect(result.conflictingSlug).toBe('other-spec');
+    expect(result.gap.gapId).toBe(`duplicate:${REF}`);
+    expect(result.gap.layer).toBe('duplicate-claim');
+    expect(result.gap.item).toContain('other-spec');
+
+    // Offline: only git was invoked, no gh/fetch/network call of any kind.
+    expect(calls.every((c) => c[0] !== 'fetch')).toBe(true);
+  });
+
+  it('passes with zero network calls when no default-branch intake marker matches the Source-Ref', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const { git, calls } = fakeGit([
+      {
+        match: ['ls-tree', '-r', '--name-only', 'main', '--', '.docs/intake'],
+        result: { exitCode: 0, stdout: '.docs/intake/unrelated-spec.md\n' },
+      },
+      {
+        match: ['show', 'main:.docs/intake/unrelated-spec.md'],
+        result: { exitCode: 0, stdout: `# Intake origin: unrelated-spec\n\nSource-Ref: acme/app#999\n` },
+      },
+    ]);
+
+    const result = await scanDuplicateClaim('/repo', 'main', REF, { git });
+    expect(result.ok).toBe(true);
+    expect(calls.every((c) => c[0] !== 'fetch' && c[0] !== 'gh')).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('excludes its own slug so a spec never flags itself as its own duplicate', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['ls-tree', '-r', '--name-only', 'main', '--', '.docs/intake'],
+        result: { exitCode: 0, stdout: '.docs/intake/this-spec.md\n' },
+      },
+      {
+        match: ['show', 'main:.docs/intake/this-spec.md'],
+        result: { exitCode: 0, stdout: `# Intake origin: this-spec\n\nSource-Ref: ${REF}\n` },
+      },
+    ]);
+
+    const result = await scanDuplicateClaim('/repo', 'main', REF, { git, excludeSlug: 'this-spec' });
+    expect(result.ok).toBe(true);
+  });
+
+  it('trivially passes when there is no usable sourceRef, with zero git/network calls', async () => {
+    const { git, calls } = fakeGit([]);
+    const result = await scanDuplicateClaim('/repo', 'main', undefined, { git });
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('integrates the duplicate:<ref> gap id with the Task 13 waiver vocabulary', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['ls-tree', '-r', '--name-only', 'main', '--', '.docs/intake'],
+        result: { exitCode: 0, stdout: '.docs/intake/other-spec.md\n' },
+      },
+      {
+        match: ['show', 'main:.docs/intake/other-spec.md'],
+        result: { exitCode: 0, stdout: `# Intake origin: other-spec\n\nSource-Ref: ${REF}\n` },
+      },
+    ]);
+
+    const result = await scanDuplicateClaim('/repo', 'main', REF, { git });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    const verdict = await evaluateCoherenceWaiver({
+      gaps: [result.gap],
+      changedFiles: [{ status: 'A', path: '.docs/coherence-waivers/my-plan.md' }],
+      readText: async () =>
+        `Waives: ${result.gapId}\nRationale: operator approved re-claim of the same intake.\n`,
+    });
+    expect(verdict.ok).toBe(true);
+  });
+});
+
+describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () => {
+  it('is fail-open on a network/scan error: the warn is skipped, never throwing', async () => {
+    const throwingGit: GitRunner = async () => {
+      throw new Error('network error: could not resolve origin');
+    };
+    const args: RunOverlapScanArgs = {
+      candidateFiles: ['src/foo.ts'],
+      git: throwingGit,
+      resolver: { resolve: vi.fn() } as unknown as RunOverlapScanArgs['resolver'],
+      sourceRef: 'acme/app#527',
+      localBase: 'main',
+    };
+
+    await expect(advisoryDuplicateClaimWarn(args)).resolves.toBeNull();
+  });
+
+  it('delegates to overlap-scan.ts machinery (no second scanner) and returns its report on success', async () => {
+    const { git } = fakeGit([
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['rev-parse', '--verify', 'main'], result: { exitCode: 0 } },
+      { match: ['for-each-ref'], result: { exitCode: 0, stdout: '' } },
+    ]);
+    const args: RunOverlapScanArgs = {
+      candidateFiles: ['src/foo.ts'],
+      git,
+      resolver: { resolve: vi.fn(async () => ({ kind: 'unblocked' })) } as unknown as RunOverlapScanArgs['resolver'],
+      sourceRef: 'acme/app#527',
+      localBase: 'main',
+    };
+
+    const report = await advisoryDuplicateClaimWarn(args);
+    expect(report).not.toBeNull();
+    expect(report?.seamOverlaps).toEqual([]);
+    expect(report?.skipNotes).toEqual([]);
   });
 });
