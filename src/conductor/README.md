@@ -165,8 +165,9 @@ by **gate verdicts** instead of a fixed order:
 - **Retry-as-escalation** (`engine/escalation.ts`, #188) — a step's retry is not an
   identical re-run: it escalates from the resolved base `(model, effort)`, indexed by the
   1-based attempt. Attempt 1 = base; attempt 2 bumps effort one level
-  (`low→medium→high→xhigh→max`); attempt 3+ holds that effort and bumps the model one tier
-  (`haiku→sonnet→opus→fable`), capped at each ladder's top (a no-op rung, not an error).
+  (`low→medium→high→xhigh→max`); attempt 3+ holds that effort and cumulatively bumps the
+  model (attempt − 2) tiers up from base (attempt 3 = one tier, attempt 4 = two tiers, …)
+  (`haiku→sonnet→opus→fable`), capped at `fable` (a no-op rung, not an error).
   The bumped model still flows through the #186 availability ladder, so a dead escalated
   tier is substituted with a live one. Escalation derives purely from `attempt`, so the
   non-consuming `attempt--; continue` paths (rate-limit, stale session, auth park) re-run
