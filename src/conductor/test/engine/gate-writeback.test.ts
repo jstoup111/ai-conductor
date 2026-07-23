@@ -214,6 +214,15 @@ describe('gate-writeback (Task 17)', () => {
       ).resolves.toBeUndefined();
     });
 
+    it('suppression preserves non-throwing: gh throwing on the merge-state lookup at verbose:false still resolves without throwing (Task 5)', async () => {
+      const gh: GhRunner = async () => {
+        throw new Error('boom: prMergeState lookup failed');
+      };
+      await expect(
+        announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {}, verbose: false }),
+      ).resolves.toBeUndefined();
+    });
+
     // ── Task 19: write-back failure semantics (S6 NP-1..NP-5) ──────────────
 
     it('FR-8: announces (label + comment) when the target PR is already MERGED', async () => {
@@ -589,6 +598,23 @@ describe('gate-writeback (Task 17)', () => {
 
       expect(calls.find((c) => c[0] === 'issue' && c[1] === 'comment')).toBeUndefined();
       expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_LABEL))).toBe(false);
+    });
+
+    it('suppression preserves other-owner silent-skip (#691): zero gh calls and zero [gate-writeback] skip lines at verbose:false with a valid Source-Ref (Task 5)', async () => {
+      const calls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        calls.push([...args]);
+        if (args[0] === 'issue' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ comments: [] }) };
+        }
+        return { stdout: '' };
+      };
+      const logs: string[] = [];
+
+      await announceGatedIssue(SPEC, 'acme/repo#42', { runGh: gh, cwd: '/repo', log: (m) => logs.push(m), verbose: false });
+
+      expect(calls.length).toBe(0);
+      expect(logs.filter((m) => m.includes('[gate-writeback]')).length).toBe(0);
     });
 
     it('absent marker (sourceRef undefined) skips silently — zero gh calls', async () => {
