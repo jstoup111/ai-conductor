@@ -18,7 +18,7 @@ export type JiraWorkRef = { kind: 'jira'; key: string };
 export type WorkRef = GithubWorkRef | JiraWorkRef;
 
 /** Grammar for a Jira issue key: an uppercase project prefix, then `-`, then digits. */
-export const JIRA_KEY_GRAMMAR = /^[A-Z][A-Z0-9]+-\d+$/;
+const JIRA_KEY_GRAMMAR = /^[A-Z][A-Z0-9]+-\d+$/;
 
 /**
  * Parse a sourceRef string into a `WorkRef`, or null if it matches no known

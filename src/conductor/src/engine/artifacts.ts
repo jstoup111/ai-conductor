@@ -3,7 +3,7 @@ import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
-import { parseWorkRef } from './engineer/source-ref.js';
+import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
@@ -2386,13 +2386,17 @@ export function parseComplexityTier(content: string | null): ComplexityTier | un
  * Returns `undefined` when the content is null/absent or the ref is missing or
  * malformed (validated via the shared `parseWorkRef`, which recognizes both
  * grammars). Callers treat undefined as "no intake origin" and skip all
- * issue-linking — preserving today's behavior for hand-authored specs.
+ * issue-linking — preserving today's behavior for hand-authored specs. The
+ * matched ref is re-emitted via `formatWorkRef` so read-back is a lossless
+ * round-trip through the canonical grammar (identity for already-well-formed
+ * refs, both GitHub and Jira).
  */
 export function parseIntakeSourceRef(content: string | null): string | undefined {
   if (!content) return undefined;
   const m = content.match(/^\s*Source-Ref:\s*(\S+)/im);
   if (!m) return undefined;
-  return parseWorkRef(m[1]) ? m[1] : undefined;
+  const parsed = parseWorkRef(m[1]);
+  return parsed ? formatWorkRef(parsed) : undefined;
 }
 
 /**
