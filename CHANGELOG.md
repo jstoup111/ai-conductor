@@ -23,6 +23,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Spec (DECIDE only): intake issues filed via `bin/intake-file` accumulated contradictory
+  duplicate `priority:`/`size:` labels — 23 of 109 open issues were affected. The
+  `intake-label-sync` workflow cannot parse a CLI-authored body (its `extractField` matches
+  only the GitHub issue-form's `### Heading` rendering), so it fell through to its defaults
+  and **added** `priority: medium` / `size: M` on top of the values the CLI had already
+  applied, because the shared `syncIssueLabels` seam writes with an additive `addLabel` —
+  contradicting the same workflow's header claim of a "set labels" full replace. The spec
+  gives the seam a label-authority ladder (explicit > existing > default) applied by a
+  namespace-scoped replace that preserves `engineer:handled`/`blocked_by:#N`, teaches
+  `bin/intake-file` to emit the `### Priority`/`### Size` shape the parser already
+  understands (leaving the issue-form path untouched), and adds a dry-run-by-default
+  `intake-backfill --dedupe` sweep for the already-affected issues (#889).
 - Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
   complete: the build step's own completion predicate only checked
   `.pipeline/task-status.json` rows and missed tasks resolved solely via `Task:` trailer
