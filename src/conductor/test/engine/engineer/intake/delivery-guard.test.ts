@@ -1598,6 +1598,80 @@ describe('Plan-Task 6: createDeliveryGuardedQueue — reap never touches fresh o
   });
 });
 
+// ─── Plan-Task 7: reaped entry is claimable on the same pull, oldest-first ─────
+// (.docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md, Task 7 —
+// distinct from the pre-existing "Task 7" describe blocks above, which belong to
+// an unrelated, earlier plan's task numbering.)
+
+describe('Plan-Task 7: createDeliveryGuardedQueue — reaped entry served same-pull, oldest-first (FIFO)', () => {
+  it('stale claimed entry (older capturedAt) is reaped and returned before a newer pending entry', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+
+    // The queue's FIFO order mirrors capturedAt: the stale entry's envelope was
+    // captured first, so the underlying queue would naturally serve it first —
+    // but its ledger status is still 'claimed' (stranded), so without the reap
+    // it would otherwise be dropped as an in-flight duplicate (see Task 7 guard
+    // logic) and the newer pending entry would be served instead.
+    const staleCandidate = makeEnvelope('stale-idea');
+    const pendingCandidate = makeEnvelope('pending-idea');
+    const { queue } = makeFakeQueueWithEnvelopes([staleCandidate, pendingCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    (ledger as any).list = async () => [
+      {
+        source: 'test-source',
+        sourceRef: 'stale-idea',
+        status: 'claimed',
+        capturedAt: '2020-01-01T00:00:00.000Z',
+        lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+      },
+    ];
+
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (sourceRef === 'stale-idea') {
+        return {
+          source,
+          sourceRef,
+          status: 'claimed',
+          capturedAt: '2020-01-01T00:00:00.000Z',
+          lastSeenAt: '2020-01-01T00:00:00.000Z',
+        };
+      }
+      return undefined; // pending-idea is a healthy passthrough candidate
+    };
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      (ledger as any).get = async (s: string, r: string) => {
+        if (r === 'stale-idea') {
+          return {
+            source: s,
+            sourceRef: r,
+            status: 'pending',
+            capturedAt: '2020-01-01T00:00:00.000Z',
+          };
+        }
+        return undefined;
+      };
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    // The reaped, older entry wins over the newer healthy pending one — proving
+    // the reap persisted to the ledger BEFORE the candidate's status was
+    // inspected, on this same claim() call.
+    expect(claimed).toEqual(staleCandidate);
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+  });
+});
+
 // ─── Task 9: issue-state probe scoped to parseable github-issues envelopes ────
 
 describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable github-issues envelopes', () => {

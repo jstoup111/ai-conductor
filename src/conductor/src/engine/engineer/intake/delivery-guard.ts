@@ -428,12 +428,19 @@ export function createDeliveryGuardedQueue(
 
   return {
     async claim(): Promise<Envelope | null> {
-      const result = await innerClaim();
-      // Task 5: stale-claimed reap runs once per top-level claim() call, after
-      // the delivered-heal pass (innerClaim) has fully resolved — so healing
-      // always takes precedence over reaping.
+      // Plan-Task 7: the reap MUST persist to the ledger before innerClaim
+      // inspects any candidate's status — otherwise a stale claimed entry
+      // whose envelope is still in the underlying queue gets misread as an
+      // in-flight duplicate and dropped instead of being served this same
+      // pull (FIFO by capturedAt, Story 2). Delivered-heal (inside
+      // innerClaim) still takes precedence over reaping for any single
+      // entry, because reapStaleClaimed only acts on entries whose status
+      // is already 'claimed' with no live prUrl-driven heal in progress —
+      // running the ledger-wide reap first does not change that per-entry
+      // precedence, it only ensures reaped entries are visible in time to
+      // be claimed on this pull.
       await reapStaleClaimed();
-      return result;
+      return innerClaim();
     },
 
     async ack(e: Envelope): Promise<void> {
