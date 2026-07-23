@@ -92,18 +92,93 @@ export interface TrackerClient {
   upsertIssueComment(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
 }
 
+/** Error thrown when a `GhRunner` invocation rejects; carries argv/stderr/exit-code and, if
+ * the failure is 404-shaped, a `status: 404` marker so callers (e.g. the engineer-forget
+ * advisory-label-strip flow) can detect "issue not found" specifically. */
+export class GhRunnerError extends Error {
+  readonly argv: string[];
+  readonly stderr?: string;
+  readonly exitCode?: number;
+  readonly status?: number;
+
+  constructor(argv: string[], cause: unknown) {
+    const causeErr = cause as { message?: string; stderr?: unknown; code?: unknown };
+    const stderr = typeof causeErr?.stderr === 'string' ? causeErr.stderr : undefined;
+    const causeMessage = causeErr?.message ?? String(cause);
+    const is404 = /\b404\b|not found/i.test(`${stderr ?? ''} ${causeMessage}`);
+
+    super(
+      `gh ${argv.join(' ')} failed: ${causeMessage}` + (stderr ? ` (stderr: ${stderr})` : ''),
+    );
+    this.name = 'GhRunnerError';
+    this.argv = argv;
+    this.stderr = stderr;
+    this.exitCode = typeof causeErr?.code === 'number' ? causeErr.code : undefined;
+    if (is404) {
+      this.status = 404;
+    }
+  }
+}
+
+/** Error thrown when a parsing op receives stdout that is not valid JSON; names the
+ * failing operation so callers get an actionable message instead of a raw JSON.parse error. */
+export class GhParseError extends Error {
+  readonly operation: string;
+  readonly stdout: string;
+  readonly cause: unknown;
+
+  constructor(operation: string, stdout: string, cause: unknown) {
+    super(
+      `${operation}: failed to parse gh output as JSON: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = 'GhParseError';
+    this.operation = operation;
+    this.stdout = stdout;
+    this.cause = cause;
+  }
+}
+
+async function runOrThrow(
+  runner: GhRunner,
+  args: string[],
+  opts: { cwd: string },
+): Promise<{ stdout: string }> {
+  try {
+    return await runner(args, opts);
+  } catch (err) {
+    throw new GhRunnerError(args, err);
+  }
+}
+
+function parseJsonOrThrow<T>(operation: string, stdout: string): T {
+  try {
+    return JSON.parse(stdout) as T;
+  } catch (err) {
+    throw new GhParseError(operation, stdout, err);
+  }
+}
+
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
 export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
   return {
     async getIssueLabels(repo, number, cwd) {
-      const { stdout } = await runner(['api', `repos/${repo}/issues/${number}`], { cwd });
-      const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
+      const { stdout } = await runOrThrow(runner, ['api', `repos/${repo}/issues/${number}`], {
+        cwd,
+      });
+      const data = parseJsonOrThrow<{ labels?: Array<{ name: string }> | null }>(
+        'getIssueLabels',
+        stdout,
+      );
       return (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
     },
 
     async viewIssue(slug, cwd) {
-      const { stdout } = await runner(['issue', 'view', slug, '--json', 'state'], { cwd });
-      return JSON.parse(stdout) as { state: string };
+      const { stdout } = await runOrThrow(runner, ['issue', 'view', slug, '--json', 'state'], {
+        cwd,
+      });
+      return parseJsonOrThrow<{ state: string }>('viewIssue', stdout);
     },
 
     async getIssueState(slug, cwd) {
@@ -112,20 +187,22 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
     },
 
     async viewerIdentity(cwd) {
-      const { stdout } = await runner(['api', 'user', '--jq', '.login'], { cwd });
+      const { stdout } = await runOrThrow(runner, ['api', 'user', '--jq', '.login'], { cwd });
       return stdout.trim();
     },
 
     async getBlockedBy(repo, number, cwd) {
-      const { stdout } = await runner(
+      const { stdout } = await runOrThrow(
+        runner,
         ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
         { cwd },
       );
-      return JSON.parse(stdout);
+      return parseJsonOrThrow('getBlockedBy', stdout);
     },
 
     async listAssignedIssues(repo, cwd) {
-      const { stdout } = await runner(
+      const { stdout } = await runOrThrow(
+        runner,
         [
           'issue',
           'list',
@@ -140,11 +217,13 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
         ],
         { cwd },
       );
-      return JSON.parse(stdout || '[]') as AssignedIssue[];
+      return parseJsonOrThrow<AssignedIssue[]>('listAssignedIssues', stdout || '[]');
     },
 
     async commentOnIssue(repo, number, body, cwd) {
-      await runner(['issue', 'comment', String(number), '-R', repo, '--body', body], { cwd });
+      await runOrThrow(runner, ['issue', 'comment', String(number), '-R', repo, '--body', body], {
+        cwd,
+      });
     },
 
     async createIssue(input, cwd) {
@@ -152,27 +231,28 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
       if (input.repo) {
         args.push('--repo', input.repo);
       }
-      const { stdout } = await runner(args, { cwd });
+      const { stdout } = await runOrThrow(runner, args, { cwd });
       return stdout.trim();
     },
 
     async addIssueLabel(repo, number, label, cwd) {
-      await runner(
+      await runOrThrow(
+        runner,
         ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${label}`],
         { cwd },
       );
     },
 
     async closeIssue(repo, issueRef, cwd) {
-      await runner(['issue', 'close', issueRef, '-R', repo], { cwd });
+      await runOrThrow(runner, ['issue', 'close', issueRef, '-R', repo], { cwd });
     },
 
     async upsertIssueBody(repo, issueRef, body, cwd) {
-      await runner(['issue', 'edit', issueRef, '--body', body, '-R', repo], { cwd });
+      await runOrThrow(runner, ['issue', 'edit', issueRef, '--body', body, '-R', repo], { cwd });
     },
 
     async upsertIssueComment(repo, issueRef, body, cwd) {
-      await runner(['issue', 'comment', issueRef, '--body', body, '-R', repo], { cwd });
+      await runOrThrow(runner, ['issue', 'comment', issueRef, '--body', body, '-R', repo], { cwd });
     },
   };
 }

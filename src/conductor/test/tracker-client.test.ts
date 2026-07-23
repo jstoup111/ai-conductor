@@ -43,6 +43,78 @@ function fakeRunner(stdout: string) {
   return { runner, calls };
 }
 
+/** Fake runner that rejects the way execFileP does on non-zero exit: an Error with `.code` and `.stderr`. */
+function failingRunner(opts: { code?: number; stderr: string; message?: string }) {
+  const calls: Array<{ args: string[]; opts: { cwd: string } }> = [];
+  const runner: GhRunner = async (args, callOpts) => {
+    calls.push({ args, opts: callOpts });
+    const err = new Error(opts.message ?? `Command failed: gh ${args.join(' ')}`) as Error & {
+      code?: number;
+      stderr?: string;
+    };
+    err.code = opts.code;
+    err.stderr = opts.stderr;
+    throw err;
+  };
+  return { runner, calls };
+}
+
+describe('createGithubTrackerClient — loud error semantics', () => {
+  it('closeIssue: non-zero exit rejection carries argv and stderr', async () => {
+    const { runner } = failingRunner({ code: 1, stderr: 'gh: some failure occurred' });
+    const client = createGithubTrackerClient(runner);
+
+    await expect(client.closeIssue('owner/repo', '12', '.')).rejects.toMatchObject({
+      message: expect.stringContaining('gh: some failure occurred'),
+    });
+    await expect(client.closeIssue('owner/repo', '12', '.')).rejects.toMatchObject({
+      message: expect.stringContaining('issue'),
+    });
+  });
+
+  it('getIssueLabels: non-zero exit rejection carries argv and stderr', async () => {
+    const { runner } = failingRunner({ code: 1, stderr: 'gh: boom' });
+    const client = createGithubTrackerClient(runner);
+
+    await expect(client.getIssueLabels('owner/repo', 42, '.')).rejects.toMatchObject({
+      message: expect.stringContaining('gh: boom'),
+    });
+    await expect(client.getIssueLabels('owner/repo', 42, '.')).rejects.toMatchObject({
+      message: expect.stringContaining('repos/owner/repo/issues/42'),
+    });
+  });
+
+  it('getIssueLabels: invalid JSON stdout rejects with a named parse error, not a raw JSON.parse message', async () => {
+    const { runner } = fakeRunner('not json {{{');
+    const client = createGithubTrackerClient(runner);
+
+    await expect(client.getIssueLabels('owner/repo', 42, '.')).rejects.toMatchObject({
+      message: expect.stringMatching(/getIssueLabels/i),
+    });
+  });
+
+  it('viewIssue: invalid JSON stdout rejects with a named parse error, not a raw JSON.parse message', async () => {
+    const { runner } = fakeRunner('not json {{{');
+    const client = createGithubTrackerClient(runner);
+
+    await expect(client.viewIssue('owner/repo#12', '.')).rejects.toMatchObject({
+      message: expect.stringMatching(/viewIssue/i),
+    });
+  });
+
+  it('getIssueLabels: 404-shaped gh failure preserves 404 evidence for downstream detection', async () => {
+    const { runner } = failingRunner({
+      code: 1,
+      stderr: 'HTTP 404: Not Found (https://api.github.com/repos/owner/repo/issues/42)',
+    });
+    const client = createGithubTrackerClient(runner);
+
+    await expect(client.getIssueLabels('owner/repo', 42, '.')).rejects.toMatchObject({
+      status: 404,
+    });
+  });
+});
+
 describe('createGithubTrackerClient — read ops argv parity', () => {
   it('getIssueLabels: matches backlog-priority.ts:335 `gh api repos/<owner>/<repo>/issues/<n>`', async () => {
     const { runner, calls } = fakeRunner(
