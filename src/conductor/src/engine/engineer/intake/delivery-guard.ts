@@ -12,6 +12,9 @@ import { REOPEN_ATTEMPTS_CAP } from './github-issues.js';
 import type { IntakeQueue } from './queue.js';
 import type { Envelope } from './port.js';
 import { parseSourceRef } from './source-ref.js';
+import { isStaleClaim } from './stale-claim.js';
+import { resolveStaleClaimWindowMs } from '../../resolved-config.js';
+import type { HarnessConfig } from '../../../types/index.js';
 
 /** Discriminated GitHub issue state from getIssueState probe. */
 export type IssueState = 'open' | 'closed' | 'unknown';
@@ -117,6 +120,8 @@ export interface GuardLedger {
   transition(...args: any[]): Promise<void>;
   reopen(source: string, sourceRef: string): Promise<void>;
   forget(source: string, sourceRef: string): Promise<void>;
+  list?(): Promise<any[]>;
+  requeueClaimed?(source: string, sourceRef: string): Promise<{ acted: boolean }>;
 }
 
 /** Simple logger interface. */
@@ -128,6 +133,7 @@ export interface Logger {
 export interface DeliveryGuardDeps {
   gh: GhRunner;
   logger?: Logger;
+  config?: HarnessConfig;
 }
 
 /**
@@ -156,9 +162,31 @@ export function createDeliveryGuardedQueue(
   const held: Envelope[] = [];
   const logger = deps.logger ?? { info: () => {} };
 
-  return {
-    async claim(): Promise<Envelope | null> {
-      const candidate = await queue.claim();
+  // Task 5 (stale-claimed reap): scan the ledger for entries stuck in
+  // 'claimed' status past the stale-claim window (an engineer process died
+  // or was killed before recording a prUrl or completing the claim) and
+  // requeue them to 'pending' so they become claimable again. Runs once per
+  // top-level claim() invocation, AFTER the delivered-heal pass has already
+  // resolved (so healing always takes precedence over reaping).
+  async function reapStaleClaimed(): Promise<void> {
+    if (typeof ledger.list !== 'function' || typeof ledger.requeueClaimed !== 'function') {
+      return;
+    }
+    const entries = await ledger.list();
+    const windowMs = resolveStaleClaimWindowMs(deps.config);
+    const now = Date.now();
+    for (const entry of entries) {
+      if (isStaleClaim(entry, now, windowMs)) {
+        const result = await ledger.requeueClaimed(entry.source, entry.sourceRef);
+        if (result?.acted) {
+          logger.info(`Reaped stale claimed entry ${entry.sourceRef}: claimed → pending`);
+        }
+      }
+    }
+  }
+
+  async function innerClaim(): Promise<Envelope | null> {
+    const candidate = await queue.claim();
       if (!candidate) {
         // Before returning null, release all held candidates
         for (const c of held) {
@@ -204,13 +232,13 @@ export function createDeliveryGuardedQueue(
                     `[delivery-guard] Failed to ack closed-issue candidate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
                   );
                   held.push(candidate);
-                  return this.claim();
+                  return innerClaim();
                 }
                 logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
               }
 
               logger.info(`Dropped closed issue ${sourceRef}`);
-              return this.claim();
+              return innerClaim();
             }
           }
         }
@@ -241,7 +269,7 @@ export function createDeliveryGuardedQueue(
             );
             held.push(candidate);
             // Continue scanning for the next candidate
-            return this.claim();
+            return innerClaim();
           }
           // ENOENT is benign — file was already deleted by concurrent process
           logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
@@ -253,7 +281,7 @@ export function createDeliveryGuardedQueue(
         );
 
         // Continue scanning for the next candidate
-        return this.claim();
+        return innerClaim();
       }
 
       // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
@@ -279,7 +307,7 @@ export function createDeliveryGuardedQueue(
             // Add candidate to held list (not yet served)
             held.push(candidate);
             // Continue scanning for the next candidate
-            return this.claim();
+            return innerClaim();
           }
 
           // Task 4: Wrap queue.ack in try/catch for ENOENT handling
@@ -300,7 +328,7 @@ export function createDeliveryGuardedQueue(
               );
               held.push(candidate);
               // Continue scanning for the next candidate
-              return this.claim();
+              return innerClaim();
             }
             // ENOENT is benign — file was already deleted by concurrent process
             // Log at debug level and continue
@@ -311,7 +339,7 @@ export function createDeliveryGuardedQueue(
           logger.info(`Healed stale entry ${sourceRef}: ${priorStatus} → done`);
 
           // Continue scanning for the next candidate
-          return this.claim();
+          return innerClaim();
         }
 
         // Task 6: unknown PR state — fail safe with no sticky state
@@ -322,7 +350,7 @@ export function createDeliveryGuardedQueue(
           logger.info(`PR state unknown for ${sourceRef}, holding`);
           held.push(candidate);
           // Continue scanning for the next candidate
-          return this.claim();
+          return innerClaim();
         }
 
         // Task 5: closed-unmerged reopen semantics (FR-39/40)
@@ -344,7 +372,7 @@ export function createDeliveryGuardedQueue(
               held.push(candidate);
             }
             // Continue scanning for the next candidate
-            return this.claim();
+            return innerClaim();
           } else {
             // At or past cap — park as needs-manual
             try {
@@ -358,7 +386,7 @@ export function createDeliveryGuardedQueue(
               );
               held.push(candidate);
               // Continue scanning for the next candidate
-              return this.claim();
+              return innerClaim();
             }
 
             // Ack the envelope
@@ -378,7 +406,7 @@ export function createDeliveryGuardedQueue(
                 );
                 held.push(candidate);
                 // Continue scanning for the next candidate
-                return this.claim();
+                return innerClaim();
               }
               // ENOENT is benign
               logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
@@ -386,7 +414,7 @@ export function createDeliveryGuardedQueue(
 
             logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
             // Continue scanning for the next candidate
-            return this.claim();
+            return innerClaim();
           }
         }
       }
@@ -395,7 +423,17 @@ export function createDeliveryGuardedQueue(
       held.push(candidate);
 
       // Continue scanning for the next candidate
-      return this.claim();
+      return innerClaim();
+  }
+
+  return {
+    async claim(): Promise<Envelope | null> {
+      const result = await innerClaim();
+      // Task 5: stale-claimed reap runs once per top-level claim() call, after
+      // the delivered-heal pass (innerClaim) has fully resolved — so healing
+      // always takes precedence over reaping.
+      await reapStaleClaimed();
+      return result;
     },
 
     async ack(e: Envelope): Promise<void> {

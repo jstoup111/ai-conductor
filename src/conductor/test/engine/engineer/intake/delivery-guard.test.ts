@@ -1425,6 +1425,103 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
   });
 });
 
+// ─── Task 5: delivery-guard reaps stale claimed → pending at claim time ─────
+
+describe('Task 5: createDeliveryGuardedQueue — reaps stale claimed entries to pending', () => {
+  it('stale claimed entry (no prUrl) → requeueClaimed called, logger.info announces reap, delivered-heal runs first (precedence)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+    };
+
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    // The claimed candidate itself has no ledger entry keyed to it (passthrough).
+    (ledger as any).get = async () => undefined;
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+    // Precedence: no delivered-heal transitions were triggered by this reap.
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('delivered-heal (→ done) runs before the stale-claimed reap pass (precedence)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+
+    // candidate1's ledger entry is claimed + has an open prUrl → delivered-heal path.
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    // A separate, unrelated stale claimed entry exists in the ledger (no prUrl).
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const first = await guarded.claim();
+
+    // Delivered-heal serves candidate2 after healing candidate1 to done.
+    expect(first).toEqual(candidate2);
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('done');
+
+    // Stale-claimed reap also ran and requeued the unrelated stale entry.
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+  });
+});
+
 // ─── Task 9: issue-state probe scoped to parseable github-issues envelopes ────
 
 describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable github-issues envelopes', () => {
