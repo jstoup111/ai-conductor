@@ -159,6 +159,33 @@ describe('writeIntakeMarker', () => {
     expect(body).toContain('Owner: alice');
     expect(body).not.toContain('Source-Ref:');
   });
+
+  it('carries the verbatim Desired-outcome bullet block when staged outcomes content is given (Task 3)', async () => {
+    const stagedOutcomes = [
+      'Source-Ref: acme/app#7',
+      '',
+      '## Desired outcome',
+      '',
+      '- Given X, the system does Y.',
+      '- Given Z, the system does W.',
+      '',
+    ].join('\n');
+
+    const marker = await writeIntakeMarker(repoPath, 'slug-outcomes', 'acme/app#7', 'alice', undefined, stagedOutcomes);
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'slug-outcomes.md'), 'utf8');
+    expect(body).toContain('Source-Ref: acme/app#7');
+    expect(body).toContain('Owner: alice');
+    expect(body).toContain('## Desired outcome');
+    expect(body).toContain('- Given X, the system does Y.');
+    expect(body).toContain('- Given Z, the system does W.');
+  });
+
+  it('plan-stem filename is unchanged when staged outcomes content is provided', async () => {
+    const stagedOutcomes = ['Source-Ref: acme/app#7', '', '## Desired outcome', '', '- A bullet.', ''].join('\n');
+    const marker = await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', null, undefined, stagedOutcomes);
+    expect(marker).toBe(join(repoPath, '.docs', 'intake', 'the-plan-stem.md'));
+  });
 });
 
 describe('runAuthoring intake marker (FR-1, FR-3)', () => {

@@ -47,6 +47,7 @@ export async function writeIntakeMarker(
   sourceRef: string | undefined | null,
   ownerIdentity: string | undefined | null,
   guard: AuthoringGuard = new AuthoringGuard(repoPath),
+  stagedOutcomesContent?: string | null,
 ): Promise<string | null> {
   const hasSourceRef = parseWorkRef(sourceRef) !== null;
   const owner = ownerIdentity == null ? '' : ownerIdentity.trim();
@@ -84,9 +85,32 @@ export async function writeIntakeMarker(
   }
 
   if (hasOwner) lines.push(`Owner: ${owner}`);
+
+  // Append the verbatim `## Desired outcome` bullet block staged at worktree
+  // creation (Task 1's outcome-staging.ts), when present — Story 1 happy path.
+  // The staged content's own `Source-Ref:` header line is stripped; only the
+  // `## Desired outcome` section onward is carried into the marker.
+  const outcomesSection = extractOutcomesSection(stagedOutcomesContent);
+  if (outcomesSection) {
+    lines.push('', outcomesSection.trimEnd());
+  }
+
   const body = `${lines.join('\n')}\n`;
 
   await mkdir(intakeDir, { recursive: true });
   await writeFile(markerFile, body, 'utf8');
   return markerFile;
+}
+
+/**
+ * Extract the `## Desired outcome` section (heading through trailing bullets)
+ * from staged outcomes content written by outcome-staging.ts's
+ * `stageIntakeOutcomes`. Returns null when there is no staged content or no
+ * such heading.
+ */
+function extractOutcomesSection(stagedOutcomesContent: string | undefined | null): string | null {
+  if (stagedOutcomesContent == null) return null;
+  const headingIdx = stagedOutcomesContent.search(/^## Desired outcome\s*$/m);
+  if (headingIdx === -1) return null;
+  return stagedOutcomesContent.slice(headingIdx);
 }

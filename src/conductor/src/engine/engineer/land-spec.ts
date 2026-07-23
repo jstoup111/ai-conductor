@@ -43,6 +43,7 @@ import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planSt
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from './outcome-staging.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 
@@ -330,7 +331,13 @@ export async function landSpec(
   // survive the spec-PR merge and reach the daemon. The owner is already resolved above
   // (fail-closed gate at step 2a), so specOwner is guaranteed to be non-null here.
   const markerSlug = planStem(planFile);
-  await writeIntakeMarker(worktreePath, markerSlug, sourceRef, specOwner, guard);
+  let stagedOutcomesContent: string | null = null;
+  try {
+    stagedOutcomesContent = await readFile(join(worktreePath, INTAKE_OUTCOMES_RELATIVE_PATH), 'utf-8');
+  } catch {
+    // No staged outcomes (e.g. chat/CLI-originated idea) — marker carries none.
+  }
+  await writeIntakeMarker(worktreePath, markerSlug, sourceRef, specOwner, guard, stagedOutcomesContent);
 
   // Stage ONLY the `.docs` tree (never `add -A`): the per-idea worktree holds exactly
   // this idea's artifacts, so the commit is idea-scoped and no foreign untracked file
