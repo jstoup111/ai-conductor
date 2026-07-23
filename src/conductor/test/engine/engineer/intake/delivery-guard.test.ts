@@ -1075,6 +1075,42 @@ describe('Task 5: createDeliveryGuardedQueue — probes issue state for github-i
   });
 });
 
+// ─── Task 6: claim guard drops closed issue and continues scan ──────────────
+
+describe('Task 6: createDeliveryGuardedQueue — closed issue dropped, scan continues', () => {
+  it('closed github-issues candidate followed by open candidate → closed forgotten+acked, open candidate returned', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const openCandidate = makeEnvelope('idea-1', 'test-source');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([
+      closedCandidate,
+      openCandidate,
+    ]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#42') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(openCandidate);
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#42']]);
+    expect(releasedEnvelopes).toContain(closedCandidate);
+    expect(releasedEnvelopes).not.toContain(openCandidate);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
 // ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
 
 describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {

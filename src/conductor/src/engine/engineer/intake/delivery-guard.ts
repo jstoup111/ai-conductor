@@ -179,7 +179,33 @@ export function createDeliveryGuardedQueue(
         if (source === 'github-issues') {
           const parsed = parseSourceRef(sourceRef);
           if (parsed) {
-            await getIssueState(deps.gh, parsed.issue);
+            const issueState = await getIssueState(deps.gh, parsed.issue);
+            if (issueState === 'closed') {
+              // Closed issue — forget the ledger entry and drop the candidate,
+              // then continue scanning for the next one.
+              await ledger.forget(source, sourceRef);
+
+              try {
+                await queue.ack(candidate);
+              } catch (err) {
+                const isEnoent =
+                  err instanceof Error &&
+                  (('code' in err && (err as any).code === 'ENOENT') ||
+                    err.message.includes('ENOENT'));
+
+                if (!isEnoent) {
+                  process.stderr.write(
+                    `[delivery-guard] Failed to ack closed-issue candidate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+                  );
+                  held.push(candidate);
+                  return this.claim();
+                }
+                logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+              }
+
+              logger.info(`Dropped closed issue ${sourceRef}`);
+              return this.claim();
+            }
           }
         }
 
