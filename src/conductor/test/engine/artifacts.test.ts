@@ -1284,6 +1284,58 @@ describe('engine/artifacts', () => {
         expect(result).toEqual({ done: true });
       });
 
+      // Task 5: mixed-evidence coverage — some tasks resolved via
+      // task-status.json rows, others resolved only via Task:-trailered
+      // commits, all unioned together to complete the build.
+      it('Task 5: mixed row-completed and trailer-completed tasks together complete the build', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+          '### Task 2: Second task\n**Story:** 2\n\n' +
+          '### Task 3: Third task\n**Story:** 3\n\n' +
+          '### Task 4: Fourth task\n**Story:** 4\n\n' +
+          '### Task 5: Fifth task\n**Story:** 5\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // Tasks 3-5 are evidenced only via Task:-trailered commits — no
+        // corresponding completed rows.
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/three.ts'), 'export const three = true;\n');
+        await execa('git', ['add', 'src/three.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task three\n\nTask: 3\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/four.ts'), 'export const four = true;\n');
+        await execa('git', ['add', 'src/four.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task four\n\nTask: 4\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/five.ts'), 'export const five = true;\n');
+        await execa('git', ['add', 'src/five.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task five\n\nTask: 5\n'], { cwd: dir });
+
+        // Tasks 1-2 are evidenced only via task-status.json rows marked
+        // completed — no Task: trailers for them at all.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'completed' },
+          { id: '2', name: 'Second task', status: 'completed' },
+          { id: '3', name: 'Third task', status: 'pending' },
+          { id: '4', name: 'Fourth task', status: 'pending' },
+          { id: '5', name: 'Fifth task', status: 'pending' },
+        ]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
+
       // Regression tests (Task 3): em-dash plan parser—prevent false-positive empty-plan auto-park
       describe('regression: em-dash headings (### Task N — Title) are not false-positives for empty-plan', () => {
         it('Story 1: Em-dash plan with evidence is "done", not "empty"', async () => {
