@@ -38,12 +38,15 @@ export class MetricsRecorder {
    * @param durationMs - Wall-clock duration from step_started to close (milliseconds).
    * @param retryCount - Number of retries for this step execution.
    * @param tokenUsage - Optional token usage from step_completed; absent → skip.
+   * @param model      - Optional model name from step_completed; when present,
+   *                     tagged onto each token data point's attributes.
    */
   onStepClose(
     step: string,
     durationMs: number,
     retryCount: number,
     tokenUsage?: TokenUsage,
+    model?: string,
   ): void {
     // Duration: always record (even 0 ms is a valid observation).
     this.durationHistogram.record(durationMs, { step });
@@ -55,18 +58,28 @@ export class MetricsRecorder {
 
     // Tokens: only when tokenUsage is present; only present kinds recorded.
     if (tokenUsage !== undefined && tokenUsage !== null) {
-      this.recordTokens(step, tokenUsage);
+      this.recordTokens(step, tokenUsage, model);
     }
     // tokenUsage absent → no token points (no NaN / zero-fill).
   }
 
-  private recordTokens(step: string, usage: TokenUsage): void {
-    // Iterate only over own enumerable keys that hold numeric values.
-    // This handles partial kinds (input/output only, no cacheRead/cacheCreation).
-    const entries = Object.entries(usage) as [string, number | undefined][];
-    for (const [kind, value] of entries) {
+  /**
+   * Only the four true token-count fields are recorded as "kind" data points.
+   * costUsd/numTurns/durationMs (added to TokenUsage for cost rollup, Task 1)
+   * are NOT token counts and must not be double-counted as counter kinds here.
+   */
+  private static readonly TOKEN_KINDS = [
+    'input',
+    'output',
+    'cacheRead',
+    'cacheCreation',
+  ] as const;
+
+  private recordTokens(step: string, usage: TokenUsage, model?: string): void {
+    for (const kind of MetricsRecorder.TOKEN_KINDS) {
+      const value = usage[kind];
       if (typeof value === 'number' && !Number.isNaN(value)) {
-        this.tokensCounter.add(value, { step, kind });
+        this.tokensCounter.add(value, model ? { step, kind, model } : { step, kind });
       }
     }
   }
