@@ -75,9 +75,11 @@ export interface Ledger {
    * Recover a stranded `claimed` entry back to `pending`: preserves `capturedAt`,
    * increments `attempts` (the churn counter), and refreshes `lastSeenAt`.
    * Distinct from `reopen` (`done` → `pending`) — used for crash/stale-claim recovery
-   * (FR-1, FR-4, FR-11, ADR-2). No-op if the entry is absent.
+   * (FR-1, FR-4, FR-11, ADR-2). No-op if the entry is absent or not currently `claimed`
+   * (ADR-2, FR-6) — the return value signals whether the requeue actually happened, so
+   * callers (e.g. the `unclaim` CLI verb) can distinguish "requeued" from "nothing to do".
    */
-  requeueClaimed(source: string, sourceRef: string): Promise<void>;
+  requeueClaimed(source: string, sourceRef: string): Promise<{ acted: boolean }>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -204,11 +206,11 @@ export function createLedger(path: string): Ledger {
       await saveStore(path, store);
     },
 
-    async requeueClaimed(source: string, sourceRef: string): Promise<void> {
+    async requeueClaimed(source: string, sourceRef: string): Promise<{ acted: boolean }> {
       const store = await loadStore(path);
       const key = makeKey(source, sourceRef);
       const entry = store[key];
-      if (!entry) return; // nothing to requeue — no-op.
+      if (!entry || entry.status !== 'claimed') return { acted: false }; // no-op — refuse on absent/non-claimed (ADR-2).
       store[key] = {
         ...entry,
         status: 'pending',
@@ -216,6 +218,7 @@ export function createLedger(path: string): Ledger {
         lastSeenAt: new Date().toISOString(),
       };
       await saveStore(path, store);
+      return { acted: true };
     },
   };
 }
