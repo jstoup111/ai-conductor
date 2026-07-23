@@ -410,6 +410,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   recording the exact source commit they were built from. The origin-fetch cadence is
   throttled by the new `engine_refresh_min_interval_seconds` config key (default `300`)
   (#598).
+- **DECIDE-phase artifact coherence gate.** A deterministic, land-time check that the
+  intake outcomes → PRD FRs → stories → plan tasks actually agree with each other, so a
+  spec can't land with a plausible plan that quietly drops an outcome, invents an FR, or
+  orphans a story/task. Claiming an idea from intake now stages its Desired-outcome bullets
+  to `.pipeline/intake-outcomes.md` so they travel with the worktree; the new
+  `/coherence-check` skill (Medium/Large tier only) authors the committed traceability
+  record at `.docs/coherence/<plan-stem>.md` at the end of DECIDE; and `land-spec.ts` runs
+  `runCoherenceGate` (`engine/engineer/coherence-validator.ts`), which cross-checks every
+  cited id against the real artifacts (fabricated-citation reject), runs five
+  coverage/consistency layers (outcome, FR, story, orphan-task, coverage-table), scans for
+  duplicate intake claims offline via local git state, and blocks the land on any
+  unresolved gap. Tier S is exempt outright, and specs authored before this gate existed
+  are never retroactively blocked (no `.docs/coherence/` signal in the diff disengages the
+  gate). A genuine exception is waivable via a committed
+  `.docs/coherence-waivers/<plan-stem>.md` (`Waives: <gap-id>[, ...]` / `Rationale: <prose>`,
+  fresh-in-diff, partial coverage still blocks).
 
 ## Migration
 
