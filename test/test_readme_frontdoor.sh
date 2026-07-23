@@ -18,12 +18,13 @@ if [[ ! -f "$README" ]]; then
   exit 1
 fi
 
-# Task 8 target heading set (Task 9 will add "## Documentation" afterward).
+# Current front-door heading set (Task 9 added "## Documentation").
 expected=(
   "## Requirements"
   "## Install"
   "## How the Pieces Fit Together"
   "## Quick Start"
+  "## Documentation"
   "## Key Design Principles"
 )
 
