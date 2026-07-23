@@ -9339,6 +9339,95 @@ describe('build-step stall circuit breaker', () => {
     expect(runner.runInteractive).not.toHaveBeenCalled();
   });
 
+  // #859 loop-level pin (Task 9): when every plan task id is resolved via
+  // Task:-trailered commits (rows still pending/never flipped), the build
+  // completion check must return done=true — and the stall circuit breaker
+  // (which lives entirely inside the `if (!completion.done)` branch) must
+  // never be reached at all. Asserts no build_stall event fires and the
+  // interactive stall handoff never runs, even though attempt/resolved-count
+  // bookkeeping would otherwise look flat across attempts.
+  it('#859: all task ids trailer-resolved -> completion is done and the stall breaker is never reached', async () => {
+    // `execa` is mocked module-wide (top of file) to a no-op success stub —
+    // real git commands never execute, so trailer resolution would silently
+    // see zero commits. This test needs genuine git commits to exercise the
+    // trailer-union path, so it swaps in the real `execa` implementation for
+    // its duration and restores the no-op stub afterward.
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    try {
+      await seedAllArtifactsExceptTaskStatus();
+
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed pre-build artifacts'], { cwd: dir });
+
+      // Plan with 3 tasks, matching the writeTaskStatus() heading convention.
+      await writeFile(
+        join(dir, '.docs/plans/2026-04-18-plan.md'),
+        ['# Plan', '', '### Task 1: Step 1', '', '### Task 2: Step 2', '', '### Task 3: Step 3', ''].join(
+          '\n',
+        ),
+      );
+      await execa('git', ['add', '.docs/plans/2026-04-18-plan.md'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+      // task-status.json rows are ALL pending — the pipeline never flipped
+      // them — so a rows-only reader would see zero resolved tasks forever.
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'pending' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+          ],
+        }),
+      );
+
+      // Every task is resolved ONLY via a Task:-trailered commit.
+      await mkdir(join(dir, 'src'), { recursive: true });
+      for (const n of [1, 2, 3]) {
+        await writeFile(join(dir, `src/task-${n}.ts`), `export const task${n} = true;\n`);
+        await execa('git', ['add', `src/task-${n}.ts`], { cwd: dir });
+        await execa('git', ['commit', '-m', `feat: task ${n}\n\nTask: ${n}\n`], { cwd: dir });
+      }
+
+      const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
+        run: vi.fn().mockResolvedValue({ success: true }),
+        runInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const stallEvents: unknown[] = [];
+      events.on('build_stall', (e) => stallEvents.push(e));
+
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        onRecovery,
+      });
+
+      await conductor.run();
+
+      // Trailer-union resolution passes the completion gate on the first
+      // attempt, so the stall block (guarded by `if (!completion.done)`) is
+      // never entered: no build_stall event, no interactive handoff.
+      expect(stallEvents).toHaveLength(0);
+      expect(runner.runInteractive).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
+  });
+
   it('proceeds as succeeded when the interactive REPL finishes the work', async () => {
     await seedAllArtifactsExceptTaskStatus();
     await writeTaskStatus(2, 5); // stalled at 2/5

@@ -280,6 +280,25 @@ auto-park.) An exhausted `no_task_progress` build halts with a distinct,
 specific reason (`build stalled: no task progress (...)`) rather than the generic "retries
 exhausted" message. The `halt_marker` flow below is unchanged:
 
+**Build-step exit routes on the trailer-union resolution (#859,
+adr-2026-07-23-trailer-union-build-step-routing).** The build step's own completion
+predicate (`CUSTOM_COMPLETION_PREDICATES.build`) and the stall breaker's `countResolvedTasks`
+now consume one shared resolver, `resolveTaskIds(projectRoot, planIds)` (`engine/task-progress.ts`):
+a plan task id counts as resolved if it appears as a `completed`/`skipped` row in
+`.pipeline/task-status.json` **or** as a distinct `Task:` trailer on the branch,
+`canonicalTaskId`-matched against the plan. The predicate computes `unresolved = planIds −
+resolveTaskIds(...)` and stays fail-closed (missing/corrupt status file or plan ⇒ not done,
+as before); trailer reads inside the resolver stay fail-soft (a git error yields no extra
+ids, never a throw). Before this fix the exit gate read rows alone while the breaker already
+read the union (#757/#773 Task 15), so a build whose tasks were resolved solely via
+`Task:` trailers could never satisfy its own exit gate — it kept re-dispatching until the
+breaker's resolved-count sat pinned at its ceiling and misread "all done" as "no progress",
+HALTing `no_task_progress` at 100% completion. This is a **routing** fix only: `Task:`
+trailers remain non-authoritative telemetry per #773 — they decide *when* the build step
+stops dispatching and hands off downstream, never that work is complete. `build_review`'s
+completeness rubric (below) remains the sole completion authority and can still FAIL a
+fully-trailered build and kick it back.
+
 - **Capture before clear** — `readHaltMarkerContent(this.projectRoot)` (`engine/task-progress.ts`)
   reads the raw marker content (the question, `null` if the marker is gone/unreadable), then
   `writeStallQuestionEvidence(this.projectRoot, question)` persists it to

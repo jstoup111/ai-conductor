@@ -42,6 +42,41 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
   const tasks = normalizeTasks(parsed);
   if (tasks.length === 0) return 0;
 
+  const planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
+  const resolved = await resolveTaskIds(projectRoot, planIds);
+  return resolved.size;
+}
+
+/**
+ * Shared union fold: plan task-ids that are "resolved" — either already
+ * `completed`/`skipped` in `.pipeline/task-status.json`, OR carried by a
+ * `Task:` trailer on a commit on the current branch (matched against
+ * `planIds` directly or via `canonicalTaskId` alias, e.g. plan id `2`
+ * matches trailer `Task: T2`). Trailer read is fail-soft: a git error (non-repo
+ * dir, no commits, etc.) degrades to no additional ids, never throws.
+ *
+ * This is the exact fold `countResolvedTasks` computes internally; extracted
+ * here so other callers (the build completion predicate) can consume the
+ * same definition instead of re-deriving it.
+ */
+export async function resolveTaskIds(projectRoot: string, planIds: string[]): Promise<Set<string>> {
+  const statusPath = join(projectRoot, '.pipeline/task-status.json');
+  let raw: string;
+  try {
+    raw = await readFile(statusPath, 'utf-8');
+  } catch {
+    raw = '';
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+
+  const tasks = normalizeTasks(parsed);
+
   const resolved = new Set<string>();
   for (const t of tasks) {
     if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined) {
@@ -49,21 +84,17 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
     }
   }
 
-  // Union in plan task-ids carried by `Task:` trailers on the branch. Best
-  // effort: non-git directories or git failures degrade to no additional
-  // ids (fail-soft), matching countResolvedTasks's overall "no data means no
-  // progress" default.
   const trailerIds = await distinctTaskTrailerIds(projectRoot);
-  const planIds = new Set(tasks.map((t) => t.id).filter((id): id is string => id !== undefined));
+  const planIdSet = new Set(planIds);
   for (const id of trailerIds) {
     const canonical = canonicalTaskId(id);
-    const match = planIds.has(id)
+    const match = planIdSet.has(id)
       ? id
-      : [...planIds].find((p) => canonicalTaskId(p) === canonical);
+      : [...planIdSet].find((p) => canonicalTaskId(p) === canonical);
     if (match !== undefined) resolved.add(match);
   }
 
-  return resolved.size;
+  return resolved;
 }
 
 /**

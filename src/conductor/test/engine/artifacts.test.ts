@@ -1234,6 +1234,238 @@ describe('engine/artifacts', () => {
         await rm(bareDir, { recursive: true, force: true });
       });
 
+      // #859: bug fix — the build predicate previously computed `unresolved`
+      // by filtering task-status.json rows only, ignoring Task:-trailered
+      // commits entirely. A build where every task is trailer-evidenced but
+      // rows are still pending/in_progress (e.g. the pipeline never flipped
+      // rows to completed) falsely halted at "no_task_progress" despite 100%
+      // completion. The predicate must union rows with resolveTaskIds.
+      it('#859: build predicate resolves via trailer-union when rows show zero completions', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+          '### Task 2: Second task\n**Story:** 2\n\n' +
+          '### Task 3: Third task\n**Story:** 3\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // Every task id is trailer-evidenced via a real commit...
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/one.ts'), 'export const one = true;\n');
+        await execa('git', ['add', 'src/one.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task one\n\nTask: 1\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/two.ts'), 'export const two = true;\n');
+        await execa('git', ['add', 'src/two.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task two\n\nTask: 2\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/three.ts'), 'export const three = true;\n');
+        await execa('git', ['add', 'src/three.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task three\n\nTask: 3\n'], { cwd: dir });
+
+        // ...but the task-status.json rows are ALL pending/in_progress —
+        // zero completed rows.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'pending' },
+          { id: '2', name: 'Second task', status: 'in_progress' },
+          { id: '3', name: 'Third task', status: 'pending' },
+        ]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
+
+      // Task 5: mixed-evidence coverage — some tasks resolved via
+      // task-status.json rows, others resolved only via Task:-trailered
+      // commits, all unioned together to complete the build.
+      it('Task 5: mixed row-completed and trailer-completed tasks together complete the build', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+          '### Task 2: Second task\n**Story:** 2\n\n' +
+          '### Task 3: Third task\n**Story:** 3\n\n' +
+          '### Task 4: Fourth task\n**Story:** 4\n\n' +
+          '### Task 5: Fifth task\n**Story:** 5\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // Tasks 3-5 are evidenced only via Task:-trailered commits — no
+        // corresponding completed rows.
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/three.ts'), 'export const three = true;\n');
+        await execa('git', ['add', 'src/three.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task three\n\nTask: 3\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/four.ts'), 'export const four = true;\n');
+        await execa('git', ['add', 'src/four.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task four\n\nTask: 4\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/five.ts'), 'export const five = true;\n');
+        await execa('git', ['add', 'src/five.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task five\n\nTask: 5\n'], { cwd: dir });
+
+        // Tasks 1-2 are evidenced only via task-status.json rows marked
+        // completed — no Task: trailers for them at all.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'completed' },
+          { id: '2', name: 'Second task', status: 'completed' },
+          { id: '3', name: 'Third task', status: 'pending' },
+          { id: '4', name: 'Fourth task', status: 'pending' },
+          { id: '5', name: 'Fifth task', status: 'pending' },
+        ]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
+
+      // Task 8: prove the completion-miss reason names only the ids that are
+      // actually unresolved under the union (rows OR trailers), not a raw
+      // row-only filter that would over-name trailer-resolved ids.
+      describe('Task 8: completion-miss reason names only union-unresolved ids', () => {
+        async function initRepo() {
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+        }
+
+        it('names exactly the truly-unresolved ids (4, 5) when 1-3 are resolved (2 via trailer-only)', async () => {
+          await initRepo();
+          await writePlan(
+            '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n\n' +
+            '### Task 3: Third task\n**Story:** 3\n\n' +
+            '### Task 4: Fourth task\n**Story:** 4\n\n' +
+            '### Task 5: Fifth task\n**Story:** 5\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+          // Tasks 2 and 3 are resolved ONLY via Task: trailer commits, not rows.
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/two.ts'), 'export const two = true;\n');
+          await execa('git', ['add', 'src/two.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task two\n\nTask: 2\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/three.ts'), 'export const three = true;\n');
+          await execa('git', ['add', 'src/three.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task three\n\nTask: 3\n'], { cwd: dir });
+
+          // Task 1 resolved via a completed row; 4 and 5 remain unresolved
+          // (no rows, no trailers).
+          await writeTasks([
+            { id: '1', name: 'First task', status: 'completed' },
+            { id: '2', name: 'Second task', status: 'pending' },
+            { id: '3', name: 'Third task', status: 'pending' },
+            { id: '4', name: 'Fourth task', status: 'pending' },
+            { id: '5', name: 'Fifth task', status: 'pending' },
+          ]);
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          // 3 resolved (1, 2, 3) of 5 total ⇒ 2 unresolved of 5.
+          expect(result.reason).toMatch(/^2\/5 tasks/);
+          expect(result.reason).toContain('4, 5');
+          expect(result.reason).not.toContain('1,');
+          expect(result.reason).not.toMatch(/\b2\b,/);
+          expect(result.reason).not.toMatch(/\b3\b,/);
+        });
+
+        it('truncates with "(+N more)" when all 5 ids are unresolved', async () => {
+          await initRepo();
+          await writePlan(
+            '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n\n' +
+            '### Task 3: Third task\n**Story:** 3\n\n' +
+            '### Task 4: Fourth task\n**Story:** 4\n\n' +
+            '### Task 5: Fifth task\n**Story:** 5\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+          await writeTasks([
+            { id: '1', name: 'First task', status: 'pending' },
+            { id: '2', name: 'Second task', status: 'pending' },
+            { id: '3', name: 'Third task', status: 'pending' },
+            { id: '4', name: 'Fourth task', status: 'pending' },
+            { id: '5', name: 'Fifth task', status: 'pending' },
+          ]);
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/^5\/5 tasks/);
+          expect(result.reason).toContain('1, 2, 3');
+          expect(result.reason).toContain('(+2 more)');
+        });
+
+        // Documented semantics (verified from task-progress.ts's
+        // distinctTaskTrailerIds/listCommitsWithTrailers): resolution scans
+        // `Task:` trailers across ALL commits in the merge-base-relative
+        // range, keyed purely on commit message trailers — it never inspects
+        // file diffs or working-tree state. A `git revert` creates a NEW
+        // commit that reverses the file changes but does not remove the
+        // original trailered commit from history, and the revert commit's
+        // own message ("Revert \"...\"\n\nThis reverts commit <sha>.") does
+        // NOT carry a `Task:` trailer. So the original id remains resolved:
+        // reverting the change does NOT un-resolve the task id.
+        it('a reverted commit still counts its Task: trailer id as resolved (revert does not un-resolve)', async () => {
+          await initRepo();
+          await writePlan(
+            '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/one.ts'), 'export const one = true;\n');
+          await execa('git', ['add', 'src/one.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task one\n\nTask: 1\n'], { cwd: dir });
+
+          // Revert the task-one commit via a follow-up revert commit.
+          await execa('git', ['revert', '--no-edit', 'HEAD'], { cwd: dir });
+
+          await writeTasks([
+            { id: '1', name: 'First task', status: 'pending' },
+            { id: '2', name: 'Second task', status: 'pending' },
+          ]);
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+
+          expect(result.done).toBe(false);
+          // Task 1 remains "resolved" via its (still-present-in-history)
+          // trailered commit despite the revert — only task 2 is unresolved.
+          expect(result.reason).toMatch(/^1\/2 tasks/);
+          expect(result.reason).toContain('2');
+          expect(result.reason).not.toMatch(/:\s*1(,|\s*$)/);
+        });
+      });
+
       // Regression tests (Task 3): em-dash plan parser—prevent false-positive empty-plan auto-park
       describe('regression: em-dash headings (### Task N — Title) are not false-positives for empty-plan', () => {
         it('Story 1: Em-dash plan with evidence is "done", not "empty"', async () => {
@@ -1463,6 +1695,84 @@ describe('engine/artifacts', () => {
           if (!result.done && result.reason) {
             expect(result.reason).not.toMatch(/no tasks in plan|plan is empty or contains no tasks/i);
           }
+        });
+      });
+
+      // Task 6 (trailer-union build completion plan): the halt-marker check,
+      // plan-validation, and status-file read guards run BEFORE the
+      // resolveTaskIds union call and must still fail closed unchanged by
+      // its introduction.
+      describe('Task 6: fail-closed guards precede the resolveTaskIds union call', () => {
+        it('fails with the missing-status-file reason when .pipeline/task-status.json does not exist and cannot be seeded', async () => {
+          // A plan exists but projectRoot/planPath are omitted from ctx, so
+          // seeding never runs and no task-status.json is created — the
+          // read guard must reject before ever reaching the resolver.
+          await writePlan('### Task 1: Task one\n**Story:** 1\n');
+          const result = await checkStepCompletion(dir, 'build', {});
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/missing .pipeline\/task-status\.json/);
+        });
+
+        it('fails with the invalid-JSON reason when task-status.json cannot be parsed and re-seeding is bypassed', async () => {
+          await writePlan('### Task 1: Task one\n**Story:** 1\n');
+          const statusPath = join(dir, '.pipeline/task-status.json');
+          await mkdir(dirname(statusPath), { recursive: true });
+          await writeFile(statusPath, 'not valid json {');
+
+          // Passing ctx without projectRoot/planPath skips seedTaskStatus
+          // entirely, so the corrupt file reaches the JSON.parse guard as-is.
+          const result = await checkStepCompletion(dir, 'build', {});
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/invalid JSON in \.pipeline\/task-status\.json/);
+        });
+
+        it('fails with the empty-plan reason when the plan file has no task headings', async () => {
+          await writePlan('# Notes\n\nJust prose, no task headings here.\n');
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/plan is empty or contains no tasks/);
+        });
+
+        it('fails with the halt-marker reason even when every task is fully trailer-evidenced (halt check short-circuits before the resolver)', async () => {
+          await execa('git', ['init', '-b', 'main'], { cwd: dir });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+          await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+          await writeFile(join(dir, 'README.md'), '# Test\n');
+          await execa('git', ['add', 'README.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+          await writePlan(
+            '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n',
+          );
+          await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+          // Fully trailer-evidence both tasks via real commits...
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/one.ts'), 'export const one = true;\n');
+          await execa('git', ['add', 'src/one.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task one\n\nTask: 1\n'], { cwd: dir });
+
+          await writeFile(join(dir, 'src/two.ts'), 'export const two = true;\n');
+          await execa('git', ['add', 'src/two.ts'], { cwd: dir });
+          await execa('git', ['commit', '-m', 'feat: task two\n\nTask: 2\n'], { cwd: dir });
+
+          // ...and also mark the rows completed, so the union resolver
+          // would report full completion if it were ever consulted.
+          await writeTasks([
+            { id: '1', name: 'First task', status: 'completed' },
+            { id: '2', name: 'Second task', status: 'completed' },
+          ]);
+
+          // But a halt marker is present — this must win regardless.
+          await createFile(HALT_MARKER, 'user requested exit; awaiting recovery REPL');
+
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/halt-user-input-required/);
         });
       });
     });

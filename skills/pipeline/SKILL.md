@@ -84,15 +84,19 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
 5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
-                  (e.g. Task: 9, not Task: task-9). The engine derives completion from this trailer; the orchestrator
-                  never writes `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
+                  (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
+                  telemetry: it routes the build→build_review handoff, but `build_review`
+                  judges/derives actual completion from a plan-vs-diff comparison (union of
+                  trailer-tagged and diff-resolved tasks); the orchestrator never writes
+                  `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
 6. DONE         — After the subagent's commit lands on the branch, the PostToolUse session hook
                   (same matcher as step 0/2) removes `.pipeline/current-task` once the subagent
                   returns, iff its content still matches this dispatch's id — no CLI invocation
-                  needed. It never writes `completed`; completion is derived solely from the
-                  commit's `Task: <id>` trailer verified in step 5. If state ever needs manual
-                  correction (e.g. after a crash), `conduct-ts task start/done` remain available
-                  as operator/recovery commands, but are not part of the normal per-task flow.
+                  needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
+                  only routes the handoff to `build_review`, which is the actual completion
+                  authority. If state ever needs manual correction (e.g. after a crash),
+                  `conduct-ts task start/done` remain available as operator/recovery commands,
+                  but are not part of the normal per-task flow.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import {
   countResolvedTasks,
+  resolveTaskIds,
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
@@ -129,6 +130,205 @@ describe('task-progress', () => {
       await expect(countResolvedTasks(dir)).resolves.toBe(0);
       const { readdir } = await import('node:fs/promises');
       await expect(readdir(dir)).resolves.toEqual([]);
+    });
+  });
+
+  describe('Task 3: countResolvedTasks / resolveTaskIds parity (pre-refactor pin)', () => {
+    it('rows-only: pins countResolvedTasks to 3 for 3 completed/skipped rows out of 5', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'completed' },
+            { id: '3', status: 'skipped' },
+            { id: '4', status: 'pending' },
+            { id: '5', status: 'in_progress' },
+          ],
+        }),
+      );
+      expect(await countResolvedTasks(dir)).toBe(3);
+    });
+
+    it('trailers-only: pins countResolvedTasks to 2 when rows are all pending but 2 have Task: trailers', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'pending' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+            { id: '4', status: 'pending' },
+          ],
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 1\n\nTask: 1'], { cwd: dir });
+
+      await writeFile(join(dir, 'b.txt'), 'b');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 3\n\nTask: 3'], { cwd: dir });
+
+      expect(await countResolvedTasks(dir)).toBe(2);
+    });
+
+    it('mixed rows + trailers + alias: pins countResolvedTasks to 4 (union of completed/skipped rows and trailer/alias matches)', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+            { id: '4', status: 'skipped' },
+            { id: '5', status: 'pending' },
+          ],
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      // trailer-only id (plan id 3, bare trailer)
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 3\n\nTask: 3'], { cwd: dir });
+
+      // alias case: plan id 2, trailer "T2"
+      await writeFile(join(dir, 'b.txt'), 'b');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 2\n\nTask: T2'], { cwd: dir });
+
+      // resolved set should be {1 (completed), 4 (skipped), 3 (trailer), 2 (alias)} = 4
+      expect(await countResolvedTasks(dir)).toBe(4);
+    });
+
+    it('no-status-file: pins countResolvedTasks to 0 when .pipeline/task-status.json is absent', async () => {
+      expect(await countResolvedTasks(dir)).toBe(0);
+    });
+
+    it('empty-rows: pins countResolvedTasks to 0 when the tasks field is missing', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({ plan_ref: 'foo' }),
+      );
+      expect(await countResolvedTasks(dir)).toBe(0);
+    });
+  });
+
+  describe('resolveTaskIds', () => {
+    it('resolves completed rows, skipped rows, trailer-only ids, and canonical alias trailers', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'pending' },
+            { id: '3', status: 'pending' },
+            { id: '4', status: 'skipped' },
+            { id: '5', status: 'pending' },
+          ],
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'seed'], { cwd: dir });
+
+      // trailer-only id (plan id 3, bare trailer)
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 3\n\nTask: 3'], { cwd: dir });
+
+      // alias case: plan id 2, trailer "T2"
+      await writeFile(join(dir, 'b.txt'), 'b');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 2\n\nTask: T2'], { cwd: dir });
+
+      const resolved = await resolveTaskIds(dir, ['1', '2', '3', '4', '5']);
+
+      expect(resolved).toEqual(new Set(['1', '2', '3', '4']));
+    });
+
+    it('ignores a phantom Task trailer whose id is not in planIds', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 99\n\nTask: 99'], { cwd: dir });
+
+      const resolved = await resolveTaskIds(dir, ['1', '2', '3', '4', '5']);
+
+      expect(resolved).toEqual(new Set());
+    });
+
+    it('degrades to rows-only resolution without throwing when projectRoot is not a git repo', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set(['1']));
+    });
+
+    it('does not resolve rows with status in_progress or pending', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'in_progress' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set());
+    });
+
+    it('normalizes a legacy id-keyed map-shape task-status.json without throwing', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          '1': { status: 'completed' },
+          '2': { status: 'pending' },
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set(['1']));
     });
   });
 

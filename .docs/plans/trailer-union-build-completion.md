@@ -105,7 +105,7 @@ CHANGELOG `[Unreleased]` only).
 - src/conductor/src/engine/task-progress.ts — delegation
 - src/conductor/test/engine/task-progress.test.ts — parity pins
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** same as Task 1
 **Dependencies:** Task 1, Task 2
 
 ### Task 4: Build predicate resolves via the union — the #859 regression shape
