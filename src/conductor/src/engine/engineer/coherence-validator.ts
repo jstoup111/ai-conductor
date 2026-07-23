@@ -10,7 +10,7 @@
 //
 // This module is inert until wired into land-spec.ts.
 
-import { splitStoryBlocks } from '../artifacts.js';
+import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
 
 /** The four row classes a coherence artifact row may belong to. */
@@ -314,6 +314,67 @@ export function checkOutcomeCoverage(
     const row = outcomeRowsById.get(gapId);
     if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase())) {
       return { ok: false, reason: 'outcome-gap', gapId, bullet: outcomeBullets[n - 1] };
+    }
+  }
+
+  return { ok: true };
+}
+
+// --- Story-coverage layer (Task 9) ---
+
+export type StoryCoverageResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'story-gap';
+      /** The `story-<id>` id of the uncovered story. */
+      gapId: string;
+      /** The story's title, taken from its `## Story <id>: <title>` heading. */
+      title: string;
+    }
+  | {
+      ok: false;
+      reason: 'unparseable-stories';
+    };
+
+/** The title portion of a `## Story <id>: <title>` heading, if present. */
+function extractStoryTitle(blockText: string): string {
+  const m = blockText.match(/^##\s+Story\s+[A-Za-z0-9.\-]+\s*:\s*(.*)$/im);
+  return m ? m[1].trim() : '';
+}
+
+/**
+ * Set-difference check: every story id declared in the stories file
+ * (`splitStoryBlocks`) must be cited by ≥1 plan task's `**Story:**` line
+ * (`collectPlanCoverage`). A story with no citing task is reported as a gap
+ * naming the `story-<id>` id and the story's title.
+ *
+ * Fail-closed: a stories file with zero parseable story blocks (no `##
+ * Story <id>:` headings at all) never trivially passes as "no stories to
+ * cover" — it is rejected outright as `unparseable-stories`, so a corrupt or
+ * malformed stories file can never masquerade as full coverage.
+ */
+export function checkStoryCoverage(
+  storiesText: string | null,
+  planText: string | null,
+): StoryCoverageResult {
+  const blocks = splitStoryBlocks(storiesText ?? '');
+  const idBlocks = blocks.filter((b) => b.id);
+  if (idBlocks.length === 0) {
+    return { ok: false, reason: 'unparseable-stories' };
+  }
+
+  const covered = collectPlanCoverage(planText ?? '');
+
+  for (const block of idBlocks) {
+    const id = block.id!;
+    if (!covered.has(`${id}|*`)) {
+      return {
+        ok: false,
+        reason: 'story-gap',
+        gapId: `story-${id}`,
+        title: extractStoryTitle(block.text),
+      };
     }
   }
 

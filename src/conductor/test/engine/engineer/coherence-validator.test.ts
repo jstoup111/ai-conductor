@@ -13,6 +13,7 @@ import {
   crossCheckIds,
   checkOutcomeCoverage,
   checkFrCoverage,
+  checkStoryCoverage,
   type CrossCheckInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
@@ -427,5 +428,82 @@ describe('checkFrCoverage', () => {
   it('passes trivially (no PRD, technical track) when prdText is null', () => {
     const result = checkFrCoverage(null, '## Story 1\n', '### Task 1\n');
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('checkStoryCoverage', () => {
+  it('passes when every story id is cited by ≥1 task **Story:** line', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+
+## Story 2: Widget returns
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when returned, then it is refunded.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Files:** src/widget.ts
+
+### Task 2: Build returns
+**Story:** Story 2 (happy path)
+**Files:** src/returns.ts
+`;
+    const result = checkStoryCoverage(storiesText, planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('reports a gap naming the uncovered story id and title', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+
+## Story 2: Widget returns
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when returned, then it is refunded.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Files:** src/widget.ts
+`;
+    const result = checkStoryCoverage(storiesText, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('story-gap');
+    expect(result.gapId).toBe('story-2');
+    expect(result.title).toBe('Widget returns');
+  });
+
+  it('fails closed with unparseable-stories when the stories file has zero parseable blocks', () => {
+    const storiesText = `# Stories
+
+Just some prose, no story headings at all.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Files:** src/widget.ts
+`;
+    const result = checkStoryCoverage(storiesText, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('unparseable-stories');
   });
 });

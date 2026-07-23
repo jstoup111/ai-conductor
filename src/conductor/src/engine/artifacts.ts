@@ -2782,7 +2782,7 @@ function storyIdFromFilename(path: string): string | undefined {
  *       `**Story:** Story 1 (FR-1, FR-2)` + `**Type:** happy-path`
  * A `## Coverage Check` table (`| 1 | happy | ... |`) is also honored.
  */
-function collectPlanCoverage(planText: string): Set<string> {
+export function collectPlanCoverage(planText: string): Set<string> {
   const set = new Set<string>();
 
   for (const block of splitOnHeadings(planText, /^###\s+/)) {
