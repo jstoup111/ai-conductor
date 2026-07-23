@@ -44,6 +44,7 @@ import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
+import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 
 const execFile = promisify(execFileCb);
 
@@ -65,6 +66,12 @@ export interface LandSpecOptions {
   ownerConfig?: OwnerConfig;
   /** gh runner for the login fallback; injected in tests / by the CLI. */
   gh?: GhRunner;
+  /**
+   * Mermaid render-check deps for the diagram gate (#810). Defaults to the real
+   * mmdc-backed deps; injected in tests to drive the gate without launching a
+   * browser.
+   */
+  renderDeps?: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
 }
 
 export interface LandSpecResult {
@@ -278,6 +285,35 @@ export async function landSpec(
     }
   }
 
+  // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
+  //     render-check was skill prose (not enforced) and fail-opened when mmdc
+  //     was absent. Enforce it deterministically at the land seam, fail-closed:
+  //     every mermaid block in every `.docs/**/*.md` MUST render, and if
+  //     diagrams are present but cannot be validated (mmdc missing), the land is
+  //     refused rather than silently passing an unvalidated diagram.
+  const renderDeps = opts.renderDeps ?? defaultRenderDeps(() => {});
+  for (const mdFile of await collectDocsMarkdown(worktreePath)) {
+    const mdContent = await readFile(mdFile, 'utf-8');
+    const check = await checkDiagramsForFile(mdContent, renderDeps, planStem(mdFile));
+    if (check.status === 'errors') {
+      const first = check.failures[0];
+      const firstLine = (first?.error ?? 'parse error').split('\n').find((l) => /error/i.test(l));
+      throw new Error(
+        `landSpec: mermaid diagram ${first?.index ?? '?'} in "${mdFile}" fails to render — ` +
+          `${(firstLine ?? first?.error ?? 'parse error').trim()}. Fix the diagram(s) ` +
+          '(run `conduct render-diagrams --check <file>`), then re-run land.',
+      );
+    }
+    if (check.status === 'tool-missing') {
+      throw new Error(
+        `landSpec: "${mdFile}" contains ${check.total} mermaid diagram(s) that cannot be ` +
+          'validated — @mermaid-js/mermaid-cli (mmdc) is not installed. Install it so diagrams ' +
+          'are verified to render before landing (bin/install mermaid preset, or ' +
+          '`npm i -g @mermaid-js/mermaid-cli`).',
+      );
+    }
+  }
+
   // 5. Commit in place on the worktree's branch. The branch already exists (it is the
   //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
   //    primary working tree is never touched (FR-2). On failure we leave the worktree
@@ -424,6 +460,36 @@ export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Recursively collect every `.md` file under the worktree's `.docs/` tree
+ * (absolute paths) for the mermaid render gate. Returns [] when `.docs/` is
+ * absent. Mermaid blocks can live in any artifact (architecture, ADRs,
+ * architecture-review, plans), so every `.md` is checked — files without a
+ * mermaid block resolve to `no-diagrams` cheaply (no mmdc launch).
+ */
+async function collectDocsMarkdown(worktreePath: string): Promise<string[]> {
+  const root = join(worktreePath, '.docs');
+  const out: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, String(e.name));
+      if (e.isDirectory()) {
+        await walk(p);
+      } else if (e.isFile() && /\.md$/i.test(String(e.name))) {
+        out.push(p);
+      }
+    }
+  };
+  await walk(root);
+  return out.sort();
+}
 
 /**
  * List `.docs/decisions/adr-*.md` files (absolute paths). Returns [] when the
