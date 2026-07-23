@@ -14,6 +14,7 @@ import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
+import type { ComplexityTier, Track } from '../../types/index.js';
 
 /** The four row classes a coherence artifact row may belong to. */
 export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task';
@@ -1004,4 +1005,109 @@ export async function advisoryDuplicateClaimWarn(
   } catch {
     return null;
   }
+}
+
+// --- Entry guard: tier gating, layer degradation, no-retroactivity (Task 15) ---
+//
+// Per adr-2026-07-22-coherence-gate-placement-and-validation-split.md ("Tier
+// exemption", "Track/origin degradation") the validator does not always run
+// all five layers against every spec. `resolveRequiredLayers` is the single
+// entry guard `land-spec.ts` (Task 16) calls before touching the fail-closed
+// missing-artifact rule, so:
+//
+//   1. Tier S is exempt OUTRIGHT — the check runs and returns `disengaged`
+//      before anything else is inspected (Story 14 ordering: the exemption
+//      can never be misread as a "missing artifact" gap).
+//   2. A "legacy" idea-attributable change set — one with no
+//      `.docs/coherence/` file in it at all — predates the /coherence-check
+//      step existing; the gate disengages entirely rather than rejecting a
+//      spec that was never asked to author the artifact (no-retroactivity).
+//   3. Otherwise the gate engages and derives which of the five coverage
+//      layers are REQUIRED from committed signals only: no track marker (or
+//      an explicit `product` track) requires the FR layer; a `technical`
+//      track marker skips it. No persisted intake outcome bullets skips the
+//      outcome layer; any outcome bullets require it. The story/orphan-task/
+//      coverage-table layers are structural (they need no external marker)
+//      and are always required once the gate is engaged.
+
+/** The five coverage/consistency layers `validateCoherence` can enforce. */
+export type CoherenceRequiredLayer =
+  | 'outcome'
+  | 'fr'
+  | 'story'
+  | 'orphan-task'
+  | 'coverage-table';
+
+export type RequiredLayersResult =
+  | {
+      /** The gate does not run at all for this spec. */
+      engaged: false;
+      /** Why the gate disengaged. */
+      reason: 'tier-exempt' | 'legacy-change-set';
+    }
+  | {
+      /** The gate runs; only the layers listed here are enforced. */
+      engaged: true;
+      layers: ReadonlySet<CoherenceRequiredLayer>;
+    };
+
+/**
+ * Decide whether the coherence gate engages for this spec at all and, if so,
+ * which layers it requires. Call this BEFORE any fail-closed missing-artifact
+ * check (Story 14): a `disengaged` result must short-circuit the caller with
+ * no further validator work, never fall through into a rejection path.
+ *
+ * @param worktree - the idea's worktree path. Not read directly by this
+ *   function (tier/track/outcomes/changeSet are supplied pre-resolved by the
+ *   caller) — accepted for parity with the other land-spec entry points and
+ *   reserved for future direct-read callers.
+ * @param tier - the spec's `.docs/complexity/<slug>.md` tier, or `undefined`
+ *   when no tier marker exists.
+ * @param track - the spec's `.docs/track/<slug>.md` track (via
+ *   `parseTrack`), or `undefined` when no track marker exists. Mirrors land's
+ *   own default: an absent marker defaults to `product`.
+ * @param outcomes - the spec's staged/committed intake Desired-outcome
+ *   bullets, in order. An empty array means no outcome layer is required.
+ * @param changeSet - the idea-attributable path set (`resolveIdeaFiles`'s
+ *   return value, or an equivalent list) for this spec's diff. Used only to
+ *   detect the no-retroactivity trigger: no `.docs/coherence/` path present
+ *   anywhere in it means this spec predates the /coherence-check step.
+ */
+export function resolveRequiredLayers(
+  worktree: string,
+  tier: ComplexityTier | undefined,
+  track: Track | undefined,
+  outcomes: readonly string[],
+  changeSet: ReadonlySet<string> | readonly string[],
+): RequiredLayersResult {
+  void worktree;
+
+  // 1. Tier exemption, checked first and unconditionally: never let a later
+  // check (missing artifact, legacy change set) misclassify an exempt spec.
+  if (tier === 'S') {
+    return { engaged: false, reason: 'tier-exempt' };
+  }
+
+  // 2. No-retroactivity trigger: a legacy change set (no coherence artifact
+  // anywhere in the idea-attributable diff) disengages the gate entirely.
+  const changed = changeSet instanceof Set ? changeSet : new Set(changeSet);
+  const hasCoherenceSignal = [...changed].some((p) => p.startsWith('.docs/coherence/'));
+  if (!hasCoherenceSignal) {
+    return { engaged: false, reason: 'legacy-change-set' };
+  }
+
+  // 3. Layer degradation: structural layers are always required once
+  // engaged; marker-gated layers derive from committed signals.
+  const layers = new Set<CoherenceRequiredLayer>(['story', 'orphan-task', 'coverage-table']);
+
+  const effectiveTrack: Track = track ?? 'product';
+  if (effectiveTrack === 'product') {
+    layers.add('fr');
+  }
+
+  if (outcomes.length > 0) {
+    layers.add('outcome');
+  }
+
+  return { engaged: true, layers };
 }

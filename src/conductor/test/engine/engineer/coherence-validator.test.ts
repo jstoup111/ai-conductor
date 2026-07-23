@@ -20,6 +20,7 @@ import {
   validateCoherence,
   scanDuplicateClaim,
   advisoryDuplicateClaimWarn,
+  resolveRequiredLayers,
   type CrossCheckInputs,
   type CoherenceGap,
   type ValidateCoherenceInputs,
@@ -960,5 +961,81 @@ describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () =>
     expect(report).not.toBeNull();
     expect(report?.seamOverlaps).toEqual([]);
     expect(report?.skipNotes).toEqual([]);
+  });
+});
+
+describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-retroactivity)', () => {
+  const WITH_COHERENCE = ['.docs/coherence/my-plan.md'];
+  const LEGACY = ['.docs/plan/my-plan.md', 'src/foo.ts'];
+
+  it('disengages for tier S BEFORE any other check — even with a legacy change set and no outcomes', () => {
+    const result = resolveRequiredLayers('/wt', 'S', 'product', [], LEGACY);
+    expect(result).toEqual({ engaged: false, reason: 'tier-exempt' });
+  });
+
+  it('disengages for tier S even when the change set carries a coherence artifact', () => {
+    const result = resolveRequiredLayers('/wt', 'S', 'technical', ['outcome bullet'], WITH_COHERENCE);
+    expect(result.engaged).toBe(false);
+    if (result.engaged) return;
+    expect(result.reason).toBe('tier-exempt');
+  });
+
+  it('technical track marker skips the FR layer but keeps story/orphan-task/coverage-table enforced', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'technical', [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.layers.has('fr')).toBe(false);
+    expect(result.layers.has('story')).toBe(true);
+    expect(result.layers.has('orphan-task')).toBe(true);
+    expect(result.layers.has('coverage-table')).toBe(true);
+  });
+
+  it('product track requires the FR layer', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.layers.has('fr')).toBe(true);
+  });
+
+  it('no staged/committed outcomes skips the outcome layer, but orphan-task stays required', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.layers.has('outcome')).toBe(false);
+    expect(result.layers.has('orphan-task')).toBe(true);
+  });
+
+  it('non-empty outcome bullets require the outcome layer', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', ['Desired outcome: X'], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.layers.has('outcome')).toBe(true);
+  });
+
+  it('no track marker (undefined) defaults to product, per parseTrack default semantics', () => {
+    const result = resolveRequiredLayers('/wt', 'M', undefined, [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+    if (!result.engaged) return;
+    expect(result.layers.has('fr')).toBe(true);
+  });
+
+  it('a legacy change set (no .docs/coherence/ path) disengages the gate entirely', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', ['Desired outcome: X'], LEGACY);
+    expect(result).toEqual({ engaged: false, reason: 'legacy-change-set' });
+  });
+
+  it('accepts a changeSet as a Set<string> as well as an array', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], new Set(WITH_COHERENCE));
+    expect(result.engaged).toBe(true);
+  });
+
+  it('M-tier engages normally: the S-tier exemption never leaks to non-S tiers', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
+  });
+
+  it('L-tier engages normally too', () => {
+    const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
+    expect(result.engaged).toBe(true);
   });
 });
