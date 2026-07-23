@@ -1,0 +1,10 @@
+{
+  "id": "flow-examples-fixture-0001",
+  "source": "github-issues",
+  "sourceRef": "flow-examples/fixtures#1",
+  "text": "Fixture idea seeded for the intake-loop flow example (Task 12): demonstrates a pending envelope flowing through `conduct-ts intake-loop --once`.",
+  "hintRepo": "flow-examples",
+  "status": "pending",
+  "receivedAt": "2026-01-01T00:00:00.000Z",
+  "labels": ["size:s"]
+}
