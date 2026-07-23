@@ -169,6 +169,69 @@ describe('task-progress', () => {
 
       expect(resolved).toEqual(new Set(['1', '2', '3', '4']));
     });
+
+    it('ignores a phantom Task trailer whose id is not in planIds', async () => {
+      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      await writeFile(join(dir, 'a.txt'), 'a');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'work on task 99\n\nTask: 99'], { cwd: dir });
+
+      const resolved = await resolveTaskIds(dir, ['1', '2', '3', '4', '5']);
+
+      expect(resolved).toEqual(new Set());
+    });
+
+    it('degrades to rows-only resolution without throwing when projectRoot is not a git repo', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set(['1']));
+    });
+
+    it('does not resolve rows with status in_progress or pending', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'in_progress' },
+            { id: '2', status: 'pending' },
+          ],
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set());
+    });
+
+    it('normalizes a legacy id-keyed map-shape task-status.json without throwing', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          '1': { status: 'completed' },
+          '2': { status: 'pending' },
+        }),
+      );
+
+      const resolved = await resolveTaskIds(dir, ['1', '2']);
+
+      expect(resolved).toEqual(new Set(['1']));
+    });
   });
 
   describe('halt marker', () => {
