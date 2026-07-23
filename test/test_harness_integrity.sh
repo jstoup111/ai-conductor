@@ -696,6 +696,37 @@ else
   assert "test/test_ci_detect_docs_only.sh exists" 1
 fi
 
+# ── 14. README/docs relocation acceptance checks ────────────────────────────
+# Runs the three durable acceptance checks produced by Tasks 11-13 of
+# .docs/plans/condense-readme-relocate-docs.md: docs-link-check.sh (no broken
+# relative links/anchors across README.md + docs/*.md), readme-shape-check.sh
+# (README.md stays a condensed front-door), and
+# docs-content-preservation-check.sh (relocated content isn't silently
+# dropped). Without this wiring, step 1's `bash -n` only proves these scripts
+# are syntactically valid, not that they actually pass — wire them in as real
+# invoked checks, same pattern as step 13's ci-detect-docs-only.sh.
+echo ""
+echo -e "${BOLD}14. README/docs relocation acceptance checks${NC}"
+
+for docs_check in docs-link-check.sh readme-shape-check.sh docs-content-preservation-check.sh; do
+  docs_check_path="${HARNESS_DIR}/test/${docs_check}"
+  if [ -f "$docs_check_path" ]; then
+    set +e
+    docs_check_output=$(bash "$docs_check_path" 2>&1)
+    docs_check_exit=$?
+    set -e
+
+    if [ "$docs_check_exit" -eq 0 ]; then
+      assert "test/${docs_check} — passes" 0
+    else
+      echo "$docs_check_output" | sed 's/^/    /'
+      assert "test/${docs_check} — failed" 1
+    fi
+  else
+    assert "test/${docs_check} exists" 1
+  fi
+done
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
