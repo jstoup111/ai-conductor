@@ -284,6 +284,27 @@ describe('createDependencyLinks (writer)', () => {
     }
   });
 
+  it('Jira-shaped ref (source or target) is skipped non-fatally — no gh API call made', async () => {
+    const { gh, calls } = makeGh({});
+    const jiraSourceEdge: DependencyEdge = {
+      source: 'PROJ-123',
+      target: 'acme/app#217',
+      kind: 'gated-on',
+      blocked_by: true,
+    };
+    const jiraTargetEdge: DependencyEdge = {
+      source: 'acme/app#230',
+      target: 'PROJ-456',
+      kind: 'depends-on',
+      blocked_by: true,
+    };
+
+    const results = await createDependencyLinks([jiraSourceEdge, jiraTargetEdge], { gh, cwd: '/repo' });
+
+    expect(results).toEqual([]);
+    expect(calls.length).toBe(0);
+  });
+
   it('re-running against a fully-existing graph performs zero POSTs (safe, idempotent)', async () => {
     const { gh, calls } = makeGh({
       'repos/acme/app/issues/230/dependencies/blocked_by': [

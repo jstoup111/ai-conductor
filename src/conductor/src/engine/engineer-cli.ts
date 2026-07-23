@@ -44,6 +44,7 @@ import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
+import { parseSourceRef } from './engineer/issue-ref.js';
 import { restRemoveLabelArgs } from './pr-labels.js';
 import {
   claimUnblocked,
@@ -1092,10 +1093,10 @@ export async function dispatchEngineer(
 
       // Best-effort label strip; a gh failure must not fail `forget` (the ledger
       // entry is already gone, which is the authoritative dedup state).
-      const m = sourceRef.match(/^(.+)#(\d+)$/);
-      if (m) {
+      const parsedForget = parseSourceRef(sourceRef);
+      if (parsedForget) {
         try {
-          await gh(restRemoveLabelArgs(m[1], m[2], HANDLED_LABEL), { cwd: process.cwd() });
+          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.number, HANDLED_LABEL), { cwd: process.cwd() });
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }

@@ -7,6 +7,8 @@
 //     never injects a closing keyword for `Refs`, gh failure is non-fatal.
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   parseSourceRef,
   formatIssueRef,
@@ -49,6 +51,43 @@ describe('parseSourceRef', () => {
     ['acme/app#-1', null], // sign not allowed
   ])('rejects garbled input %p', (input, expected) => {
     expect(parseSourceRef(input as string)).toEqual(expected);
+  });
+});
+
+describe('parseSourceRef golden corpus', () => {
+  // Characterization test — freezes TODAY's actual behavior (lastIndexOf('#') +
+  // digit-only number check) BEFORE any refactor to generalize source-ref
+  // parsing (e.g. to support Jira keys). If this test needs to change, the
+  // refactor changed observable parse behavior — that must be a deliberate,
+  // reviewed decision, not an accident.
+  it.each([
+    ['acme/app#49', { repo: 'acme/app', number: '49' }],
+    ['a#b#4', { repo: 'a#b', number: '4' }],
+    ['a/b#01', { repo: 'a/b', number: '01' }],
+    ['#5', null],
+    ['a/b#', null],
+    ['a/b#4x', null],
+    ['å/ü#7', { repo: 'å/ü', number: '7' }],
+    ['PROJ-123', null],
+    ['', null],
+    [null, null],
+    [undefined, null],
+    [' PROJ-123 ', null],
+    ['A/B#1-2', null],
+  ])('parseSourceRef(%p) === %p', (input, expected) => {
+    expect(parseSourceRef(input as string)).toEqual(expected);
+  });
+});
+
+describe('parseSourceRef shim', () => {
+  it('delegates to parseWorkRef — issue-ref.ts no longer implements its own hash parsing', () => {
+    const srcPath = fileURLToPath(new URL('../../../src/engine/engineer/issue-ref.ts', import.meta.url));
+    const src = readFileSync(srcPath, 'utf8');
+    expect(src).not.toContain("lastIndexOf('#')");
+  });
+
+  it('returns null for a Jira-shaped ref (already true today — pinned)', () => {
+    expect(parseSourceRef('PROJ-123')).toBeNull();
   });
 });
 

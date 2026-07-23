@@ -22,6 +22,7 @@
 
 import { ensureLabel, addLabel, type GhRunner } from '../../pr-labels.js';
 import { createDependencyLinks, type DependencyEdge } from '../issue-dep-migration.js';
+import { strictSlugGithubRef, parseWorkRef } from '../source-ref.js';
 
 export type { GhRunner } from '../../pr-labels.js';
 
@@ -67,15 +68,6 @@ const SIZE_COLORS: Record<string, string> = {
   L: 'a2c4e0',
 };
 
-const SLUG_REF_RE = /^([\w.-]+\/[\w.-]+)#(\d+)$/;
-
-/** Parse `owner/repo#N` into its repo-slug + issue-number parts, or null. */
-function parseSlugRef(ref: string): { repo: string; number: string } | null {
-  const m = SLUG_REF_RE.exec(ref);
-  if (!m) return null;
-  return { repo: m[1], number: m[2] };
-}
-
 /**
  * Sync an intake issue's priority/size labels and Depends-on links to GitHub.
  * Never throws: every gh call is routed through the non-throwing pr-labels /
@@ -101,7 +93,7 @@ export async function syncIssueLabels(
   const badRefs: string[] = [];
   const linked: string[] = [];
 
-  const ref = parseSlugRef(issueRef);
+  const ref = strictSlugGithubRef(issueRef);
   if (!ref) {
     log(`[label-sync] syncIssueLabels: unparseable issue ref "${issueRef}"`);
     return {
@@ -129,8 +121,12 @@ export async function syncIssueLabels(
 
   const edges: DependencyEdge[] = [];
   for (const dep of fields.dependsOn ?? []) {
-    if (SLUG_REF_RE.test(dep)) {
+    if (strictSlugGithubRef(dep)) {
       edges.push({ source: issueRef, target: dep, kind: 'depends-on', blocked_by: true });
+    } else if (parseWorkRef(dep)?.kind === 'jira') {
+      // Jira-shaped Depends-on refs are recognized but not (yet) linkable via
+      // the GitHub blocked_by API — skip non-fatally, not a bad ref.
+      log(`[label-sync] syncIssueLabels: skipping Jira-shaped Depends-on ref "${dep}" (not linkable)`);
     } else {
       badRefs.push(dep);
     }

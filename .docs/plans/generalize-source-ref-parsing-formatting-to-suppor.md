@@ -75,8 +75,17 @@ None — pure TypeScript; no migrations, config, or new dependencies.
 - src/conductor/src/engine/engineer/source-ref.ts — new module
 - src/conductor/test/engine/engineer/source-ref.test.ts — new test file
 
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/issue-ref.ts)
+**Wired-into:** src/conductor/src/engine/engineer/issue-ref.ts#parseWorkRef
 **Dependencies:** none
+
+> Contract note (as-built, 2026-07-23): originally declared `none (inert until
+> issue-ref.ts)` for the sequencing window before Task 5's shim landed. The
+> feature is now fully built and `parseWorkRef` (plus the sibling helpers
+> `strictSlugGithubRef`/`splitOwnerRepo`/`formatWorkRef` this module exports)
+> is reachable from production — `issue-ref.ts#parseSourceRef`,
+> `artifacts.ts#parseIntakeSourceRef`, `intake-marker.ts#writeIntakeMarker`,
+> `intake/label-sync.ts`, and `backlog-priority.ts`. The declaration is
+> reconciled to a real call site.
 
 ### Task 3: source-ref module — Jira grammar + disjointness
 **Story:** Story 1 — Jira happy paths + Jira negatives + `#`/`/` disjointness
@@ -247,8 +256,15 @@ None — pure TypeScript; no migrations, config, or new dependencies.
 - src/conductor/src/engine/pr-labels.ts — shared return type import
 - src/conductor/test/engine/engineer/intake/backfill.test.ts — Jira per-issue failure
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/daemon-cli.ts#parseIssueRef
 **Dependencies:** Task 5
+
+> Contract note (as-built, 2026-07-23): `pr-labels.ts#parseIssueRef` is an
+> existing export whose signature changed (return type now the shared
+> `ParsedIssueRef`); the line-diff surfaces the re-added `export` line as a
+> "new" surface. It is not new — it is consumed in production by
+> `daemon-cli.ts`. Declared at its real consumer site rather than
+> `none (no new production surface)`.
 
 ### Task 13: Land-with-Jira-ref integration + grammar sweep
 **Story:** Story 4 — land integration (marker committed + ledger advanced + writeback skipped); Story 1/5 Done-When greps

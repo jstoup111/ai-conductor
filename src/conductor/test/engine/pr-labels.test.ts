@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { classifyChecksOutcome, prMergeState, isMergeable } from '../../src/engine/pr-labels.js';
+import { classifyChecksOutcome, prMergeState, isMergeable, parseIssueRef } from '../../src/engine/pr-labels.js';
+
+describe('parseIssueRef — pr-labels own URL-based grammar (independent of source-ref)', () => {
+  it('parses a github.com pull URL even when the owner segment looks Jira-shaped', () => {
+    expect(parseIssueRef('https://github.com/PROJ-123/x/pull/9')).toEqual({
+      repo: 'PROJ-123/x',
+      number: '9',
+    });
+  });
+
+  it('returns null for a non-github.com URL, unaffected by source-ref grammar', () => {
+    expect(parseIssueRef('https://example.com/PROJ-123/pull/9')).toBeNull();
+  });
+});
 
 describe('checksOutcome classification', () => {
   describe('classifyChecksOutcome', () => {

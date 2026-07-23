@@ -22,6 +22,7 @@
 
 import { parsePriorityLabels, parseSizeLabel } from '../../backlog-priority.js';
 import { ensureLabel, restAddLabelArgs, type GhRunner } from '../../pr-labels.js';
+import { parseSourceRef } from '../issue-ref.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,15 +106,6 @@ export function inferPriorityFromBody(body: string | undefined): PriorityValue |
   return match[1].toLowerCase() as PriorityValue;
 }
 
-// ── ref parsing ──────────────────────────────────────────────────────────────
-
-/** Parse an `owner/repo#N` ref into its `repo` and `number` parts. */
-function parseRef(ref: string): { repo: string; number: string } | null {
-  const m = ref.match(/^([^/]+\/[^#]+)#(\d+)$/);
-  if (!m) return null;
-  return { repo: m[1], number: m[2] };
-}
-
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -147,7 +139,7 @@ export async function backfillIntakeLabels(
       continue;
     }
 
-    const parsedRef = parseRef(issue.ref);
+    const parsedRef = parseSourceRef(issue.ref);
     if (!parsedRef) {
       log(`intake-backfill: issue ${issue.ref} failed — unparseable ref`);
       report.failed.push({ ref: issue.ref, error: `unparseable ref: ${issue.ref}` });
