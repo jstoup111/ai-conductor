@@ -873,9 +873,21 @@ in `.ai-conductor/config.yml` to re-surface them for debugging; the default (uns
 `engine/config.ts` (must be boolean), typed on `HarnessConfig.daemon_verbose` in
 `types/config.ts`, and threaded into `gatedWritebackDeps.verbose` in `daemon-cli.ts`.
 
+The same flag also governs **`bin/setup` output passthrough**. On a *successful* worktree
+prepare, `runProjectSetup` used to echo every line of the project's `bin/setup` output into
+the daemon log prefixed `setup: ` — dependency-manager chatter, blank spacer lines, and
+`publish-engine`'s machine-readable `{"versionId":…}` JSON. That passthrough accounted for
+55% of `.daemon/daemon.log` (3,875 of 6,990 lines in one observed run, 748 of them blank)
+and is only ever read when setup *fails* — where `SetupFailureError.outputTail` already
+carries a 50-line tail independently. The default now logs a single
+`setup: N line(s) of output suppressed` summary; `daemon_verbose: true` restores the full
+echo. Blank lines are dropped in both modes. Failure behavior is unchanged. Threaded via
+`prepareWorktree(path, log, { verbose })` and `RealDepsConfig.verbose`.
+
 ```yaml
 # .ai-conductor/config.yml
-daemon_verbose: true   # default: false — suppresses gate-writeback other-owner skip notices
+daemon_verbose: true   # default: false — suppresses gate-writeback other-owner skip
+                       # notices and bin/setup success-output passthrough
 ```
 
 #### Attribution enforcement: inline build-work commits (#505, advisory since #773)

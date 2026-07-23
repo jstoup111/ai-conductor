@@ -947,7 +947,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const git: GitRunner = makeGitRunner(worktree.path);
 
     // Inject prepareWorktree for retry after quarantine
-    const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath, log);
+    const runPrepare = (worktreePath: string) =>
+      prepareWorktree(worktreePath, log, { verbose: config?.daemon_verbose ?? false });
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
@@ -1010,6 +1011,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     provider,
     memoryProvider,
     log,
+    verbose: config?.daemon_verbose ?? false,
     runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
