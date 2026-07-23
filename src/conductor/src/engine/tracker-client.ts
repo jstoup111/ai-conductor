@@ -47,3 +47,86 @@ export function makeProductionGh(): GhRunner {
     return { stdout: String(result.stdout) };
   };
 }
+
+/** Minimal shape of an assigned issue as returned by `gh issue list ... --json`. */
+export interface AssignedIssue {
+  number: number;
+  title: string;
+  body: string;
+  labels: unknown;
+}
+
+/**
+ * Canonical seam for tracker/PR read+write operations. GitHub is the only
+ * implementation today; the interface is backend-agnostic so future trackers
+ * can implement it without touching call sites.
+ *
+ * Only READ ops are defined here (Task 2); write ops land in Task 3.
+ */
+export interface TrackerClient {
+  /** `gh api repos/<owner>/<repo>/issues/<number>` — returns label names. */
+  getIssueLabels(repo: string, number: number, cwd: string): Promise<string[]>;
+  /** `gh issue view <owner/repo#number> --json state` — raw stdout JSON. */
+  viewIssue(slug: string, cwd: string): Promise<{ state: string }>;
+  /** `gh issue view <owner/repo#number> --json state` — uppercased state string. */
+  getIssueState(slug: string, cwd: string): Promise<string>;
+  /** `gh api user --jq .login` — normalized viewer login. */
+  viewerIdentity(cwd: string): Promise<string>;
+  /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
+  getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
+  /** `gh issue list --assignee @me --state open --json ... -R <repo>` — assigned issues. */
+  listAssignedIssues(repo: string, cwd: string): Promise<AssignedIssue[]>;
+}
+
+/** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
+export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
+  return {
+    async getIssueLabels(repo, number, cwd) {
+      const { stdout } = await runner(['api', `repos/${repo}/issues/${number}`], { cwd });
+      const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
+      return (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
+    },
+
+    async viewIssue(slug, cwd) {
+      const { stdout } = await runner(['issue', 'view', slug, '--json', 'state'], { cwd });
+      return JSON.parse(stdout) as { state: string };
+    },
+
+    async getIssueState(slug, cwd) {
+      const { state } = await this.viewIssue(slug, cwd);
+      return String(state ?? '').toUpperCase();
+    },
+
+    async viewerIdentity(cwd) {
+      const { stdout } = await runner(['api', 'user', '--jq', '.login'], { cwd });
+      return stdout.trim();
+    },
+
+    async getBlockedBy(repo, number, cwd) {
+      const { stdout } = await runner(
+        ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
+        { cwd },
+      );
+      return JSON.parse(stdout);
+    },
+
+    async listAssignedIssues(repo, cwd) {
+      const { stdout } = await runner(
+        [
+          'issue',
+          'list',
+          '--assignee',
+          '@me',
+          '--state',
+          'open',
+          '--json',
+          'number,title,body,labels',
+          '-R',
+          repo,
+        ],
+        { cwd },
+      );
+      return JSON.parse(stdout || '[]') as AssignedIssue[];
+    },
+  };
+}
