@@ -483,3 +483,66 @@ describe('runIntakeLoop', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 15: intakeTick invokes an injected `reconcile` effect (brain sweep).
+//
+// Plan: .docs/plans/intake-claim-closed-issue-guard-and-brain-sweep.md (Task 15)
+//
+// `reconcile` is an optional effect on `IntakeLoopDeps` that lets the loop
+// invoke `reconcileClosedIssues` (or any sweep) without `intakeTick` knowing
+// its name — keeping the tick pure/I/O-free and unit-testable. It runs once
+// per tick, after the poll/enqueue work, and a throw from it must never
+// propagate out of `intakeTick`.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('intakeTick — injected reconcile effect', () => {
+  it('calls the injected reconcile() exactly once per tick, after poll/enqueue', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const callOrder: string[] = [];
+    const poll = vi.fn(async () => {
+      callOrder.push('poll');
+      return [];
+    });
+    const enqueue = vi.fn(async (_envelope: unknown) => {
+      callOrder.push('enqueue');
+    });
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = (_msg: string) => {};
+    const reconcile = vi.fn(async () => {
+      callOrder.push('reconcile');
+    });
+
+    await intakeTick({ poll, enqueue, notify, sleep, now, log, reconcile });
+
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(['poll', 'reconcile']);
+  });
+
+  it('a throwing reconcile() does not crash the tick', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
+
+    const poll = vi.fn(async () => []);
+    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const notify = vi.fn(async (_ideas: unknown[]) => {});
+    const sleep = async (_ms: number) => {};
+    const now = () => new Date('2026-06-30T00:00:00.000Z');
+    const log = vi.fn((_msg: string) => {});
+    const reconcile = vi.fn(async () => {
+      throw new Error('reconcile boom');
+    });
+
+    const summary = await intakeTick({ poll, enqueue, notify, sleep, now, log, reconcile });
+
+    expect(summary).toEqual({ captured: 0 });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+});

@@ -29,6 +29,13 @@ export interface IntakeLoopDeps {
   now: () => Date;
   /** Emits a diagnostic log line. */
   log: (msg: string) => void;
+  /**
+   * Optional brain-sweep effect (e.g. `reconcileClosedIssues`), invoked once
+   * per tick after the poll/enqueue work. Injected rather than called by
+   * name so `intakeTick` stays pure/I/O-free and unit-testable; a throw from
+   * this effect is caught and logged, never propagated out of the tick.
+   */
+  reconcile?: () => Promise<unknown>;
 }
 
 /** Configuration for the intake loop's interval scheduler. */
@@ -142,6 +149,16 @@ export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummar
       // not prevent captures from being persisted or crash the tick — log it
       // and proceed.
       deps.log(`notify failed (non-fatal, tick continues): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (deps.reconcile) {
+    try {
+      await deps.reconcile();
+    } catch (err) {
+      // Brain-sweep backstop: a reconcile() failure must not crash the tick
+      // or prevent captures from this tick from being reported — log it and
+      // proceed.
+      deps.log(`intake tick: reconcile() failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { captured: captured.length };
