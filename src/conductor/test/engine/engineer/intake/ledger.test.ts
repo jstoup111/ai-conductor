@@ -72,3 +72,20 @@ describe('list() enumerator', () => {
     expect(refs).toEqual(['o/a#1', 'o/a#2', 'o/a#3']);
   });
 });
+
+describe('requeueClaimed() — claimed to pending recovery (FR-1, FR-4, FR-11)', () => {
+  it('moves a claimed entry to pending, preserves capturedAt, bumps attempts, refreshes lastSeenAt', async () => {
+    const l = createLedger(join(dir, 'ledger.json'));
+    await l.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await l.transition('github-issues', 'o/a#1', 'claimed');
+    const before = await l.get('github-issues', 'o/a#1');
+
+    await l.requeueClaimed('github-issues', 'o/a#1');
+
+    const after = await l.get('github-issues', 'o/a#1');
+    expect(after?.status).toBe('pending');
+    expect(after?.capturedAt).toBe(before?.capturedAt);
+    expect(after?.attempts).toBe((before?.attempts ?? 0) + 1);
+    expect(after?.lastSeenAt).toBeDefined();
+  });
+});

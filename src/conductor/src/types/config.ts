@@ -475,6 +475,12 @@ export interface HarnessConfig {
    */
   rebase_resolution_attempts?: number;
   /**
+   * Staleness window (in hours) for auto-healing stale claimed-but-abandoned
+   * ledger entries (unclaim/requeue). Default: 24 (one day). Absent/invalid
+   * values fall back to the default.
+   */
+  stale_claim_window_hours?: number;
+  /**
    * Maximum number of validation-phase tasks the engine fans out
    * concurrently. Absent → engine default. Non-numeric values are rejected
    * at validation time (see validateConfig).

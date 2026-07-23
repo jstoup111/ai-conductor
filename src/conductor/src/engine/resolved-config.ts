@@ -347,6 +347,38 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Stale-claim auto-heal window (ADR-1 / FR-3)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Default staleness window, in milliseconds, for auto-healing stale
+ * claimed-but-abandoned ledger entries (unclaim/requeue). 24 hours.
+ * Overridable via `stale_claim_window_hours` in the top-level HarnessConfig.
+ */
+export const DEFAULT_STALE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Resolve the stale-claim auto-heal window in milliseconds from HarnessConfig.
+ *
+ * Reads `config.stale_claim_window_hours` (top-level HarnessConfig key, in hours).
+ *
+ * Resolution rules:
+ *   - undefined / absent → DEFAULT_STALE_CLAIM_WINDOW_MS (24h)
+ *   - positive number    → the value converted to milliseconds
+ *   - zero/negative/NaN/non-numeric → DEFAULT_STALE_CLAIM_WINDOW_MS (24h)
+ */
+export function resolveStaleClaimWindowMs(config?: HarnessConfig): number {
+  const override = config?.stale_claim_window_hours;
+  if (override === undefined || override === null) {
+    return DEFAULT_STALE_CLAIM_WINDOW_MS;
+  }
+  if (typeof override !== 'number' || !Number.isFinite(override) || override <= 0) {
+    return DEFAULT_STALE_CLAIM_WINDOW_MS;
+  }
+  return override * 60 * 60 * 1000;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // OAuth token park-and-poll timeout (TR-5)
 // ────────────────────────────────────────────────────────────────────────────
 

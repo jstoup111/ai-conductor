@@ -71,6 +71,13 @@ export interface Ledger {
    * (FR-39/40) when a spec PR closes without merging. No-op if the entry is absent.
    */
   reopen(source: string, sourceRef: string): Promise<void>;
+  /**
+   * Recover a stranded `claimed` entry back to `pending`: preserves `capturedAt`,
+   * increments `attempts` (the churn counter), and refreshes `lastSeenAt`.
+   * Distinct from `reopen` (`done` → `pending`) — used for crash/stale-claim recovery
+   * (FR-1, FR-4, FR-11, ADR-2). No-op if the entry is absent.
+   */
+  requeueClaimed(source: string, sourceRef: string): Promise<void>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -188,6 +195,20 @@ export function createLedger(path: string): Ledger {
       const key = makeKey(source, sourceRef);
       const entry = store[key];
       if (!entry) return; // nothing to reopen — no-op.
+      store[key] = {
+        ...entry,
+        status: 'pending',
+        attempts: (entry.attempts ?? 0) + 1,
+        lastSeenAt: new Date().toISOString(),
+      };
+      await saveStore(path, store);
+    },
+
+    async requeueClaimed(source: string, sourceRef: string): Promise<void> {
+      const store = await loadStore(path);
+      const key = makeKey(source, sourceRef);
+      const entry = store[key];
+      if (!entry) return; // nothing to requeue — no-op.
       store[key] = {
         ...entry,
         status: 'pending',
