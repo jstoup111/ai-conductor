@@ -838,6 +838,70 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     expect(sendNotification).toHaveBeenCalledTimes(0);
   });
 
+  it('dispatchIntakeLoop wires IntakeLoopDeps.reconcile bound to the real ledger/queue + a getIssueState gh capability', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+
+    // Fake ledger with one pending github-issues entry backing a closed issue.
+    const ledgerEntries = [
+      { source: 'github-issues', sourceRef: 'o/a#1', status: 'pending' },
+    ];
+    const forgotten: any[] = [];
+    const fakeLedger = {
+      list: async () => ledgerEntries,
+      forget: async (source: string, sourceRef: string) => {
+        forgotten.push({ source, sourceRef });
+      },
+    };
+    const removed: any[] = [];
+    const fakeQueue = {
+      enqueue: async () => {},
+      list: async () => [{ source: 'github-issues', sourceRef: 'o/a#1' }],
+      remove: async (e: any) => void removed.push(e),
+    };
+    const fakeAdapter = { poll: async () => [] };
+    const fakeBuildIntake = () => ({
+      reader: {} as any,
+      ledger: fakeLedger as any,
+      queue: fakeQueue as any,
+      adapter: fakeAdapter as any,
+    });
+
+    // Fake gh runner: reports issue o/a#1 as closed.
+    const ghCalls: any[] = [];
+    const fakeGh = async (args: string[], _opts: { cwd: string }) => {
+      ghCalls.push(args);
+      return { stdout: 'closed' };
+    };
+
+    let capturedDeps: any;
+    const fakeRunIntakeLoop = async (deps: any) => {
+      capturedDeps = deps;
+    };
+
+    await dispatch(
+      { kind: 'run', once: true, intervalMs: 999 },
+      {
+        buildIntake: fakeBuildIntake as any,
+        runIntakeLoop: fakeRunIntakeLoop as any,
+        gh: fakeGh as any,
+        now: () => new Date('2026-06-30T00:00:00.000Z'),
+        log: () => {},
+        printErr: () => {},
+        engineerDir: '/tmp/test-reconcile-wiring',
+      },
+    );
+
+    expect(typeof capturedDeps.reconcile).toBe('function');
+
+    const summary = await capturedDeps.reconcile();
+
+    expect(ghCalls.length).toBeGreaterThan(0);
+    expect(forgotten).toEqual([{ source: 'github-issues', sourceRef: 'o/a#1' }]);
+    expect(removed).toHaveLength(1);
+    expect(summary).toMatchObject({ scanned: 1, forgotten: 1, errors: 0 });
+  });
+
   it('dispatchIntakeLoop imports no LLM/provider/claude-session module (zero-token guard)', async () => {
     const src = await readFile(CLI_SRC, 'utf8');
     expect(src).not.toMatch(/from\s+['"](?:@anthropic-ai\/sdk|[^'"]*\bclaude-[^'"]*)['"]/i);
