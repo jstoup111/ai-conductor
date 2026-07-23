@@ -365,7 +365,7 @@ describe('engine/conductor', () => {
       worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
-      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', build: 'done',
+      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
     } as ConductState);
 
     let buildReviewCalls = 0;
@@ -4033,8 +4033,9 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(7);
+    expect(tierSkipEvents.length).toBe(8);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
+    expect(tierSkipEvents.map((e) => e.step)).toContain('coherence_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
@@ -4200,7 +4201,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4238,7 +4239,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4312,7 +4313,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4351,7 +4352,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4507,7 +4508,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4572,7 +4573,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4728,7 +4729,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -4865,7 +4866,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5007,7 +5008,7 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5164,7 +5165,7 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5297,7 +5298,7 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5437,7 +5438,7 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5652,7 +5653,7 @@ describe('engine/conductor', () => {
       prd: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -5825,7 +5826,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -6116,7 +6117,7 @@ describe('engine/conductor', () => {
         track: 'technical',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
@@ -6160,7 +6161,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -6200,7 +6201,7 @@ describe('engine/conductor', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -6549,7 +6550,7 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'skipped',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
       };
 
       const result = navigateBack(state, 'explore');
@@ -6582,7 +6583,7 @@ describe('engine/conductor', () => {
         explore: 'done',
         complexity: 'done',
         stories: 'done',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
         build: 'done',
         build_review: 'done',
         wiring_check: 'done',
@@ -6630,7 +6631,7 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
@@ -6733,7 +6734,7 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
@@ -6845,7 +6846,7 @@ describe('engine/conductor', () => {
         complexity: 'done',
         stories: 'done',
         conflict_check: 'done',
-        plan: 'done',
+        plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done',
         architecture_review: 'done',
         acceptance_specs: 'done',
@@ -8103,7 +8104,7 @@ describe('engine/conductor', () => {
       // the build step only.
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        stories: 'done', conflict_check: 'done', plan: 'done',
+        stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done', architecture_review: 'done',
         acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
         feature_desc: 'auth-park-test',
@@ -8162,7 +8163,7 @@ describe('engine/conductor', () => {
       // the build step only.
       await writeState(statePath, {
         worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        stories: 'done', conflict_check: 'done', plan: 'done',
+        stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
         architecture_diagram: 'done', architecture_review: 'done',
         acceptance_specs: 'done', complexity_tier: 'M', track: 'technical',
         feature_desc: 'auth-park-test',
@@ -8459,6 +8460,8 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs/conflicts/c.md'), 'x');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(join(dir, '.docs/plans/p.md'), 'x');
+      await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+      await writeFile(join(dir, '.docs/coherence/p.md'), 'x');
       await mkdir(join(dir, '.docs/architecture'), { recursive: true });
       await writeFile(join(dir, '.docs/architecture/arch.md'), 'x');
       await writeFile(join(dir, '.docs/decisions/adr-001.md'), 'x');
@@ -8548,6 +8551,7 @@ describe('engine/conductor', () => {
         // task whose pre-existing completed row is backed by a pre-seeded
         // evidenceStamps entry (the H8 first-seed migration grandfather was retired by #463).
         ['.docs/plans/2026-04-16-plan.md', '### Task task-1: Pre-completed work\n'],
+        ['.docs/coherence/2026-04-16-plan.md', 'test'],
         ['.docs/architecture/2026-04-16-arch.md', 'test'],
         ['.docs/decisions/adr-001.md', 'test'],
         ['spec/acceptance/feature_spec.rb', 'test'],
@@ -8725,7 +8729,7 @@ describe('recovery retry budget', () => {
   it('passes RecoveryContext with recoveryCount=0 on first recovery entry', async () => {
     await writeState(statePath, {
       worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
@@ -8752,7 +8756,7 @@ describe('recovery retry budget', () => {
   it('marks retriesExhausted after MAX_RECOVERY_RETRIES cycles', async () => {
     await writeState(statePath, {
       worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
@@ -8787,7 +8791,7 @@ describe('recovery retry budget', () => {
   it('does not infinite-loop when a non-conforming onRecovery returns retry after exhaustion', async () => {
     await writeState(statePath, {
       worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
       architecture_review: 'done', writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
@@ -8905,7 +8909,7 @@ describe('skip-already-resolved steps', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -8942,7 +8946,7 @@ describe('skip-already-resolved steps', () => {
       complexity: 'done',
       complexity_tier: 'S',
       stories: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       acceptance_specs: 'skipped',
     } as ConductState);
 
@@ -8970,7 +8974,7 @@ describe('skip-already-resolved steps', () => {
       complexity_tier: 'L',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -9005,7 +9009,7 @@ describe('skip-already-resolved steps', () => {
       conflict_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
-      plan: 'done',
+      plan: 'done', coherence_check: 'done',
     } as ConductState);
 
     const calledSteps: StepName[] = [];
@@ -9052,6 +9056,7 @@ describe('build-step stall circuit breaker', () => {
       ['.docs/stories/epic-1/a.md', 'x'],
       ['.docs/conflicts/2026-04-18.md', 'x'],
       ['.docs/plans/2026-04-18-plan.md', 'x'],
+      ['.docs/coherence/2026-04-18-plan.md', 'x'],
       ['.docs/architecture/arch.md', 'x'],
       ['.docs/decisions/adr-001.md', 'x'],
       ['spec/acceptance/feature_spec.rb', 'x'],
@@ -9739,6 +9744,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
       ['.docs/stories/epic-1/story-a.md', 'a'],
       ['.docs/conflicts/2026-04-16-conflict.md', 'a'],
       ['.docs/plans/2026-04-16-plan.md', 'a'],
+      ['.docs/coherence/2026-04-16-plan.md', 'a'],
       ['.docs/architecture/2026-04-16-arch.md', 'a'],
       ['.docs/decisions/adr-001.md', 'a'],
       ['spec/acceptance/feature_spec.rb', 'a'],

@@ -87,7 +87,7 @@ describe('Integration: config flow', () => {
     // (the PRD exists regardless of the architecture review). build_review is
     // a prerequisite of manual_test so it also runs, and wiring_check (the
     // reachability gate between build_review and manual_test) dispatches too.
-    expect(runner.calls).toHaveLength(14);
+    expect(runner.calls).toHaveLength(15);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -160,7 +160,10 @@ describe('Integration: config flow', () => {
 
     expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)
     expect(customIdx).toBe(planIdx + 1); // custom step lands right after plan
-    expect(specsIdx).toBe(customIdx + 1);
+    // coherence_check (built-in, S-skippable) sits between the custom step
+    // and acceptance_specs — it's inserted immediately after plan in
+    // ALL_STEPS and the custom "after: plan" insertion lands ahead of it.
+    expect(specsIdx).toBe(customIdx + 2);
     expect(registry[customIdx].prerequisites).toEqual(['plan']);
   });
 

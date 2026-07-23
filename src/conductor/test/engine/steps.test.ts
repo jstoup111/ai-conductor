@@ -22,12 +22,13 @@ describe('engine/steps', () => {
     const expectedOrder: StepName[] = [
       'worktree', 'memory', 'explore', 'complexity', 'prd',
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
+      'coherence_check',
       'acceptance_specs', 'build', 'build_review', 'wiring_check', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 20 steps', () => {
-      expect(ALL_STEPS).toHaveLength(20);
+    it('has exactly 21 steps', () => {
+      expect(ALL_STEPS).toHaveLength(21);
     });
 
     it('steps are in exact order', () => {
@@ -120,8 +121,15 @@ describe('engine/steps', () => {
       expect(s.prerequisites).toEqual(['conflict_check']);
     });
 
-    it('acceptance_specs is BUILD/gating, skippable for S', () => {
+    it('coherence_check is DECIDE/gating, prereq plan, skippable for S', () => {
       const s = ALL_STEPS[10];
+      expect(s.name).toBe('coherence_check');
+      expect(s.prerequisites).toEqual(['plan']);
+      expect(s.skippableForTiers).toEqual(['S']);
+    });
+
+    it('acceptance_specs is BUILD/gating, skippable for S', () => {
+      const s = ALL_STEPS[11];
       expect(s.name).toBe('acceptance_specs');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['plan']);
@@ -129,7 +137,7 @@ describe('engine/steps', () => {
     });
 
     it('build is BUILD/structural, checkpoint, prereq plan', () => {
-      const s = ALL_STEPS[11];
+      const s = ALL_STEPS[12];
       expect(s.name).toBe('build');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('structural');
@@ -138,7 +146,7 @@ describe('engine/steps', () => {
     });
 
     it('build_review is a BUILD/gating loop gate sitting between build and manual_test', () => {
-      const s = ALL_STEPS[12];
+      const s = ALL_STEPS[13];
       expect(s.name).toBe('build_review');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('gating');
@@ -148,7 +156,7 @@ describe('engine/steps', () => {
     });
 
     it('wiring_check is a BUILD/gating loop gate sitting between build_review and manual_test', () => {
-      const s = ALL_STEPS[13];
+      const s = ALL_STEPS[14];
       expect(s.name).toBe('wiring_check');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('gating');
@@ -159,7 +167,7 @@ describe('engine/steps', () => {
     });
 
     it('manual_test is SHIP/gating, checkpoint, prereq wiring_check (#367 — a failing manual test must be able to block)', () => {
-      const s = ALL_STEPS[14];
+      const s = ALL_STEPS[15];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -171,7 +179,7 @@ describe('engine/steps', () => {
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
-      const s = ALL_STEPS[15];
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -183,7 +191,7 @@ describe('engine/steps', () => {
     });
 
     it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
-      const s = ALL_STEPS[16];
+      const s = ALL_STEPS[17];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -200,7 +208,7 @@ describe('engine/steps', () => {
     });
 
     it('retro is SHIP/advisory, skippable for S', () => {
-      const s = ALL_STEPS[17];
+      const s = ALL_STEPS[18];
       expect(s.name).toBe('retro');
       expect(s.enforcement).toBe('advisory');
       expect(s.prerequisites).toEqual(['architecture_review_as_built']);
@@ -208,7 +216,7 @@ describe('engine/steps', () => {
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[18];
+      const s = ALL_STEPS[19];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -221,7 +229,7 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[19];
+      const s = ALL_STEPS[20];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
@@ -277,8 +285,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 19 for finish', () => {
-      expect(getStepIndex('finish')).toBe(19);
+    it('returns 20 for finish', () => {
+      expect(getStepIndex('finish')).toBe(20);
     });
   });
 
@@ -287,12 +295,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 19', () => {
-      expect(getStepByIndex(19).name).toBe('finish');
+    it('returns finish for index 20', () => {
+      expect(getStepByIndex(20).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(20)).toThrow();
+      expect(() => getStepByIndex(21)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
@@ -302,10 +310,10 @@ describe('engine/steps', () => {
   describe('shouldSkipForTier', () => {
     const sSkippable: StepName[] = [
       'conflict_check', 'architecture_diagram', 'architecture_review',
-      'acceptance_specs', 'manual_test', 'retro',
+      'coherence_check', 'acceptance_specs', 'manual_test', 'retro',
     ];
 
-    it('Small tier skips the right 6 steps', () => {
+    it('Small tier skips the right 7 steps', () => {
       for (const step of sSkippable) {
         expect(shouldSkipForTier(step, 'S')).toBe(true);
       }
@@ -379,12 +387,13 @@ describe('engine/steps', () => {
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
-    it('returns 7 steps for S tier', () => {
+    it('returns 8 steps for S tier', () => {
       const result = getSkippableSteps('S');
       // Returned in ALL_STEPS order (architecture now precedes conflict_check).
       expect(result).toEqual([
         'architecture_diagram', 'architecture_review', 'conflict_check',
-        'acceptance_specs', 'manual_test', 'architecture_review_as_built', 'retro',
+        'coherence_check', 'acceptance_specs', 'manual_test',
+        'architecture_review_as_built', 'retro',
       ]);
     });
 
@@ -401,6 +410,7 @@ describe('engine/steps', () => {
         'architecture_diagram',
         'architecture_review',
         'conflict_check',
+        'coherence_check',
         'acceptance_specs',
         'manual_test',
         'architecture_review_as_built',

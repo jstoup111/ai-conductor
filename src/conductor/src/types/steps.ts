@@ -8,6 +8,7 @@ export type StepName =
   | 'stories'
   | 'conflict_check'
   | 'plan'
+  | 'coherence_check'
   | 'architecture_diagram'
   | 'architecture_review'
   | 'worktree'

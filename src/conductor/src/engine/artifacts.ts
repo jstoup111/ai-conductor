@@ -37,6 +37,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   stories: ['.docs/stories/**/*.md'],
   conflict_check: ['.docs/conflicts/*.md'],
   plan: ['.docs/plans/*.md'],
+  coherence_check: ['.docs/coherence/*.md'],
   architecture_diagram: ['.docs/architecture/*.md'],
   architecture_review: [
     '.docs/decisions/architecture-review-*.md',

@@ -19,6 +19,7 @@ function frontDone(): ConductState {
     stories: 'done',
     conflict_check: 'done',
     plan: 'done',
+    coherence_check: 'done',
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
