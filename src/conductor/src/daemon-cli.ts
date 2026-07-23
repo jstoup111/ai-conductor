@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
-import { join } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -165,6 +165,33 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
  */
 export function engineEntryPathForRepo(projectRoot: string): string {
   return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
+const ENGINE_SOURCE_SHA_SIDECAR = '.engine-source-sha';
+
+/**
+ * Read the source-commit SHA stamped into the pinned `dist-versions/<id>`
+ * directory this daemon is booting out of (`.engine-source-sha`, written by
+ * `publish-engine.mjs` at finalize — Task 4). Resolves `dist` (a symlink to
+ * `dist-versions/<id>`) relative to the given engine entry path
+ * (`<conductorRoot>/dist/index.js`).
+ *
+ * Never throws: returns `'unknown'` whenever `dist` isn't a symlink (e.g. a
+ * plain directory in tests, or a corrupt layout) or the sidecar is absent
+ * (pre-feature published versions never wrote it) — the boot log must never
+ * crash over a missing/optional stamp.
+ */
+export async function readEngineSourceSha(engineEntryPath: string): Promise<string> {
+  const distDir = dirname(engineEntryPath);
+  try {
+    const target = await readlink(distDir);
+    const versionDir = isAbsolute(target) ? target : join(dirname(distDir), target);
+    const sha = await readFile(join(versionDir, ENGINE_SOURCE_SHA_SIDECAR), 'utf-8');
+    return sha.trim();
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -716,11 +743,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
   const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  // Task 8: append the pinned version's stamped source SHA to the boot
+  // "daemon identity: ..." log line (never crashes — 'unknown' when the
+  // `.engine-source-sha` sidecar is absent, e.g. pre-feature versions).
+  const engineSourceSha = await readEngineSourceSha(engineEntryPath);
+  const logWithEngineSourceSha = (msg: string): void => {
+    log(msg.startsWith('daemon identity: ') ? `${msg} (source sha: ${engineSourceSha})` : msg);
+  };
   const engineIdentity = await initStaleEngineState({
     repoPath: projectRoot,
     entryPath: engineEntryPath,
     flag: isArmed,
-    log,
+    log: logWithEngineSourceSha,
   });
 
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
