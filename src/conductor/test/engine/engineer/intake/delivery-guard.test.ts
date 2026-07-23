@@ -1111,6 +1111,75 @@ describe('Task 6: createDeliveryGuardedQueue — closed issue dropped, scan cont
   });
 });
 
+// ─── Task 7: closed last/only candidate returns null; ENOENT-on-ack is benign ──
+
+describe('Task 7: createDeliveryGuardedQueue — closed last candidate returns null; ack ENOENT benign', () => {
+  it('single closed github-issues candidate → forgotten+dropped, claim() returns null (empty queue)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#99', 'github-issues');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([closedCandidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#99') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toBeNull();
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#99']]);
+    expect(releasedEnvelopes).toContain(closedCandidate);
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('single closed candidate, queue.ack throws ENOENT → swallowed, claim() still returns null', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const closedCandidate = makeEnvelope('owner/repo#100', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([closedCandidate]);
+    const enoentError = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+    enoentError.code = 'ENOENT';
+    queue.ack = async () => {
+      throw enoentError;
+    };
+    const { ledger, transitionCalls } = makeFakeLedger();
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === 'github-issues' && sourceRef === 'owner/repo#100') {
+        return { source, sourceRef, status: 'pending' };
+      }
+      return undefined;
+    };
+    const forgetCalls: Array<[string, string]> = [];
+    (ledger as any).forget = async (source: string, sourceRef: string) => {
+      forgetCalls.push([source, sourceRef]);
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED' }));
+
+    let threw = false;
+    let claimed: any;
+    try {
+      const guarded = createDeliveryGuardedQueue(queue, ledger as any, { gh });
+      claimed = await guarded.claim();
+    } catch {
+      threw = true;
+    }
+
+    expect(threw).toBe(false);
+    expect(claimed).toBeNull();
+    expect(forgetCalls).toEqual([['github-issues', 'owner/repo#100']]);
+    expect(transitionCalls).toHaveLength(0);
+  });
+});
+
 // ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
 
 describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {
