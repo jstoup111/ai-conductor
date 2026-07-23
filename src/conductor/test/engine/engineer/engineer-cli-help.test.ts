@@ -24,6 +24,8 @@ const SUBCOMMANDS = [
   'claim',
   'forget',
   'resolve',
+  'unclaim',
+  'requeue',
   'migrate-issue-deps',
 ];
 
@@ -104,6 +106,39 @@ describe('dispatchEngineer: {kind:"help"} renders text with zero side effects (#
     const { out, opts } = captureOut();
     await dispatchEngineer({ kind: 'help', topic: 'projects' }, opts({}));
     expect(out[0].toLowerCase()).toContain('read-only');
+  });
+
+  it('`unclaim` help text describes it as an out-of-band maintenance/recovery op, not a loop step', async () => {
+    const { out, opts } = captureOut();
+    await dispatchEngineer({ kind: 'help', topic: 'unclaim' }, opts({}));
+    const text = out[0].toLowerCase();
+    expect(text).toContain('maintenance');
+    expect(text).toContain('claimed');
+    expect(text).toContain('pending');
+  });
+
+  it('`requeue` help text describes bulk stale-claim recovery with --stale/--older-than flags', async () => {
+    const { out, opts } = captureOut();
+    await dispatchEngineer({ kind: 'help', topic: 'requeue' }, opts({}));
+    const text = out[0].toLowerCase();
+    expect(text).toContain('maintenance');
+    expect(text).toContain('--stale');
+    expect(text).toContain('--older-than');
+  });
+});
+
+describe('printGuide: bare `engineer --help` lists the unclaim/requeue maintenance verbs (#story-3)', () => {
+  it('the guide text lists both `engineer unclaim <ref>` and `engineer requeue --stale [--older-than <dur>]`', async () => {
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'guide' },
+      { print: (s) => out.push(s), printErr: () => {} },
+    );
+    expect(code).toBe(0);
+    const text = out.join('\n');
+    expect(text).toMatch(/engineer unclaim <[^>]+>/);
+    expect(text).toContain('engineer requeue --stale');
+    expect(text).toContain('--older-than');
   });
 });
 
