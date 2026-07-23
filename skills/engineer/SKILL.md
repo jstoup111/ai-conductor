@@ -137,6 +137,8 @@ DECIDE phase — the daemon only builds — so produce the complete, build-ready
 6. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
 7. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
 8. `/plan`      → an implementation plan in the target's `.docs/plans/`
+9. `/coherence-check` → the committed traceability mapping (outcomes → FRs → stories → tasks) in
+   the target's `.docs/coherence/` — **skip for Small; Medium and Large only.**
 
 These produce **Status:Accepted** artifacts via your real harness (agents + hooks). Do NOT
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
@@ -203,7 +205,8 @@ launcher regains control when the operator quits and relaunches you clean for th
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
 - [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled, the `.docs/intake/<slug>.md` marker is committed, and the spec PR is linked with `Refs <ref>` (the daemon adds `Closes <ref>` to the implementation PR, auto-closing the issue on merge)
 - [ ] DECIDE ran the real skills in canonical order — `/explore` → complexity → `/prd` (product) →
-      `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` (not stubs, not DRAFT, no `claude -p`)
+      `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` →
+      `/coherence-check` (M/L only, skipped for S) (not stubs, not DRAFT, no `claude -p`)
 - [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped
 - [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
 - [ ] Authoring + `land` + `handoff` ran inside the per-idea worktree (`--worktree`); the target's
