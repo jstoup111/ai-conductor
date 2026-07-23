@@ -86,6 +86,8 @@ export interface TrackerClient {
   addIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
   /** `gh issue close <ref> -R <repo>` — close an issue in a specific repo. */
   closeIssue(repo: string, issueRef: string, cwd: string): Promise<void>;
+  /** `gh issue view <ref> --json body -R <repo>` — issue body in a specific repo, or `null` on 404. */
+  getIssueBody(repo: string, issueRef: string, cwd: string): Promise<string | null>;
   /** `gh issue edit <ref> --body <body> -R <repo>` — overwrite an issue's body in a specific repo. */
   upsertIssueBody(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
   /** `gh issue comment <ref> --body <body> -R <repo>` — comment on an issue in a specific repo. */
@@ -251,6 +253,23 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
 
     async closeIssue(repo, issueRef, cwd) {
       await runOrThrow(runner, ['issue', 'close', issueRef, '-R', repo], { cwd });
+    },
+
+    async getIssueBody(repo, issueRef, cwd) {
+      try {
+        const { stdout } = await runOrThrow(
+          runner,
+          ['issue', 'view', issueRef, '--json', 'body', '-R', repo],
+          { cwd },
+        );
+        const data = parseJsonOrThrow<{ body?: string }>('getIssueBody', stdout);
+        return data.body ?? '';
+      } catch (err) {
+        if (err instanceof GhRunnerError && err.status === 404) {
+          return null;
+        }
+        throw err;
+      }
     },
 
     async upsertIssueBody(repo, issueRef, body, cwd) {

@@ -12,47 +12,9 @@
  */
 
 import { LedgerEntry } from './ledger.js';
+import { GhRunnerError, TrackerClient } from '../tracker-client.js';
 
-/**
- * GitHub abstraction interface for dependency injection
- */
-export interface GhAbstraction {
-  /**
-   * Get the current body of an issue.
-   * Returns null if the issue is not found (404).
-   */
-  getIssueBody(repo: string, issue: string): Promise<string | null>;
-
-  /**
-   * Update the body of an issue.
-   * May throw if the operation fails.
-   */
-  upsertIssueBody(repo: string, issue: string, body: string): Promise<void>;
-
-  /**
-   * Get the labels on an issue.
-   * Returns an empty array if no labels.
-   */
-  getIssueLabels(repo: string, issue: string): Promise<string[]>;
-
-  /**
-   * Get the current state of an issue.
-   * Returns "open", "closed", or null (if not found / 404).
-   */
-  getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null>;
-
-  /**
-   * Add a comment to an issue.
-   * May throw if the operation fails.
-   */
-  upsertIssueComment(repo: string, issue: string, body: string): Promise<void>;
-
-  /**
-   * Close an issue.
-   * May throw if the operation fails.
-   */
-  closeIssue(repo: string, issue: string): Promise<void>;
-}
+export type { TrackerClient } from '../tracker-client.js';
 
 /**
  * Result of stamping an issue
@@ -134,17 +96,18 @@ export function renderCloseComment(slug: string, prUrl: string): string {
  * - On edit error: set lastError with message, do NOT throw
  *
  * @param entry - Ledger entry with repo, issue, slug info
- * @param gh - GitHub abstraction
+ * @param gh - Tracker client
+ * @param cwd - Working directory for the underlying tracker CLI invocation
  * @returns StampResult with status and any errors
  */
-export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise<StampResult> {
+export async function stampIssue(entry: LedgerEntry, gh: TrackerClient, cwd = '.'): Promise<StampResult> {
   const { repo, issue, slug } = entry;
   const now = new Date().toISOString();
 
   // Step 1: Fetch current body
   let body: string | null;
   try {
-    body = await gh.getIssueBody(repo, issue);
+    body = await gh.getIssueBody(repo, issue, cwd);
   } catch (err) {
     // Treat fetch errors as external closure
     return {
@@ -187,7 +150,7 @@ export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
   const newBody = body + (body.endsWith('\n') ? '' : '\n') + `Halt-Slug: ${slug}\n`;
 
   try {
-    await gh.upsertIssueBody(repo, issue, newBody);
+    await gh.upsertIssueBody(repo, issue, newBody, cwd);
     return {
       stamped: true,
       stampedAt: now
@@ -223,17 +186,23 @@ export async function stampIssue(entry: LedgerEntry, gh: GhAbstraction): Promise
  * (the body tracking should detect this via issue body inspection or similar).
  *
  * @param entry - Ledger entry with repo, issue info
- * @param gh - GitHub abstraction
+ * @param gh - Tracker client
+ * @param cwd - Working directory for the underlying tracker CLI invocation
  * @returns CloseResult with status and any errors
  */
-export async function closeIssue(entry: LedgerEntry, prUrl: string, gh: GhAbstraction): Promise<CloseResult> {
+export async function closeIssue(
+  entry: LedgerEntry,
+  prUrl: string,
+  gh: TrackerClient,
+  cwd = '.',
+): Promise<CloseResult> {
   const { repo, issue, slug } = entry;
   const now = new Date().toISOString();
 
   // Step 1: Check for keep-open label
   let labels: string[];
   try {
-    labels = await gh.getIssueLabels(repo, issue);
+    labels = await gh.getIssueLabels(repo, Number(issue), cwd);
   } catch (err) {
     // If we can't fetch labels, treat as retriable error
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -254,14 +223,22 @@ export async function closeIssue(entry: LedgerEntry, prUrl: string, gh: GhAbstra
   // Step 2: Check current issue state
   let state: 'open' | 'closed' | null;
   try {
-    state = await gh.getIssueState(repo, issue);
+    const view = await gh.viewIssue(`${repo}#${issue}`, cwd);
+    const normalized = String(view.state ?? '').toLowerCase();
+    state = normalized === 'open' || normalized === 'closed' ? (normalized as 'open' | 'closed') : null;
   } catch (err) {
-    // If we can't fetch state, treat as retriable error
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    return {
-      closed: false,
-      lastError: `failed to fetch issue state: ${errorMsg}`
-    };
+    // 404-shaped failures mean the issue doesn't exist — treat exactly like
+    // a not-found state (no writes), not a retriable error.
+    if (err instanceof GhRunnerError && err.status === 404) {
+      state = null;
+    } else {
+      // If we can't fetch state, treat as retriable error
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        closed: false,
+        lastError: `failed to fetch issue state: ${errorMsg}`
+      };
+    }
   }
 
   // If not found or already closed, return without writes
@@ -274,7 +251,7 @@ export async function closeIssue(entry: LedgerEntry, prUrl: string, gh: GhAbstra
 
   // Step 3: Issue is open, add comment
   try {
-    await gh.upsertIssueComment(repo, issue, renderCloseComment(slug, prUrl));
+    await gh.upsertIssueComment(repo, issue, renderCloseComment(slug, prUrl), cwd);
   } catch (err) {
     // Comment failed: return error, do NOT attempt close
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -287,7 +264,7 @@ export async function closeIssue(entry: LedgerEntry, prUrl: string, gh: GhAbstra
   // Step 4: Close the issue
   let closeError: string | undefined;
   try {
-    await gh.closeIssue(repo, issue);
+    await gh.closeIssue(repo, issue, cwd);
   } catch (err) {
     // Record error
     closeError = err instanceof Error ? err.message : String(err);

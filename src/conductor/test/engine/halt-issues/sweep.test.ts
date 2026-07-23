@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { sweep, SweepConfig, SweepResult } from '../../../src/engine/halt-issues/sweep';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
+import { TrackerClient, GhRunnerError } from '../../../src/engine/tracker-client';
 
 /**
  * Mock file system abstraction for testing
@@ -60,9 +61,11 @@ class MockFs {
 }
 
 /**
- * Mock GitHub abstraction for testing
+ * Fake TrackerClient for testing. Implements only the subset of
+ * TrackerClient exercised by sweep.ts/closer.ts — the rest throw if hit,
+ * since sweep/closer should never call them.
  */
-class MockGh {
+class MockGh implements Partial<TrackerClient> {
   private editIndex = 0;
   private stampIndex = 0;
   private closeIndex = 0;
@@ -132,14 +135,20 @@ class MockGh {
     this.bodies.set(`${repo}/${issue}`, body);
   }
 
-  async getIssueLabels(repo: string, issue: string): Promise<string[]> {
+  async getIssueLabels(repo: string, issue: number): Promise<string[]> {
     this.callCounts.getIssueLabels++;
     return this.labels.get(`${repo}/${issue}`) ?? [];
   }
 
-  async getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null> {
+  async viewIssue(slug: string): Promise<{ state: string }> {
     this.callCounts.getIssueState++;
-    return this.states.get(`${repo}/${issue}`) ?? null;
+    const [repo, issue] = slug.split('#');
+    const state = this.states.get(`${repo}/${issue}`) ?? null;
+    if (state === null) {
+      const err = new GhRunnerError(['issue', 'view', slug], { message: 'not found (404)' });
+      throw err;
+    }
+    return { state };
   }
 
   commentBodies: string[] = [];
@@ -205,7 +214,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -230,7 +239,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -253,7 +262,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -279,7 +288,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -306,7 +315,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -335,7 +344,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -355,7 +364,7 @@ describe('sweep', () => {
         ...baseConfig,
         dryRun: true,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -394,7 +403,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -420,7 +429,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -451,7 +460,7 @@ describe('sweep', () => {
       const config: SweepConfig = {
         ...baseConfig,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 
@@ -510,7 +519,7 @@ describe('sweep', () => {
         ...baseConfig,
         dryRun: true,
         fs: mockFs,
-        gh: mockGh,
+        gh: mockGh as unknown as TrackerClient,
         clock: { now: () => new Date('2026-07-05T10:00:00Z') }
       };
 

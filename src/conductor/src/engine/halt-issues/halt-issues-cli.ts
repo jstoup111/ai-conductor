@@ -10,17 +10,17 @@
  *
  * Part of the halt-monitor filed issues never auto-close flow (ADR D3/D5).
  *
- * Production `gh`/fs wiring lives ONLY here (via `makeProductionGh`) — the pure
- * `sweep.ts` orchestrator takes an injected `GhAbstraction` and never shells out
- * itself, so its tests never spawn a real `gh` process.
+ * Production `gh`/fs wiring lives ONLY here (via the canonical `TrackerClient`
+ * seam) — the pure `sweep.ts` orchestrator takes an injected `TrackerClient`
+ * and never shells out itself, so its tests never spawn a real `gh` process.
  */
 
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { execa } from 'execa';
-import { sweep, type GhAbstraction } from './sweep.js';
+import { sweep } from './sweep.js';
+import { createGithubTrackerClient, makeProductionGh as makeProductionGhRunner } from '../tracker-client.js';
 
 export type HaltIssuesSweepCommand =
   | { kind: 'sweep'; dryRun: boolean; repoDir: string; monitorLog: string; ledger: string; ghRepo: string }
@@ -96,97 +96,6 @@ export function detectHaltIssuesSweepCommand(argv: string[]): HaltIssuesSweepCom
 }
 
 /**
- * Production `gh` CLI adapter — the ONLY place in the halt-issues flow that
- * shells out to the real `gh` binary. `sweep.ts` stays pure and takes this
- * (or a fake) via dependency injection.
- */
-export function makeProductionGh(): GhAbstraction {
-  return {
-    async getIssueBody(repo: string, issue: string): Promise<string | null> {
-      try {
-        const result = await execa('gh', ['issue', 'view', issue, '--json', 'body', '-q', '.body'], {
-          cwd: '.',
-          reject: false,
-          env: { ...process.env, GH_REPO: repo },
-        });
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        return result.stdout;
-      } catch (err) {
-        throw new Error(`Failed to get issue body: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-
-    async upsertIssueBody(repo: string, issue: string, body: string): Promise<void> {
-      try {
-        await execa('gh', ['issue', 'edit', issue, '--body', body], {
-          cwd: '.',
-          env: { ...process.env, GH_REPO: repo },
-        });
-      } catch (err) {
-        throw new Error(`Failed to update issue body: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-
-    async getIssueLabels(repo: string, issue: string): Promise<string[]> {
-      try {
-        const result = await execa('gh', ['issue', 'view', issue, '--json', 'labels', '-q', '.labels[].name'], {
-          cwd: '.',
-          reject: false,
-          env: { ...process.env, GH_REPO: repo },
-        });
-        if (result.exitCode !== 0) {
-          return [];
-        }
-        return result.stdout.split('\n').filter((line) => line.trim());
-      } catch {
-        return [];
-      }
-    },
-
-    async getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null> {
-      try {
-        const result = await execa('gh', ['issue', 'view', issue, '--json', 'state', '-q', '.state'], {
-          cwd: '.',
-          reject: false,
-          env: { ...process.env, GH_REPO: repo },
-        });
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        const state = result.stdout.trim().toLowerCase();
-        return state === 'open' || state === 'closed' ? state : null;
-      } catch {
-        return null;
-      }
-    },
-
-    async upsertIssueComment(repo: string, issue: string, body: string): Promise<void> {
-      try {
-        await execa('gh', ['issue', 'comment', issue, '--body', body], {
-          cwd: '.',
-          env: { ...process.env, GH_REPO: repo },
-        });
-      } catch (err) {
-        throw new Error(`Failed to comment on issue: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-
-    async closeIssue(repo: string, issue: string): Promise<void> {
-      try {
-        await execa('gh', ['issue', 'close', issue], {
-          cwd: '.',
-          env: { ...process.env, GH_REPO: repo },
-        });
-      } catch (err) {
-        throw new Error(`Failed to close issue: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-  };
-}
-
-/**
  * Production filesystem abstraction for the sweep orchestrator.
  */
 function makeProductionFs() {
@@ -255,7 +164,7 @@ export async function dispatchHaltIssuesSweep(cmd: HaltIssuesSweepCommand, cwd: 
   }
 
   try {
-    const gh = makeProductionGh();
+    const gh = createGithubTrackerClient(makeProductionGhRunner());
     const fs = makeProductionFs();
 
     const result = await sweep({

@@ -20,7 +20,7 @@ import { join } from 'path';
 import { sweep, SweepConfig } from '../../../src/engine/halt-issues/sweep';
 import { FsAbstraction } from '../../../src/engine/halt-issues/resolution';
 import { LedgerFs } from '../../../src/engine/halt-issues/ledger';
-import { GhAbstraction } from '../../../src/engine/halt-issues/sweep';
+import { TrackerClient } from '../../../src/engine/tracker-client';
 
 /**
  * Minimal in-memory fs abstraction covering LedgerFs + FsAbstraction.
@@ -73,7 +73,7 @@ class MockFs implements FsAbstraction, LedgerFs {
 /**
  * Minimal gh abstraction — dry-run never calls it, but sweep requires one.
  */
-class MockGh implements GhAbstraction {
+class MockGh implements TrackerClient {
   async getIssueBody(): Promise<string | null> {
     throw new Error('gh should not be called during dry-run');
   }
@@ -83,13 +83,43 @@ class MockGh implements GhAbstraction {
   async getIssueLabels(): Promise<string[]> {
     throw new Error('gh should not be called during dry-run');
   }
-  async getIssueState(): Promise<'open' | 'closed' | null> {
+  async getIssueState(): Promise<string> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async viewIssue(): Promise<{ state: string }> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async viewerIdentity(): Promise<string> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async getBlockedBy(): Promise<unknown> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async listAssignedIssues(): Promise<never[]> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async commentOnIssue(): Promise<void> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async createIssue(): Promise<string> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async addIssueLabel(): Promise<void> {
     throw new Error('gh should not be called during dry-run');
   }
   async upsertIssueComment(): Promise<void> {
     throw new Error('gh should not be called during dry-run');
   }
   async closeIssue(): Promise<void> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async viewPullRequest(): Promise<{ state?: string; mergedAt?: string | null }> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async createLabel(): Promise<void> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async removeIssueLabel(): Promise<void> {
     throw new Error('gh should not be called during dry-run');
   }
 }
