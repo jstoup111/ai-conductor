@@ -67,4 +67,32 @@ describe('canonical tracker-client seam grep gate', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  // Guards against a second production gh factory reappearing (e.g. the
+  // gh-blocker-runner.ts regression fixed by adr-2026-07-22-canonical-tracker-client-seam):
+  // any module outside the canonical seam (or the existing PR-side exemptions)
+  // that shells out to `gh` directly via execFile/execa bypasses the
+  // AI_CONDUCTOR_NO_REAL_EXEC kill-switch entirely.
+  it('invokes execFile/execa with a literal "gh" argv only in tracker-client.ts', () => {
+    const EXEC_SIDE_EXEMPT = new Set([
+      CANONICAL_MODULE,
+      PR_SIDE_EXEMPT,
+      'src/engine/worktree.ts',
+      'src/engine/engineer/handoff.ts',
+    ]);
+    const files = listSourceFiles().filter((f) => !EXEC_SIDE_EXEMPT.has(f));
+
+    const offenders: string[] = [];
+    // Matches execFile(...'gh'...), execFile('gh', ...), execa('gh', ...), execaCommand('gh ...')
+    const ghExecPattern = /\b(?:execFile|execFileSync|execa|execaSync|execaCommand)\s*\(\s*['"]gh['"]/;
+
+    for (const file of files) {
+      const contents = readFileSync(path.join(REPO_ROOT, file), 'utf8');
+      if (ghExecPattern.test(contents)) {
+        offenders.push(`${file}: shells out to 'gh' directly instead of via makeProductionGh()`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
 });

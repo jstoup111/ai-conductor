@@ -339,16 +339,36 @@ describe('createGhBlockerRunner (real gh binary smoke)', () => {
       return;
     }
 
-    const run = createGhBlockerRunner();
-    const resolver = createBlockerResolver({ run });
+    // adr-2026-07-22-canonical-tracker-client-seam: createGhBlockerRunner now
+    // delegates to the canonical makeProductionGh(), which is guarded by the
+    // AI_CONDUCTOR_NO_REAL_EXEC kill-switch (set globally by vitest setup).
+    // This smoke test deliberately opts out — it is the one place a real gh
+    // call is intentional — and the call is a read-only GET
+    // (repos/.../dependencies/blocked_by), so there is no mutation risk.
+    const hadKillSwitch = Object.prototype.hasOwnProperty.call(
+      process.env,
+      'AI_CONDUCTOR_NO_REAL_EXEC',
+    );
+    const priorKillSwitch = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
 
     let verdict;
     try {
-      verdict = await resolver.resolve('anthropics/claude-code#229');
-    } catch (err) {
-      // Network unreachable or auth failure — skip gracefully; this smoke
-      // test verifies the adapter shape, not environment availability.
-      return;
+      const run = createGhBlockerRunner();
+      const resolver = createBlockerResolver({ run });
+      try {
+        verdict = await resolver.resolve('anthropics/claude-code#229');
+      } catch (err) {
+        // Network unreachable or auth failure — skip gracefully; this smoke
+        // test verifies the adapter shape, not environment availability.
+        return;
+      }
+    } finally {
+      if (hadKillSwitch) {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = priorKillSwitch;
+      } else {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      }
     }
 
     // The resolver never throws on a real API response — it always closes
