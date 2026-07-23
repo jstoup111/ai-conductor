@@ -52,6 +52,31 @@ describe('parseSourceRef', () => {
   });
 });
 
+describe('parseSourceRef golden corpus', () => {
+  // Characterization test — freezes TODAY's actual behavior (lastIndexOf('#') +
+  // digit-only number check) BEFORE any refactor to generalize source-ref
+  // parsing (e.g. to support Jira keys). If this test needs to change, the
+  // refactor changed observable parse behavior — that must be a deliberate,
+  // reviewed decision, not an accident.
+  it.each([
+    ['acme/app#49', { repo: 'acme/app', number: '49' }],
+    ['a#b#4', { repo: 'a#b', number: '4' }],
+    ['a/b#01', { repo: 'a/b', number: '01' }],
+    ['#5', null],
+    ['a/b#', null],
+    ['a/b#4x', null],
+    ['å/ü#7', { repo: 'å/ü', number: '7' }],
+    ['PROJ-123', null],
+    ['', null],
+    [null, null],
+    [undefined, null],
+    [' PROJ-123 ', null],
+    ['A/B#1-2', null],
+  ])('parseSourceRef(%p) === %p', (input, expected) => {
+    expect(parseSourceRef(input as string)).toEqual(expected);
+  });
+});
+
 describe('formatIssueRef', () => {
   it('formats Closes / Refs lines', () => {
     expect(formatIssueRef('Closes', 'acme/app#49')).toBe('Closes acme/app#49');
