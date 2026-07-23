@@ -12,6 +12,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Spec (DECIDE only, no behavior change yet): recorded the cheap-gate-first decision for the
+  BUILD tail (#879) — `wiring_check` moves ahead of `build_review` so a wiring-broken HEAD
+  never pays for an LLM grader dispatch it then discards, and `wiring_check` becomes a truly
+  engine-native step (no session dispatch) as `step-runners.ts` already documented. Artifacts:
+  ADR `adr-2026-07-23-cheap-gate-first-wiring-before-build-review`, architecture review,
+  stories, conflict check, and an 11-task implementation plan.
 - Source-ref parsing/formatting is now generalized behind a canonical tagged
   `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
