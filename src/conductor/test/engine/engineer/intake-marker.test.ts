@@ -134,6 +134,18 @@ describe('writeIntakeMarker', () => {
     expect(body2).not.toContain('Owner:');
   });
 
+  it('emits "Source-Ref: PROJ-123" verbatim for a Jira-shaped sourceRef', async () => {
+    const marker = await writeIntakeMarker(repoPath, 'jira-slug', 'PROJ-123', null);
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'jira-slug.md'), 'utf8');
+    expect(body).toContain('Source-Ref: PROJ-123');
+  });
+
+  it('emits no Source-Ref line for an empty/whitespace sourceRef', async () => {
+    expect(await writeIntakeMarker(repoPath, 'blank-slug', '', null)).toBeNull();
+    expect(await writeIntakeMarker(repoPath, 'blank-slug2', '   ', null)).toBeNull();
+  });
+
   it('writes an owner-only marker when sourceRef is null but owner is present', async () => {
     const marker = await writeIntakeMarker(repoPath, 'owner-only', null, 'alice');
     expect(marker).not.toBeNull();

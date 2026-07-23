@@ -12,7 +12,7 @@
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AuthoringGuard } from './authoring-guard.js';
-import { parseSourceRef } from './issue-ref.js';
+import { parseWorkRef } from './source-ref.js';
 
 /**
  * Write `.docs/intake/<slug>.md` with `Source-Ref: <sourceRef>` and, when an
@@ -48,7 +48,7 @@ export async function writeIntakeMarker(
   ownerIdentity: string | undefined | null,
   guard: AuthoringGuard = new AuthoringGuard(repoPath),
 ): Promise<string | null> {
-  const hasSourceRef = parseSourceRef(sourceRef) !== null;
+  const hasSourceRef = parseWorkRef(sourceRef) !== null;
   const owner = ownerIdentity == null ? '' : ownerIdentity.trim();
   const hasOwner = owner !== '';
 
