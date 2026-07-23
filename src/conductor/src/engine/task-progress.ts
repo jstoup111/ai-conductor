@@ -67,6 +67,56 @@ export async function countResolvedTasks(projectRoot: string): Promise<number> {
 }
 
 /**
+ * Shared union fold: plan task-ids that are "resolved" — either already
+ * `completed`/`skipped` in `.pipeline/task-status.json`, OR carried by a
+ * `Task:` trailer on a commit on the current branch (matched against
+ * `planIds` directly or via `canonicalTaskId` alias, e.g. plan id `2`
+ * matches trailer `Task: T2`). Trailer read is fail-soft: a git error (non-repo
+ * dir, no commits, etc.) degrades to no additional ids, never throws.
+ *
+ * This is the exact fold `countResolvedTasks` computes internally; extracted
+ * here so other callers (the build completion predicate) can consume the
+ * same definition instead of re-deriving it.
+ */
+export async function resolveTaskIds(projectRoot: string, planIds: string[]): Promise<Set<string>> {
+  const statusPath = join(projectRoot, '.pipeline/task-status.json');
+  let raw: string;
+  try {
+    raw = await readFile(statusPath, 'utf-8');
+  } catch {
+    raw = '';
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : undefined;
+  } catch {
+    parsed = undefined;
+  }
+
+  const tasks = normalizeTasks(parsed);
+
+  const resolved = new Set<string>();
+  for (const t of tasks) {
+    if ((t.status === 'completed' || t.status === 'skipped') && t.id !== undefined) {
+      resolved.add(t.id);
+    }
+  }
+
+  const trailerIds = await distinctTaskTrailerIds(projectRoot);
+  const planIdSet = new Set(planIds);
+  for (const id of trailerIds) {
+    const canonical = canonicalTaskId(id);
+    const match = planIdSet.has(id)
+      ? id
+      : [...planIdSet].find((p) => canonicalTaskId(p) === canonical);
+    if (match !== undefined) resolved.add(match);
+  }
+
+  return resolved;
+}
+
+/**
  * Distinct raw `Task:` trailer values across commits on the current branch
  * (per `listCommitsWithTrailers`'s merge-base-relative range). Fails soft to
  * an empty set on any git error (non-repo dir, no commits, etc.) — trailer
