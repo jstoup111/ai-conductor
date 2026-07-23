@@ -1,3 +1,5 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
 import {
   snapshotDaemonSessions,
@@ -5,6 +7,21 @@ import {
   sweepStaleDaemonSessions,
   type ReapResult,
 } from './tmux-leak-guard.js';
+import {
+  snapshotEngineerSignals,
+  diffEngineerSignals,
+  type EngineerSignalsDiff,
+} from './signals-leak-guard.js';
+
+/**
+ * REAL engineer signals dir (the operator's actual store) — deliberately NOT
+ * `process.env.AI_CONDUCTOR_ENGINEER_DIR`, since test/setup.ts redirects that
+ * env var to a tmpdir for the whole test process. This guard must watch the
+ * real default path regardless of that redirect (#861): the redirect is what
+ * should be preventing pollution, and this guard is the backstop that proves
+ * it's actually working.
+ */
+const REAL_ENGINEER_DIR = join(homedir(), '.ai-conductor', 'engineer');
 
 /**
  * Global vitest setup/teardown: detect .pipeline leaks during test runs.
@@ -63,6 +80,32 @@ export function applyTeardownDecision(
 }
 
 /**
+ * Decide the teardown outcome from an engineer-signals diff (#861).
+ *
+ * Any test-project-tagged lines added to the REAL engineer signals store
+ * during the run means the test-process env redirect (src/conductor/test/
+ * setup.ts, which points AI_CONDUCTOR_ENGINEER_DIR at a tmpdir) failed to
+ * isolate some write path — the run FAILS, naming the delta count.
+ *
+ * Exported for direct unit testing of the throw-vs-warn decision, separate
+ * from the real fs/vitest wiring — mirrors `applyTeardownDecision` above.
+ */
+export function applyEngineerSignalsTeardownDecision(
+  diff: EngineerSignalsDiff,
+  logger: (message: string) => void = console.error
+): void {
+  if (diff.addedTestProjectLines > 0) {
+    throw new Error(
+      `signals-leak-guard: ${diff.addedTestProjectLines} test-project-tagged signal(s) ` +
+        `leaked into the REAL engineer signals store (${REAL_ENGINEER_DIR}) during this ` +
+        `test run (#861) — the test-process env redirect in src/conductor/test/setup.ts ` +
+        `(AI_CONDUCTOR_ENGINEER_DIR -> tmpdir) should have prevented this; find the write ` +
+        `path that bypassed the redirect and fix it there`
+    );
+  }
+}
+
+/**
  * Best-effort reap on graceful interruption (SIGINT/SIGTERM). vitest's
  * `globalTeardown` only runs on a normal process exit — Ctrl-C, an external
  * `timeout`-style SIGTERM, or a killed worker all bypass it entirely, which
@@ -99,6 +142,11 @@ function installInterruptReap(
 
 export default async function setup() {
   const beforeState = await snapshotPipeline(process.cwd());
+
+  // Signals leak guard (#861): snapshot the REAL engineer signals store
+  // before the run so only test-project-tagged lines ADDED during this run
+  // count as pollution leaked past the test-process env redirect.
+  const engineerSignalsBefore = await snapshotEngineerSignals(REAL_ENGINEER_DIR);
 
   // Pre-run sweep (see tmux-leak-guard.ts header: "PERMANENT-BASELINE-
   // BLINDSPOT FIX"): kill any cc-daemon-* session already running whose pane
@@ -145,6 +193,26 @@ export default async function setup() {
     // fixture prefix (loop-test-, intake-life-, …) attributes the leaking file.
     const result = reapLeakedDaemonSessions(globalThis.__tmuxSnapshot ?? daemonSnapshot);
     applyTeardownDecision(result);
+
+    // Signals leak guard (#861): re-snapshot the REAL engineer signals store
+    // and diff against the pre-run baseline. snapshotEngineerSignals already
+    // catches its own read errors internally (returns exists: false) rather
+    // than throwing, but this is wrapped defensively anyway — an unexpected
+    // error here must degrade to a warning, not fail the whole suite (same
+    // fail-safe policy as the tmux guard's indeterminate branch above).
+    try {
+      const engineerSignalsAfter = await snapshotEngineerSignals(REAL_ENGINEER_DIR);
+      const engineerSignalsDiff = diffEngineerSignals(engineerSignalsBefore, engineerSignalsAfter);
+      applyEngineerSignalsTeardownDecision(engineerSignalsDiff);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('signals-leak-guard:')) {
+        throw err;
+      }
+      console.error(
+        `signals-leak-guard: NOT enforced (fail-safe): unexpected error while checking the ` +
+          `real engineer signals store for leaked test-project lines — investigate manually: ${err}`
+      );
+    }
   };
 }
 
