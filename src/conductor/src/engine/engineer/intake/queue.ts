@@ -25,6 +25,10 @@ export interface IntakeQueue {
   claim(): Promise<Envelope | null>;
   ack(e: Envelope): Promise<void>;
   release(e: Envelope): Promise<void>;
+  /** List all pending (un-claimed) Envelopes currently in the inbox. */
+  list(): Promise<Envelope[]>;
+  /** Remove a pending Envelope from the inbox. Benign no-op if already absent. */
+  remove(e: Envelope): Promise<void>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -156,6 +160,38 @@ export function createFileQueue(dir: string): IntakeQueue {
 
     async release(e: Envelope): Promise<void> {
       await rename(join(dir, claimedName(e)), join(dir, pendingName(e)));
+    },
+
+    // ── list ─────────────────────────────────────────────────────────────────
+
+    async list(): Promise<Envelope[]> {
+      await mkdir(dir, { recursive: true });
+      const entries = await readdir(dir);
+      const pendingFiles = entries.filter((f) => f.endsWith('.json')).sort();
+
+      const envelopes: Envelope[] = [];
+      for (const filename of pendingFiles) {
+        let content: string;
+        try {
+          content = await readFile(join(dir, filename), 'utf8');
+        } catch {
+          // File disappeared between readdir and readFile (concurrent claim/ack).
+          continue;
+        }
+        envelopes.push(JSON.parse(content) as Envelope);
+      }
+      return envelopes;
+    },
+
+    // ── remove ───────────────────────────────────────────────────────────────
+
+    async remove(e: Envelope): Promise<void> {
+      try {
+        await unlink(join(dir, pendingName(e)));
+      } catch (err: unknown) {
+        const nodeErr = err as NodeJS.ErrnoException;
+        if (nodeErr.code !== 'ENOENT') throw err;
+      }
     },
   };
 }
