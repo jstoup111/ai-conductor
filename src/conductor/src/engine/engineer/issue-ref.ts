@@ -13,6 +13,8 @@
 //
 // All gh access is injected; nothing here touches the network in tests.
 
+import { parseWorkRef } from './source-ref.js';
+
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
@@ -22,19 +24,14 @@ export type IssueRefKeyword = 'Closes' | 'Refs';
 /**
  * Parse `owner/repo#123` into its repo + issue-number parts, or null if malformed.
  *
- * Lenient on the repo segment (any non-empty prefix before the LAST `#`) so it
- * matches the intake adapter's historical behavior; strict on the number (digits
- * only). A null result means "no usable issue reference" — every caller treats
- * that as a no-op rather than an error.
+ * Compat shim over {@link parseWorkRef}: delegates to the generalized work-ref
+ * grammar and narrows to the GitHub shape, returning null for any other kind
+ * (e.g. a Jira key) or unparseable input. A null result means "no usable issue
+ * reference" — every caller treats that as a no-op rather than an error.
  */
 export function parseSourceRef(sourceRef: string | undefined | null): { repo: string; number: string } | null {
-  if (!sourceRef) return null;
-  const hash = sourceRef.lastIndexOf('#');
-  if (hash <= 0 || hash === sourceRef.length - 1) return null;
-  const repo = sourceRef.slice(0, hash);
-  const number = sourceRef.slice(hash + 1);
-  if (!/^\d+$/.test(number)) return null;
-  return { repo, number };
+  const r = parseWorkRef(sourceRef);
+  return r?.kind === 'github' ? { repo: r.repo, number: r.number } : null;
 }
 
 /**
