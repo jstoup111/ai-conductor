@@ -1422,3 +1422,39 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
     expect(third).toBeNull();
   });
 });
+
+// ─── Task 9: issue-state probe scoped to parseable github-issues envelopes ────
+
+describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable github-issues envelopes', () => {
+  it('non-github-issues candidate → delivered, getIssueState probe never invoked (gh not called)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1', 'test-source');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh, calls } = makeFakeGh('OPEN');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('github-issues candidate with unparseable sourceRef → delivered, probe skipped, diagnostic logged', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('not-a-valid-ref', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    const { runner: gh, calls } = makeFakeGh('OPEN');
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('not-a-valid-ref'))).toBe(true);
+  });
+});

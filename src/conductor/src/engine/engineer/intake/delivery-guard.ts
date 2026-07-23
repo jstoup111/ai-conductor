@@ -178,6 +178,9 @@ export function createDeliveryGuardedQueue(
         // falls through to normal delivery — only Task 6 will drop closed.
         if (source === 'github-issues') {
           const parsed = parseSourceRef(sourceRef);
+          if (!parsed) {
+            logger.info(`Unparseable sourceRef ${sourceRef}, skipping issue-state probe`);
+          }
           if (parsed) {
             const issueState = await getIssueState(deps.gh, parsed.issue);
             if (issueState === 'closed') {
