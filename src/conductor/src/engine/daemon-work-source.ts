@@ -50,7 +50,7 @@ export interface LocalWorkSourceDeps {
    * skip itself is still correct).
    */
   repairProcessed?: DiscoverBacklogOpts['repairProcessed'];
-  fastForwardRoot: (root: string, log: (m: string) => void) => Promise<void>;
+  fastForwardRoot: (root: string, log: (m: string) => void) => Promise<unknown>;
   discoverBacklog: (
     root: string,
     isProcessed: (slug: string) => Promise<boolean>,
