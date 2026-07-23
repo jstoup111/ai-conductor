@@ -2194,6 +2194,14 @@ wrapper, which errors loudly with remediation guidance). First build post-upgrad
 existing `dist/` directory into the store (one-time, automatic). See the Migration section in
 `CHANGELOG.md` for upgrade instructions.
 
+At finalize, the wrapper also stamps a `.engine-source-sha` sidecar file into the pinned
+`dist-versions/<id>` directory, containing the source commit SHA the build was produced from.
+The daemon reads this sidecar once at boot (`readEngineSourceSha`, resolving the `dist` symlink
+to its pinned version directory) to report the loaded engine's source SHA on the boot log's
+"daemon identity: ..." line (`unknown` when the sidecar is absent, e.g. a pre-feature published
+version) and to drive the advisory staleness probe described under "Daemon auto-restart on stale
+engine" below.
+
 **Daemon self-termination on missing repo root** (`engine/daemon.ts`) — the daemon checks at the 
 start of each loop iteration whether its repo root has been deleted (e.g., a worktree removed out 
 from under it). On definitive absence (`repoRootMissing()` predicate confirms the path is gone), 
@@ -3868,18 +3876,50 @@ See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-0
 ### Daemon auto-restart on stale engine (self-host only)
 
 When enabled in self-host mode, the daemon keeps its running engine in sync with merged source.
-**Before starting each feature** (and at idle) it rebuilds the engine from the fast-forwarded
-source — a content-addressed `npm run build` that no-ops when unchanged and atomically flips the
-`dist` symlink otherwise, leaving the running pinned `dist-versions/<id>` untouched — then hashes
-`dist/index.js`. If the running engine is now stale and no tasks are in-flight, it writes a restart
-intent marker (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the configured respawn
-transport (PR #215) to relaunch with fresh code so the next feature is built by that fresh code.
+**Before starting each feature** (and at idle) it first fetches origin and fast-forwards the local
+checkout to origin's default branch (`fastForwardRoot`, throttled by
+`engine_refresh_min_interval_seconds` — see below), then rebuilds the engine from that
+fast-forwarded source — a content-addressed `npm run build` that no-ops when unchanged and
+atomically flips the `dist` symlink otherwise, leaving the running pinned `dist-versions/<id>`
+untouched — then hashes `dist/index.js`. If the running engine is now stale and no tasks are
+in-flight, it writes a restart intent marker (`.daemon/RESTART_PENDING`) and exits with code 0,
+allowing the configured respawn transport (PR #215) to relaunch with fresh code so the next
+feature is built by that fresh code.
 
 The rebuild step exists because engine build artifacts are untracked (#309): a merge advances
 `src/` but never the local `dist` artifact, so without a rebuild the staleness check would never
-observe merge-driven drift. Firing at the **dispatch boundary** (not only when the backlog fully
-drains) matters because a merge that lands new specs takes the dispatch path and skips the
-drained-idle branch — so an idle-only check would build freshly-merged specs on stale engine code.
+observe merge-driven drift. The fetch-and-fast-forward step exists for the same reason one layer
+up: without it, a merge landing on origin would never reach the local checkout that the rebuild
+builds from, so the rebuild alone is not sufficient — both steps are required to close the loop
+from "merged on origin" to "running engine reflects it." Firing at the **dispatch boundary** (not
+only when the backlog fully drains) matters because a merge that lands new specs takes the
+dispatch path and skips the drained-idle branch — so an idle-only check would build
+freshly-merged specs on stale engine code.
+
+**Throttled fetch (`engine_refresh_min_interval_seconds`, default 300, `engine-refresh.ts`).** The
+pre-rebuild fetch is gated by an injectable-clock throttle (`createRefreshThrottle`) shared with
+the advisory probe below, so a busy or idling daemon does not hit origin more than once per
+interval. When `fastForwardRoot` reports a degraded outcome (`dirty`, `diverged`, or
+`fetch-failed`) with a determinable origin head SHA, a deduped `StalenessWarner`
+(`createStalenessWarner`) logs one `WARN engine-stale: <cause>` line naming the cause, origin's
+head SHA, and the reload command (`git pull --ff-only origin <default-branch> && (cd
+src/conductor && npm run build) && conduct daemon restart`); the warning is keyed on
+`(cause, originHead)` so it re-fires only when origin's head SHA changes for that cause, never on
+every throttle-window tick of the same stale condition. Causes that aren't determinable
+(no-origin, unknown-default-branch, not-on-default-branch) or that are clean (`current`,
+`advanced`) never warn.
+
+**Advisory staleness probe when self-heal is off (`probeStampedShaBehindOrigin`).** Independent of
+whether `auto_restart_on_stale_engine` is set, the daemon wires an advisory-only probe at the
+quiescent boundary that compares the source SHA stamped into the currently-running pinned engine
+version (the `.engine-source-sha` sidecar written by `publish-engine.mjs` at finalize, read once
+at boot and surfaced on the "daemon identity: ..." boot log line as `source sha: <sha>`, or
+`unknown` when the sidecar is absent — e.g. a pre-feature published version) against origin's
+current head via `git merge-base --is-ancestor`. When origin is determinably ahead of the stamped
+SHA, it emits the same deduped warning with cause `self-heal-disabled`. This probe shares the same
+throttle mechanism (so it never fetches more than once per interval either) but NEVER rebuilds and
+NEVER restarts — it only surfaces drift for an operator running without self-heal enabled, who
+would otherwise get no signal at all that their daemon's engine has fallen behind origin.
 
 **Configuration:**
 
@@ -3906,9 +3946,9 @@ auto_restart_on_stale_engine: true    # default: false; self-host only, ignored 
   is not automatically relaunched with fresh code
 
 **Detection:** The daemon captures the sha256 of `dist/index.js` at startup and, before each
-dispatch (and at idle), rebuilds from source and re-hashes. A mismatch means the running engine no
-longer matches the freshly-built source. On non-convergence at boot (fresh identity ≠ the restart's
-target) restart is suppressed to avoid thrashing.
+dispatch (and at idle), fetches/fast-forwards origin, rebuilds from that source, and re-hashes. A
+mismatch means the running engine no longer matches the freshly-built source. On non-convergence at
+boot (fresh identity ≠ the restart's target) restart is suppressed to avoid thrashing.
 
 #### Respawn in-place (single-generation) — Fix for #400
 
