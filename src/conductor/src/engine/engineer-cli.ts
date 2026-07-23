@@ -20,8 +20,7 @@
 //   conduct-ts engineer handoff       → {kind:'handoff'}  — open spec PR + ensureRunning
 //   (malformed subcommand / missing flags → {kind:'guide'} — print usage)
 
-import { execFile as execFileCb, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { EngineerIO, EngineerDeps } from './engineer/loop.js';
 import { createRegistryReader } from './registry.js';
@@ -56,6 +55,7 @@ import { createBlockerResolver } from './blocker-resolver.js';
 import { ghIssueLabelReader } from './backlog-priority.js';
 import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
+import { makeProductionGh } from './tracker-client.js';
 
 /**
  * Production DECIDE seam: gates each authoring step through the io surface.
@@ -94,8 +94,6 @@ function makeProductionAssessComplexity(
     return { approved: true, tier: m[1].toUpperCase() as 'S' | 'M' | 'L' };
   };
 }
-
-const execFileP = promisify(execFileCb);
 
 // ── Dispatch descriptor ───────────────────────────────────────────────────────
 
@@ -507,15 +505,12 @@ function printGuide(print: (s: string) => void): void {
   );
 }
 
-// Construct the real gh runner used in production. Exported so other
-// composition roots (e.g. the intake-loop CLI, Task 17) can reuse the exact
-// same production `gh` wiring without duplicating it.
-export function makeProductionGh(): NonNullable<DispatchEngineerOpts['gh']> {
-  return async (args: string[], opts: { cwd: string }) => {
-    const result = await execFileP('gh', args, { cwd: opts.cwd });
-    return { stdout: String(result.stdout) };
-  };
-}
+// Real gh runner used in production is the canonical one from tracker-client.ts
+// (re-exported here so other composition roots, e.g. the intake-loop CLI, can
+// keep importing it from engineer-cli.ts without duplicating the wiring). It
+// honors the AI_CONDUCTOR_NO_REAL_EXEC kill switch (assertRealExecAllowed) —
+// unlike the old local copy this replaces.
+export { makeProductionGh };
 
 /**
  * Composition root for the github-issues intake: wires the registry reader, the

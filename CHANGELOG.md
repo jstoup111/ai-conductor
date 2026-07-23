@@ -56,6 +56,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Canonical `TrackerClient` seam (`src/conductor/src/engine/tracker-client.ts`) — an
+  interface abstracting tracker read/write operations so engine modules stop calling
+  GitHub/`gh` directly. Ahead of #845 (backend selection) and #849 (Jira transports),
+  `docs/configuration.md` and `src/conductor/README.md` document the reserved
+  per-project `tracker` config contract (`backend`, `transport`, `credentials`);
+  `github` remains the zero-config default and the engine reads no `tracker` config
+  key yet.
 - `bin/quarantine-engineer-signals` — an operator-invoked, idempotent maintenance script that
   partitions the real engineer signals store into kept (real + malformed) and quarantined
   (`test-project`-tagged) lines, backs up the original before mutating, and preserves every kept
@@ -130,6 +137,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   0). Wired into `/architecture-review`'s Wiring Surface check (Medium/Large tier) and
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
+
+### Changed
+
+- Canonicalized runners across engine modules to route through the new `TrackerClient`
+  seam rather than each module invoking its own ad hoc GitHub call path, in preparation
+  for per-backend tracker selection (#845/#849).
 
 ### Removed
 

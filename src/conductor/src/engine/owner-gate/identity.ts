@@ -15,15 +15,12 @@
 // changing the gate's build/skip behavior.
 
 /**
- * Shell runner for the `gh` CLI. Mirrors the GhRunner shape used across the
- * engine (engineer/loop.ts, pr-labels.ts) — defined here so owner-gate has no
- * dependency on those modules. Injected in tests; nothing here touches the
- * network directly.
+ * Canonical `gh` CLI runner shape — re-exported here so owner-gate has no
+ * direct import-path coupling to callers, while still sharing the single
+ * canonical definition in tracker-client.ts.
  */
-export type GhRunner = (
-  args: string[],
-  opts: { cwd: string },
-) => Promise<{ stdout: string }>;
+import type { GhRunner } from '../tracker-client.js';
+export type { GhRunner };
 
 /** Minimal config surface this module reads. Full type lives in types/config.ts. */
 export interface OwnerConfig {

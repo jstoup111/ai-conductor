@@ -200,8 +200,9 @@ export function parseDependencyProse(input: DependencyProseInput): DependencyPro
 
 // --- Task 24: writer (GET-before-POST, additive-only) ---------------------
 
-/** Shell runner for the `gh` CLI. Mirrors the other engineer adapters' GhRunner shape. */
-export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+/** Canonical `gh` CLI runner shape — re-exported from tracker-client.ts. */
+import type { GhRunner } from '../tracker-client.js';
+export type { GhRunner };
 
 /** Parse `owner/repo#N` into its repo-slug + issue-number parts, or null if malformed. */
 function parseRef(ref: string): { repo: string; number: string } | null {

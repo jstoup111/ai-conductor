@@ -618,3 +618,18 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 - Missing entrypoint file → startup aborted with `PluginLoadError` naming the missing path.
 - Project-local plugin with the same `kind:name` as a global plugin → project-local wins; a debug log line records the shadowing.
 
+### Tracker backend (reserved — not yet implemented)
+
+```yaml
+tracker:
+  backend: "github" | "jira"
+  transport?: "api" | "mcp"
+  credentials?: <reference>
+```
+
+**Reserved — not read by the engine; consumed by #845 (backend selection) and #849
+(Jira transports).** `github` is the zero-config default: with no `tracker` key
+present, the engine behaves exactly as it does today, talking to GitHub via the
+existing `gh`/`Octokit` path. This shape documents the intended per-project
+config contract ahead of implementation so the canonical tracker-client seam
+(the `TrackerClient` interface) has a stable target to grow into.

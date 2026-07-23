@@ -61,7 +61,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 - src/conductor/src/engine/pr-labels.ts — re-export shim only
 - src/conductor/test/tracker-client.test.ts — new tests
 
-**Wired-into:** src/conductor/src/engine/pr-labels.ts#makeProductionGit (guard import; existing importers resolve via re-export)
+**Wired-into:** src/conductor/src/engine/pr-labels.ts#makeProductionGit
 **Dependencies:** none
 
 ### Task 2: TrackerClient interface + GitHub client read ops (labels, view, state, identity, blocked_by, list)
@@ -79,7 +79,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 - src/conductor/src/engine/tracker-client.ts — interface + read ops
 - src/conductor/test/tracker-client.test.ts — argv parity tests
 
-**Wired-into:** none (inert until src/conductor/src/engine/engineer-cli.ts)
+**Wired-into:** src/conductor/src/engine/engineer/intake/github-issues.ts#createGithubTrackerClient
 **Dependencies:** Task 1
 
 ### Task 3: GitHub client write ops (comment, create, close, label add, body upsert)
@@ -133,7 +133,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 - src/conductor/src/engine/backlog-priority.ts — type swap
 - src/conductor/test/backlog-priority.test.ts — mechanical type rename only
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/daemon-cli.ts#ghIssueLabelReader
 **Dependencies:** Task 1
 
 ### Task 6: Migrate blocker-resolver.ts + supply cwd at construction sites
@@ -244,7 +244,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 **Files:**
 - src/conductor/src/engine/daemon-cli.ts — root wiring
 
-**Wired-into:** src/conductor/src/engine/daemon-cli.ts#daemonCommand
+**Wired-into:** src/conductor/src/daemon-cli.ts#makeProductionGh
 **Dependencies:** Task 1
 
 ### Task 12: halt-issues sweep/closer fold-in with call-count parity
@@ -263,7 +263,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 - src/conductor/src/engine/halt-issues/closer.ts — interface swap
 - src/conductor/test/halt-issues/sweep.test.ts — call-count + failure parity
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/engine/halt-issues/sweep.ts#stampIssue, src/conductor/src/engine/halt-issues/sweep.ts#closeIssue
 **Dependencies:** Task 4
 
 ### Task 13: halt-issues CLI root — guarded factory, repo targeting parity
@@ -280,7 +280,7 @@ None — no migration, no new dependency; `gh` CLI behavior unchanged throughout
 **Files:**
 - src/conductor/src/engine/halt-issues/halt-issues-cli.ts — root wiring
 
-**Wired-into:** src/conductor/src/engine/halt-issues/halt-issues-cli.ts#main
+**Wired-into:** src/conductor/src/engine/halt-issues/halt-issues-cli.ts#dispatchHaltIssuesSweep
 **Dependencies:** Task 12
 
 ### Task 14: Checked-in grep gate — no runner declarations outside the canonical module

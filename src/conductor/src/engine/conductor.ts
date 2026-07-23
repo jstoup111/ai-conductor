@@ -1017,7 +1017,7 @@ export class Conductor {
           projectRoot: this.projectRoot,
           planPath,
           config: this.config,
-          gh: (args: string[]) => this.gh(args, { cwd: this.projectRoot }),
+          gh: this.gh,
           anchor: '',
         }),
     };

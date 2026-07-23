@@ -496,11 +496,12 @@ export function evaluatePlanWiringDisposition(
 export type FileExistsChecker = (path: string) => Promise<boolean>;
 
 /**
- * Injected `gh` CLI runner — same injected-runner convention as `GitRunner`.
+ * Canonical `gh` CLI runner shape — re-exported from tracker-client.ts.
  * Not yet exercised: issue-form ref resolution (Task 20) is the only caller;
  * path-form resolution (this task) must never invoke it.
  */
-export type GhRunner = (args: string[]) => Promise<{ stdout: string }>;
+import type { GhRunner } from './tracker-client.js';
+export type { GhRunner };
 
 export interface ResolveWaiverRefResult {
   status: 'waived' | 'gap';
@@ -524,6 +525,7 @@ export async function resolveWaiverRef(
   ref: InertRef,
   fileExists: FileExistsChecker,
   gh: GhRunner,
+  cwd: string,
 ): Promise<ResolveWaiverRefResult> {
   if (ref.form === 'path') {
     const exists = await fileExists(ref.path);
@@ -536,7 +538,7 @@ export async function resolveWaiverRef(
   const slug = `${ref.owner}/${ref.repo}#${ref.number}`;
   let stdout: string;
   try {
-    const result = await gh(['issue', 'view', slug, '--json', 'state']);
+    const result = await gh(['issue', 'view', slug, '--json', 'state'], { cwd });
     stdout = result.stdout;
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
@@ -591,13 +593,14 @@ export async function checkInertContractContradiction(
   searchReferences: ReferenceSearchRunner,
   fileExists: FileExistsChecker,
   gh: GhRunner,
+  cwd: string,
 ): Promise<string[]> {
   const gaps: string[] = [];
 
   for (const task of tasks) {
     if (task.parseResult?.kind !== 'inert') continue;
 
-    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh);
+    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh, cwd);
     if (resolution.status !== 'waived') continue;
 
     const taskFiles = new Set(task.files);
@@ -1084,7 +1087,7 @@ export async function computeWiringEvidence(
   const waivers: unknown[] = [];
   for (const task of tasks) {
     if (task.parseResult?.kind !== 'inert') continue;
-    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh);
+    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh, projectRoot);
     waivers.push({ taskId: task.taskId, ref: task.parseResult.ref, status: resolution.status });
     if (resolution.status !== 'waived') {
       pushGap(
@@ -1102,6 +1105,7 @@ export async function computeWiringEvidence(
     searchReferences,
     fileExists,
     gh,
+    projectRoot,
   );
   for (const message of contradictionGaps) {
     const idMatch = message.match(/^task ([^:]+):/);

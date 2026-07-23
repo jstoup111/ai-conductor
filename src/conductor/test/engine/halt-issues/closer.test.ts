@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import { stampIssue, StampResult, closeIssue, CloseResult, renderCloseComment } from '../../../src/engine/halt-issues/closer';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
+import { TrackerClient, GhRunnerError } from '../../../src/engine/tracker-client';
 
 const TEST_PR_URL = 'https://github.com/jstoup111/test-repo/pull/42';
 
@@ -34,7 +35,7 @@ interface FakeGhOpts {
   closeResponses: Array<{ shouldFail?: boolean; error?: string }>;
 }
 
-class FakeGh {
+class FakeGh implements Partial<TrackerClient> {
   private editIndex = 0;
   private commentIndex = 0;
   private closeIndex = 0;
@@ -57,14 +58,19 @@ class FakeGh {
     this.opts.bodies.set(key, body);
   }
 
-  async getIssueLabels(repo: string, issue: string): Promise<string[]> {
+  async getIssueLabels(repo: string, issue: number): Promise<string[]> {
     const key = `${repo}/${issue}`;
     return this.opts.labels.get(key) ?? [];
   }
 
-  async getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null> {
+  async viewIssue(slug: string): Promise<{ state: string }> {
+    const [repo, issue] = slug.split('#');
     const key = `${repo}/${issue}`;
-    return this.opts.issueStates.get(key) ?? null;
+    const state = this.opts.issueStates.get(key) ?? null;
+    if (state === null) {
+      throw new GhRunnerError(['issue', 'view', slug], { message: 'not found (404)' });
+    }
+    return { state };
   }
 
   async upsertIssueComment(repo: string, issue: string, body: string): Promise<void> {
@@ -122,7 +128,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(true);
       expect(result.stampedAt).toBeDefined();
@@ -148,7 +154,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(false);
       expect(result.stampedAt).toBeDefined();
@@ -170,7 +176,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(false);
       expect(result.closedBy).toBeUndefined();
@@ -189,7 +195,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(false);
       expect(result.lastError).toBe('rate limited');
@@ -208,7 +214,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(false);
       expect(result.closedBy).toBe('external');
@@ -227,7 +233,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       expect(result.stamped).toBe(true);
       expect(result.stampedAt).toBeDefined();
@@ -250,7 +256,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       // On re-stamp, stampedAt should be set to current time (or same as before)
       expect(result.stampedAt).toBeDefined();
@@ -271,7 +277,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await stampIssue(baseEntry, gh);
+      const result = await stampIssue(baseEntry, gh as unknown as TrackerClient);
 
       // Should extract the slug correctly even with extra whitespace
       expect(result.stamped).toBe(false);
@@ -299,7 +305,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: false }]
       });
 
-      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result.closed).toBe(true);
       expect(result.closedBy).toBe('sweep');
@@ -334,7 +340,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('kept-open');
@@ -364,7 +370,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('external');
@@ -395,7 +401,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: true, error: 'Permission denied' }]
       });
 
-      const result1 = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result1 = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result1.closed).toBe(false);
       expect(result1.lastError).toContain('Permission denied');
@@ -449,7 +455,7 @@ describe('closer', () => {
         closeResponses: [{ shouldFail: false }]
       });
 
-      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result.closed).toBe(false);
       expect(result.lastError).toContain('rate limited');
@@ -477,7 +483,7 @@ describe('closer', () => {
         closeResponses: []
       });
 
-      const result = await closeIssue(closableEntry, TEST_PR_URL, gh);
+      const result = await closeIssue(closableEntry, TEST_PR_URL, gh as unknown as TrackerClient);
 
       expect(result.closed).toBe(false);
       expect(result.closedBy).toBe('external');

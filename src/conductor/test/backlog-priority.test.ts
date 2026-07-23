@@ -7,9 +7,9 @@ import {
   ghIssueLabelReader,
   PRIORITY_BAND_RANK,
   type PriorityResolution,
-  type ExecRunner,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
+import type { GhRunner } from '../src/engine/tracker-client.js';
 
 describe('PRIORITY_BAND_RANK — exported band ranking', () => {
   it('exports a single ranking with no-issue < critical < high < medium < low < unlabeled', () => {
@@ -1424,7 +1424,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
   describe('test 1: Build gh api command from sourceRef', () => {
     it('parses owner/repo#N and builds correct gh api argv', async () => {
       const callLog: Array<{ args: string[] }> = [];
-      const runner: ExecRunner = async (args: string[], opts: { cwd: string }) => {
+      const runner: GhRunner = async (args: string[], opts: { cwd: string }) => {
         callLog.push({ args });
         return { stdout: JSON.stringify({ labels: [{ name: 'priority: high' }] }) };
       };
@@ -1441,7 +1441,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
   describe('test 2: Cross-repo refs', () => {
     it('handles multiple sourceRefs from different repos', async () => {
       const callLog: Array<{ args: string[] }> = [];
-      const runner: ExecRunner = async (args: string[], opts: { cwd: string }) => {
+      const runner: GhRunner = async (args: string[], opts: { cwd: string }) => {
         callLog.push({ args });
         // Return response based on which issue is being queried
         if (args.some((a) => a.endsWith('/456'))) {
@@ -1462,7 +1462,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
 
   describe('test 3: Label extraction', () => {
     it('extracts label names from JSON response labels array', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         return {
           stdout: JSON.stringify({
             labels: [
@@ -1481,7 +1481,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
     });
 
     it('handles empty labels array', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         return { stdout: JSON.stringify({ labels: [] }) };
       };
 
@@ -1494,7 +1494,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
 
   describe('test 4: HTTP 404 → not-found', () => {
     it('non-existent issue returns not-found (404)', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         const err = new Error('HTTP 404: Not Found');
         (err as any).status = 404;
         throw err;
@@ -1508,7 +1508,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
 
     it('multiple refs with one 404', async () => {
       let callCount = 0;
-      const runner: ExecRunner = async (args: string[]) => {
+      const runner: GhRunner = async (args: string[]) => {
         callCount++;
         if (args.some((a) => a.endsWith('/999'))) {
           const err = new Error('HTTP 404: Not Found');
@@ -1529,7 +1529,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
 
   describe('test 5: Transport failure/ENOENT → throw', () => {
     it('non-404 transport error throws', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         throw new Error('network timeout');
       };
 
@@ -1539,7 +1539,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
     });
 
     it('ENOENT error throws', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         const err = new Error('ENOENT: no such file or directory');
         (err as any).code = 'ENOENT';
         throw err;
@@ -1551,7 +1551,7 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
     });
 
     it('500 error throws', async () => {
-      const runner: ExecRunner = async () => {
+      const runner: GhRunner = async () => {
         const err = new Error('HTTP 500: Internal Server Error');
         (err as any).status = 500;
         throw err;

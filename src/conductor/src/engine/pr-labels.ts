@@ -18,15 +18,8 @@ const execFileP = promisify(execFileCb);
 
 // ── Runner types ──────────────────────────────────────────────────────────────
 
-/**
- * Injectable runner for `gh` CLI commands.
- * Mirrors the GhRunner type in engineer/loop.ts — defined here so pr-labels
- * has no dependency on that module.
- */
-export type GhRunner = (
-  args: string[],
-  opts: { cwd: string },
-) => Promise<{ stdout: string }>;
+import { makeProductionGh, assertRealExecAllowed, type GhRunner } from './tracker-client.js';
+export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
  * Injectable runner for `git` CLI commands.
@@ -37,34 +30,6 @@ export type GitRunner = (
 ) => Promise<{ stdout: string }>;
 
 // ── Production factories ──────────────────────────────────────────────────────
-
-/**
- * Test kill-switch. When `AI_CONDUCTOR_NO_REAL_EXEC` is set (the vitest global setup
- * sets it — see `test/setup.ts`), the production `gh`/`git` runners refuse to
- * shell out. This is a belt-and-suspenders guard: every test is supposed to inject
- * a fake runner, but if one ever reaches a real runner (e.g. a daemon-mode test
- * that forgets to stub escalation), this prevents it from mutating real GitHub —
- * the exact failure mode that once labeled + commented on a live PR. The real-`git`
- * integration tests (e.g. rebase / daemon-rekick) use their own execa paths, NOT
- * this seam, so they are unaffected.
- */
-function assertRealExecAllowed(bin: string): void {
-  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
-    throw new Error(
-      `pr-labels: real '${bin}' exec blocked under AI_CONDUCTOR_NO_REAL_EXEC (test env). ` +
-        `Inject a fake runner instead of using makeProduction${bin === 'gh' ? 'Gh' : 'Git'}().`,
-    );
-  }
-}
-
-/** Construct the real gh runner used in production. */
-export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string }) => {
-    assertRealExecAllowed('gh');
-    const result = await execFileP('gh', args, { cwd: opts.cwd });
-    return { stdout: String(result.stdout) };
-  };
-}
 
 /** Construct the real git runner used in production. */
 export function makeProductionGit(): GitRunner {

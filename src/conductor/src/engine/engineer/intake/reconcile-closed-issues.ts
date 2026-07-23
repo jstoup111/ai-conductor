@@ -18,7 +18,7 @@ import { parseSourceRef } from './source-ref.js';
 
 /**
  * Capability for querying a GitHub issue's open/closed state.
- * Modeled on GhAbstraction.getIssueState in halt-issues/sweep.ts.
+ * Modeled on the halt-issues closer's issue-state lookup (src/engine/halt-issues/closer.ts).
  */
 export type GetIssueState = (repo: string, issue: string) => Promise<'open' | 'closed' | null>;
 

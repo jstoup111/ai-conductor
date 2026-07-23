@@ -2311,6 +2311,24 @@ store idempotently. Future non-default providers integrate as MCP servers querie
 by the agent — the harness wires the provider selection but never searches on the agent's
 behalf.
 
+### Tracker backend config (reserved — not yet implemented)
+
+```yaml
+tracker:
+  backend: "github" | "jira"
+  transport?: "api" | "mcp"
+  credentials?: <reference>
+```
+
+**Reserved — not read by the engine; consumed by #845 (backend selection) and #849
+(Jira transports).** No `HarnessConfig` field exists for this yet, and nothing in
+`src/conductor/src` consumes a `tracker` config key. `github` is the zero-config
+default: today, and until #845/#849 land, the engine always talks to GitHub
+regardless of whether this key is present. This documents the intended shape of
+the per-project tracker config ahead of implementation, so callers of the
+canonical `TrackerClient` seam (`src/conductor/src/engine/tracker-client.ts`)
+have a stable target contract to build backend selection against.
+
 Key modules:
 - `engine/memory-store.ts` — `projectKey`, `ensureMemoryStore`, `recordMemoryEntry`
 - `engine/memory-migrate.ts` — `migrateMemory` (safe copy-verify-swap)

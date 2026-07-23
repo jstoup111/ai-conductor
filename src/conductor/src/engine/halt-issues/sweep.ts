@@ -23,18 +23,9 @@ import { parseVerdicts } from './verdict-parser.js';
 import { Ledger, LedgerFs, Clock } from './ledger.js';
 import { stampIssue, closeIssue } from './closer.js';
 import { resolveEntry, FsAbstraction } from './resolution.js';
+import { TrackerClient } from '../tracker-client.js';
 
-/**
- * GitHub abstraction interface (from closer.ts)
- */
-export interface GhAbstraction {
-  getIssueBody(repo: string, issue: string): Promise<string | null>;
-  upsertIssueBody(repo: string, issue: string, body: string): Promise<void>;
-  getIssueLabels(repo: string, issue: string): Promise<string[]>;
-  getIssueState(repo: string, issue: string): Promise<'open' | 'closed' | null>;
-  upsertIssueComment(repo: string, issue: string, body: string): Promise<void>;
-  closeIssue(repo: string, issue: string): Promise<void>;
-}
+export type { TrackerClient } from '../tracker-client.js';
 
 /**
  * Configuration for the sweep operation
@@ -46,7 +37,7 @@ export interface SweepConfig {
   repo: string;
   dryRun: boolean;
   fs: FsAbstraction & LedgerFs;
-  gh: GhAbstraction;
+  gh: TrackerClient;
   clock: Clock;
 }
 
@@ -191,7 +182,7 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
     try {
       // Step 4a: Stamp the issue (only if not already stamped locally)
       if (!alreadyStamped) {
-        const stampResult = await stampIssue(entry, config.gh);
+        const stampResult = await stampIssue(entry, config.gh, config.repoDir);
 
         if (stampResult.stamped) {
           counts.stamped++;
@@ -227,7 +218,7 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
         }
 
         // Step 4c: Close the issue
-        const closeResult = await closeIssue(entry, resolution.prUrl, config.gh);
+        const closeResult = await closeIssue(entry, resolution.prUrl, config.gh, config.repoDir);
 
         if (closeResult.closed) {
           counts.closed++;

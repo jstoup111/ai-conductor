@@ -14,6 +14,7 @@
 
 import { createInterface } from 'node:readline/promises';
 import { makeProductionGh } from './engine/pr-labels.js';
+import { createGithubTrackerClient } from './engine/tracker-client.js';
 import { fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
@@ -75,8 +76,10 @@ async function main(): Promise<void> {
 
   const rl = opts.interactive ? createInterface({ input: process.stdin, output: process.stdout }) : null;
   try {
+    const gh = makeProductionGh();
     const result = await fileIntakeIssue(opts, {
-      gh: makeProductionGh(),
+      gh,
+      tracker: createGithubTrackerClient(gh),
       cwd: '.',
       prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
     });
