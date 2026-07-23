@@ -1052,6 +1052,29 @@ describe('Task 4: GuardLedger interface — exposes forget()', () => {
   });
 });
 
+// ─── Task 5: claim guard probes issue state for github-issues envelopes (open → deliver) ────
+
+describe('Task 5: createDeliveryGuardedQueue — probes issue state for github-issues, open delivers', () => {
+  it('pending github-issues candidate with OPEN issue → delivered, getIssueState probe reached (gh invoked)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('owner/repo#42', 'github-issues');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+    (ledger as any).get = async () => ({
+      source: 'github-issues',
+      sourceRef: 'owner/repo#42',
+      status: 'pending',
+    });
+    const { runner: gh, calls } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(calls.length).toBeGreaterThan(0);
+  });
+});
+
 // ─── Task 7: in-flight duplicate envelope dropped without ledger mutation ────
 
 describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dropped', () => {

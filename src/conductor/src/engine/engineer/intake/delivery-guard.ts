@@ -11,6 +11,44 @@
 import { REOPEN_ATTEMPTS_CAP } from './github-issues.js';
 import type { IntakeQueue } from './queue.js';
 import type { Envelope } from './port.js';
+import { parseSourceRef } from './source-ref.js';
+
+/** Discriminated GitHub issue state from getIssueState probe. */
+export type IssueState = 'open' | 'closed' | 'unknown';
+
+/**
+ * Probe GitHub issue state via gh runner.
+ *
+ * Calls `gh issue view <n> --json state -q .state` and maps the response to
+ * a discriminated state. Handles errors gracefully — if gh throws or stdout
+ * is unparseable, returns 'unknown' instead of crashing.
+ */
+export async function getIssueState(gh: GhRunner, issue: string): Promise<IssueState> {
+  try {
+    const { stdout } = await gh(['issue', 'view', issue, '--json', 'state', '-q', '.state'], {
+      cwd: process.cwd(),
+    });
+
+    const trimmed = (stdout || '').trim();
+    let state: string | undefined;
+    try {
+      const parsed = JSON.parse(trimmed);
+      state = typeof parsed === 'string' ? parsed : parsed?.state;
+    } catch {
+      state = trimmed;
+    }
+
+    if (state === 'OPEN') {
+      return 'open';
+    }
+    if (state === 'CLOSED') {
+      return 'closed';
+    }
+    return 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 
 /** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -135,6 +173,16 @@ export function createDeliveryGuardedQueue(
 
       // Healthy path: no ledger entry (non-recording source) or pending status
       if (!entry || entry.status === 'pending' || entry.status === 'unseen') {
+        // Task 5: for github-issues envelopes with a parseable sourceRef,
+        // probe issue state before delivering. Open (or unparseable/unknown)
+        // falls through to normal delivery — only Task 6 will drop closed.
+        if (source === 'github-issues') {
+          const parsed = parseSourceRef(sourceRef);
+          if (parsed) {
+            await getIssueState(deps.gh, parsed.issue);
+          }
+        }
+
         // Passthrough unchanged — no ledger writes, no gh calls
         return candidate;
       }
