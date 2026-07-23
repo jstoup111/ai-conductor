@@ -38,33 +38,18 @@ if [ "$INTERACTIVE" -eq 1 ]; then
   exec conduct-ts engineer
 fi
 
-WORKTREE_OUT="$(run_with_timeout 60 conduct-ts engineer worktree 2>&1)"
-WORKTREE_STATUS=$?
-if [ "$WORKTREE_STATUS" -eq 124 ]; then
-  echo "FAIL engineer/${TIER}: timeout"
-  exit 1
-elif [ "$WORKTREE_STATUS" -ne 0 ]; then
+if ! WORKTREE_OUT="$(conduct-ts engineer worktree 2>&1)"; then
   echo "FAIL engineer/${TIER}: worktree failed — ${WORKTREE_OUT}"
   exit 1
 fi
 
-LAND_OUT="$(run_with_timeout 60 conduct-ts engineer land 2>&1)"
-LAND_STATUS=$?
-if [ "$LAND_STATUS" -eq 124 ]; then
-  echo "FAIL engineer/${TIER}: timeout"
-  exit 1
-elif [ "$LAND_STATUS" -ne 0 ]; then
+if ! LAND_OUT="$(conduct-ts engineer land 2>&1)"; then
   REASON="$(printf '%s\n' "$LAND_OUT" | tail -n 1)"
   echo "FAIL engineer/${TIER}: land rejected — ${REASON}"
   exit 1
 fi
 
-HANDOFF_OUT="$(run_with_timeout 60 conduct-ts engineer handoff 2>&1)"
-HANDOFF_STATUS=$?
-if [ "$HANDOFF_STATUS" -eq 124 ]; then
-  echo "FAIL engineer/${TIER}: timeout"
-  exit 1
-elif [ "$HANDOFF_STATUS" -ne 0 ]; then
+if ! HANDOFF_OUT="$(conduct-ts engineer handoff 2>&1)"; then
   echo "FAIL engineer/${TIER}: handoff failed — ${HANDOFF_OUT}"
   exit 1
 fi
