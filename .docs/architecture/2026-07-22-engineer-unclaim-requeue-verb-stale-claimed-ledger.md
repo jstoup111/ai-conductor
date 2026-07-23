@@ -16,9 +16,9 @@ flowchart TD
   OP -->|"engineer requeue --stale (new)"| CLI
 
   subgraph intake["engineer/intake"]
-    QUEUE[queue.ts<br/>file-backed inbox<br/>claim / ack]
+    QUEUE["queue.ts<br/>file-backed inbox<br/>claim / ack"]
     GUARD["delivery-guard.ts<br/>createDeliveryGuardedQueue<br/>claim-time heal pass"]
-    LEDGER[ledger.ts<br/>Ledger: transition / reopen /<br/>requeueClaimed (new)]
+    LEDGER["ledger.ts<br/>Ledger: transition / reopen /<br/>requeueClaimed (new)"]
     REAP["stale-claim reaper (new)<br/>age &gt; staleness window?"]
   end
 
