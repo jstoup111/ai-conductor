@@ -120,4 +120,61 @@ describe('reconcileClosedIssues', () => {
     const done = await ledger.get('github-issues', 'o/a#4');
     expect(done?.status).toBe('done');
   });
+
+  it('isolates a mid-batch getIssueState throw — surrounding entries still processed, error counted, batch not aborted', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#2' }); // throws
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#3' }); // closed
+
+    await queue.enqueue(envelope('1', 'o/a#1'));
+    await queue.enqueue(envelope('2', 'o/a#2'));
+    await queue.enqueue(envelope('3', 'o/a#3'));
+
+    const summary = await reconcileClosedIssues({
+      ledger,
+      queue,
+      getIssueState: async (repo: string, issue: string) => {
+        const key = `${repo}#${issue}`;
+        if (key === 'o/a#2') throw new Error('gh api boom');
+        if (key === 'o/a#1' || key === 'o/a#3') return 'closed';
+        return null;
+      },
+    });
+
+    expect(summary.scanned).toBe(3);
+    expect(summary.forgotten).toBe(2);
+    expect(summary.errors).toBe(1);
+
+    expect(await ledger.get('github-issues', 'o/a#1')).toBeUndefined();
+    expect(await ledger.get('github-issues', 'o/a#3')).toBeUndefined();
+
+    const untouched = await ledger.get('github-issues', 'o/a#2');
+    expect(untouched?.status).toBe('pending');
+  });
+
+  it('total getIssueState outage (every call returns null) forgets nothing', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#2' });
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#3' });
+
+    const summary = await reconcileClosedIssues({
+      ledger,
+      queue,
+      getIssueState: async () => null,
+    });
+
+    expect(summary.scanned).toBe(3);
+    expect(summary.forgotten).toBe(0);
+    expect(summary.errors).toBe(0);
+
+    expect((await ledger.get('github-issues', 'o/a#1'))?.status).toBe('pending');
+    expect((await ledger.get('github-issues', 'o/a#2'))?.status).toBe('pending');
+    expect((await ledger.get('github-issues', 'o/a#3'))?.status).toBe('pending');
+  });
 });

@@ -35,6 +35,7 @@ export interface ReconcileClosedIssuesOptions {
 export interface ReconcileClosedIssuesSummary {
   scanned: number;
   forgotten: number;
+  errors: number;
 }
 
 /**
@@ -52,6 +53,7 @@ export async function reconcileClosedIssues(
   const summary: ReconcileClosedIssuesSummary = {
     scanned: 0,
     forgotten: 0,
+    errors: 0,
   };
 
   const entries = await ledger.list();
@@ -87,6 +89,7 @@ export async function reconcileClosedIssues(
       summary.forgotten++;
     } catch {
       // Per-entry isolation: one failure doesn't block the rest of the sweep.
+      summary.errors++;
       continue;
     }
   }
