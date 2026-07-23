@@ -107,6 +107,8 @@ walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
 - [Configuration](docs/configuration.md) — settings.json, tech-context, and harness customization
 - [Daemon Operations](docs/daemon-operations.md) — running, parking, and recovering the autonomous build daemon
 - [Observability](docs/observability.md) — logs, metrics, and monitoring the daemon and skills
+  (includes `conduct kpi` — per-feature token/cost accounting rollup over `.docs/shipped/*.md`
+  Cost blocks; see [Conductor CLI Reference](src/conductor/README.md) for the full format)
 - [Intake](docs/intake.md) — filing issues that seed the DECIDE phase
 - [Architecture](docs/architecture.md) — how engineer, daemon, and operator roles fit together
 - [Runbooks](docs/runbooks/emergency-stop-a-running-feature.md) — step-by-step procedures for operational incidents

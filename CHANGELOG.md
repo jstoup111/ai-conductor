@@ -43,6 +43,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   Paired with the new `src/conductor/test/signals-leak-guard.ts` module (`snapshotEngineerSignals`/
   `diffEngineerSignals`), which the test suite's `global-setup.ts` uses to fail closed on any
   test-induced growth of the real store (#861).
+- **Per-feature token/cost accounting (#537).** Autonomous dispatch now invokes Claude with
+  `--output-format json`, capturing real `tokenUsage` (input/output/cache tokens, `costUsd`,
+  `numTurns`, `durationMs`) and `model` on every `step_completed` event instead of dropping
+  usage silently — a step with no captured usage is marked `unmetered: true` rather than
+  omitted. A new `computeCostRollup` aggregates a feature's `.pipeline/events.jsonl` into
+  tokens/cost/dispatches/retries/halts/unmetered, and `conduct shipped-record` persists that
+  rollup as a `## Cost` block appended after the shipped record's frontmatter fence (dedup/
+  parsing unaffected). A new read-only **`conduct kpi`** command reports tokens-per-shipped-
+  feature across all committed `.docs/shipped/*.md` records, plus an aggregate/trend, and
+  flags any feature with unmetered dispatches as partial. The retro skill and the OTel
+  `conductor.step.tokens` counter (now with a `model` attribute) both consume this same data
+  instead of estimating it.
 - `examples/` — runnable example script per `conduct-ts` flow at S/M/L tiers.
 - **`engineer claim` never hands out a closed GitHub issue, and the brain intake sweep
   reconciles closed issues out of the ledger/inbox.** On claim, `github-issues` candidates
