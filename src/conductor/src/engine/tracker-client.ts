@@ -129,8 +129,10 @@ export class GhRunnerError extends Error {
 }
 
 /** Error thrown when a parsing op receives stdout that is not valid JSON; names the
- * failing operation so callers get an actionable message instead of a raw JSON.parse error. */
-export class GhParseError extends Error {
+ * failing operation so callers get an actionable message instead of a raw JSON.parse error.
+ * Module-private: nothing outside this file catches it by type — callers match on the
+ * operation-named message — so it is intentionally not exported (no external wiring). */
+class GhParseError extends Error {
   readonly operation: string;
   readonly stdout: string;
   readonly cause: unknown;
