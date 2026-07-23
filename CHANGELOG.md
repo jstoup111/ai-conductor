@@ -17,6 +17,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
   markers and the ledger. Five duplicate ref-parsing implementations were retired
   in favor of the shared shim, with no behavior change for existing GitHub refs.
+- Gate-writeback's other-owner skip notices (no implementation PR yet, terminal PR state,
+  no `Source-Ref` marker) are now suppressed from the daemon log by default; set
+  `daemon_verbose: true` in `.ai-conductor/config.yml` to re-surface them (#840).
 
 ### Fixed
 
