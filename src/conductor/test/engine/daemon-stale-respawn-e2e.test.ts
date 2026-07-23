@@ -18,6 +18,12 @@ import {
 import { createRestartRequester } from '../../src/daemon-cli.js';
 import * as restartIntent from '../../src/engine/restart-intent.js';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { fastForwardRoot } from '../../src/engine/daemon-backlog.js';
+import { captureEngineIdentity, createStaleEngineChecker } from '../../src/engine/engine-identity.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCb);
 
 // Capstone acceptance spec for #353 / adr-2026-07-06-stale-engine-respawn-in-place
 // (TR-2, TR-3, TR-4). The production wiring this drives — createRestartRequester
@@ -567,6 +573,183 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
       expect(requestRestart).not.toHaveBeenCalled();
       expect(res.stoppedReason).toBe('idle_timeout');
       expect(logs.some((m) => m.toLowerCase().includes('staleness probe') || m.toLowerCase().includes('probe'))).toBe(true);
+    });
+  });
+
+  describe('merged-fix end-to-end propagation (Task 10; #598 TI-1 HP1/HP2/HP3)', () => {
+    // Reuses the same e2e seams as the refreshEngineSource/probeEngineStaleness
+    // describes above (real git fixture + fake-build-command seam): a bare
+    // "origin" remote plus a working clone, and a `fakeRebuild` that stands in
+    // for the heavy `npm run build` step by making "rebuild" a pure function of
+    // the checked-out engine-source file (so a docs-only advance yields a
+    // byte-identical dist/content-hash while an engine-source advance yields a
+    // different one — the same behavior `publish-engine.mjs`'s content-hash
+    // versioning produces, without paying for a real tsup build per test).
+
+    async function initGitRepo(): Promise<{ dir: string; originDir: string; tmpBase: string }> {
+      const tmpBase = await mkdtemp(join(tmpdir(), 'e2e-propagation-'));
+      const dir = join(tmpBase, 'work');
+      const originDir = join(tmpBase, 'origin.git');
+      await mkdir(dir, { recursive: true });
+      await mkdir(originDir, { recursive: true });
+      await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'engine-entry.txt'), 'v1\n');
+      await writeFile(join(dir, 'README.md'), 'init\n');
+      await execFile('git', ['add', '.'], { cwd: dir });
+      await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+      await execFile('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: dir });
+      return { dir, originDir, tmpBase };
+    }
+
+    /** Simulates a merged PR landing on origin/main without touching `dir`
+     * (which stays behind — the incident this feature fixes). */
+    async function advanceOrigin(
+      originDir: string,
+      tmpBase: string,
+      changeKind: 'engine' | 'docs',
+    ): Promise<string> {
+      const otherDir = join(tmpBase, `other-${changeKind}`);
+      await execFile('git', ['clone', '-q', originDir, otherDir]);
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: otherDir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: otherDir });
+      if (changeKind === 'engine') {
+        await writeFile(join(otherDir, 'src', 'engine-entry.txt'), 'v2 — merged engine fix\n');
+      } else {
+        await writeFile(join(otherDir, 'README.md'), 'docs update\n');
+      }
+      await execFile('git', ['add', '.'], { cwd: otherDir });
+      await execFile(
+        'git',
+        ['commit', '-q', '-m', changeKind === 'engine' ? 'fix: engine bug' : 'docs: update'],
+        { cwd: otherDir },
+      );
+      await execFile('git', ['push', '-q', 'origin', 'main'], { cwd: otherDir });
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: otherDir });
+      return stdout.trim();
+    }
+
+    /** Fake build-command seam: "publish" is standing in for
+     * publish-engine.mjs's content-hash-stamped-version behavior — the
+     * published dist is a pure function of the checked-out engine source, so
+     * an engine-source advance produces a NEW version/content-hash and a
+     * docs-only advance reproduces the SAME one. */
+    async function fakePublish(dir: string, distPath: string): Promise<void> {
+      const content = await readFile(join(dir, 'src', 'engine-entry.txt'), 'utf-8').catch(() => '');
+      await mkdir(dirname(distPath), { recursive: true });
+      await writeFile(distPath, content, 'utf-8');
+    }
+
+    async function headSha(dir: string): Promise<string> {
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: dir });
+      return stdout.trim();
+    }
+
+    it('Scenario A (HP1/HP2): behind-origin engine-source advance -> quiescent fast-forward "advanced" -> publish stamps the merge SHA -> checker reports "stale" -> requestRestart fires', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath); // v1: identity currently loaded by the running daemon
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const mergeSha = await advanceOrigin(originDir, tmpBase, 'engine');
+
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => [{ slug: 'pending' }],
+          runFeature: async () => {
+            throw new Error('must never dispatch: the engine is stale before this item runs');
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        // ff outcome: advanced, at the merge commit.
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: mergeSha }));
+        expect(await headSha(dir)).toBe(mergeSha);
+
+        // Publish flips to a new (content-hash) version stamped at the merge SHA.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).not.toBe(capturedIdentity);
+
+        // Checker sees the drift -> stale -> restart requested.
+        expect(checker.check()).toBe('stale');
+        expect(requestRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it('Scenario B (HP3): docs-only advance -> publish content-unchanged (same identity) -> no restart invoked', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath);
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const docsMergeSha = await advanceOrigin(originDir, tmpBase, 'docs');
+
+        let dispatched = false;
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => (dispatched ? [] : [{ slug: 'pending' }]),
+          runFeature: async (item: { slug: string }) => {
+            dispatched = true;
+            return { slug: item.slug, status: 'done' };
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: docsMergeSha }));
+        expect(await headSha(dir)).toBe(docsMergeSha);
+
+        // Docs-only advance: publish reproduces the SAME content-hash identity.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).toBe(capturedIdentity);
+
+        expect(checker.check()).toBe('current');
+        expect(dispatched).toBe(true); // engine wasn't stale, feature ran
+        expect(requestRestart).not.toHaveBeenCalled();
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
     });
   });
 
