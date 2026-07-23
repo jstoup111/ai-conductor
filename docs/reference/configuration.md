@@ -88,7 +88,7 @@ the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-36 top-level keys are allow-listed. Everything else fails the load.
+37 top-level keys are allow-listed. Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -127,6 +127,7 @@ the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `step_heartbeat_stall_minutes` | number | `20` | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
+| `stale_claim_window_hours` | number | `24` | [stale_claim_window_hours](#stale_claim_window_hours) |
 
 ## harness_version
 
@@ -981,6 +982,14 @@ A non-number is a hard error (`config.ts:720-724`). Zero, negative, and `NaN` pa
 `resolveValidationConcurrency` (`config.ts:1891-1903`) silently substitutes `2`.
 
 Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
+
+## stale_claim_window_hours
+
+Controls how long a `claimed` engineer-intake ledger entry may remain unfinished before it is
+treated as stranded. It governs claim-time auto-heal and the default window for
+`conduct-ts engineer requeue --stale`; `--older-than` overrides it for one invocation.
+
+The default is `24` hours. Non-positive and non-numeric values fall back to that default.
 
 ## Keys the type declares but the loader rejects
 
