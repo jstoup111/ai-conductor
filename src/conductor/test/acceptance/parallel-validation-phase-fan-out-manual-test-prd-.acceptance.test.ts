@@ -583,4 +583,63 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  // ── H. group engages at the first DISPATCHABLE member (entry-skip fix) ────
+  // Regression for the entry-member-skip bug: with `steps.manual_test.disable:
+  // true` (this harness repo's own self-host config), the loop's config-skip
+  // branch `continue`d at manual_test BEFORE the group-engagement code, and
+  // engagement was keyed to `members[0] === step.name` — so the group never
+  // engaged and prd_audit/architecture_review_as_built ran strictly serially
+  // (zero `parallel_started` events in the entire daemon log). The fix keys
+  // engagement to the first member that survives the skip cascade.
+  it('fans out prd_audit ∥ architecture_review_as_built when manual_test (the nominal entry) is config-disabled', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-entryskip-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath, {
+        retro: 'done',
+        rebase: 'done',
+        finish: 'done',
+      });
+
+      const dispatched: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const emitted: ConductorEvent[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('parallel_started', (e) => emitted.push(e));
+
+      const conductor = makeConductor(dir, statePath, runner, events, {
+        config: { steps: { manual_test: { disable: true } } },
+      });
+      await conductor.run();
+
+      // The disabled nominal entry never dispatches…
+      expect(dispatched).not.toContain('manual_test');
+      // …and the two surviving members still fan out as a width-2 group:
+      // exactly one parallel_started naming both, and only both.
+      expect(emitted.length).toBe(1);
+      const branches = (emitted[0] as { branches?: string[] }).branches ?? [];
+      expect(branches).toContain('prd_audit');
+      expect(branches).toContain('architecture_review_as_built');
+      expect(branches).not.toContain('manual_test');
+      expect(dispatched).toContain('prd_audit');
+      expect(dispatched).toContain('architecture_review_as_built');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

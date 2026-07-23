@@ -365,7 +365,11 @@ manual_test's post-step checkpoint pauses for the operator exactly as before.
   members keep their own contiguous `ALL_STEPS` entries (immediately after the last build
   gate, `build_review → wiring_check`), their own `StepDefinition`s, and their own linear
   indices — the group is an execution overlay, not a topology change. The loop engages the
-  group path whenever it lands on any member in auto mode.
+  group path in auto mode when it lands on the group's first **non-skipped** member — not
+  hard-wired to `members[0]`, so a config-disabled/tier/track-skipped nominal entry (e.g.
+  `manual_test` disabled for self-host builds) still lets the surviving members fan out. A
+  member already `done` (kickback/resume re-entry at a later member) anchors engagement
+  instead, keeping mid-loop re-entries on the pre-existing serial walk.
 - **Fan-out** (`engine/group-core.ts`, shared with the config-DSL `parallel` executor) —
   membership is resolved against state/track/tier first (`resolveGroupMembership`): skipped
   members are excluded, already-`done` members (e.g. after a mid-group SIGINT) carry their

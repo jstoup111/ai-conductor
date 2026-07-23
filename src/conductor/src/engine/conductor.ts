@@ -2232,7 +2232,8 @@ export class Conductor {
 
         // Built-in validation group engagement (adr-2026-07-10-validation-group-join.md):
         // the group engages ONLY in auto mode, and only at its entry point (the
-        // group's first member). This marks the group path with a distinguishable
+        // group's first DISPATCHABLE member — see groupEntryName below). This
+        // marks the group path with a distinguishable
         // `parallel_started` event WITHOUT diverting from the existing per-step
         // dispatch below — real fan-out/join wiring against these members lands in
         // later tasks (15+); until then the members still dispatch one at a time
@@ -2249,7 +2250,6 @@ export class Conductor {
         // diagnostic HALT), exactly like the serial walk.
         if (
           builtinGroup &&
-          builtinGroup.members[0] === step.name &&
           this.mode === 'auto' &&
           checkGate(step, state).passed
         ) {
@@ -2260,7 +2260,24 @@ export class Conductor {
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
           const membership = resolveGroupMembership(builtinGroup, state, groupTrack, this.config);
-          if (membership.allSkipped) {
+          // Engagement is keyed to the group's first NON-SKIPPED member, not
+          // blindly to members[0]. A nominal entry the serial walk already
+          // skip-marked (e.g. manual_test config-disabled for self-host
+          // builds) hits a `continue` in the skip branches above and never
+          // reaches this code — keying engagement to members[0] therefore
+          // left the whole group permanently serial in any repo that
+          // disables its first member (zero `parallel_started` events ever).
+          // The first member surviving the skip cascade is the group's real
+          // entry point. Deliberately "first non-SKIPPED", not "first
+          // dispatchable": a member that is `done` (VerdictOutcome — e.g.
+          // manual_test on a kickback re-entry that navigateBack'd to
+          // prd_audit) still anchors engagement, so mid-loop re-entries at a
+          // later member keep the pre-existing SERIAL walk (and its
+          // gap-aware kickback machinery) exactly as before this fix.
+          const groupEntryName = membership.members.find(
+            (m) => m.outcome.kind !== 'skipped',
+          )?.name;
+          if (membership.allSkipped && builtinGroup.members[0] === step.name) {
             for (const member of membership.members) {
               await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
               state[member.name as StepName] = 'skipped';
@@ -2275,7 +2292,10 @@ export class Conductor {
           // observable event stream for that single member is
           // byte-for-byte equivalent to the pre-Task-14 serial baseline.
           // Width 2+ still emits `parallel_started` to mark the group path.
-          if (membership.dispatchable.length > 1) {
+          // Only the entry (first dispatchable) member fans out — a
+          // non-entry member reaching this code falls through to the
+          // ordinary serial dispatch below.
+          if (groupEntryName === step.name && membership.dispatchable.length > 1) {
             // Task 4 (#788): this fan-out lane dispatches its members
             // (manual_test/prd_audit/architecture_review_as_built — all
             // SHIP-phase) OUTSIDE the ordinary per-step dispatch below, so
