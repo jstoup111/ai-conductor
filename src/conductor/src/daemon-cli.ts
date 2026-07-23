@@ -43,6 +43,7 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
+import { createRefreshThrottle, createStalenessWarner } from './engine/engine-refresh.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -1281,6 +1282,37 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // src/conductor is its build package.
       rebuildEngine: isSelfHost
         ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
+        : undefined,
+      // Fast-forward the harness checkout to origin before each dispatch
+      // (self-host only, NP4) so rebuildEngine above builds from
+      // merge-driven drift instead of a stale local branch (TI-1 HP1).
+      // Throttled (TI-2) via engine_refresh_min_interval_seconds so an idle
+      // daemon does not fetch on every poll. Degraded outcomes (dirty,
+      // diverged, fetch-failed) with a determinable originHead are routed
+      // into the deduped staleness warner (TI-4 HP1/HP2); other causes
+      // (no-origin, unknown-default, not-default-branch) and clean outcomes
+      // (current, advanced) never warn.
+      refreshEngineSource: isSelfHost
+        ? (() => {
+            const minIntervalMs =
+              (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+            const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+            const warner = createStalenessWarner(log);
+            return async () => {
+              if (!throttle.shouldRun()) return;
+              throttle.markRan();
+              const outcome = await fastForwardRoot(projectRoot, log);
+              if (
+                outcome.status === 'skipped' &&
+                (outcome.cause === 'dirty' ||
+                  outcome.cause === 'diverged' ||
+                  outcome.cause === 'fetch-failed') &&
+                outcome.originHead
+              ) {
+                warner.warn(outcome.cause, outcome.originHead, baseBranch);
+              }
+            };
+          })()
         : undefined,
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────

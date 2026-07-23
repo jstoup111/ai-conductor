@@ -362,6 +362,16 @@ export interface DaemonDeps {
    */
   rebuildEngine?: () => Promise<void>;
 
+  /**
+   * Fast-forwards the daemon's own checkout to origin/<default>, throttled,
+   * before `rebuildEngine` so a rebuild reflects merge-driven drift rather
+   * than a stale local branch (TI-1 HP1). Only wired for self-host daemons;
+   * absent (no-op) everywhere else. A throw is caught and logged — the flow
+   * continues into `rebuildEngine`/`check()` unaffected (non-fatal, same
+   * posture as a failed rebuild). Call site wired in Task 7.
+   */
+  refreshEngineSource?: () => Promise<void>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
