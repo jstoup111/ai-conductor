@@ -1,0 +1,49 @@
+/**
+ * Canonical tracker-client seam — the single module through which all real
+ * `gh` CLI invocations for tracker/PR operations must flow.
+ *
+ * Design constraints:
+ *   - `assertRealExecAllowed` is the one guard; every production runner
+ *     factory (in this module or elsewhere) must call it before spawning.
+ *   - `GhRunner` is the canonical injectable shape — other modules re-export
+ *     it rather than defining their own copy.
+ */
+
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileP = promisify(execFileCb);
+
+/**
+ * Injectable runner for `gh` CLI commands.
+ */
+export type GhRunner = (
+  args: string[],
+  opts: { cwd: string },
+) => Promise<{ stdout: string }>;
+
+/**
+ * Test kill-switch. When `AI_CONDUCTOR_NO_REAL_EXEC` is set (the vitest global setup
+ * sets it — see `test/setup.ts`), the production `gh`/`git` runners refuse to
+ * shell out. This is a belt-and-suspenders guard: every test is supposed to inject
+ * a fake runner, but if one ever reaches a real runner (e.g. a daemon-mode test
+ * that forgets to stub escalation), this prevents it from mutating real GitHub —
+ * the exact failure mode that once labeled + commented on a live PR.
+ */
+export function assertRealExecAllowed(bin: string): void {
+  if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
+    throw new Error(
+      `tracker-client: real '${bin}' exec blocked under AI_CONDUCTOR_NO_REAL_EXEC (test env). ` +
+        `Inject a fake runner instead of using makeProduction${bin === 'gh' ? 'Gh' : 'Git'}().`,
+    );
+  }
+}
+
+/** Construct the real gh runner used in production. */
+export function makeProductionGh(): GhRunner {
+  return async (args: string[], opts: { cwd: string }) => {
+    assertRealExecAllowed('gh');
+    const result = await execFileP('gh', args, { cwd: opts.cwd });
+    return { stdout: String(result.stdout) };
+  };
+}
