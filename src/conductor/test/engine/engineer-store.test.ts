@@ -71,6 +71,18 @@ async function readSignalLines(engineerDir: string): Promise<string[]> {
   return raw.split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
+// Safely count lines in a signals store that may not exist yet — used to
+// snapshot a real/pre-existing store's line count before an operation, so we
+// can assert on a delta rather than on existence (an operator machine may
+// already have a real, non-empty store from prior real usage).
+async function countSignalLinesSafe(engineerDir: string): Promise<number> {
+  try {
+    return (await readSignalLines(engineerDir)).length;
+  } catch {
+    return 0;
+  }
+}
+
 describe('engine/engineer-store', () => {
   let engineerDir: string;
   let projectDir: string;
@@ -491,6 +503,111 @@ describe('engine/engineer-store', () => {
       }
       const runIds = lines.map((l) => JSON.parse(l).runId);
       expect(new Set(runIds).size).toBe(N);
+    });
+  });
+
+  // ─── kill-switch #3: test-pollution guard (guard-engineer-signals-from-test-pollution) ─
+  //
+  // `test/setup.ts` redirects $AI_CONDUCTOR_ENGINEER_DIR to a per-run tmpdir
+  // BEFORE this describe's `beforeEach` overrides it again with its own tmpdir.
+  // These specs prove: (1) the emission path that resolves its dir purely from
+  // process.env (the real production call pattern — `resolveEngineerDir()` with
+  // no args, as used by daemon-runner.ts) never lands writes under the
+  // operator's real `~/.ai-conductor/engineer/`, and (2) an explicit
+  // `home`/`env` override passed directly into `resolveEngineerDir` — the
+  // "separate process" simulation — is completely unaffected by whatever the
+  // test-process env redirect is currently set to, proving the guard is
+  // process-env-scoped, not a global clobber of explicit args.
+  describe('test-pollution guard: env-scoped redirect never touches real store or explicit overrides', () => {
+    it('resolveEngineerDir() with no args + appendSignal never creates the real operator store', async () => {
+      const mod = await loadEngineerStore();
+      const resolveEngineerDir = requireFn(mod, 'resolveEngineerDir');
+      const appendSignal = requireFn(mod, 'appendSignal');
+
+      // Simulate the real emission call pattern: no explicit dir passed, so
+      // resolution falls through to process.env (redirected by test/setup.ts
+      // and this file's own beforeEach — both pointing at tmpdirs, never home).
+      const dir = resolveEngineerDir();
+      expect(dir).toBe(engineerDir);
+
+      // Snapshot the real operator store's line count BEFORE appending —
+      // this machine may already have a real, non-empty store from prior
+      // real usage, so existence is the wrong invariant to assert on; only
+      // an unchanged count proves the redirect prevented pollution.
+      const realDir = join(homedir(), '.ai-conductor', 'engineer');
+      const realCountBefore = await countSignalLinesSafe(realDir);
+
+      await appendSignal(dir, {
+        schemaVersion: 1,
+        ts: 't',
+        project: 'pollution-guard',
+        feature: 'feat',
+        runId: 'run-guard-1',
+        outcome: 'done',
+        kickbacks: [],
+        halts: [],
+        retryHotspots: [],
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+        durationByStep: {},
+      });
+
+      // Writes land under the redirected tmpdir...
+      const lines = await readSignalLines(dir);
+      expect(lines.length).toBe(1);
+
+      // ...and the real operator store's line count is unchanged — the
+      // redirect prevented any new append from landing there, regardless of
+      // whether that store pre-existed on this machine.
+      const realCountAfter = await countSignalLinesSafe(realDir);
+      expect(realCountAfter).toBe(realCountBefore);
+    });
+
+    it('ST-2: an explicit home/env override bypasses the test-process env redirect entirely', async () => {
+      const mod = await loadEngineerStore();
+      const resolveEngineerDir = requireFn(mod, 'resolveEngineerDir');
+      const appendSignal = requireFn(mod, 'appendSignal');
+
+      // A separate "real" dir, simulating another process's explicit config —
+      // distinct from both `engineerDir` (this file's tmp override) and
+      // process.env.AI_CONDUCTOR_ENGINEER_DIR (the currently-active redirect).
+      const explicitRealDir = await mkdtemp(join(tmpdir(), 'engineer-explicit-real-'));
+      try {
+        // process.env.AI_CONDUCTOR_ENGINEER_DIR is set to `engineerDir` right
+        // now (beforeEach) — prove the explicit `home`+empty `env` override
+        // wins over it, i.e. resolution never consults process.env when an
+        // explicit env object is supplied.
+        expect(process.env.AI_CONDUCTOR_ENGINEER_DIR).toBe(engineerDir);
+        const resolved = resolveEngineerDir({ home: explicitRealDir, env: {} });
+        expect(resolved).not.toBe(engineerDir);
+        expect(resolved).toBe(join(explicitRealDir, '.ai-conductor', 'engineer'));
+
+        await mkdir(resolved, { recursive: true });
+        await appendSignal(resolved, {
+          schemaVersion: 1,
+          ts: 't',
+          project: 'pollution-guard',
+          feature: 'feat-explicit',
+          runId: 'run-guard-2',
+          outcome: 'done',
+          kickbacks: [],
+          halts: [],
+          retryHotspots: [],
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+          durationByStep: {},
+        });
+
+        // The explicit-override write lands where the explicit args said —
+        // not in the env-redirected `engineerDir` this file otherwise uses.
+        const explicitLines = await readSignalLines(resolved);
+        expect(explicitLines.length).toBe(1);
+        const redirectedExists = await access(join(engineerDir, SIGNALS_LOG)).then(
+          () => true,
+          () => false,
+        );
+        expect(redirectedExists).toBe(false);
+      } finally {
+        await rm(explicitRealDir, { recursive: true, force: true });
+      }
     });
   });
 });
