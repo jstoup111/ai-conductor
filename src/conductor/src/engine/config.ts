@@ -190,6 +190,8 @@ export function validateConfig(
     'model_fallback_ladder',
     // Daemon auto-restart on stale engine.
     'auto_restart_on_stale_engine',
+    // Minimum interval between engine-refresh (origin fetch) attempts.
+    'engine_refresh_min_interval_seconds',
     // Auto-resolve merge conflicts on open PRs.
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
@@ -665,6 +667,35 @@ export function validateConfig(
   } else {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
+  }
+
+  // engine_refresh_min_interval_seconds — minimum interval between engine
+  // refresh (origin fetch) attempts, in seconds. Contract (total — never
+  // throws, never undefined):
+  //   C1  absent / null → 300 (default, no warning)
+  //   C2  finite positive number → that value (no warning)
+  //   C3  other value (non-numeric, non-finite, zero, or negative) → 300
+  //       + one warning
+  if (
+    obj.engine_refresh_min_interval_seconds !== undefined &&
+    obj.engine_refresh_min_interval_seconds !== null
+  ) {
+    if (
+      typeof obj.engine_refresh_min_interval_seconds === 'number' &&
+      Number.isFinite(obj.engine_refresh_min_interval_seconds) &&
+      obj.engine_refresh_min_interval_seconds > 0
+    ) {
+      // C2: valid — accept as-is
+    } else {
+      // C3: invalid value — log warning and resolve to default
+      warnings.push(
+        `engine_refresh_min_interval_seconds has invalid value ${JSON.stringify(obj.engine_refresh_min_interval_seconds)}, falling back to 300.`,
+      );
+      obj.engine_refresh_min_interval_seconds = 300;
+    }
+  } else {
+    // C1: absent or null → 300 without warning
+    obj.engine_refresh_min_interval_seconds = 300;
   }
 
   // mergeable_autoresolve — auto-resolve merge conflicts on open PRs.
