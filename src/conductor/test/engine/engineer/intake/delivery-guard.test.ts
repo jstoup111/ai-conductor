@@ -159,6 +159,50 @@ function makeFakeQueueWithEnvelopes(envelopes: any[]): {
   return { queue, releasedEnvelopes };
 }
 
+/**
+ * Fake queue that ALSO supports `list()`/`enqueue()` — the two members
+ * `reapStaleClaimed` (delivery-guard.ts) type-guards for before synthesizing a
+ * minimal envelope for a stale-claimed ledger entry whose original envelope is
+ * no longer present in the queue (already ack'd, long before the process that
+ * held the claim died). `makeFakeQueueWithEnvelopes` above deliberately omits
+ * these two methods so unrelated tests exercise the (typeof-guarded) "queue
+ * doesn't support list/enqueue" short-circuit; this variant is for tests that
+ * must drive the synthesis branch itself.
+ */
+function makeFakeQueueWithEnvelopesAndCatalog(envelopes: any[]): {
+  queue: FakeQueue & { list(): Promise<any[]>; enqueue(e: any): Promise<void> };
+  releasedEnvelopes: any[];
+  enqueued: any[];
+} {
+  const pending = [...envelopes];
+  const catalog = [...envelopes];
+  const releasedEnvelopes: any[] = [];
+  const enqueued: any[] = [];
+
+  const queue = {
+    async claim() {
+      const e = pending.shift();
+      return e || null;
+    },
+    async ack(e: any) {
+      releasedEnvelopes.push(e);
+    },
+    async release(e: any) {
+      releasedEnvelopes.push(e);
+    },
+    async list() {
+      return [...catalog];
+    },
+    async enqueue(e: any) {
+      enqueued.push(e);
+      catalog.push(e);
+      pending.push(e);
+    },
+  };
+
+  return { queue, releasedEnvelopes, enqueued };
+}
+
 function makeEnvelope(sourceRef: string, source = 'test-source') {
   return {
     id: `id-${sourceRef}`,
@@ -1595,6 +1639,96 @@ describe('Plan-Task 6: createDeliveryGuardedQueue — reap never touches fresh o
     expect(claimed).toEqual(candidate);
     expect(requeueCalls).toHaveLength(0);
     expect(logMessages.some((m) => m.includes('done-idea'))).toBe(false);
+  });
+});
+
+// ─── Synthetic-envelope reap: stale claimed entry with no queue envelope ──────
+// (commit e22ba810 added `queue.list()`/`queue.enqueue()` synthesis inside
+// `reapStaleClaimed` for exactly this case — the original envelope was ack'd
+// away when it was first claimed, so nothing in the queue matches the stale
+// ledger entry any more. Every other reap test above seeds `pending` with an
+// envelope whose sourceRef matches the stale entry, so the synth branch never
+// actually ran; this test's queue starts with ONLY an unrelated pending
+// envelope — proving the reap manufactures one and serves it.)
+
+describe('Synthetic-envelope reap: stale claimed entry with no matching queue envelope', () => {
+  it('synthesizes a minimal envelope for a stale claimed entry absent from queue.list() and serves it same-pull', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+
+    // The queue has NO envelope for 'stale-idea' — it was ack'd away when
+    // originally claimed. Only an unrelated, genuinely pending envelope exists.
+    const pendingCandidate = makeEnvelope('pending-idea');
+    const { queue, enqueued } = makeFakeQueueWithEnvelopesAndCatalog([pendingCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      capturedAt: '2020-01-01T00:00:00.000Z',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+    };
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+    // The pending candidate has no ledger entry (healthy passthrough).
+    (ledger as any).get = async () => undefined;
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const first = await guarded.claim();
+
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    // A synthetic envelope was manufactured for the reaped entry, backdated to
+    // its original capturedAt so a real (time-ordered) queue would serve it
+    // ahead of the newer pending candidate.
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]).toMatchObject({
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      receivedAt: '2020-01-01T00:00:00.000Z',
+    });
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+
+    // The synthesized envelope is now genuinely claimable — served on a
+    // subsequent pull from the SAME guarded queue (this fake's `claim()`
+    // preserves push order rather than re-sorting by receivedAt, so the two
+    // claim()s here stand in for a real queue's single FIFO-ordered pull).
+    expect(first).toMatchObject({ source: 'test-source', sourceRef: 'pending-idea' });
+    const second = await guarded.claim();
+    expect(second).toMatchObject({ source: 'test-source', sourceRef: 'stale-idea' });
+  });
+
+  it('does not duplicate-enqueue when a matching envelope already exists in queue.list()', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const staleCandidate = makeEnvelope('stale-idea');
+    const { queue, enqueued } = makeFakeQueueWithEnvelopesAndCatalog([staleCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      capturedAt: '2020-01-01T00:00:00.000Z',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).requeueClaimed = async () => ({ acted: true });
+    (ledger as any).get = async () => undefined;
+
+    const { runner: gh } = makeFakeGh('');
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(enqueued).toHaveLength(0);
+    expect(claimed).toEqual(staleCandidate);
   });
 });
 
