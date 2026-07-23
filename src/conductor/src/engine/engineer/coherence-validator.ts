@@ -621,6 +621,8 @@ export function checkOrphanTasks(
   return { ok: true };
 }
 
+// --- Orphan-task layer (Task 10) helpers used above; layer order continues below ---
+
 // --- Coverage-table consistency layer (Task 11) ---
 
 export type CoverageTableResult =
@@ -726,4 +728,151 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
   }
 
   return { ok: true };
+}
+
+// --- Aggregated deterministic gap report (Task 12) ---
+
+/** The five coverage/consistency layers a gap can originate from, in fixed report order. */
+export type CoherenceGapLayer = 'outcome' | 'fr' | 'story' | 'orphan-task' | 'coverage-table';
+
+/** Fixed layer ordering used to sort an aggregated gap list before rendering. */
+const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
+  'outcome',
+  'fr',
+  'story',
+  'orphan-task',
+  'coverage-table',
+];
+
+/**
+ * A single normalized gap, ready to render, produced by any of the five
+ * coverage/consistency layers. `item` is always the verbatim quoted evidence
+ * (a bullet, a title, or a detail sentence) — never a bare id with no
+ * context, so a single-gap report can never read as generic-only wording.
+ */
+export interface CoherenceGap {
+  layer: CoherenceGapLayer;
+  /** The gap's id, e.g. `outcome-2`, `FR-3`, `story-4`, `task-7`, `claim-2`. */
+  gapId: string;
+  /** The source artifact the gap was found in (e.g. `stories`, `plan`, `PRD`). */
+  artifact: string;
+  /** The verbatim quoted item (bullet text, title, or explanatory detail). */
+  item: string;
+}
+
+/**
+ * Render an aggregated gap list into one deterministic Markdown report.
+ * Gaps are sorted by fixed layer order, then by their position within the
+ * input list (a stable sort) — so identical input always renders byte-
+ * identical output, and every gap's id, source artifact, and quoted item
+ * appear on its own line (never collapsed into a single generic message).
+ */
+export function renderGapReport(gaps: CoherenceGap[]): string {
+  if (gaps.length === 0) {
+    return '# Coherence gaps\n\nNo gaps found.\n';
+  }
+
+  const sorted = [...gaps].sort(
+    (a, b) => GAP_LAYER_ORDER.indexOf(a.layer) - GAP_LAYER_ORDER.indexOf(b.layer),
+  );
+
+  const lines = ['# Coherence gaps', ''];
+  for (const gap of sorted) {
+    lines.push(`- **${gap.gapId}** (${gap.artifact}): "${gap.item}"`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** The real-artifact inputs the full coherence validator runs all five layers against. */
+export interface ValidateCoherenceInputs {
+  /** Parsed coherence artifact rows (Task 5), used by the outcome-coverage layer. */
+  rows: CoherenceRow[];
+  /** Verbatim staged/committed intake outcome bullets, in order. */
+  outcomeBullets: string[];
+  /** PRD file contents, or null on the technical track. */
+  prdText: string | null;
+  /** Stories file contents, or null when unavailable. */
+  storiesText: string | null;
+  /** Plan file contents, or null when unavailable. */
+  planText: string | null;
+}
+
+export type ValidateCoherenceResult =
+  | { ok: true }
+  | { ok: false; gaps: CoherenceGap[]; report: string };
+
+/**
+ * Orchestrate all five coverage/consistency layers (outcome, FR, story,
+ * orphan-task, coverage-table) and aggregate every gap they report into one
+ * deterministic report, rather than stopping at the first failing layer.
+ * Each layer independently returns at most one gap per call; this function
+ * collects one gap per layer (when that layer fails) into a single list and
+ * renders it with `renderGapReport`.
+ */
+export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCoherenceResult {
+  const gaps: CoherenceGap[] = [];
+
+  const outcomeResult = checkOutcomeCoverage(inputs.rows, inputs.outcomeBullets);
+  if (!outcomeResult.ok) {
+    gaps.push({
+      layer: 'outcome',
+      gapId: outcomeResult.gapId,
+      artifact: 'intake outcomes',
+      item: outcomeResult.bullet,
+    });
+  }
+
+  const frResult = checkFrCoverage(inputs.prdText, inputs.storiesText, inputs.planText);
+  if (!frResult.ok) {
+    gaps.push({
+      layer: 'fr',
+      gapId: frResult.frId,
+      artifact: 'PRD',
+      item: frResult.storyId
+        ? `${frResult.frId} is cited by story-${frResult.storyId} but no task covers that story`
+        : `${frResult.frId} is not cited by any story's Requirement line`,
+    });
+  }
+
+  const storyResult = checkStoryCoverage(inputs.storiesText, inputs.planText);
+  if (!storyResult.ok) {
+    if (storyResult.reason === 'unparseable-stories') {
+      gaps.push({
+        layer: 'story',
+        gapId: 'stories-unparseable',
+        artifact: 'stories',
+        item: 'stories file has no parseable story blocks',
+      });
+    } else {
+      gaps.push({
+        layer: 'story',
+        gapId: storyResult.gapId,
+        artifact: 'stories',
+        item: storyResult.title,
+      });
+    }
+  }
+
+  const orphanResult = checkOrphanTasks(inputs.storiesText, inputs.planText);
+  if (!orphanResult.ok) {
+    gaps.push({
+      layer: 'orphan-task',
+      gapId: orphanResult.gapId,
+      artifact: 'plan',
+      item: orphanResult.title,
+    });
+  }
+
+  const coverageTableResult = checkCoverageTableConsistency(inputs.planText);
+  if (!coverageTableResult.ok) {
+    gaps.push({
+      layer: 'coverage-table',
+      gapId: coverageTableResult.gapId,
+      artifact: 'plan',
+      item: coverageTableResult.detail,
+    });
+  }
+
+  if (gaps.length === 0) return { ok: true };
+  return { ok: false, gaps, report: renderGapReport(gaps) };
 }

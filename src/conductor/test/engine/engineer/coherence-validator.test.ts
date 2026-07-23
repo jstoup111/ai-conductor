@@ -16,7 +16,11 @@ import {
   checkStoryCoverage,
   checkOrphanTasks,
   checkCoverageTableConsistency,
+  renderGapReport,
+  validateCoherence,
   type CrossCheckInputs,
+  type CoherenceGap,
+  type ValidateCoherenceInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
 const WELL_FORMED = `# Coherence Map
@@ -686,5 +690,113 @@ describe('checkCoverageTableConsistency', () => {
 `;
     const result = checkCoverageTableConsistency(planText);
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('validateCoherence + renderGapReport (aggregated deterministic gap report)', () => {
+  // Fixture that trivially trips three distinct gap classes at once:
+  //   - outcome: the staged outcome bullet has no outcome-1 row at all
+  //   - fr: FR-1 is cited by story-1, but story-1 has no covering task
+  //   - story: story-1 is declared but no plan task cites it
+  const storiesTextThreeGaps = `# Stories
+
+## Story 1: Ship the widget
+**Requirement:** FR-1
+As a user, I want a widget.
+`;
+  const planTextThreeGaps = `# Plan
+
+No tasks yet.
+`;
+  const threeGapInputs: ValidateCoherenceInputs = {
+    rows: [],
+    outcomeBullets: ['Reduce checkout latency'],
+    prdText: '## Functional Requirements\n\nFR-1: widgets ship\n',
+    storiesText: storiesTextThreeGaps,
+    planText: planTextThreeGaps,
+  };
+
+  it('aggregates gaps from three different classes into one report', () => {
+    const result = validateCoherence(threeGapInputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    expect(result.gaps).toHaveLength(3);
+    const layers = result.gaps.map((g) => g.layer).sort();
+    expect(layers).toEqual(['fr', 'outcome', 'story']);
+
+    for (const gap of result.gaps) {
+      expect(gap.gapId.length).toBeGreaterThan(0);
+      expect(gap.artifact.length).toBeGreaterThan(0);
+      expect(gap.item.length).toBeGreaterThan(0);
+      expect(result.report).toContain(gap.gapId);
+      expect(result.report).toContain(gap.artifact);
+      expect(result.report).toContain(gap.item);
+    }
+  });
+
+  it('reports the specific gap id for a single gap, not generic-only wording', () => {
+    const inputs: ValidateCoherenceInputs = {
+      // No outcome-1 row at all: everything else (fr/story/orphan/table)
+      // is set up to pass cleanly, so exactly one gap (outcome-1) survives.
+      rows: [],
+      outcomeBullets: ['Reduce checkout latency'],
+      prdText: null,
+      storiesText: `# Stories
+
+## Story 1: Ship the widget
+**Requirement:** none
+`,
+      planText: `# Plan
+
+### Task 1: Build the widget
+**Story:** Story 1
+**Type:** happy-path
+`,
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-1');
+    expect(result.report).toContain('outcome-1');
+    expect(result.report).toContain('Reduce checkout latency');
+    // Not generic-only: the specific bullet text and id must both appear.
+    expect(result.report).not.toMatch(/^# Coherence gaps\n\n- \*\*outcome-\d+\*\* \(intake outcomes\): ""\n$/);
+  });
+
+  it('produces byte-identical reports for identical gap input, twice', () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'story', gapId: 'story-2', artifact: 'stories', item: 'Ship the gizmo' },
+      { layer: 'outcome', gapId: 'outcome-1', artifact: 'intake outcomes', item: 'Reduce latency' },
+      { layer: 'orphan-task', gapId: 'task-9', artifact: 'plan', item: 'Unrelated task' },
+    ];
+
+    const first = renderGapReport(gaps);
+    const second = renderGapReport([...gaps]);
+    expect(first).toBe(second);
+
+    // Deterministic sort: outcome (layer 0) before story (layer 2) before
+    // orphan-task (layer 3), regardless of input order.
+    const outcomeIdx = first.indexOf('outcome-1');
+    const storyIdx = first.indexOf('story-2');
+    const orphanIdx = first.indexOf('task-9');
+    expect(outcomeIdx).toBeGreaterThan(-1);
+    expect(outcomeIdx).toBeLessThan(storyIdx);
+    expect(storyIdx).toBeLessThan(orphanIdx);
+  });
+
+  it('renders each gap with its id, source artifact, and quoted item', () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'fr', gapId: 'FR-3', artifact: 'PRD', item: 'FR-3 is not cited by any story' },
+    ];
+    const report = renderGapReport(gaps);
+    expect(report).toContain('FR-3');
+    expect(report).toContain('PRD');
+    expect(report).toContain('FR-3 is not cited by any story');
+    // Not generic-only: the specific id must appear, not just a bare "gap" word.
+    expect(report).not.toMatch(/^# Coherence gaps\n\nNo gaps found\.\n$/);
   });
 });
