@@ -24,7 +24,15 @@ sandbox_up
 
 cd "$SANDBOX_PROJECT_ROOT" || exit 1
 
-conduct-ts inline "$PROMPT" --auto
+run_with_timeout 10 conduct-ts inline "$PROMPT" --auto >/tmp/examples-inline.$$.log 2>&1
+INLINE_STATUS=$?
+cat /tmp/examples-inline.$$.log
+rm -f /tmp/examples-inline.$$.log
+
+if [ "$INLINE_STATUS" -eq 124 ] || [ "$INLINE_STATUS" -eq 137 ]; then
+  echo "FAIL inline/${TIER}: timeout"
+  exit 1
+fi
 
 assert_checkpoint "inline" "$TIER" \
   '[ -f .pipeline/events.jsonl ] && grep -q "\"type\":\"feature_complete\"" .pipeline/events.jsonl' \
