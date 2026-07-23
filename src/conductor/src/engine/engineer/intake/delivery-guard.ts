@@ -180,6 +180,32 @@ export function createDeliveryGuardedQueue(
         const result = await ledger.requeueClaimed(entry.source, entry.sourceRef);
         if (result?.acted) {
           logger.info(`Reaped stale claimed entry ${entry.sourceRef}: claimed → pending`);
+
+          // A stale-claimed entry may have no corresponding envelope left in
+          // the underlying file queue (the original envelope was ack'd when
+          // it was first claimed, long before the process died). The reap
+          // above only heals the LEDGER — without a queue envelope, nothing
+          // is ever handed back to the operator even though the ledger now
+          // says 'pending'. Reconstruct a minimal synthetic envelope so it
+          // re-enters the same claim path as any other candidate, ordered by
+          // receivedAt (= capturedAt) so it wins FIFO against genuinely newer
+          // pending envelopes, exactly like a real one would.
+          if (typeof queue.list !== 'function' || typeof queue.enqueue !== 'function') {
+            continue;
+          }
+          const alreadyQueued = (await queue.list()).some(
+            (e) => e.source === entry.source && e.sourceRef === entry.sourceRef,
+          );
+          if (!alreadyQueued) {
+            await queue.enqueue({
+              id: `reaped:${entry.source}:${entry.sourceRef}`,
+              source: entry.source,
+              sourceRef: entry.sourceRef,
+              text: `[reaped stale claim] ${entry.sourceRef}`,
+              status: 'pending',
+              receivedAt: entry.capturedAt ?? new Date(now).toISOString(),
+            });
+          }
         }
       }
     }
