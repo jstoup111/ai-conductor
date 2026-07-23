@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Specced (#878, DECIDE artifacts only — not yet built): trailer scans will no longer
+  re-spawn an identical git subprocess fan on an unchanged HEAD. `listCommitsWithTrailers`
+  (no-anchor path) gets an in-process memo keyed on `(projectRoot, headSha, mergeBase)`
+  with both key components re-probed by cheap git plumbing on every call, plus a
+  per-project-root memo of the derived `origin/<default>` ref. `countResolvedTasks` /
+  `resolveTaskIds` results stay byte-for-byte identical, fail-soft paths bypass the cache
+  entirely, and the anchored `getEvidenceRange` path (reflog-dependent via
+  `merge-base --fork-point`) is deliberately left uncached. See
+  `.docs/decisions/adr-2026-07-23-trailer-scan-memo-invalidation-key.md`.
 - Source-ref parsing/formatting is now generalized behind a canonical tagged
   `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
