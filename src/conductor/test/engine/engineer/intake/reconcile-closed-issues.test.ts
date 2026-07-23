@@ -76,4 +76,48 @@ describe('reconcileClosedIssues', () => {
     const remainingEnvelopes = await queue.list();
     expect(remainingEnvelopes.map((e) => e.id).sort()).toEqual(['2']);
   });
+
+  it('sweeps only pending entries — claimed/routed/done entries are never forgotten even if their issue is closed', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // pending, closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#2' }); // claimed, closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#3' }); // routed, closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#4' }); // done, closed
+
+    await ledger.transition('github-issues', 'o/a#2', 'claimed');
+    await ledger.transition('github-issues', 'o/a#3', 'routed');
+    await ledger.transition('github-issues', 'o/a#4', 'done');
+
+    const issueStates: Record<string, 'open' | 'closed' | null> = {
+      'o/a#1': 'closed',
+      'o/a#2': 'closed',
+      'o/a#3': 'closed',
+      'o/a#4': 'closed',
+    };
+
+    const summary = await reconcileClosedIssues({
+      ledger,
+      queue,
+      getIssueState: async (repo: string, issue: string) => {
+        const key = `${repo}#${issue}`;
+        return issueStates[key] ?? null;
+      },
+    });
+
+    expect(summary.scanned).toBe(1);
+    expect(summary.forgotten).toBe(1);
+
+    expect(await ledger.get('github-issues', 'o/a#1')).toBeUndefined();
+
+    const claimed = await ledger.get('github-issues', 'o/a#2');
+    expect(claimed?.status).toBe('claimed');
+
+    const routed = await ledger.get('github-issues', 'o/a#3');
+    expect(routed?.status).toBe('routed');
+
+    const done = await ledger.get('github-issues', 'o/a#4');
+    expect(done?.status).toBe('done');
+  });
 });
