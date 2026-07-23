@@ -18,8 +18,10 @@ import { execa } from 'execa';
 import {
   specHash,
   renderShippedRecord,
+  renderShippedRecordWithCost,
   writeShippedRecord,
 } from './shipped-record.js';
+import { computeCostRollup } from './cost-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 
 export type ShippedRecordDispatch =
@@ -97,10 +99,26 @@ export async function dispatchShippedRecord(
     const { digest } = specHash(planBytes, storiesBytes);
 
     const relPath = join('.docs', 'shipped', `${slug}.md`);
-    await writeShippedRecord(
-      join(cwd, relPath),
-      renderShippedRecord({ slug, specHash: digest, pr, shipped: todayIso() }),
-    );
+    // Cost accounting must NEVER block ship: if the rollup itself throws for
+    // any reason, fall back to the plain frontmatter-only record (no Cost
+    // block) rather than let the error propagate into the outer catch (which
+    // would still exit 0, but would also skip the record entirely).
+    let recordBody: string;
+    try {
+      const rollup = await computeCostRollup(cwd);
+      recordBody = renderShippedRecordWithCost(
+        { slug, specHash: digest, pr, shipped: todayIso() },
+        rollup,
+      );
+    } catch (err) {
+      console.error(
+        `cost rollup failed — shipped record written without a Cost block for ${slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      recordBody = renderShippedRecord({ slug, specHash: digest, pr, shipped: todayIso() });
+    }
+    await writeShippedRecord(join(cwd, relPath), recordBody);
 
     await execa('git', ['add', relPath], { cwd });
     // Only commit when the add actually staged a change — an idempotent re-run

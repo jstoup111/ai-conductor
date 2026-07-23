@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { BacklogTreeSource } from './daemon-backlog.js';
+import type { CostRollup } from './cost-rollup.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -131,6 +132,37 @@ export function renderShippedRecord(fields: ShippedRecordFields): string {
     `pr: ${pr}\n` +
     `shipped: ${shipped}\n` +
     `---\n`
+  );
+}
+
+/**
+ * renderShippedRecordWithCost renders the same frontmatter as
+ * renderShippedRecord, then APPENDS a "## Cost" markdown body block after
+ * the closing frontmatter fence, summarizing a per-feature CostRollup
+ * (plan Task 6). parseShippedRecord only reads up to the closing `---`
+ * fence, so appending this block is safe and never affects dedup/discovery
+ * parsing of the frontmatter fields.
+ */
+export function renderShippedRecordWithCost(
+  fields: ShippedRecordFields,
+  rollup: CostRollup
+): string {
+  const frontmatter = renderShippedRecord(fields);
+  const costUsd = Math.round(rollup.costUsd * 10000) / 10000;
+
+  return (
+    frontmatter +
+    `\n` +
+    `## Cost\n` +
+    `input: ${rollup.tokens.input}\n` +
+    `output: ${rollup.tokens.output}\n` +
+    `cache_read: ${rollup.tokens.cacheRead}\n` +
+    `cache_creation: ${rollup.tokens.cacheCreation}\n` +
+    `cost_usd: ${costUsd}\n` +
+    `dispatches: ${rollup.dispatches}\n` +
+    `retries: ${rollup.retries}\n` +
+    `halts: ${rollup.halts}\n` +
+    `unmetered: count: ${rollup.unmetered.count}, duration_ms: ${rollup.unmetered.durationMs}\n`
   );
 }
 

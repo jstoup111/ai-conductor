@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os';
 import {
   specHash,
   renderShippedRecord,
+  renderShippedRecordWithCost,
   parseShippedRecord,
   writeShippedRecord,
   listShippedRecords,
   makeIsProcessed,
 } from '../../src/engine/shipped-record.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
+import type { CostRollup } from '../../src/engine/cost-rollup.js';
 
 /** Minimal fake tree source for exercising listShippedRecords in isolation. */
 function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
@@ -118,6 +120,40 @@ describe('parseShippedRecord', () => {
 
     const parsed = parseShippedRecord(rendered);
 
+    expect(parsed).toEqual({
+      slug: 'billing-export',
+      specHash: 'abc123',
+      pr: 'https://github.com/acme/repo/pull/42',
+      shipped: '2026-07-01',
+    });
+  });
+
+  it('round-trips frontmatter fields when a Cost block is appended (renderShippedRecordWithCost)', () => {
+    const rollup: CostRollup = {
+      tokens: { input: 1500, output: 300, cacheRead: 50, cacheCreation: 10 },
+      costUsd: 0.15,
+      dispatches: 2,
+      retries: 1,
+      halts: 0,
+      unmetered: { count: 0, durationMs: 0 },
+    };
+
+    const rendered = renderShippedRecordWithCost(
+      {
+        slug: 'billing-export',
+        specHash: 'abc123',
+        pr: 'https://github.com/acme/repo/pull/42',
+        shipped: '2026-07-01',
+      },
+      rollup,
+    );
+
+    expect(rendered).toMatch(/##\s*Cost/i);
+
+    const parsed = parseShippedRecord(rendered);
+
+    // Dedup/discovery only reads up to the closing frontmatter fence, so the
+    // appended Cost block must not perturb the parsed frontmatter fields.
     expect(parsed).toEqual({
       slug: 'billing-export',
       specHash: 'abc123',
