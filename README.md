@@ -97,6 +97,18 @@ aren't met — walking you from `/bootstrap` through `/finish`. For the full ins
 walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
 [Getting Started](docs/getting-started.md).
 
+## Documentation
+
+- [Choosing a Conductor](docs/choosing-a-conductor.md) — `conduct` vs `conduct-ts`, which one to use and when
+- [Getting Started](docs/getting-started.md) — full install walkthrough, verify/update/uninstall, worktree-root guard
+- [Configuration](docs/configuration.md) — settings.json, tech-context, and harness customization
+- [Daemon Operations](docs/daemon-operations.md) — running, parking, and recovering the autonomous build daemon
+- [Observability](docs/observability.md) — logs, metrics, and monitoring the daemon and skills
+- [Intake](docs/intake.md) — filing issues that seed the DECIDE phase
+- [Architecture](docs/architecture.md) — how engineer, daemon, and operator roles fit together
+- [Runbooks](docs/runbooks/) — step-by-step procedures for operational incidents
+- [Conductor CLI Reference](src/conductor/README.md) — `conduct-ts` internals and CLI flags
+
 ## Key Design Principles
 
 1. **One skill, one responsibility** — Skills have singular focus
