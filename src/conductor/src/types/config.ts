@@ -445,6 +445,13 @@ export interface HarnessConfig {
    */
   owner_gate_cutover?: string;
   /**
+   * Controls default-off verbose skip logging in gate-writeback (Task 7/8):
+   * when `true`, gated-spec skip notices (no-PR, terminal-PR, no-Source-Ref)
+   * are re-surfaced on the daemon log; when `false`/absent, they are
+   * suppressed by default.
+   */
+  daemon_verbose?: boolean;
+  /**
    * Attribution enforcement cutover (#505): the ISO-8601 instant on/after
    * which inline build-work attribution enforcement gates activate. Validated
    * at load time — a malformed (unparseable) value is REJECTED rather than

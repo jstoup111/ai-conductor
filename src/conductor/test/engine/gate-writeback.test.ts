@@ -426,6 +426,33 @@ describe('gate-writeback (Task 17)', () => {
       expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
     });
 
+    it('Task 8: at default verbosity, the daemon\'s own-work log lines share the sink but the no-PR skip notice stays suppressed', async () => {
+      const { gh, calls } = fakeGh([]);
+      const logs: string[] = [];
+      const log = (m: string) => logs.push(m);
+
+      // Simulate the daemon logging its own operational lines (start/resume/
+      // status) on the SAME log sink passed into gate-writeback deps — these
+      // are unrelated to gate-writeback's own [gate-writeback]-prefixed skip
+      // notices and must never be affected by its suppression logic.
+      log('[daemon] starting scan pass');
+      log('[daemon] resumed 2 in-flight builds');
+
+      await announceGatedPr(SPEC, '', { runGh: gh, cwd: '/repo', log, verbose: false });
+
+      log('[daemon] scan pass complete, status: idle');
+
+      expect(calls.length).toBe(0);
+      // Own-work lines are all still present, in order.
+      expect(logs).toEqual([
+        '[daemon] starting scan pass',
+        '[daemon] resumed 2 in-flight builds',
+        '[daemon] scan pass complete, status: idle',
+      ]);
+      // The gate-writeback no-PR skip notice never made it onto the sink.
+      expect(logs.filter((m) => m.startsWith('[gate-writeback]')).length).toBe(0);
+    });
+
     it('NP-4b: without a warnedSkips set, repeated no-PR skips log on every call (no dedup)', async () => {
       const { gh, calls } = fakeGh([]);
       const logs: string[] = [];
