@@ -1234,6 +1234,56 @@ describe('engine/artifacts', () => {
         await rm(bareDir, { recursive: true, force: true });
       });
 
+      // #859: bug fix — the build predicate previously computed `unresolved`
+      // by filtering task-status.json rows only, ignoring Task:-trailered
+      // commits entirely. A build where every task is trailer-evidenced but
+      // rows are still pending/in_progress (e.g. the pipeline never flipped
+      // rows to completed) falsely halted at "no_task_progress" despite 100%
+      // completion. The predicate must union rows with resolveTaskIds.
+      it('#859: build predicate resolves via trailer-union when rows show zero completions', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+          '### Task 2: Second task\n**Story:** 2\n\n' +
+          '### Task 3: Third task\n**Story:** 3\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        // Every task id is trailer-evidenced via a real commit...
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/one.ts'), 'export const one = true;\n');
+        await execa('git', ['add', 'src/one.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task one\n\nTask: 1\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/two.ts'), 'export const two = true;\n');
+        await execa('git', ['add', 'src/two.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task two\n\nTask: 2\n'], { cwd: dir });
+
+        await writeFile(join(dir, 'src/three.ts'), 'export const three = true;\n');
+        await execa('git', ['add', 'src/three.ts'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'feat: task three\n\nTask: 3\n'], { cwd: dir });
+
+        // ...but the task-status.json rows are ALL pending/in_progress —
+        // zero completed rows.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'pending' },
+          { id: '2', name: 'Second task', status: 'in_progress' },
+          { id: '3', name: 'Third task', status: 'pending' },
+        ]);
+
+        const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+        const result = await checkStepCompletion(dir, 'build', ctx);
+
+        expect(result).toEqual({ done: true });
+      });
+
       // Regression tests (Task 3): em-dash plan parser—prevent false-positive empty-plan auto-park
       describe('regression: em-dash headings (### Task N — Title) are not false-positives for empty-plan', () => {
         it('Story 1: Em-dash plan with evidence is "done", not "empty"', async () => {

@@ -12,6 +12,7 @@ import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
 import { resolveGateCodeValidityConfig } from './config.js';
+import { resolveTaskIds } from './task-progress.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -1299,12 +1300,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         return { done: false, reason: 'invalid JSON in .pipeline/task-status.json' };
       }
-      const seededTasks = extractTasks(parsed);
-      const byId = new Map(seededTasks.map((t) => [t.id, t] as const));
-      const unresolved = planTaskIds.filter((id) => {
-        const t = byId.get(id);
-        return !t || (t.status !== 'completed' && t.status !== 'skipped');
-      });
+      // #859: union rows with Task:-trailered commits via resolveTaskIds,
+      // instead of filtering task-status.json rows only. A build where every
+      // task is trailer-evidenced but rows are still pending/in_progress
+      // (rows never explicitly flipped) previously false-halted here at
+      // 100% real completion.
+      const resolvedIds = await resolveTaskIds(ctx.projectRoot, planTaskIds);
+      const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
         const names = unresolved.slice(0, 3).join(', ');
