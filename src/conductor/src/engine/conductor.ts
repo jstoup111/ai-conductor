@@ -3715,6 +3715,16 @@ export class Conductor {
               // This covers the failure mode where Claude burns output on
               // "three options: ..." rhetorical questions that no automated
               // retry will ever resolve.
+              //
+              // ADR: adr-2026-07-23-trailer-union-build-step-routing.md (#859)
+              // — `resolvedTasksAfter` below is `countResolvedTasks`, which
+              // unions task-status.json rows with Task:-trailered commits.
+              // Any attempt where every plan task id is trailer-resolved
+              // exits via the completion check above (`completion.done`)
+              // BEFORE this block runs at all, so a build that is genuinely
+              // 100% complete can never misread the attempt ceiling as a
+              // stall here — only a real, unresolved-task stall reaches this
+              // breaker.
               let stalled: 'no_task_progress' | 'halt_marker' | null = null;
               // T4: set true when this attempt made real forward progress
               // and is still under the progress-attempt ceiling — signals
