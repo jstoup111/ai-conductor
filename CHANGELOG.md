@@ -12,6 +12,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `src/conductor`'s test suite no longer risks polluting the operator's real engineer signals
+  store. `resolveEngineerDir` defaults to `~/.ai-conductor/engineer/` when
+  `$AI_CONDUCTOR_ENGINEER_DIR` is unset, so an un-stubbed test could otherwise write
+  `test-project` telemetry into the live `signals.jsonl`. The vitest global `setup.ts` now
+  redirects `$AI_CONDUCTOR_ENGINEER_DIR` to a fresh per-run tmpdir for the whole test process
+  (unless a test has already set it), and `test/global-setup.ts` gained a fail-closed leak
+  guard that snapshots the real store's `test-project` line count before/after the run and
+  throws at teardown naming the delta if it increased (#861).
 - `src/conductor`'s test suite is now deterministic under `pool: forks, maxForks: 3`.
   Object-heavy real-git fixtures previously raced on shared filesystem state across
   concurrent forked workers; they now build isolated repos via a shared
@@ -28,6 +36,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- `bin/quarantine-engineer-signals` — an operator-invoked, idempotent maintenance script that
+  partitions the real engineer signals store into kept (real + malformed) and quarantined
+  (`test-project`-tagged) lines, backs up the original before mutating, and preserves every kept
+  line byte-for-byte in original order. Supports `--dry-run` to report counts without mutating.
+  Paired with the new `src/conductor/test/signals-leak-guard.ts` module (`snapshotEngineerSignals`/
+  `diffEngineerSignals`), which the test suite's `global-setup.ts` uses to fail closed on any
+  test-induced growth of the real store (#861).
 - `examples/` — runnable example script per `conduct-ts` flow at S/M/L tiers.
 - **`engineer claim` never hands out a closed GitHub issue, and the brain intake sweep
   reconciles closed issues out of the ledger/inbox.** On claim, `github-issues` candidates

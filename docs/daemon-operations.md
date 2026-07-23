@@ -578,6 +578,29 @@ The command is **idempotent** — running it multiple times on the same entry wi
 
 See `../src/conductor/README.md` for the full implementation details.
 
+### `quarantine-engineer-signals` — engineer-signals store cleanup (#861)
+
+An operator-invoked maintenance script that removes stray `test-project`-tagged lines from the
+real engineer signals store (`$AI_CONDUCTOR_ENGINEER_DIR/signals.jsonl`, default
+`~/.ai-conductor/engineer/signals.jsonl`). This class of pollution should no longer occur — the
+test suite redirects `$AI_CONDUCTOR_ENGINEER_DIR` to a throwaway tmpdir for the whole test
+process, and a fail-closed leak guard fails the suite if the real store's `test-project` line
+count increases anyway (see `../src/conductor/README.md` → "Engineer-signals leak guard") — but
+the script remains available to clean up pre-existing pollution or a future regression.
+
+```bash
+# Report kept/quarantined counts without mutating anything
+bin/quarantine-engineer-signals --dry-run
+
+# Back up signals.jsonl, move test-project lines out, rewrite the live file
+bin/quarantine-engineer-signals
+```
+
+- Writes a timestamped backup (`signals.jsonl.bak-<ts>`) before mutating.
+- Preserves every real and malformed line byte-for-byte, in original order, in the live file.
+- Appends quarantined (`test-project`) lines to `signals.jsonl.test-quarantine`.
+- Idempotent and safe to re-run.
+
 ### Brain Loop Supervision
 
 `conduct-ts` can host the GitHub-issues intake poll as a **background daemon** instead of a
