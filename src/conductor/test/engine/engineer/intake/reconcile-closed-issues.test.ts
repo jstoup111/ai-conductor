@@ -1,0 +1,79 @@
+// reconcileClosedIssues — brain sweep that forgets ledger entries whose
+// backing GitHub issue is closed, and removes the matching inbox envelope.
+// Task 10 of intake-claim-closed-issue-guard-and-brain-sweep plan.
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
+import { createFileQueue } from '../../../../src/engine/engineer/intake/queue.js';
+import { reconcileClosedIssues } from '../../../../src/engine/engineer/intake/reconcile-closed-issues.js';
+import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
+
+let dir: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'reconcile-closed-issues-'));
+});
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+function envelope(id: string, sourceRef: string): Envelope {
+  return {
+    id,
+    source: 'github-issues',
+    sourceRef,
+    text: `idea for ${sourceRef}`,
+    status: 'pending',
+    receivedAt: `2026-07-2${id}T00:00:00.000Z`,
+  };
+}
+
+describe('reconcileClosedIssues', () => {
+  it('forgets pending github-issues ledger entries whose issue is closed, and removes their inbox envelope', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // A - closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#2' }); // B - open
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#3' }); // C - closed
+
+    const envA = envelope('1', 'o/a#1');
+    const envB = envelope('2', 'o/a#2');
+    const envC = envelope('3', 'o/a#3');
+    await queue.enqueue(envA);
+    await queue.enqueue(envB);
+    await queue.enqueue(envC);
+
+    const issueStates: Record<string, 'open' | 'closed' | null> = {
+      'o/a#1': 'closed',
+      'o/a#2': 'open',
+      'o/a#3': 'closed',
+    };
+
+    const summary = await reconcileClosedIssues(
+      {
+        ledger,
+        queue,
+        getIssueState: async (repo: string, issue: string) => {
+          const key = `${repo}#${issue}`;
+          return issueStates[key] ?? null;
+        },
+      },
+      { dryRun: false },
+    );
+
+    expect(summary.scanned).toBe(3);
+    expect(summary.forgotten).toBe(2);
+
+    expect(await ledger.get('github-issues', 'o/a#1')).toBeUndefined();
+    expect(await ledger.get('github-issues', 'o/a#3')).toBeUndefined();
+
+    const remainingEntry = await ledger.get('github-issues', 'o/a#2');
+    expect(remainingEntry?.status).toBe('pending');
+
+    const remainingEnvelopes = await queue.list();
+    expect(remainingEnvelopes.map((e) => e.id).sort()).toEqual(['2']);
+  });
+});
