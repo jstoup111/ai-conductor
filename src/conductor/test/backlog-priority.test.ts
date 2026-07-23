@@ -1527,6 +1527,22 @@ describe('ghIssueLabelReader — GitHub issue label fetcher via gh REST API', ()
     });
   });
 
+  describe('Jira-shaped sourceRef — skip without calling gh', () => {
+    it('returns not-found for a Jira ref without invoking the runner', async () => {
+      let callCount = 0;
+      const runner: GhRunner = async () => {
+        callCount++;
+        return { stdout: JSON.stringify({ labels: [] }) };
+      };
+
+      const reader = ghIssueLabelReader(runner);
+      const result = await reader(['PROJ-123']);
+
+      expect(callCount).toBe(0);
+      expect(result.get('PROJ-123')).toBe('not-found');
+    });
+  });
+
   describe('test 5: Transport failure/ENOENT → throw', () => {
     it('non-404 transport error throws', async () => {
       const runner: GhRunner = async () => {

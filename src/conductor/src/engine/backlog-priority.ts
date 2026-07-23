@@ -1,5 +1,7 @@
 import type { BacklogItem } from './daemon.js';
 import type { GhRunner } from './tracker-client.js';
+import { parseSourceRef } from './engineer/issue-ref.js';
+import { splitOwnerRepo } from './engineer/source-ref.js';
 
 /**
  * Priority band type for issue classification in daemon backlog scheduling.
@@ -281,27 +283,6 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
 }
 
 /**
- * Parse `owner/repo#N` into owner, repo, and issue number.
- * Returns null if the format is invalid.
- *
- * @param sourceRef - Reference in the form `owner/repo#N`
- * @returns Parsed components or null if unparseable
- */
-function parseIssueRef(sourceRef: string): { owner: string; repo: string; number: string } | null {
-  const hash = sourceRef.lastIndexOf('#');
-  if (hash <= 0 || hash === sourceRef.length - 1) return null;
-  const repo = sourceRef.slice(0, hash);
-  const number = sourceRef.slice(hash + 1);
-  if (!/^\d+$/.test(number)) return null;
-  // Split repo into owner and repo name
-  const slashIndex = repo.indexOf('/');
-  if (slashIndex <= 0 || slashIndex === repo.length - 1) return null;
-  const owner = repo.slice(0, slashIndex);
-  const repoName = repo.slice(slashIndex + 1);
-  return { owner, repo: repoName, number };
-}
-
-/**
  * Create a GitHub issue label reader that fetches labels from issues via gh REST API.
  *
  * For each sourceRef (e.g., 'owner/repo#N'):
@@ -319,14 +300,17 @@ export function ghIssueLabelReader(runner: GhRunner): IssueLabelReader {
 
     for (const ref of refs) {
       try {
-        const parsed = parseIssueRef(ref);
-        if (!parsed) {
-          // Unparseable ref — treat as not found
+        const parsed = parseSourceRef(ref);
+        const ownerRepo = parsed ? splitOwnerRepo(parsed.repo) : null;
+        if (!parsed || !ownerRepo) {
+          // Unparseable ref (including Jira-shaped refs) — treat as not found,
+          // without making a gh call.
           result.set(ref, 'not-found');
           continue;
         }
 
-        const { owner, repo, number } = parsed;
+        const { owner, repo } = ownerRepo;
+        const { number } = parsed;
         // gh api accepts exactly ONE endpoint argument — path must be a single token
         const args = ['api', `repos/${owner}/${repo}/issues/${number}`];
 

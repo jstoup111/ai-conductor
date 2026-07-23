@@ -56,6 +56,19 @@ export function strictSlugGithubRef(ref: string): GithubWorkRef | null {
 }
 
 /**
+ * Split an `owner/repo` slug into its `{ owner, repo }` parts, or null if
+ * malformed (missing slash, empty owner/repo segment, or more than one slash).
+ */
+export function splitOwnerRepo(slug: string): { owner: string; repo: string } | null {
+  if (!slug) return null;
+  const parts = slug.split('/');
+  if (parts.length !== 2) return null;
+  const [owner, repo] = parts;
+  if (!owner || !repo) return null;
+  return { owner, repo };
+}
+
+/**
  * Format a `WorkRef` back into its sourceRef string form. Guards against
  * emitting malformed output by re-parsing the formatted string and throwing
  * if it does not structurally match the input `WorkRef`.

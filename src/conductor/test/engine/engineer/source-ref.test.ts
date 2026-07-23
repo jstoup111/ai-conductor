@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatWorkRef, parseWorkRef } from '../../../src/engine/engineer/source-ref.js';
+import { formatWorkRef, parseWorkRef, splitOwnerRepo } from '../../../src/engine/engineer/source-ref.js';
 
 describe('parseWorkRef — GitHub grammar', () => {
   it('parses a well-formed owner/repo#N ref', () => {
@@ -60,5 +60,21 @@ describe('formatWorkRef — round-trip identity', () => {
 
   it('throws for a malformed WorkRef that would not re-parse', () => {
     expect(() => formatWorkRef({ kind: 'github', repo: '', number: '' })).toThrow();
+  });
+});
+
+describe('splitOwnerRepo — split an owner/repo slug', () => {
+  it('splits a well-formed slug', () => {
+    expect(splitOwnerRepo('acme/app')).toEqual({ owner: 'acme', repo: 'app' });
+  });
+
+  it.each([
+    ['no slash', 'acmeapp'],
+    ['leading slash (empty owner)', '/app'],
+    ['trailing slash (empty repo)', 'acme/'],
+    ['empty string', ''],
+    ['multiple slashes', 'a/b/c'],
+  ])('returns null for %s (%j)', (_label, input) => {
+    expect(splitOwnerRepo(input)).toBeNull();
   });
 });
