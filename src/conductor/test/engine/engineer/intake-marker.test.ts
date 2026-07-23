@@ -186,6 +186,54 @@ describe('writeIntakeMarker', () => {
     const marker = await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', null, undefined, stagedOutcomes);
     expect(marker).toBe(join(repoPath, '.docs', 'intake', 'the-plan-stem.md'));
   });
+
+  it('preserves the committed outcome bullet block byte-for-byte across an owner re-stamp rewrite (no stagedOutcomesContent passed)', async () => {
+    const stagedOutcomes = [
+      'Source-Ref: acme/app#7',
+      '',
+      '## Desired outcome',
+      '',
+      '- Given X, the system does Y.',
+      '- Given Z, the system does W.',
+      '',
+    ].join('\n');
+
+    // First write: intake origin with committed outcome bullets.
+    await writeIntakeMarker(repoPath, 'rewrite-slug', 'acme/app#7', null, undefined, stagedOutcomes);
+    const before = await readFile(join(repoPath, '.docs', 'intake', 'rewrite-slug.md'), 'utf8');
+    expect(before).toContain('## Desired outcome');
+
+    // Rewrite: conduct-path owner re-stamp with NO stagedOutcomesContent argument
+    // (mirrors the real re-stamp call site, which doesn't re-read staging).
+    await writeIntakeMarker(repoPath, 'rewrite-slug', undefined, 'alice');
+    const after = await readFile(join(repoPath, '.docs', 'intake', 'rewrite-slug.md'), 'utf8');
+
+    expect(after).toContain('Owner: alice');
+    expect(after).toContain('Source-Ref: acme/app#7');
+    // The Desired-outcome bullet block from the first write must survive
+    // byte-for-byte in the rewritten marker.
+    const outcomesBlock = before.slice(before.indexOf('## Desired outcome'));
+    expect(after).toContain(outcomesBlock);
+  });
+
+  it('chat-origin marker (no staging, no rewrite) keeps today\'s format — no Desired-outcome section', async () => {
+    const marker = await writeIntakeMarker(repoPath, 'chat-origin', 'acme/app#9', 'bob');
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'chat-origin.md'), 'utf8');
+    expect(body).toBe(['# Intake origin: chat-origin', '', 'Source-Ref: acme/app#9', 'Owner: bob', ''].join('\n'));
+  });
+
+  it('pinned contract: no .docs/intake/<idea-slug>.md file is ever created — only plan-stem-keyed markers exist', async () => {
+    const stagedOutcomes = ['Source-Ref: acme/app#7', '', '## Desired outcome', '', '- A bullet.', ''].join('\n');
+    await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', 'alice', undefined, stagedOutcomes);
+
+    const { readdir } = await import('node:fs/promises');
+    const files = await readdir(join(repoPath, '.docs', 'intake'));
+    // The idea-slug ('dep-bump'-style raw idea text slug) must never appear as
+    // a filename distinct from the plan-stem the marker is keyed by.
+    expect(files).toEqual(['the-plan-stem.md']);
+    expect(files).not.toContain('idea-slug.md');
+  });
 });
 
 describe('runAuthoring intake marker (FR-1, FR-3)', () => {

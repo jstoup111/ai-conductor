@@ -64,15 +64,22 @@ export async function writeIntakeMarker(
 
   const lines = [`# Intake origin: ${slug}`, ''];
 
-  // Preserve existing Source-Ref if present in an existing marker file.
-  // This handles the conduct-path stamping case where a pre-existing marker
-  // carries an intake origin that must survive when re-writing to add Owner:.
+  // Preserve existing Source-Ref (and, below, the committed outcome bullet
+  // block) if present in an existing marker file. This handles the
+  // conduct-path stamping case where a pre-existing marker carries an intake
+  // origin — and Task-3-staged outcome bullets — that must survive when
+  // re-writing to add Owner:.
   let existingSourceRef: string | null = null;
+  let existingOutcomesBlock: string | null = null;
   try {
     const existing = await readFile(markerFile, 'utf-8');
     const sourceRefMatch = existing.match(/^Source-Ref: (.+)$/m);
     if (sourceRefMatch) {
       existingSourceRef = sourceRefMatch[1];
+    }
+    const outcomesIdx = existing.search(/^## Desired outcome\s*$/m);
+    if (outcomesIdx !== -1) {
+      existingOutcomesBlock = existing.slice(outcomesIdx).trimEnd();
     }
   } catch {
     // File doesn't exist yet, continue normally
@@ -90,7 +97,7 @@ export async function writeIntakeMarker(
   // creation (Task 1's outcome-staging.ts), when present — Story 1 happy path.
   // The staged content's own `Source-Ref:` header line is stripped; only the
   // `## Desired outcome` section onward is carried into the marker.
-  const outcomesSection = extractOutcomesSection(stagedOutcomesContent);
+  const outcomesSection = extractOutcomesSection(stagedOutcomesContent) ?? existingOutcomesBlock;
   if (outcomesSection) {
     lines.push('', outcomesSection.trimEnd());
   }
