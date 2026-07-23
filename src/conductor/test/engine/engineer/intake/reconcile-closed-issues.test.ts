@@ -177,4 +177,48 @@ describe('reconcileClosedIssues', () => {
     expect((await ledger.get('github-issues', 'o/a#2'))?.status).toBe('pending');
     expect((await ledger.get('github-issues', 'o/a#3'))?.status).toBe('pending');
   });
+
+  it('dryRun reports would-forget counts but mutates nothing — ledger entries and inbox envelopes remain untouched', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // closed
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#2' }); // open
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#3' }); // closed
+
+    await queue.enqueue(envelope('1', 'o/a#1'));
+    await queue.enqueue(envelope('2', 'o/a#2'));
+    await queue.enqueue(envelope('3', 'o/a#3'));
+
+    const issueStates: Record<string, 'open' | 'closed' | null> = {
+      'o/a#1': 'closed',
+      'o/a#2': 'open',
+      'o/a#3': 'closed',
+    };
+
+    const summary = await reconcileClosedIssues(
+      {
+        ledger,
+        queue,
+        getIssueState: async (repo: string, issue: string) => {
+          const key = `${repo}#${issue}`;
+          return issueStates[key] ?? null;
+        },
+      },
+      { dryRun: true },
+    );
+
+    expect(summary.scanned).toBe(3);
+    expect(summary.forgotten).toBe(2);
+    expect(summary.errors).toBe(0);
+
+    // No mutation: ledger entries still present and pending.
+    expect((await ledger.get('github-issues', 'o/a#1'))?.status).toBe('pending');
+    expect((await ledger.get('github-issues', 'o/a#2'))?.status).toBe('pending');
+    expect((await ledger.get('github-issues', 'o/a#3'))?.status).toBe('pending');
+
+    // No mutation: all inbox envelopes still present.
+    const remainingEnvelopes = await queue.list();
+    expect(remainingEnvelopes.map((e) => e.id).sort()).toEqual(['1', '2', '3']);
+  });
 });
