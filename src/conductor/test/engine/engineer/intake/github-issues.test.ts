@@ -262,3 +262,104 @@ describe('report() failure outcomes with actionable remediation', () => {
     expect(outcome).toEqual({ ok: true });
   });
 });
+
+// ─── Task 17: forget-then-reopen re-ingestion (TR-10) ──────────────────────
+
+describe('poll() re-ingests after a forget disposition (TR-10)', () => {
+  function repoSetup() {
+    const repoPath = join(dir, 'o-a');
+    return { repoPath, registry: { list: async () => [{ name: 'o/a', path: repoPath }] } };
+  }
+
+  it('a forgotten issue that reopens (present in --state open list) is re-recorded pending', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const ledger = createLedger(join(dir, 'ledger.json'));
+
+    // Simulate Task 6's guard-drop / Task 10's brain sweep: the issue was
+    // once known, then forgotten — no ledger entry, no inbox envelope.
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#5' });
+    await ledger.forget('github-issues', 'o/a#5');
+    expect(await ledger.known('github-issues', 'o/a#5')).toBe(false);
+
+    // A poll listing the reopened issue (as `gh issue list --state open` would
+    // once it's reopened) must re-ingest it as pending.
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify([
+            { number: 5, title: 'Reopened issue', body: 'body', labels: [] },
+          ]),
+        };
+      }
+      return { stdout: '' };
+    };
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const envelopes = await adapter.poll();
+
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0]!.sourceRef).toBe('o/a#5');
+    expect(envelopes[0]!.status).toBe('pending');
+    expect(await ledger.known('github-issues', 'o/a#5')).toBe(true);
+    const entry = await ledger.get('github-issues', 'o/a#5');
+    expect(entry?.status).toBe('pending');
+  });
+
+  it('a forgotten issue that is still closed (absent from --state open list) is not re-ingested', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const ledger = createLedger(join(dir, 'ledger.json'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#6' });
+    await ledger.forget('github-issues', 'o/a#6');
+    expect(await ledger.known('github-issues', 'o/a#6')).toBe(false);
+
+    // A `--state open` gh list omits the still-closed issue entirely.
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return { stdout: JSON.stringify([]) };
+      }
+      return { stdout: '' };
+    };
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const envelopes = await adapter.poll();
+
+    expect(envelopes).toHaveLength(0);
+    expect(await ledger.known('github-issues', 'o/a#6')).toBe(false);
+  });
+
+  it('engineer:handled label semantics unchanged: a still-labelled, still-open issue is skipped (not re-ingested) even if known() is false', async () => {
+    const { repoPath, registry } = repoSetup();
+    await mkdir(repoPath, { recursive: true });
+    const ledger = createLedger(join(dir, 'ledger.json'));
+
+    // Never recorded/forgotten — simulates an issue whose label alone gates re-entry.
+    expect(await ledger.known('github-issues', 'o/a#7')).toBe(false);
+
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify([
+            {
+              number: 7,
+              title: 'Already handled',
+              body: 'body',
+              labels: [{ name: 'engineer:handled' }],
+            },
+          ]),
+        };
+      }
+      return { stdout: '' };
+    };
+    const adapter = createGithubIssuesAdapter({ gh, registry, ledger });
+
+    const envelopes = await adapter.poll();
+
+    // FR-35: handled-labelled issues are skipped at capture (no re-eligibility
+    // signal here — plain still-open+handled is not a closed-unmerged reopen).
+    expect(envelopes).toHaveLength(0);
+    expect(await ledger.known('github-issues', 'o/a#7')).toBe(false);
+  });
+});
