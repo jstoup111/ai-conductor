@@ -103,8 +103,14 @@ export async function originDefaultBranch(git: GitRunner): Promise<string | null
  *     fetched, → `origin/<default>` (kind 'remote');
  *   - if there is no origin, or discovery/fetch fails → the LOCAL `localBase`
  *     branch (kind 'local'), with no hardcoded 'main'.
+ *
+ * Extracted core seam (build-review-grades-plan-vs-diff-against-a-stale-o,
+ * Task 1): shared by `resolveBase` (the rebase gate) and, in Task 2, the
+ * ls-remote freshness probe (`resolveFreshBase`) — both need "discover
+ * default branch, fetch it, degrade to local on any failure" without
+ * duplicating the discover+fetch logic.
  */
-export async function resolveBase(
+export async function resolveBaseCore(
   git: GitRunner,
   localBase: string,
 ): Promise<ResolvedBase> {
@@ -141,6 +147,18 @@ export async function resolveBase(
     return { ref: localBase, kind: 'local', branch: localBase };
   }
   return { ref: `origin/${defaultBranch}`, kind: 'remote', branch: defaultBranch };
+}
+
+/**
+ * Public entry point used by the rebase gate. Thin delegate over
+ * `resolveBaseCore` — kept as a separate name for call-site clarity/back-compat;
+ * behavior is identical.
+ */
+export async function resolveBase(
+  git: GitRunner,
+  localBase: string,
+): Promise<ResolvedBase> {
+  return resolveBaseCore(git, localBase);
 }
 
 /**

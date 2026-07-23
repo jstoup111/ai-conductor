@@ -6,6 +6,7 @@ import { execa } from 'execa';
 
 import {
   resolveBase,
+  resolveBaseCore,
   isBranchCurrent,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
@@ -99,6 +100,53 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
     expect(base.kind).toBe('local');
     expect(base.ref).toBe('develop');
     expect(base.branch).toBe('develop');
+  });
+
+  it('default-branch discovery failing entirely (no symbolic-ref, no remote show match) degrades to local base', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['remote', 'show', 'origin'], result: { exitCode: 0, stdout: 'no HEAD branch line here' } },
+    ]);
+    const base = await resolveBase(git, 'main');
+    expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+  });
+});
+
+describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
+  it('is the extracted core that resolveBase delegates to — identical result on success', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/trunk\n' },
+      },
+      { match: ['fetch', 'origin', 'trunk'], result: { exitCode: 0 } },
+    ]);
+    const core = await resolveBaseCore(git, 'main');
+    const viaResolveBase = await resolveBase(git, 'main');
+    expect(core).toEqual({ ref: 'origin/trunk', kind: 'remote', branch: 'trunk' });
+    expect(core).toEqual(viaResolveBase);
+  });
+
+  it('no origin → resolveBaseCore returns the local base directly (same as resolveBase)', async () => {
+    const { git } = fakeGit([{ match: ['remote'], result: { stdout: '' } }]);
+    const core = await resolveBaseCore(git, 'main');
+    expect(core).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+  });
+
+  it('fetch failure → resolveBaseCore degrades to local base (same as resolveBase)', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['fetch', 'origin', 'main'], result: { exitCode: 1, stderr: 'unreachable' } },
+    ]);
+    const core = await resolveBaseCore(git, 'main');
+    expect(core.kind).toBe('local');
+    expect(core.branch).toBe('main');
   });
 });
 
