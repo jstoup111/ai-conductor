@@ -177,20 +177,100 @@ export interface FreshBaseResolution extends ResolvedBase {
 }
 
 /**
- * TODO(build-review-grades-plan-vs-diff-against-a-stale-o, Task 1-2): shared
- * fresh-base resolver — probes `refs/remotes/origin/<default>` against
- * `git ls-remote origin <default>`, fetching + recomputing on any mismatch,
- * fail-soft to `{fresh:false, remoteHeadSha:null}` on any git/network error or
- * missing origin. Not yet implemented; this stub only exists so acceptance
- * specs load and fail on assertion rather than on import.
+ * The current checked-out branch name (short form), or `null` if it cannot be
+ * determined (detached HEAD, empty repo, etc). Used as the `localBase`
+ * fallback for `resolveBaseCore` when `resolveFreshBase` has no explicit
+ * caller-supplied local base (its contract takes none — see
+ * `FreshBaseResolution` callers in the acceptance spec).
+ */
+async function currentBranch(git: GitRunner): Promise<string> {
+  const r = await git(['symbolic-ref', '--short', 'HEAD']);
+  if (r.exitCode === 0 && r.stdout.trim()) return r.stdout.trim();
+  return 'HEAD';
+}
+
+/**
+ * Shared fresh-base resolver (build-review-grades-plan-vs-diff-against-a-stale-o,
+ * Task 2). Probes `refs/remotes/origin/<default>` (the local tracking ref, NOT
+ * re-fetched) against `git ls-remote origin <default>` (the true remote head)
+ * to decide whether a fetch is actually needed:
+ *
+ *   - shas match → `fresh: true`, no fetch performed.
+ *   - shas differ → `fresh: false`; fetches (via `resolveBaseCore`) and
+ *     resolves to the freshly-fetched ref, UNLESS `opts.probeOnly` is set, in
+ *     which case no fetch happens and the pre-existing tracking ref/kind/branch
+ *     shape is returned unchanged.
+ *   - any git/network error (no origin, discovery failure, ls-remote failure,
+ *     rev-parse failure) → fail-soft to `resolveBaseCore`'s local-fallback
+ *     shape, with `trackingRefSha: null`, `remoteHeadSha: null`, `fresh: false`.
+ *     Never throws.
  */
 export async function resolveFreshBase(
-  _git: GitRunner,
-  _opts: { probeOnly?: boolean },
+  git: GitRunner,
+  opts: { probeOnly?: boolean } = {},
 ): Promise<FreshBaseResolution> {
-  throw new Error(
-    'resolveFreshBase is not implemented yet (build-review-grades-plan-vs-diff-against-a-stale-o, Task 1-2)',
-  );
+  const localBase = await currentBranch(git);
+
+  const failSoft = async (): Promise<FreshBaseResolution> => {
+    return {
+      ref: localBase,
+      kind: 'local',
+      branch: localBase,
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    };
+  };
+
+  try {
+    const remotes = await git(['remote']);
+    const hasOrigin = remotes.exitCode === 0 &&
+      remotes.stdout.split('\n').map((l) => l.trim()).includes('origin');
+    if (!hasOrigin) return failSoft();
+
+    const defaultBranch = await originDefaultBranch(git);
+    if (!defaultBranch) return failSoft();
+
+    const trackingRef = await git(['rev-parse', `refs/remotes/origin/${defaultBranch}`]);
+    if (trackingRef.exitCode !== 0 || !trackingRef.stdout.trim()) return failSoft();
+    const trackingRefSha = trackingRef.stdout.trim();
+
+    const lsRemote = await git(['ls-remote', 'origin', defaultBranch]);
+    if (lsRemote.exitCode !== 0) return failSoft();
+    const lines = lsRemote.stdout.split('\n');
+    const line = lines.find((l) => l.includes(`refs/heads/${defaultBranch}`));
+    if (!line) return failSoft();
+    const remoteHeadSha = line.split(/\s+/)[0]?.trim();
+    if (!remoteHeadSha) return failSoft();
+
+    if (trackingRefSha === remoteHeadSha) {
+      return {
+        ref: `origin/${defaultBranch}`,
+        kind: 'remote',
+        branch: defaultBranch,
+        trackingRefSha,
+        remoteHeadSha,
+        fresh: true,
+      };
+    }
+
+    // Stale: tracking ref lags the true remote head.
+    if (opts.probeOnly) {
+      return {
+        ref: `origin/${defaultBranch}`,
+        kind: 'remote',
+        branch: defaultBranch,
+        trackingRefSha,
+        remoteHeadSha,
+        fresh: false,
+      };
+    }
+
+    const fetched = await resolveBaseCore(git, localBase);
+    return { ...fetched, trackingRefSha, remoteHeadSha, fresh: false };
+  } catch {
+    return failSoft();
+  }
 }
 
 // ── Satisfied predicate (FR-4) ───────────────────────────────────────────────
