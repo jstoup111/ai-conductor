@@ -75,6 +75,7 @@ export interface GuardLedger {
   record(input: { source: string; sourceRef: string }): Promise<void>;
   transition(...args: any[]): Promise<void>;
   reopen(source: string, sourceRef: string): Promise<void>;
+  forget(source: string, sourceRef: string): Promise<void>;
 }
 
 /** Simple logger interface. */

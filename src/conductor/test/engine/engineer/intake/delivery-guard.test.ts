@@ -8,6 +8,7 @@
 //   'unknown'           — gh throws, stdout unparseable, or state unrecognized
 
 import { describe, it, expect } from 'vitest';
+import type { GuardLedger } from '../../../../src/engine/engineer/intake/delivery-guard.js';
 
 async function loadDeliveryGuard() {
   return import('../../../../src/engine/engineer/intake/delivery-guard.js') as Promise<any>;
@@ -1014,6 +1015,40 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
 
     // Verify candidate1 was released (acked after healing, not held)
     expect(releasedEnvelopes2).toContain(candidate1);
+  });
+});
+
+// ─── Task 4: GuardLedger exposes forget() ────────────────────────────────────
+
+describe('Task 4: GuardLedger interface — exposes forget()', () => {
+  it('a ledger stub implementing forget(source, sourceRef) satisfies the GuardLedger contract used by the guard constructor', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { runner: gh } = makeFakeGh('');
+
+    const forgetCalls: Array<[string, string]> = [];
+    // Type-level assertion: GuardLedger must declare forget(source, sourceRef).
+    // If the interface doesn't declare it, this fails to compile (RED).
+    const ledgerWithForget: GuardLedger = {
+      async get() {
+        return undefined;
+      },
+      async record() {},
+      async transition() {},
+      async reopen() {},
+      async forget(source: string, sourceRef: string) {
+        forgetCalls.push([source, sourceRef]);
+      },
+    };
+
+    const guarded = createDeliveryGuardedQueue(queue, ledgerWithForget, { gh });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    // forget() is callable through the ledger the guard was constructed with
+    await ledgerWithForget.forget('test-source', 'idea-1');
+    expect(forgetCalls).toEqual([['test-source', 'idea-1']]);
   });
 });
 
