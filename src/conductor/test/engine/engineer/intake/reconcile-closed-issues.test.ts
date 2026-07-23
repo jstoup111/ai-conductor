@@ -221,4 +221,59 @@ describe('reconcileClosedIssues', () => {
     const remainingEnvelopes = await queue.list();
     expect(remainingEnvelopes.map((e) => e.id).sort()).toEqual(['1', '2', '3']);
   });
+
+  it('is idempotent: running the sweep twice on the same closed entries is a no-op the second time', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // closed
+
+    await queue.enqueue(envelope('1', 'o/a#1'));
+
+    const getIssueState = async () => 'closed' as const;
+
+    const first = await reconcileClosedIssues({ ledger, queue, getIssueState });
+    expect(first.scanned).toBe(1);
+    expect(first.forgotten).toBe(1);
+    expect(first.errors).toBe(0);
+    expect(await ledger.get('github-issues', 'o/a#1')).toBeUndefined();
+
+    // Second run: the entry is already forgotten, so nothing pending matches.
+    const second = await reconcileClosedIssues({ ledger, queue, getIssueState });
+    expect(second.scanned).toBe(0);
+    expect(second.forgotten).toBe(0);
+    expect(second.errors).toBe(0);
+  });
+
+  it('yields a zero-count summary without throwing when the ledger store does not exist yet', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json')); // never written to
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    const summary = await reconcileClosedIssues({
+      ledger,
+      queue,
+      getIssueState: async () => 'closed',
+    });
+
+    expect(summary).toEqual({ scanned: 0, forgotten: 0, errors: 0 });
+  });
+
+  it('forgets the ledger entry without crashing when the matching inbox envelope is already gone (ENOENT on remove)', async () => {
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const queue = createFileQueue(join(dir, 'inbox'));
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }); // closed
+    // Note: no envelope enqueued — queue.remove() will find nothing to match.
+
+    const summary = await reconcileClosedIssues({
+      ledger,
+      queue,
+      getIssueState: async () => 'closed',
+    });
+
+    expect(summary.scanned).toBe(1);
+    expect(summary.forgotten).toBe(1);
+    expect(summary.errors).toBe(0);
+    expect(await ledger.get('github-issues', 'o/a#1')).toBeUndefined();
+  });
 });
