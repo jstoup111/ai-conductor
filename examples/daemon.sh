@@ -28,6 +28,12 @@ run_with_timeout 60 conduct-ts daemon >/tmp/examples-daemon.$$.log 2>&1
 cat /tmp/examples-daemon.$$.log
 rm -f /tmp/examples-daemon.$$.log
 
+# DONE is reached either with a recorded PR (`prUrl` in the feature_complete
+# event) or, in a no-remote sandbox, via the finish skill's local-commit path
+# (`.pipeline/finish-choice` = "merge-local" — see FINISH_CHOICE_VALUES in
+# src/conductor/src/engine/artifacts.ts and skills/finish/SKILL.md). Requiring
+# `prUrl` alone would wrongly FAIL a legitimate no-remote drain that finished
+# via merge-local.
 assert_checkpoint "daemon" "$TIER" \
-  '[ -f .pipeline/events.jsonl ] && grep -q "feature_complete" .pipeline/events.jsonl && grep -q "prUrl" .pipeline/events.jsonl' \
+  '[ -f .pipeline/events.jsonl ] && grep -q "feature_complete" .pipeline/events.jsonl && (grep -q "prUrl" .pipeline/events.jsonl || ([ -f .pipeline/finish-choice ] && grep -q "merge-local" .pipeline/finish-choice))' \
   "feature did not reach DONE"
