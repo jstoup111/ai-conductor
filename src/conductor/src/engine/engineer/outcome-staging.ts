@@ -8,7 +8,7 @@
 // multi-operator-ownership-slice-b). This module only ever writes inside
 // `.pipeline/`, never `.docs/`.
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** Relative path (from the worktree root) of the staged outcomes file. */
@@ -66,4 +66,49 @@ export async function stageIntakeOutcomes(
   await mkdir(pipelineDir, { recursive: true });
   await writeFile(stagedPath, contents, 'utf8');
   return stagedPath;
+}
+
+/** Result of reading the staged intake outcomes back out of a worktree. */
+export interface StagedIntakeOutcomes {
+  /** Whether the coherence check's outcome layer applies (false when there
+   * is no staging file, or the staged Desired-outcome section has zero
+   * bullets — a chat/CLI-origin idea or an empty intake section is never
+   * treated as a gap). */
+  required: boolean;
+  /** Verbatim bullet lines (each starting with `- `), trimmed. */
+  bullets: string[];
+  /** The staged `Source-Ref:` value, or null when nothing was staged. */
+  sourceRef: string | null;
+}
+
+/**
+ * Read back `.pipeline/intake-outcomes.md` from the given worktree.
+ *
+ * No-op-tolerant: returns `{required: false, bullets: [], sourceRef: null}`
+ * when no staging file exists (chat/CLI origin — Story 1 negative path).
+ * Also returns `required: false` when a staging file exists but its
+ * Desired-outcome section has zero bullets (empty-intake negative path) —
+ * the outcome layer is only "required" once at least one bullet is staged.
+ */
+export async function readStagedIntakeOutcomes(
+  worktreePath: string,
+): Promise<StagedIntakeOutcomes> {
+  const stagedPath = join(worktreePath, INTAKE_OUTCOMES_RELATIVE_PATH);
+
+  let contents: string;
+  try {
+    contents = await readFile(stagedPath, 'utf8');
+  } catch {
+    return { required: false, bullets: [], sourceRef: null };
+  }
+
+  const sourceRefMatch = contents.match(/^Source-Ref:\s*(.+)$/m);
+  const sourceRef = sourceRefMatch ? sourceRefMatch[1].trim() : null;
+
+  const bullets = contents
+    .split('\n')
+    .filter((line) => /^\s*-\s/.test(line))
+    .map((line) => line.trim());
+
+  return { required: bullets.length > 0, bullets, sourceRef };
 }

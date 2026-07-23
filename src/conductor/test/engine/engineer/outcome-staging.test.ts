@@ -3,10 +3,14 @@
 // DECIDE artifact is authored.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stageIntakeOutcomes } from '../../../src/engine/engineer/outcome-staging.js';
+import {
+  stageIntakeOutcomes,
+  readStagedIntakeOutcomes,
+  INTAKE_OUTCOMES_RELATIVE_PATH,
+} from '../../../src/engine/engineer/outcome-staging.js';
 
 describe('stageIntakeOutcomes', () => {
   let worktreePath: string;
@@ -33,5 +37,62 @@ describe('stageIntakeOutcomes', () => {
     const contents = await readFile(stagedPath!, 'utf8');
     expect(contents).toContain(`Source-Ref: ${sourceRef}`);
     expect(contents).toContain('## Desired outcome\n\n- Bullet one\n- Bullet two');
+  });
+
+  it('no-ops (no file, no throw) when there is no sourceRef and no intakeBody (chat/CLI origin)', async () => {
+    await expect(stageIntakeOutcomes(worktreePath, undefined, undefined)).resolves.toBeNull();
+    await expect(stageIntakeOutcomes(worktreePath, null, null)).resolves.toBeNull();
+    await expect(stageIntakeOutcomes(worktreePath, 'owner/repo#1', undefined)).resolves.toBeNull();
+    await expect(stageIntakeOutcomes(worktreePath, undefined, '## Desired outcome\n\n- x\n')).resolves.toBeNull();
+
+    await expect(access(join(worktreePath, INTAKE_OUTCOMES_RELATIVE_PATH))).rejects.toThrow();
+  });
+
+  it('stages zero bullets when the Desired-outcome section is empty, and the reader reports outcome layer not required', async () => {
+    const sourceRef = 'owner/repo#7';
+    const intakeBody = '## What\n\nSome evidence.\n\n## Desired outcome\n\n## Next\n\nother stuff\n';
+
+    const stagedPath = await stageIntakeOutcomes(worktreePath, sourceRef, intakeBody);
+    expect(stagedPath).toBe(join(worktreePath, '.pipeline', 'intake-outcomes.md'));
+
+    const contents = await readFile(stagedPath!, 'utf8');
+    expect(contents).toContain(`Source-Ref: ${sourceRef}`);
+    expect(contents).toContain('## Desired outcome');
+
+    const result = await readStagedIntakeOutcomes(worktreePath);
+    expect(result).toEqual({ required: false, bullets: [], sourceRef });
+  });
+
+  it('reports outcome layer not required when nothing was staged at all', async () => {
+    const result = await readStagedIntakeOutcomes(worktreePath);
+    expect(result).toEqual({ required: false, bullets: [], sourceRef: null });
+  });
+
+  it('reports outcome layer required when bullets are present', async () => {
+    await stageIntakeOutcomes(
+      worktreePath,
+      'owner/repo#9',
+      '## Desired outcome\n\n- Bullet A\n- Bullet B\n',
+    );
+
+    const result = await readStagedIntakeOutcomes(worktreePath);
+    expect(result.required).toBe(true);
+    expect(result.bullets).toEqual(['- Bullet A', '- Bullet B']);
+  });
+
+  it('leaves the staged outcomes file in place after a simulated failed land (no deletion in this module)', async () => {
+    const sourceRef = 'owner/repo#42';
+    const intakeBody = '## Desired outcome\n\n- Keep me\n';
+    const stagedPath = await stageIntakeOutcomes(worktreePath, sourceRef, intakeBody);
+
+    // Simulate a failed land step that throws after staging has occurred.
+    const simulateFailedLand = async () => {
+      throw new Error('land failed before commit');
+    };
+    await expect(simulateFailedLand()).rejects.toThrow('land failed before commit');
+
+    // The staged file must still be present — this module never deletes it.
+    const contents = await readFile(stagedPath!, 'utf8');
+    expect(contents).toContain('Keep me');
   });
 });
