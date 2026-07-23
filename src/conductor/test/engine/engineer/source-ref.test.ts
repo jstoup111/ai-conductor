@@ -1,5 +1,11 @@
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatWorkRef, parseWorkRef, splitOwnerRepo } from '../../../src/engine/engineer/source-ref.js';
+
+const execFile = promisify(execFileCb);
+const CONDUCTOR_SRC = resolve(__dirname, '../../../src');
 
 describe('parseWorkRef — GitHub grammar', () => {
   it('parses a well-formed owner/repo#N ref', () => {
@@ -76,5 +82,29 @@ describe('splitOwnerRepo — split an owner/repo slug', () => {
     ['multiple slashes', 'a/b/c'],
   ])('returns null for %s (%j)', (_label, input) => {
     expect(splitOwnerRepo(input)).toBeNull();
+  });
+});
+
+describe('grammar sweep — no competing owner/repo#N or #N regex outside source-ref.ts', () => {
+  it('finds the ref-splitting grammar only in source-ref.ts, plus two documented, unrelated exceptions', async () => {
+    // pr-labels.ts owns an independent URL-based parser (github.com/.../pull/N),
+    // never delegated to source-ref.ts by design (different input shape: a PR
+    // URL, not a bare sourceRef). wired-into.ts's ISSUE_REF parses a DIFFERENT
+    // domain entirely — plan/story authoring annotations ("Wired-into: owner/repo#N")
+    // — not a runtime sourceRef value, so it is not a competing grammar for the
+    // same concern.
+    const { stdout } = await execFile(
+      'grep',
+      ['-rlE', "lastIndexOf\\('#'\\)|#\\(\\\\d\\+\\)\\$", CONDUCTOR_SRC],
+    ).catch((e) => e as { stdout: string });
+
+    const files = stdout
+      .split('\n')
+      .filter(Boolean)
+      .filter((f) => !f.includes('/test/'))
+      .map((f) => f.replace(`${CONDUCTOR_SRC}/`, ''))
+      .sort();
+
+    expect(files).toEqual(['engine/engineer/source-ref.ts', 'engine/wired-into.ts']);
   });
 });

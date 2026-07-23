@@ -70,9 +70,7 @@ export interface DependencyProseResult {
 
 /** Extract the repo prefix (everything before the last `#`) from a source ref, or null. */
 function repoPrefixOf(ref: string): string | null {
-  const hash = ref.lastIndexOf('#');
-  if (hash <= 0) return null;
-  return ref.slice(0, hash);
+  return parseSourceRef(ref)?.repo ?? null;
 }
 
 const PATTERNS: { re: RegExp; kind: DependencyEdge['kind'] }[] = [
