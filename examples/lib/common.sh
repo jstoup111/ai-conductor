@@ -39,3 +39,31 @@ sandbox_down() {
   fi
   SANDBOX_ROOT=""
 }
+
+# resolve_prompt [tier] — echo the path to prompts/<tier>.md for a tier arg
+# (s|m|l or small|medium|large). With no arg: if stdin is a TTY, interactively
+# prompts "Which prompt? [s/m/l]"; if not a TTY, prints usage and returns
+# non-zero rather than silently defaulting. Unknown tiers print usage and
+# return non-zero.
+resolve_prompt() {
+  local tier="${1:-}"
+
+  if [ -z "$tier" ]; then
+    if [ -t 0 ]; then
+      read -r -p "Which prompt? [s/m/l] " tier
+    else
+      echo "Usage: resolve_prompt <s|m|l|small|medium|large>" >&2
+      return 1
+    fi
+  fi
+
+  case "$tier" in
+    s|small) echo "prompts/small.md" ;;
+    m|medium) echo "prompts/medium.md" ;;
+    l|large) echo "prompts/large.md" ;;
+    *)
+      echo "Usage: resolve_prompt <s|m|l|small|medium|large>" >&2
+      return 1
+      ;;
+  esac
+}
