@@ -19,7 +19,7 @@ export const INTAKE_OUTCOMES_RELATIVE_PATH = join('.pipeline', 'intake-outcomes.
  * bullets that follow it, up to (but not including) the next `## ` heading or
  * end of body. Returns null when no such section is present.
  */
-export function extractDesiredOutcomeSection(intakeBody: string): string | null {
+function extractDesiredOutcomeSection(intakeBody: string): string | null {
   const headingIdx = intakeBody.search(/^## Desired outcome\s*$/m);
   if (headingIdx === -1) return null;
 

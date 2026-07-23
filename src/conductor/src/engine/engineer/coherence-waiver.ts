@@ -15,7 +15,7 @@
 import { join } from 'node:path';
 import type { CoherenceGap } from './coherence-validator.js';
 
-export const COHERENCE_WAIVER_DIR = '.docs/coherence-waivers/';
+const COHERENCE_WAIVER_DIR = '.docs/coherence-waivers/';
 
 export interface CoherenceWaiverChangedFile {
   /** git name-status code: A / M / D / R<score> / C<score>. */

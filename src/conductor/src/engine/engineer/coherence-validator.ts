@@ -16,6 +16,8 @@ import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
+import { createBlockerResolver } from '../blocker-resolver.js';
+import type { GhRunner } from '../owner-gate/identity.js';
 import { deriveDefaultBranch } from './authoring.js';
 import type { AuthoringGuard } from './authoring-guard.js';
 import {
@@ -1202,6 +1204,12 @@ export interface RunCoherenceGateArgs {
   ideaFiles: ReadonlySet<string> | readonly string[];
   /** Boundary guard (C1) — reused to assert the coherence artifact path stays in-repo. */
   guard: AuthoringGuard;
+  /**
+   * gh runner for the advisory open-PR overlap scan (Story 8). Undefined
+   * (no injected gh) skips the advisory scan entirely — it never blocks
+   * land, so a missing runner degrades to "not checked", not a failure.
+   */
+  gh?: GhRunner;
 }
 
 /**
@@ -1224,6 +1232,7 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     outcomeBullets,
     ideaFiles,
     guard,
+    gh,
   } = args;
 
   const required = resolveRequiredLayers(worktreePath, tier, track, outcomeBullets, ideaFiles);
@@ -1286,6 +1295,36 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
   });
   if (!duplicate.ok) {
     gaps.push(duplicate.gap);
+  }
+
+  // Advisory open-PR overlap scan (Story 8, "Done When" #3): never blocks —
+  // a missing `gh` runner (no network/auth injected) just skips the check.
+  if (gh) {
+    const resolver = createBlockerResolver({
+      run: (ghArgs: string[]) => gh(ghArgs, { cwd: worktreePath }),
+    });
+    const report = await advisoryDuplicateClaimWarn({
+      candidateFiles: Array.from(ideaFiles),
+      git,
+      resolver,
+      sourceRef: sourceRef ?? undefined,
+      localBase: defaultBranch,
+    });
+    // This spec's own `spec/<planStem>` branch always "overlaps" itself (it
+    // is the source of every idea file) — exclude it, or every land would
+    // spuriously warn about overlapping with itself.
+    const ownBranch = `spec/${planStem}`;
+    const siblingOverlaps = report?.seamOverlaps.filter((o) => o.branch !== ownBranch) ?? [];
+    if (report && (siblingOverlaps.length > 0 || report.blockers.length > 0)) {
+      const branches = siblingOverlaps.map((o) => o.branch).join(', ');
+      const blockers = report.blockers.map((b) => `${b.repo}#${b.number}`).join(', ');
+      const parts = [
+        branches ? `overlapping branches: ${branches}` : null,
+        blockers ? `open blockers: ${blockers}` : null,
+      ].filter((p): p is string => p !== null);
+      // eslint-disable-next-line no-console -- advisory-only surfacing, never blocking
+      console.warn(`landSpec: coherence gate advisory — ${parts.join('; ')}`);
+    }
   }
 
   if (gaps.length === 0) return;

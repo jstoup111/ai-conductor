@@ -310,6 +310,7 @@ export async function landSpec(
     outcomeBullets: stagedOutcomes.bullets,
     ideaFiles,
     guard,
+    gh: opts.gh,
   });
 
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the

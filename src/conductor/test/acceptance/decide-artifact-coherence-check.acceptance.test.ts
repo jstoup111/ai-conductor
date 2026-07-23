@@ -37,7 +37,7 @@
 // land-time flow: staged outcomes -> committed marker carries them, and the
 // full coherence refusal/pass matrix at the landing boundary.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -482,6 +482,31 @@ describe('Story 8 / FR-7 — duplicate intake claim (duplicate:<ref>)', () => {
     await expect(
       landSpec(target(), 'coherence demo', wt, 'acme/app#777', landOpts()),
     ).resolves.toBeDefined();
+  });
+
+  it('happy: an open sibling spec branch touching the same idea file warns (advisory) but never blocks the land', async () => {
+    // A sibling in-flight spec branch that happens to touch this idea's own
+    // stories file — the "#527 vs #530" shape, but pre-merge (open PR), so
+    // it is advisory-only, never a refusal.
+    await git(['checkout', '-b', 'spec/sibling-idea']);
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'stories', 'coherence-demo.md'), STORIES + '\n<!-- sibling edit -->\n');
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'sibling spec touches the same story file']);
+    await git(['checkout', 'main']);
+
+    const wt = await seedWorktree('coherence demo');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(
+        landSpec(target(), 'coherence demo', wt, 'acme/app#777', landOpts()),
+      ).resolves.toBeDefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/coherence gate advisory.*overlapping branches.*spec\/sibling-idea/),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

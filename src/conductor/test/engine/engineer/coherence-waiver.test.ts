@@ -8,7 +8,6 @@ import { describe, it, expect } from 'vitest';
 import {
   parseCoherenceWaiver,
   evaluateCoherenceWaiver,
-  COHERENCE_WAIVER_DIR,
   type CoherenceWaiverChangedFile,
 } from '../../../src/engine/engineer/coherence-waiver.js';
 import type { CoherenceGap } from '../../../src/engine/engineer/coherence-validator.js';
@@ -17,7 +16,7 @@ function gap(gapId: string): CoherenceGap {
   return { layer: 'outcome', gapId, artifact: 'intake outcomes', item: `bullet for ${gapId}` };
 }
 
-const WAIVER_PATH = `${COHERENCE_WAIVER_DIR}my-spec.md`;
+const WAIVER_PATH = '.docs/coherence-waivers/my-spec.md';
 
 describe('parseCoherenceWaiver', () => {
   it('parses a valid Waives: + Rationale: block against the known gap-id vocabulary', () => {
