@@ -6,6 +6,23 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
+
+// Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on the
+// disposition classifier so the "wired before rework routing" tests can
+// assert it actually runs, without needing a real git remote in this
+// fixture's throwaway repo. Resolves 'genuine' by default (task 6 is
+// wiring-only — the classification must not change kickback routing yet).
+const classifyBuildReviewDispositionMock = vi.fn(async () => ({
+  disposition: 'genuine' as const,
+  fresh: {} as unknown,
+  baseChanged: false,
+  flaggedPaths: [] as string[],
+  freshDiffPaths: [] as string[],
+}));
+vi.mock('../../src/engine/build-review-disposition.js', () => ({
+  classifyBuildReviewDisposition: (...args: unknown[]) =>
+    classifyBuildReviewDispositionMock(...(args as [])),
+}));
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
@@ -1192,6 +1209,105 @@ describe('integration/gate-loop', () => {
         'implementation addresses only part of the declared scope',
       );
       expect(result.completed).toBe(true);
+    });
+  });
+
+  describe('build_review scope-FAIL disposition classification (Task 6, wiring-only)', () => {
+    // Task 6 wires `classifyBuildReviewDisposition` to run before rework
+    // routing whenever a build_review dispatch assembled base-freshness
+    // evidence — but does NOT yet act on its result (Task 7). This pins:
+    // (a) it runs, (b) with the graded merge-base and the FAIL verdict's
+    // reasons, and (c) today's kickback-to-build routing is unchanged
+    // regardless of what it returns.
+    function reviewFailConfig() {
+      return { build_review: { enabled: true } };
+    }
+
+    it('runs the classifier on a build_review FAIL and leaves kickback-to-build routing unchanged', async () => {
+      classifyBuildReviewDispositionMock.mockClear();
+      await writeState(statePath, { ...FRONT_DONE });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
+      let reviewRuns = 0;
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          if (step === 'build') return satisfy('build');
+          if (step === 'build_review') {
+            const isFail = reviewRuns === 0;
+            reviewRuns++;
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: isFail ? 'FAIL' : 'PASS',
+                reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
+                rubric: { tautology: false, scope: isFail, rootCause: false },
+              }),
+            );
+            // Simulate `runBuildReview` having assembled fresh-base evidence
+            // (Task 4) — required for Task 6's wiring guard to fire.
+            return {
+              success: true,
+              baseFreshness: {
+                mergeBase: 'stalemergesha0',
+                trackingRefSha: 'stalesha0',
+                remoteHeadSha: 'remotesha1',
+                fresh: false,
+              },
+            };
+          }
+          if (step === 'finish') {
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const state = JSON.parse(await readFile(statePath, 'utf-8'));
+            state.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(state));
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: reviewFailConfig(),
+        git: fakeGit,
+      });
+      await conductor.run();
+
+      // (a)/(b): classifier ran, with the graded merge-base and reasons.
+      expect(classifyBuildReviewDispositionMock).toHaveBeenCalled();
+      const [, , original, reasons] = classifyBuildReviewDispositionMock.mock.calls[0] as [
+        unknown,
+        unknown,
+        { mergeBase: string },
+        string[],
+      ];
+      expect(original.mergeBase).toBe('stalemergesha0');
+      expect(reasons).toEqual(['diff touches merged-pr.txt which is out of scope']);
+
+      // (c): kickback-to-build routing is unchanged today.
+      expect(kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(completed).toBe(true);
     });
   });
 

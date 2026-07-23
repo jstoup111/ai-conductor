@@ -104,6 +104,10 @@ import {
   ACCEPTANCE_SPECS_RED_EVIDENCE,
 } from './artifacts.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
+import {
+  classifyBuildReviewDisposition,
+  type BuildReviewDisposition,
+} from './build-review-disposition.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -1886,6 +1890,14 @@ export class Conductor {
     // Per-gate count of kickback re-opens this feature, for the anti-ping-pong
     // cap. Drives the gate-driven tail (see advanceTail).
     const kickbackCounts = new Map<StepName, number>();
+    // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): the
+    // merge-base a build_review dispatch actually graded against (set from
+    // `result.baseFreshness` right after the step runs, read back much
+    // further down in the gate-driven tail's build_review-FAIL branch, which
+    // no longer has `result` in scope). `undefined` whenever the most recent
+    // build_review dispatch never assembled inputs (e.g. plan resolution
+    // failed before `assembleBuildReviewInputs` ran).
+    let lastBuildReviewMergeBase: string | undefined;
     // Per-gate count of consecutive selector re-selects without satisfaction,
     // for the stuck-gate HALT guard (see advanceTail).
     const stuckGate = new Map<StepName, number>();
@@ -3306,6 +3318,7 @@ export class Conductor {
           // all carry `baseFreshness`), guarded so telemetry can never fail
           // or block the build_review step itself.
           if (step.name === 'build_review' && result.baseFreshness) {
+            lastBuildReviewMergeBase = result.baseFreshness.mergeBase;
             try {
               await emitTracked({
                 type: 'build_review_base',
@@ -4373,6 +4386,45 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                // Task 6: classification result, consumed by Task 7 (not yet
+                // wired to routing — see below).
+                let buildReviewDisposition: BuildReviewDisposition | undefined;
+                // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o):
+                // disposition classification, BEFORE any rework routing
+                // decision below. Re-probes and recomputes a fresh diff (via
+                // `classifyBuildReviewDisposition`, which reuses
+                // `assembleBuildReviewInputs` — read-only, never mutates git
+                // state) to tell a `stale-mirage` FAIL (flagged content only
+                // appeared because grading ran against a stale base) from a
+                // `genuine` one (flagged content persists under a fresh
+                // recompute). Wiring-only for now: the classification does
+                // not yet change routing — Task 7 consumes it to skip rework
+                // and invalidate-and-regrade on `stale-mirage`. Fully
+                // guarded: a classification failure (e.g. offline) must
+                // never block or alter today's kickback behavior.
+                if (lastBuildReviewMergeBase) {
+                  try {
+                    const planPath = await resolveFeaturePlanPath(
+                      this.projectRoot,
+                      state.feature_desc,
+                    );
+                    if (planPath) {
+                      const disposition = await classifyBuildReviewDisposition(
+                        makeGitRunner(this.projectRoot),
+                        planPath,
+                        { baseRef: '', mergeBase: lastBuildReviewMergeBase },
+                        parsed.reasons,
+                      );
+                      buildReviewDisposition = disposition.disposition;
+                    }
+                  } catch {
+                    // Never block/alter kickback routing over disposition
+                    // classification failures — Task 7 will consume
+                    // `buildReviewDisposition` when set; routing below is
+                    // unchanged either way.
+                  }
+                }
+
                 // D2: a build_review FAIL that re-enters right after a prior
                 // kickback-to-build cycle made zero net progress on an
                 // unchanged verdict escalates to HALT on this cycle instead
