@@ -1247,27 +1247,33 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
-    // Task 10 (#773): the build predicate no longer gates on the per-task
-    // evidence-ledger (the derivation engine + createTaskEvidence's
+    // Task 10 (#773, extended by #859): the build predicate no longer gates
+    // on the per-task evidence-ledger (the derivation engine + createTaskEvidence's
     // evidenceStamps; the derivation engine itself was deleted in Task 11).
-    // Real completion authority now lives in the build_review step's
+    // Final completion authority lives solely in the build_review step's
     // completeness rubric (a fail-closed, default-on grader verdict) plus
-    // the existing outcome gates — the per-task commit-stamp ledger is being
-    // demoted to telemetry. This predicate is now purely structural: it
-    // confirms the plan seeded successfully and then trusts the
-    // task-status.json row status directly (completed/skipped), the same
-    // way the legacy no-context fallback below always has. It intentionally
-    // no longer cross-checks rows against an independently re-derived
-    // evidence sidecar — the H6/H7/H8 anti-forgery check ("a completed row
-    // with no evidenceStamps entry is never counted") is retired: a forged
-    // or stale 'completed' row is no longer this gate's concern, since
-    // build_review's completeness rubric now independently judges the real
-    // diff on every pass. The derivation engine that used to re-derive
-    // task-status.json from git evidence (autoheal.ts's deriveCompletion/
-    // applyDerivedCompletion, wired from conductor.ts's auto-heal call) was
-    // deleted entirely (feature #773, Task 11) — commit-trailer stamping is
-    // telemetry only now, and this predicate simply trusts whatever status
-    // is already on the row.
+    // the existing outcome gates — this predicate never grants final
+    // acceptance itself. Its job is routing: task-status.json rows are one
+    // input, and per adr-2026-07-23-trailer-union-build-step-routing.md
+    // (#859) they are unioned with the set of task ids resolved from
+    // `Task:` commit trailers before the row/skip check below, so a task
+    // committed with a valid trailer but not yet reflected in the row
+    // (or reflected as stale/absent) still routes the build step forward
+    // into build_review instead of stalling. Widening this union can only
+    // ever hand the build off to build_review sooner — it cannot forge
+    // final completion, because build_review independently re-judges the
+    // real diff on every pass regardless of how this predicate resolved.
+    // It intentionally no longer cross-checks rows against an independently
+    // re-derived evidence sidecar — the H6/H7/H8 anti-forgery check ("a
+    // completed row with no evidenceStamps entry is never counted") is
+    // retired for the same reason: build_review, not this predicate, is
+    // the backstop against a forged or stale row. The derivation engine
+    // that used to re-derive task-status.json from git evidence
+    // (autoheal.ts's deriveCompletion/applyDerivedCompletion, wired from
+    // conductor.ts's auto-heal call) was deleted entirely (feature #773,
+    // Task 11) — commit-trailer stamping now serves double duty: still
+    // telemetry, but also, via the trailer-union routing above, an input
+    // to this predicate's handoff decision.
     if (ctx.projectRoot && ctx.planPath) {
       let planTaskIds: string[];
       try {
