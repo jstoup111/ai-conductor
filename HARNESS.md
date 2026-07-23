@@ -459,6 +459,9 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing
   behavior MUST update the project's `README` and any affected documentation in
-  the same change — new commands/flags, config keys, endpoints, setup steps. A
-  feature is not done while its docs are stale; the `finish` step verifies the
-  README/docs reflect what shipped before opening the PR.
+  the same change — new commands/flags, config keys, endpoints, setup steps. In
+  this repo that means the relevant `docs/*.md` guide (e.g. config changes →
+  `docs/configuration.md`, daemon options → `docs/daemon-operations.md`), not
+  just the condensed front-door `README.md`. A feature is not done while its
+  docs are stale; the `finish` step verifies the README/docs reflect what
+  shipped before opening the PR.
