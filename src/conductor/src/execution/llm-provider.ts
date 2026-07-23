@@ -3,6 +3,9 @@ export interface TokenUsage {
   output: number;
   cacheRead?: number;
   cacheCreation?: number;
+  costUsd?: number;
+  numTurns?: number;
+  durationMs?: number;
 }
 
 export interface InvokeResult {
