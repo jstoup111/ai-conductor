@@ -89,7 +89,9 @@ export function renderCloseComment(slug: string, prUrl: string): string {
  *
  * Logic:
  * - Fetch current issue body
- * - If 404: set closedBy='external', return
+ * - If 404 (getIssueBody resolves null): set closedBy='external', return
+ * - If fetch throws (real failure, or the AI_CONDUCTOR_NO_REAL_EXEC guard
+ *   rejecting a real spawn): set lastError with message, do NOT throw
  * - If body contains correct slug: record stampedAt (no edit), return
  * - If body contains wrong slug: set lastError='slug-mismatch', return without edit
  * - If marker absent: append marker, call upsertIssueBody, set stampedAt
@@ -109,10 +111,14 @@ export async function stampIssue(entry: LedgerEntry, gh: TrackerClient, cwd = '.
   try {
     body = await gh.getIssueBody(repo, issue, cwd);
   } catch (err) {
-    // Treat fetch errors as external closure
+    // getIssueBody only returns null for a genuine 404 (see tracker-client.ts);
+    // anything it throws — a real gh failure, a JSON parse error, or the
+    // AI_CONDUCTOR_NO_REAL_EXEC guard rejecting a real spawn — is a retriable
+    // error, not an external closure. Record it so callers/operators see it.
+    const errorMsg = err instanceof Error ? err.message : String(err);
     return {
       stamped: false,
-      closedBy: 'external'
+      lastError: errorMsg
     };
   }
 
