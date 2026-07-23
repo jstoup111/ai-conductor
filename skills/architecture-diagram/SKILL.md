@@ -111,8 +111,16 @@ scaffold output. These populate as the design develops.
 every Mermaid block and **exits non-zero on a syntax error** (e.g. the angle-bracket trap above),
 printing the offending file, block, and parse-error line. Fix any reported error and re-run until
 it passes **before** showing the diagrams for approval — a diagram that fails to render is not
-done. (If `mmdc` isn't installed the check skips cleanly with exit 0; it never false-fails on an
-environment without a browser.)
+done. (Interactively, if `mmdc` isn't installed this command skips with exit 0 so it never
+false-fails on a box without a browser.)
+
+> **This is machinery-enforced, not a reminder.** The engineer **`land` gate** re-runs the render
+> check over the spec's own authored (new/modified) `.docs/**/*.md` — not the inherited `.docs/`
+> history — and **fail-closed rejects the spec** if any Mermaid block does
+> not render — and, unlike the interactive command, it also rejects when diagrams are present but
+> `mmdc` is unavailable (an unvalidated diagram never lands). So a broken diagram cannot reach a
+> merged spec regardless of whether this step was run by hand. Install `@mermaid-js/mermaid-cli`
+> (a `bin/install` mermaid preset) so the gate can validate.
 
 Present all diagrams to the engineer for validation before proceeding.
 

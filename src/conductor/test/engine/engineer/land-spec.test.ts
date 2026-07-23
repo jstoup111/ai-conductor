@@ -208,6 +208,73 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     expect(marker).toContain('Owner: bob');
   });
 
+  describe('#810: mermaid render hard gate', () => {
+    const okGh: GhRunner = async () => ({ stdout: 'bob\n' });
+    const seedDiagram = async (worktree: string) => {
+      await mkdir(join(worktree, '.docs', 'architecture'), { recursive: true });
+      await writeFile(
+        join(worktree, '.docs', 'architecture', 'diagram.md'),
+        '# Arch\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+      );
+    };
+    const deps = (over: Partial<{ hasTool: boolean; ok: boolean; error: string }>) => ({
+      hasTool: async () => over.hasTool ?? true,
+      writeTemp: async () => '/tmp/check.mmd',
+      runMmdc: async () => ({ ok: over.ok ?? true, error: over.error }),
+    });
+
+    it('rejects a spec whose mermaid diagram fails to render', async () => {
+      const worktree = await seedValidWorktree();
+      await seedDiagram(worktree);
+      await expect(
+        landSpec(target(), 'dep bump', worktree, undefined, {
+          ownerConfig: {}, gh: okGh,
+          renderDeps: deps({ ok: false, error: 'Parse error on line 2: unexpected token' }),
+        }),
+      ).rejects.toThrow(/fails to render/);
+    });
+
+    it('fail-closed: rejects when diagrams are present but mmdc is unavailable', async () => {
+      const worktree = await seedValidWorktree();
+      await seedDiagram(worktree);
+      await expect(
+        landSpec(target(), 'dep bump', worktree, undefined, {
+          ownerConfig: {}, gh: okGh, renderDeps: deps({ hasTool: false }),
+        }),
+      ).rejects.toThrow(/cannot be validated|mmdc.*not installed/i);
+    });
+
+    it('lands when every mermaid diagram renders', async () => {
+      const worktree = await seedValidWorktree();
+      await seedDiagram(worktree);
+      const result = await landSpec(target(), 'dep bump', worktree, undefined, {
+        ownerConfig: {}, gh: okGh, renderDeps: deps({ ok: true }),
+      });
+      expect(result.slug).toBeTruthy();
+    });
+
+    it('checks only THIS idea’s changed files — an inherited COMMITTED diagram is not re-validated', async () => {
+      const worktree = await seedValidWorktree();
+      // A pre-existing, COMMITTED diagram carrying a mermaid block — stands in for
+      // the target's inherited `.docs/` history. It must NOT be re-litigated.
+      await mkdir(join(worktree, '.docs', 'architecture'), { recursive: true });
+      await writeFile(
+        join(worktree, '.docs', 'architecture', 'legacy.md'),
+        '# Legacy\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+      );
+      await execFile('git', ['add', '.docs/architecture/legacy.md'], { cwd: worktree });
+      await execFile('git', ['commit', '-m', 'legacy diagram'], { cwd: worktree });
+
+      // renderDeps would FAIL *any* diagram it checks. This idea's own new
+      // artifacts carry no mermaid — so a successful land proves the committed
+      // legacy diagram was never checked (only changed files are).
+      const result = await landSpec(target(), 'dep bump', worktree, undefined, {
+        ownerConfig: {}, gh: okGh, renderDeps: deps({ ok: false, error: 'would fail if checked' }),
+      });
+      expect(result.slug).toBeTruthy();
+    });
+  });
+
   it('#505 Task 8: landSpec commits CONDUCT_ENGINE_COMMIT=1 — lands trailer-less under an active commit-msg gate', async () => {
     // Wire the real commit-msg hook + a build-step-active marker WITHOUT
     // using prepareWorktree (it writes .env/.claude/.pipeline files that

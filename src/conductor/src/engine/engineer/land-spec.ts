@@ -44,6 +44,7 @@ import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
+import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 
 const execFile = promisify(execFileCb);
 
@@ -65,6 +66,12 @@ export interface LandSpecOptions {
   ownerConfig?: OwnerConfig;
   /** gh runner for the login fallback; injected in tests / by the CLI. */
   gh?: GhRunner;
+  /**
+   * Mermaid render-check deps for the diagram gate (#810). Defaults to the real
+   * mmdc-backed deps; injected in tests to drive the gate without launching a
+   * browser.
+   */
+  renderDeps?: Pick<RenderDeps, 'hasTool' | 'runMmdc' | 'writeTemp'>;
 }
 
 export interface LandSpecResult {
@@ -278,6 +285,37 @@ export async function landSpec(
     }
   }
 
+  // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
+  //     render-check was skill prose (not enforced) and fail-opened when mmdc
+  //     was absent. Enforce it deterministically at the land seam, fail-closed:
+  //     every mermaid block in THIS idea's authored `.docs/**/*.md` MUST render,
+  //     and if diagrams are present but cannot be validated (mmdc missing), the
+  //     land is refused rather than silently passing an unvalidated diagram.
+  //     Scoped to git-changed files so inherited historical diagrams from the
+  //     target's `.docs/` history are never re-litigated (see helper).
+  const renderDeps = opts.renderDeps ?? defaultRenderDeps(() => {});
+  for (const mdFile of await collectChangedDocsMarkdown(worktreePath)) {
+    const mdContent = await readFile(mdFile, 'utf-8');
+    const check = await checkDiagramsForFile(mdContent, renderDeps, planStem(mdFile));
+    if (check.status === 'errors') {
+      const first = check.failures[0];
+      const firstLine = (first?.error ?? 'parse error').split('\n').find((l) => /error/i.test(l));
+      throw new Error(
+        `landSpec: mermaid diagram ${first?.index ?? '?'} in "${mdFile}" fails to render — ` +
+          `${(firstLine ?? first?.error ?? 'parse error').trim()}. Fix the diagram(s) ` +
+          '(run `conduct render-diagrams --check <file>`), then re-run land.',
+      );
+    }
+    if (check.status === 'tool-missing') {
+      throw new Error(
+        `landSpec: "${mdFile}" contains ${check.total} mermaid diagram(s) that cannot be ` +
+          'validated — @mermaid-js/mermaid-cli (mmdc) is not installed. Install it so diagrams ' +
+          'are verified to render before landing (bin/install mermaid preset, or ' +
+          '`npm i -g @mermaid-js/mermaid-cli`).',
+      );
+    }
+  }
+
   // 5. Commit in place on the worktree's branch. The branch already exists (it is the
   //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
   //    primary working tree is never touched (FR-2). On failure we leave the worktree
@@ -424,6 +462,42 @@ export async function pickIdeaFile(dir: string, ideaFiles: Set<string>): Promise
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Collect the `.docs/**\/*.md` files THIS idea authored — the new/modified
+ * markdown in the worktree — for the mermaid render gate (absolute paths).
+ *
+ * Scoped to git-changed files ON PURPOSE (not the whole `.docs/` tree): the
+ * per-idea worktree is branched off the target's default branch and inherits
+ * the target's ENTIRE committed `.docs/` history (hundreds of prior specs). The
+ * gate must validate only this design phase's own artifacts — never re-litigate
+ * an unrelated historical diagram (which would false-fail the land and is slow
+ * to re-render). `git status --porcelain` surfaces exactly the untracked/
+ * modified/added set, which for a per-idea worktree is this idea's authored
+ * artifacts. Mermaid can live in any of them (architecture, ADRs, review,
+ * plans); files without a block resolve to `no-diagrams` cheaply.
+ */
+async function collectChangedDocsMarkdown(worktreePath: string): Promise<string[]> {
+  // `--untracked-files=all` (-uall) expands untracked directories to individual
+  // files — without it, an entirely-untracked `.docs/` collapses to a single
+  // `?? .docs/` entry and no per-file `.md` path is surfaced.
+  const { stdout } = await execFile(
+    'git',
+    ['status', '--porcelain', '--untracked-files=all', '--', '.docs'],
+    { cwd: worktreePath },
+  );
+  const out = new Set<string>();
+  for (const line of stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    // porcelain: `XY <path>`; a rename is `R  old -> new` — take the new path.
+    let path = line.slice(3).trim().replace(/^"(.*)"$/, '$1');
+    if (path.includes(' -> ')) path = path.split(' -> ')[1].replace(/^"(.*)"$/, '$1');
+    if (/^\.docs\/.*\.md$/i.test(path)) {
+      out.add(join(worktreePath, path));
+    }
+  }
+  return [...out].sort();
+}
 
 /**
  * List `.docs/decisions/adr-*.md` files (absolute paths). Returns [] when the
