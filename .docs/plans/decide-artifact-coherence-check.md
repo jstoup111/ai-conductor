@@ -258,7 +258,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 - src/conductor/src/engine/engineer/coherence-validator.ts — duplicate scan + gap emission
 - src/conductor/src/engine/overlap-scan.ts — reuse hook for advisory warn (no behavior change to existing callers)
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (scanDuplicateClaim call, line ~1283), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (scanDuplicateClaim call, line ~1283, and advisoryDuplicateClaimWarn call, line ~1306), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 13
 
 ### Task 15: Tier gating, layer degradation, no-retroactivity trigger
