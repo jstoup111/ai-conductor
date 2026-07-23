@@ -61,7 +61,6 @@ export interface AssignedIssue {
  * implementation today; the interface is backend-agnostic so future trackers
  * can implement it without touching call sites.
  *
- * Only READ ops are defined here (Task 2); write ops land in Task 3.
  */
 export interface TrackerClient {
   /** `gh api repos/<owner>/<repo>/issues/<number>` — returns label names. */
@@ -76,6 +75,21 @@ export interface TrackerClient {
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
   /** `gh issue list --assignee @me --state open --json ... -R <repo>` — assigned issues. */
   listAssignedIssues(repo: string, cwd: string): Promise<AssignedIssue[]>;
+  /** `gh issue comment <number> -R <repo> --body <body>` — comment on an issue. */
+  commentOnIssue(repo: string, number: number, body: string, cwd: string): Promise<void>;
+  /** `gh issue create --title <title> --body <body> [--repo <repo>]` — returns the created issue URL. */
+  createIssue(
+    input: { title: string; body: string; repo?: string },
+    cwd: string,
+  ): Promise<string>;
+  /** `gh api --method POST repos/<repo>/issues/<number>/labels -f labels[]=<label>` — add a label via REST. */
+  addIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
+  /** `gh issue close <ref> -R <repo>` — close an issue in a specific repo. */
+  closeIssue(repo: string, issueRef: string, cwd: string): Promise<void>;
+  /** `gh issue edit <ref> --body <body> -R <repo>` — overwrite an issue's body in a specific repo. */
+  upsertIssueBody(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
+  /** `gh issue comment <ref> --body <body> -R <repo>` — comment on an issue in a specific repo. */
+  upsertIssueComment(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
 }
 
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
@@ -127,6 +141,38 @@ export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
         { cwd },
       );
       return JSON.parse(stdout || '[]') as AssignedIssue[];
+    },
+
+    async commentOnIssue(repo, number, body, cwd) {
+      await runner(['issue', 'comment', String(number), '-R', repo, '--body', body], { cwd });
+    },
+
+    async createIssue(input, cwd) {
+      const args = ['issue', 'create', '--title', input.title, '--body', input.body];
+      if (input.repo) {
+        args.push('--repo', input.repo);
+      }
+      const { stdout } = await runner(args, { cwd });
+      return stdout.trim();
+    },
+
+    async addIssueLabel(repo, number, label, cwd) {
+      await runner(
+        ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${label}`],
+        { cwd },
+      );
+    },
+
+    async closeIssue(repo, issueRef, cwd) {
+      await runner(['issue', 'close', issueRef, '-R', repo], { cwd });
+    },
+
+    async upsertIssueBody(repo, issueRef, body, cwd) {
+      await runner(['issue', 'edit', issueRef, '--body', body, '-R', repo], { cwd });
+    },
+
+    async upsertIssueComment(repo, issueRef, body, cwd) {
+      await runner(['issue', 'comment', issueRef, '--body', body, '-R', repo], { cwd });
     },
   };
 }

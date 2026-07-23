@@ -135,3 +135,92 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
     expect(issues).toEqual([{ number: 1, title: 't', body: 'b', labels: [] }]);
   });
 });
+
+describe('createGithubTrackerClient — write ops argv parity', () => {
+  it('commentOnIssue: matches github-issues.ts:302 `gh issue comment <n> -R <repo> --body <body>`', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.commentOnIssue('owner/repo', 42, 'hello', '.');
+
+    expect(calls).toEqual([
+      {
+        args: ['issue', 'comment', '42', '-R', 'owner/repo', '--body', 'hello'],
+        opts: { cwd: '.' },
+      },
+    ]);
+  });
+
+  it('createIssue: matches file-issue.ts:135 `gh issue create --title <t> --body <b> [--repo <r>]`', async () => {
+    const { runner, calls } = fakeRunner('https://github.com/owner/repo/issues/9\n');
+    const client = createGithubTrackerClient(runner);
+
+    const url = await client.createIssue({ title: 'T', body: 'B', repo: 'owner/repo' }, '.');
+
+    expect(calls).toEqual([
+      {
+        args: ['issue', 'create', '--title', 'T', '--body', 'B', '--repo', 'owner/repo'],
+        opts: { cwd: '.' },
+      },
+    ]);
+    expect(url).toBe('https://github.com/owner/repo/issues/9');
+  });
+
+  it('createIssue: omits --repo when not provided', async () => {
+    const { runner, calls } = fakeRunner('https://github.com/owner/repo/issues/9\n');
+    const client = createGithubTrackerClient(runner);
+
+    await client.createIssue({ title: 'T', body: 'B' }, '.');
+
+    expect(calls).toEqual([
+      { args: ['issue', 'create', '--title', 'T', '--body', 'B'], opts: { cwd: '.' } },
+    ]);
+  });
+
+  it('addIssueLabel: matches pr-labels.ts restAddLabelArgs REST POST shape', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.addIssueLabel('owner/repo', 42, 'engineer:handled', '.');
+
+    expect(calls).toEqual([
+      {
+        args: ['api', '--method', 'POST', 'repos/owner/repo/issues/42/labels', '-f', 'labels[]=engineer:handled'],
+        opts: { cwd: '.' },
+      },
+    ]);
+  });
+
+  it('closeIssue: matches halt-issues-cli.ts closeIssue `gh issue close <ref>` cross-repo targeting', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.closeIssue('owner/repo', '12', '.');
+
+    expect(calls).toEqual([
+      { args: ['issue', 'close', '12', '-R', 'owner/repo'], opts: { cwd: '.' } },
+    ]);
+  });
+
+  it('upsertIssueBody: matches halt-issues-cli.ts upsertIssueBody `gh issue edit <ref> --body <body>` cross-repo targeting', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.upsertIssueBody('owner/repo', '12', 'new body', '.');
+
+    expect(calls).toEqual([
+      { args: ['issue', 'edit', '12', '--body', 'new body', '-R', 'owner/repo'], opts: { cwd: '.' } },
+    ]);
+  });
+
+  it('upsertIssueComment: matches halt-issues-cli.ts upsertIssueComment `gh issue comment <ref> --body <body>` cross-repo targeting', async () => {
+    const { runner, calls } = fakeRunner('');
+    const client = createGithubTrackerClient(runner);
+
+    await client.upsertIssueComment('owner/repo', '12', 'a comment', '.');
+
+    expect(calls).toEqual([
+      { args: ['issue', 'comment', '12', '--body', 'a comment', '-R', 'owner/repo'], opts: { cwd: '.' } },
+    ]);
+  });
+});
