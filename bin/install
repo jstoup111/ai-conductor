@@ -349,6 +349,16 @@ harness_hooks = {
                     "timeout": 10
                 }
             ]
+        },
+        {
+            "matcher": "Edit|Write|NotebookEdit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": f"{hooks_dir}/docs-guard.sh",
+                    "timeout": 10
+                }
+            ]
         }
     ],
     "PostToolUse": [

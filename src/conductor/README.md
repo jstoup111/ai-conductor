@@ -884,6 +884,58 @@ See `src/engine/attribution-enforcement.ts`, `src/engine/git-hook-assets.ts`,
 `adr-2026-07-10-inline-work-attribution-enforcement.md` (historical design context —
 the enforcement they describe is now advisory, not blocking).
 
+#### Phase-scoped `.docs/` write-guard (#788)
+
+Spec/plan artifacts under `.docs/` are meant to be frozen once BUILD starts — an agent
+that edits them mid-build is quietly rewriting the plan it's supposed to be judged
+against. The docs-guard hook makes that mechanical instead of relying on prompt
+discipline: a new `PreToolUse` hook, `docs-guard.sh` (matcher `Edit|Write|NotebookEdit`),
+blocks any write to `.docs/*` while a BUILD/SHIP step is active, unless the write is
+explicitly allowlisted.
+
+- **`.pipeline/phase-active` marker** (`writePhaseMarker`/`removePhaseMarker`,
+  `engine/phase-marker.ts`) is written at the entry of every conductor step and cleared
+  on step exit (`conductor.ts`), so a stale marker from a crashed/killed process is
+  self-correcting on the next step transition — it never persists across steps that
+  didn't request it. The marker is a plain line-oriented file (not JSON), so the bash
+  hook can read it with `sed`/`case` and no parser: `step: <name>`, `phase:
+  <BUILD|SHIP>`, `written: <ISO-8601>`, and zero or more `allow: <prefix>` lines.
+- **Two-part allowlist** (`resolveDocsAllowlist`, `engine/phase-marker.ts`):
+  - **Always-allowed** (`DOCS_WRITE_ALWAYS_ALLOWED`) — prefixes exempt regardless of
+    which step is active, e.g. `.docs/release-waivers/` (release-gate waivers must be
+    writable even mid-BUILD).
+  - **Per-step** (`DOCS_WRITE_ALLOWLIST`) — additional prefixes exempt only for a
+    specific step, e.g. the `retro` step allows `.docs/retros/` and `.docs/stories/`
+    (a retro legitimately writes retro/story artifacts under `.docs/` after BUILD).
+  - Prefix matching is a literal `case`-glob prefix test on the marker's `allow:`
+    lines (written with a trailing slash), so `.docs/retros/x.md` matches the
+    `.docs/retros/` allow but `.docs/retros-evil/x.md` does not.
+- **Inert when no phase is active**: with the marker absent (DECIDE phase, or any
+  session outside a conductor-driven step), the hook exits 0 without reading stdin at
+  all — it never blocks waiting on hook payload delivery when there's nothing to
+  enforce.
+- **Fail-closed once a phase is active**: if the marker is present but the target path
+  can't be determined (unparseable/timed-out JSON payload), the hook blocks (exit 2)
+  rather than passing an undeterminable write through — matching the write-surface
+  degradation rule used elsewhere in the harness. A target outside `.docs/` always
+  passes through regardless of phase.
+- **Stuck/stale marker remedy**: if a legitimate write is blocked because a step
+  incorrectly left a marker in place (or you're certain the phase guard no longer
+  applies), remove it manually: `rm .pipeline/phase-active`. The next step entry
+  rewrites it as needed, so this is safe even if done unnecessarily.
+- **Wiring**: generated into both daemon-provisioned worktrees
+  (`engine/worktree-prepare.ts`, written to `.pipeline/session-hooks/docs-guard.sh`)
+  and primary checkouts (`bin/install`, via `bin/generate-docs-guard-hook` /
+  `hooks/claude/docs-guard.sh`), so the same guard applies whether a build is running
+  under the daemon or driven interactively from a primary checkout.
+
+See `src/engine/phase-marker.ts`, `src/engine/session-hook-assets.ts` (`DOCS_GUARD_HOOK`),
+`src/engine/worktree-prepare.ts`, `bin/generate-docs-guard-hook`,
+`test/engine/phase-marker.test.ts`, `test/engine/conductor-phase-marker-write.test.ts`,
+`test/engine/conductor-phase-marker-clear.test.ts`, `test/engine/session-hook-assets.test.ts`,
+`test/engine/worktree-prepare.test.ts`, `test/acceptance/docs-guard-real-binary.acceptance.test.ts`,
+and `test/acceptance/generate-docs-guard-hook.acceptance.test.ts`.
+
 #### Task-status telemetry (task-evidence stamps are not a completion gate, #773)
 
 `.pipeline/task-evidence.json` (`evidenceStamps`) still exists and is still written on

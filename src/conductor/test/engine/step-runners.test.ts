@@ -1286,6 +1286,37 @@ TIER: M`,
       expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
+    it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
+      const { mkdir } = await import('node:fs/promises');
+      const plansDir = join(dir, '.docs', 'plans');
+      await mkdir(plansDir, { recursive: true });
+      // Unrelated plan that sorts AFTER the feature's own plan alphabetically.
+      await writeFile(
+        join(plansDir, 'writing-system-tests-red-exit-gate.md'),
+        '# Unrelated Plan\n\nWrong plan.\n',
+        'utf-8',
+      );
+      await writeFile(
+        join(plansDir, 'block-edits-to-docs-spec-artifacts-during-build-an.md'),
+        '# Correct Plan\n\nGrade against this one.\n',
+        'utf-8',
+      );
+
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(true);
+      const opts = invoke.mock.calls[0][0] as InvokeOptions;
+      expect(opts.prompt).toContain('Grade against this one.');
+      expect(opts.prompt).not.toContain('Wrong plan.');
+    });
+
     it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: false,

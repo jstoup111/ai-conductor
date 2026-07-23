@@ -1,0 +1,35 @@
+#!/bin/bash
+# generate-docs-guard-hook — regenerates (or checks) the committed
+# hooks/claude/docs-guard.sh artifact from DOCS_GUARD_HOOK
+# (src/conductor/src/engine/session-hook-assets.ts).
+#
+# Runs the TypeScript tool directly from source via the local tsx binary
+# (src/conductor/node_modules/.bin/tsx) — deliberately not via a bundled
+# build. This is a source-run-only wrapper and must never touch
+# src/conductor/dist/.
+#
+# Exit codes (see src/conductor/src/tools/generate-docs-guard-hook.ts):
+#   0 - ok (write succeeded, or --check found no drift)
+#   1 - drift detected (--check only)
+#   2 - environment error (tsx missing, tool missing, write failure)
+set -e
+
+REAL_PATH="$(readlink -f "$0")"
+BIN_DIR="$(dirname "$REAL_PATH")"
+REPO_ROOT="${BIN_DIR}/.."
+CONDUCTOR_DIR="${REPO_ROOT}/src/conductor"
+TSX="${CONDUCTOR_DIR}/node_modules/.bin/tsx"
+TOOL="${CONDUCTOR_DIR}/src/tools/generate-docs-guard-hook-main.ts"
+
+if [ ! -x "$TSX" ]; then
+  echo "generate-docs-guard-hook: missing ${TSX}" >&2
+  echo "generate-docs-guard-hook: run 'npm install' in src/conductor/" >&2
+  exit 2
+fi
+
+if [ ! -f "$TOOL" ]; then
+  echo "generate-docs-guard-hook: missing ${TOOL}" >&2
+  exit 2
+fi
+
+exec "$TSX" "$TOOL" "$@"

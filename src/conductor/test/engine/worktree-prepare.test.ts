@@ -15,6 +15,7 @@ import {
   PRE_DISPATCH_HOOK,
   POST_DISPATCH_HOOK,
   MUTATION_GATE_HOOK,
+  DOCS_GUARD_HOOK,
 } from '../../src/engine/session-hook-assets.js';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
@@ -761,11 +762,15 @@ describe('engine/worktree-prepare', () => {
 
       const settings = JSON.parse(second);
       const preToolUse = settings.hooks.PreToolUse as Record<string, unknown>[];
-      const editMatches = preToolUse.filter(
-        (e) => (e as { matcher?: string }).matcher === 'Edit|Write|NotebookEdit',
+      const editMutationMatches = preToolUse.filter(
+        (e) =>
+          (e as { matcher?: string }).matcher === 'Edit|Write|NotebookEdit' &&
+          (e as { hooks?: Array<{ command?: string }> }).hooks?.some((h) =>
+            typeof h.command === 'string' && h.command.includes('mutation-gate.sh'),
+          ),
       );
       const bashMatches = preToolUse.filter((e) => (e as { matcher?: string }).matcher === 'Bash');
-      expect(editMatches).toHaveLength(1);
+      expect(editMutationMatches).toHaveLength(1);
       expect(bashMatches).toHaveLength(1);
     });
 
@@ -780,6 +785,106 @@ describe('engine/worktree-prepare', () => {
       await chmod(hooksDir, 0o700).catch(() => undefined);
 
       expect(lines.some((l) => /session hooks/i.test(l) && /skip/i.test(l))).toBe(true);
+    });
+  });
+
+  // Task 9 (#788): the docs-guard hook asset is wired at worktree provisioning
+  // as its own, independent PreToolUse entry — not chained onto mutation-gate.
+  describe('docs-guard hook wiring (Task 9)', () => {
+    const settingsPath = (worktreeDir: string) =>
+      join(worktreeDir, '.claude', 'settings.local.json');
+
+    function findEntry(
+      arr: unknown[] | undefined,
+      matcher: string,
+      substr: string,
+    ): Record<string, unknown> | undefined {
+      return (arr as Record<string, unknown>[] | undefined)?.find((e) => {
+        const hooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
+        return (
+          (e as { matcher?: string }).matcher === matcher &&
+          hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr))
+        );
+      });
+    }
+
+    it('writes docs-guard.sh executable with the exported asset content', async () => {
+      await prepareWorktree(dir);
+
+      const docsGuardPath = join(dir, '.pipeline', 'session-hooks', 'docs-guard.sh');
+      const content = await readFile(docsGuardPath, 'utf-8');
+      expect(content).toBe(DOCS_GUARD_HOOK);
+      const s = await stat(docsGuardPath);
+      expect(s.mode & 0o777).toBe(0o755);
+    });
+
+    it('adds an Edit|Write|NotebookEdit PreToolUse entry pointing at docs-guard.sh, distinct from mutation-gate', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+
+      const docsGuardEntry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'docs-guard.sh');
+      expect(docsGuardEntry).toBeDefined();
+      const cmd = (docsGuardEntry?.hooks as Array<{ command: string }>)[0].command;
+      expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'docs-guard.sh'));
+
+      // Own entry — separate from mutation-gate's entry under the same matcher.
+      const mutationGateEntry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh');
+      expect(mutationGateEntry).toBeDefined();
+      expect(mutationGateEntry).not.toBe(docsGuardEntry);
+    });
+
+    it('is idempotent across repeated provisioning runs: no duplicate docs-guard entries', async () => {
+      await prepareWorktree(dir);
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+      const preToolUse = settings.hooks.PreToolUse as Record<string, unknown>[];
+      const docsGuardMatches = preToolUse.filter(
+        (e) =>
+          (e as { matcher?: string }).matcher === 'Edit|Write|NotebookEdit' &&
+          (e as { hooks?: Array<{ command?: string }> }).hooks?.some((h) =>
+            typeof h.command === 'string' && h.command.includes('docs-guard.sh'),
+          ),
+      );
+      expect(docsGuardMatches).toHaveLength(1);
+    });
+
+    it('is fail-open when the docs-guard hook-file write fails: logs a skip, provisioning still succeeds', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      const lines: string[] = [];
+      await expect(prepareWorktree(dir, (m) => lines.push(m))).resolves.toBeUndefined();
+
+      await chmod(hooksDir, 0o700).catch(() => undefined);
+
+      expect(lines.some((l) => /session hooks/i.test(l) && /skip/i.test(l))).toBe(true);
+    });
+
+    it('wires the docs-guard entry independently of mutation-gate presence', async () => {
+      await prepareWorktree(dir);
+
+      const raw = await readFile(settingsPath(dir), 'utf-8');
+      const settings = JSON.parse(raw);
+      // Manually strip the mutation-gate entry to simulate its absence, then
+      // re-run provisioning: docs-guard wiring must not depend on it.
+      settings.hooks.PreToolUse = (settings.hooks.PreToolUse as Record<string, unknown>[]).filter(
+        (e) =>
+          !(e as { hooks?: Array<{ command?: string }> }).hooks?.some((h) =>
+            typeof h.command === 'string' && h.command.includes('mutation-gate.sh'),
+          ),
+      );
+      await writeFile(settingsPath(dir), JSON.stringify(settings, null, 2), 'utf-8');
+
+      await prepareWorktree(dir);
+
+      const raw2 = await readFile(settingsPath(dir), 'utf-8');
+      const settings2 = JSON.parse(raw2);
+      expect(findEntry(settings2.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'docs-guard.sh')).toBeDefined();
     });
   });
 });
