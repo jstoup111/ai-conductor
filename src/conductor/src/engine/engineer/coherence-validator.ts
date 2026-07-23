@@ -10,10 +10,18 @@
 //
 // This module is inert until wired into land-spec.ts.
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
+import { deriveDefaultBranch } from './authoring.js';
+import type { AuthoringGuard } from './authoring-guard.js';
+import {
+  evaluateCoherenceWaiver,
+  type CoherenceWaiverChangedFile,
+} from './coherence-waiver.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
 /** The four row classes a coherence artifact row may belong to. */
@@ -1110,4 +1118,189 @@ export function resolveRequiredLayers(
   }
 
   return { engaged: true, layers };
+}
+
+// --- `runCoherenceGate` facade (Task 16) ───────────────────────────────────
+//
+// The single orchestration entry point `land-spec.ts` calls after the
+// existing DRAFT-ADR gate. Wires together, in order: `resolveRequiredLayers`
+// (tier exemption / no-retroactivity / layer degradation) -> parse the
+// committed coherence artifact -> `crossCheckIds` (fabricated-citation
+// fail-closed reject) -> `validateCoherence` (the five coverage/consistency
+// layers, gated to only the required ones) -> the offline duplicate-claim
+// scan -> waiver evaluation over any aggregated gaps. Throws a single Error
+// naming every unresolved gap id on any unwaived failure; resolves silently
+// (Story 13) on a coherent or gate-disengaged spec.
+
+/** Enumerate this idea's changed files with git status codes, for the waiver's fresh-in-diff check. */
+async function resolveChangedFilesForWaiver(
+  worktreePath: string,
+  canonicalPath: string,
+  git: GitRunner,
+): Promise<CoherenceWaiverChangedFile[]> {
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+
+  const mergeBase = await git(['merge-base', 'HEAD', defaultBranch]);
+  const committed: CoherenceWaiverChangedFile[] = [];
+  if (mergeBase.exitCode === 0) {
+    const base = mergeBase.stdout.trim();
+    const diff = await git(['diff', '--name-status', base, 'HEAD']);
+    if (diff.exitCode === 0) {
+      for (const line of diff.stdout.trim().split('\n')) {
+        if (line.trim() === '') continue;
+        const parts = line.split('\t');
+        const status = parts[0];
+        const path = parts[parts.length - 1];
+        committed.push({ status, path });
+      }
+    }
+  }
+
+  const status = await git(['status', '--porcelain', '--untracked-files=all']);
+  const untracked: CoherenceWaiverChangedFile[] = [];
+  if (status.exitCode === 0) {
+    for (const line of status.stdout.trim().split('\n')) {
+      if (line.trim() === '' || line.slice(0, 2) !== '??') continue;
+      const path = line.slice(3).trim().replace(/^"(.*)"$/, '$1');
+      untracked.push({ status: 'A', path });
+    }
+  }
+
+  return [...committed, ...untracked];
+}
+
+export interface RunCoherenceGateArgs {
+  /** The per-idea worktree (cwd for all git/fs ops). */
+  worktreePath: string;
+  /** The target repo's registry canonical path (for default-branch derivation). */
+  canonicalPath: string;
+  /** `.docs/complexity/<slug>.md` tier, or undefined when no tier marker exists. */
+  tier: ComplexityTier | undefined;
+  /** `.docs/track/<slug>.md` track, or undefined when no track marker exists. */
+  track: Track | undefined;
+  /** This spec's intake source ref, or undefined/null for a chat/CLI-origin idea. */
+  sourceRef: string | undefined | null;
+  /** The plan stem (slug) used to key `.docs/coherence/<stem>.md`. */
+  planStem: string;
+  /** Stories file contents, or null when unavailable. */
+  storiesText: string | null;
+  /** Plan file contents, or null when unavailable. */
+  planText: string | null;
+  /** PRD file contents, or null on the technical track. */
+  prdText: string | null;
+  /** Verbatim staged/committed intake outcome bullets, in order. */
+  outcomeBullets: readonly string[];
+  /** The idea-attributable path set (`resolveIdeaFiles`'s return value). */
+  ideaFiles: ReadonlySet<string> | readonly string[];
+  /** Boundary guard (C1) — reused to assert the coherence artifact path stays in-repo. */
+  guard: AuthoringGuard;
+}
+
+/**
+ * Run the full coherence gate for this land. Resolves silently (no return
+ * value) when the gate disengages (tier-S exemption, legacy change set) or
+ * every layer passes / every gap is freshly waived. Throws a single
+ * aggregated `Error` naming every unresolved gap id otherwise.
+ */
+export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void> {
+  const {
+    worktreePath,
+    canonicalPath,
+    tier,
+    track,
+    sourceRef,
+    planStem,
+    storiesText,
+    planText,
+    prdText,
+    outcomeBullets,
+    ideaFiles,
+    guard,
+  } = args;
+
+  const required = resolveRequiredLayers(worktreePath, tier, track, outcomeBullets, ideaFiles);
+  if (!required.engaged) return;
+
+  // Parse the committed coherence artifact (fail-closed on missing/empty/unparseable).
+  const coherenceRelPath = `.docs/coherence/${planStem}.md`;
+  const coherenceAbsPath = join(worktreePath, coherenceRelPath);
+  guard.assertWriteAllowed(coherenceAbsPath);
+  let coherenceText: string | null;
+  try {
+    coherenceText = await readFile(coherenceAbsPath, 'utf-8');
+  } catch {
+    coherenceText = null;
+  }
+
+  const parsed = parseCoherenceArtifact(coherenceText);
+  if (!parsed.ok) {
+    throw new Error(
+      `landSpec: coherence gate: ${parsed.reason} at "${coherenceRelPath}". ` +
+        'Run /coherence-check to author the traceability record before landing.',
+    );
+  }
+
+  // Fabricated-citation fail-closed reject — never waivable (an evidentiary
+  // defect, not a coverage gap).
+  const crossCheck = crossCheckIds(parsed.rows, {
+    storiesText,
+    planText,
+    prdText,
+    outcomeCount: outcomeBullets.length,
+  });
+  if (!crossCheck.ok) {
+    throw new Error(
+      `landSpec: coherence gate: fabricated-id "${crossCheck.fabricatedId}" cited by ` +
+        `${crossCheck.rowClass} row "${crossCheck.rowId}" — the coherence artifact cites an id ` +
+        'that does not resolve against any real story/task/FR/outcome. Fix the record via ' +
+        '/coherence-check before landing.',
+    );
+  }
+
+  const effectivePrdText = required.layers.has('fr') ? prdText : null;
+  const effectiveOutcomeBullets = required.layers.has('outcome') ? outcomeBullets : [];
+
+  const coverage = validateCoherence({
+    rows: parsed.rows,
+    outcomeBullets: [...effectiveOutcomeBullets],
+    prdText: effectivePrdText,
+    storiesText,
+    planText,
+  });
+
+  const gaps: CoherenceGap[] = coverage.ok ? [] : [...coverage.gaps];
+
+  const git = makeGitRunner(worktreePath);
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+  const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
+    git,
+    excludeSlug: planStem,
+  });
+  if (!duplicate.ok) {
+    gaps.push(duplicate.gap);
+  }
+
+  if (gaps.length === 0) return;
+
+  const changedFiles = await resolveChangedFilesForWaiver(worktreePath, canonicalPath, git);
+  const readText = async (path: string): Promise<string | null> => {
+    try {
+      return await readFile(path, 'utf-8');
+    } catch {
+      return null;
+    }
+  };
+
+  const waiverVerdict = await evaluateCoherenceWaiver({
+    gaps,
+    changedFiles,
+    readText,
+    root: worktreePath,
+  });
+  if (waiverVerdict.ok) return;
+
+  const report = renderGapReport(gaps);
+  throw new Error(
+    `landSpec: coherence gate blocked — ${waiverVerdict.reason}\n\n${report}`,
+  );
 }

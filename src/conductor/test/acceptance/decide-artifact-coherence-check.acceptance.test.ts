@@ -140,16 +140,16 @@ const PLAN = [
 const COHERENCE = [
   '# Coherence: coherence demo',
   '',
-  '| class   | id       | maps-to        | verdict |',
-  '|---------|----------|----------------|---------|',
-  '| outcome | outcome-1 | Story 1       | covered |',
-  '| outcome | outcome-2 | Story 1       | covered |',
-  '| fr      | FR-1      | Story 1        | covered |',
-  '| fr      | FR-2      | Story 2        | covered |',
-  '| story   | Story 1   | Task 1         | covered |',
-  '| story   | Story 2   | Task 2         | covered |',
-  '| task    | Task 1    | Story 1        | covered |',
-  '| task    | Task 2    | Story 2        | covered |',
+  '| class   | id        | maps-to  | verdict | evidence                     |',
+  '|---------|-----------|----------|---------|-------------------------------|',
+  '| outcome | outcome-1 | story-1  | covered | "outcome 1 maps to story 1"  |',
+  '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |',
+  '| fr      | FR-1      | story-1  | covered | "FR-1 maps to story 1"       |',
+  '| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |',
+  '| story   | story-1   | task-1   | covered | "story 1 maps to task 1"     |',
+  '| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |',
+  '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
+  '| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |',
   '',
 ].join('\n');
 
@@ -227,9 +227,22 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await w('decisions/adr-coherence.md', APPROVED_ADR);
   }
 
+  // Always mark that this idea's DECIDE flow ran the /coherence-check step
+  // (a `.docs/coherence/` signal in the idea-attributable diff), even when a
+  // test omits the actual mapping artifact — so a "missing artifact" negative
+  // test exercises the fail-closed missing-artifact rule rather than the
+  // no-retroactivity legacy-change-set disengage (which is for specs whose
+  // diff carries NO coherence signal at all, predating the step existing).
+  if (tier !== 'S') {
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await w('coherence/.gitkeep', '');
+  }
+
   if (coherence !== null) {
     await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
-    await w(`coherence/${coherenceFilename}`, coherence);
+    const coherenceText =
+      stageOutcomes ? coherence : coherence.split('\n').filter((line) => !line.trimStart().startsWith('| outcome')).join('\n');
+    await w(`coherence/${coherenceFilename}`, coherenceText);
   }
 
   if (waiver !== null) {
@@ -306,7 +319,10 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
   });
 
   it('negative: a mapping row citing a nonexistent story id is refused (fabricated citation)', async () => {
-    const badCoherence = COHERENCE.replace('| Story 1         | covered |', '| Story 99        | covered |');
+    const badCoherence = COHERENCE.replace(
+      '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
+      '| task    | task-1    | story-99 | covered | "task 1 maps to story 1"     |',
+    );
     const wt = await seedWorktree('coherence demo', { coherence: badCoherence });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
@@ -325,7 +341,7 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
 describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
   it('negative: an outcome bullet with no mapping row is refused with an outcome gap id', async () => {
     // Drop the row covering the second outcome bullet.
-    const gapped = COHERENCE.replace('| outcome | outcome-2 | Story 1       | covered |\n', '');
+    const gapped = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
     const wt = await seedWorktree('coherence demo', { coherence: gapped });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
@@ -350,7 +366,10 @@ describe('Story 4 / FR-3 — FR coverage, product track (fr-<N>)', () => {
   it('negative: an FR whose only story maps to no task is refused reporting BOTH (transitive gap)', async () => {
     // Story 2 covers FR-2 but no task cites Story 2 → FR-2 transitively uncovered.
     const plan = PLAN.replace(/### Task 2:[\s\S]*?\n\n/, '');
-    const wt = await seedWorktree('coherence demo', { plan });
+    const coherence = COHERENCE
+      .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '')
+      .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '| story   | story-2   |          | covered | "story 2 not yet covered"    |\n');
+    const wt = await seedWorktree('coherence demo', { plan, coherence });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
     ).rejects.toThrow(/fr-2/i);
@@ -403,15 +422,15 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
     const plan = PLAN.replace(
       '**Story:** Story 2 (happy path — stories map)\n**Type:** happy-path',
       '**Story:** supports the coherence validator wiring\n**Type:** infrastructure',
-    );
+    ).replace('| 2 | 2 |\n', '');
     // Story 2 now has no citing task, so also drop Story 2 + its FR to keep the
     // rest of the chain coherent; this isolates the "infra task is covered" claim.
     const stories = STORIES.replace(/## Story 2 —[\s\S]*$/, '');
     const prd = PRD.replace('- **FR-2 — story coverage.** Every story maps to a task.\n', '');
     const coherence = COHERENCE
-      .replace('| fr      | FR-2      | Story 2        | covered |\n', '')
-      .replace('| story   | Story 2   | Task 2         | covered |\n', '')
-      .replace('| outcome | outcome-2 | Story 1       | covered |', '| outcome | outcome-2 | Story 1       | covered |');
+      .replace('| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n', '')
+      .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '')
+      .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '');
     const wt = await seedWorktree('coherence demo', { plan, stories, prd, coherence });
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
   });
@@ -457,7 +476,7 @@ describe('Story 8 / FR-7 — duplicate intake claim (duplicate:<ref>)', () => {
 // ── Story 9 (FR-8): waivers name gaps, are fresh, never cover silently ─────────
 describe('Story 9 / FR-8 — coherence waiver', () => {
   // Introduce a real gap (unmapped outcome-2) that the waiver must name.
-  const gappedCoherence = COHERENCE.replace('| outcome | outcome-2 | Story 1       | covered |\n', '');
+  const gappedCoherence = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
 
   it('happy: a fresh-in-diff waiver naming the gap with a non-empty rationale lets the land proceed', async () => {
     const waiver = 'Waives: outcome-2\n\nRationale: outcome-2 is a deferred follow-up, tracked in #540.\n';
@@ -506,7 +525,10 @@ describe('Story 10 / FR-9 — precise, aggregated gap reporting', () => {
   it('negative: a chain with gaps of three different classes reports ALL of them in one refusal', async () => {
     // outcome-2 unmapped + Story 2 uncovered (Task 2 removed) + phantom coverage claim.
     const plan = PLAN.replace(/### Task 2:[\s\S]*?\n\n/, '').replace('| 2 | 2 |', '| 2 | T9 |');
-    const coherence = COHERENCE.replace('| outcome | outcome-2 | Story 1       | covered |\n', '');
+    const coherence = COHERENCE
+      .replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '')
+      .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '')
+      .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '| story   | story-2   |          | covered | "story 2 not yet covered"    |\n');
     const wt = await seedWorktree('coherence demo', { plan, coherence });
 
     let caught: Error | null = null;
@@ -529,8 +551,8 @@ describe('Story 11 / FR-10 — technical-track behavior', () => {
   it('happy: a technical-track spec (no PRD) with a coherent outcomes/stories/tasks chain lands (FR layer skipped)', async () => {
     // Technical track: no PRD, stories carry no **Requirement:** FR lines.
     const stories = STORIES.replace(/\*\*Requirement:\*\* FR-\d+\n\n/g, '');
-    const coherence = COHERENCE.replace('| fr      | FR-1      | Story 1        | covered |\n', '').replace(
-      '| fr      | FR-2      | Story 2        | covered |\n',
+    const coherence = COHERENCE.replace('| fr      | FR-1      | story-1  | covered | "FR-1 maps to story 1"       |\n', '').replace(
+      '| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n',
       '',
     );
     const wt = await seedWorktree('coherence demo', { prd: null, track: 'technical', stories, coherence });
@@ -540,9 +562,9 @@ describe('Story 11 / FR-10 — technical-track behavior', () => {
   it('negative: a technical-track spec with an unmapped outcome is still refused on the outcome gap', async () => {
     const stories = STORIES.replace(/\*\*Requirement:\*\* FR-\d+\n\n/g, '');
     const coherence = COHERENCE
-      .replace('| fr      | FR-1      | Story 1        | covered |\n', '')
-      .replace('| fr      | FR-2      | Story 2        | covered |\n', '')
-      .replace('| outcome | outcome-2 | Story 1       | covered |\n', '');
+      .replace('| fr      | FR-1      | story-1  | covered | "FR-1 maps to story 1"       |\n', '')
+      .replace('| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n', '')
+      .replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
     const wt = await seedWorktree('coherence demo', { prd: null, track: 'technical', stories, coherence });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),

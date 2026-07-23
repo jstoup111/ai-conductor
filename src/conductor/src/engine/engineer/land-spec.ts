@@ -43,7 +43,8 @@ import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planSt
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
-import { INTAKE_OUTCOMES_RELATIVE_PATH } from './outcome-staging.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH, readStagedIntakeOutcomes } from './outcome-staging.js';
+import { runCoherenceGate } from './coherence-validator.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 
@@ -286,6 +287,31 @@ export async function landSpec(
     }
   }
 
+  // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability
+  //     mapping (outcomes -> FRs -> stories -> tasks) authored by
+  //     /coherence-check must be present, parseable, cross-checked against
+  //     the real artifacts, and gap-free (or fully waived) before landing.
+  //     Disengages entirely for tier S and for legacy change sets that
+  //     predate the /coherence-check step (no `.docs/coherence/` signal in
+  //     this idea's diff) — all logic lives in coherence-validator.ts /
+  //     coherence-waiver.ts; this is the single call-site block.
+  const markerSlug = planStem(planFile);
+  const stagedOutcomes = await readStagedIntakeOutcomes(worktreePath);
+  await runCoherenceGate({
+    worktreePath,
+    canonicalPath: canonical,
+    tier,
+    track,
+    sourceRef,
+    planStem: markerSlug,
+    storiesText: storiesContent,
+    planText: planContent,
+    prdText: specFile ? await readFile(specFile, 'utf-8') : null,
+    outcomeBullets: stagedOutcomes.bullets,
+    ideaFiles,
+    guard,
+  });
+
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
   //     render-check was skill prose (not enforced) and fail-opened when mmdc
   //     was absent. Enforce it deterministically at the land seam, fail-closed:
@@ -330,7 +356,6 @@ export async function landSpec(
   // Persist the intake origin + owner alongside the spec (inside the worktree) so both
   // survive the spec-PR merge and reach the daemon. The owner is already resolved above
   // (fail-closed gate at step 2a), so specOwner is guaranteed to be non-null here.
-  const markerSlug = planStem(planFile);
   let stagedOutcomesContent: string | null = null;
   try {
     stagedOutcomesContent = await readFile(join(worktreePath, INTAKE_OUTCOMES_RELATIVE_PATH), 'utf-8');
