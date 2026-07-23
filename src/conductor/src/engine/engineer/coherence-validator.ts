@@ -620,3 +620,110 @@ export function checkOrphanTasks(
 
   return { ok: true };
 }
+
+// --- Coverage-table consistency layer (Task 11) ---
+
+export type CoverageTableResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'coverage-table-gap';
+      /** The `claim-<row>` id of the offending table row (1-indexed data rows). */
+      gapId: string;
+      /** Human-readable explanation of what the table claims vs. what the task tree shows. */
+      detail: string;
+    };
+
+/** A single row of the plan's `## Coverage Check (story → task)` table. */
+interface CoverageTableRow {
+  storyId: string;
+  taskIds: string[];
+}
+
+/**
+ * Parse the plan's `## Coverage Check` markdown table into `(storyId,
+ * taskIds[])` pairs, reusing the same row/separator splitting
+ * (`splitRow`/`isSeparatorRow`) already used to parse the coherence artifact
+ * table above. Returns `null` when the plan has no such section (nothing to
+ * reconcile — not a gap).
+ */
+function parseCoverageCheckTableRows(planText: string): CoverageTableRow[] | null {
+  const headingIdx = planText.search(/^##\s+Coverage Check\b/im);
+  if (headingIdx === -1) return null;
+
+  const afterHeading = planText.slice(headingIdx);
+  const nextHeadingMatch = afterHeading.slice(1).match(/\n##\s+/);
+  const section = nextHeadingMatch ? afterHeading.slice(0, nextHeadingMatch.index! + 1) : afterHeading;
+
+  const rows: CoverageTableRow[] = [];
+  let sawHeader = false;
+  let sawSeparator = false;
+  for (const line of section.split('\n')) {
+    const cells = splitRow(line);
+    if (cells === null) continue;
+    if (!sawHeader) {
+      sawHeader = true;
+      continue;
+    }
+    if (!sawSeparator) {
+      if (!isSeparatorRow(cells)) continue;
+      sawSeparator = true;
+      continue;
+    }
+    if (cells.length < 2) continue;
+    const storyId = cells[0].trim();
+    const taskIds = cells[1]
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    rows.push({ storyId, taskIds });
+  }
+
+  return rows;
+}
+
+/**
+ * Reconcile the plan's `## Coverage Check (story → task)` table against the
+ * plan's real task tree (the `### Task <id>` blocks and their `**Story:**`
+ * citations). Two ways a row can lie: it cites a task id that doesn't exist
+ * in the task tree at all, or it pairs a story with a task whose own
+ * `**Story:**` line does not actually cite that story (the table and the
+ * tree disagree about who covers what). Either is reported as `claim-<row>`
+ * (1-indexed over the table's data rows), naming the offending id(s) — never
+ * silently dropped. A plan with no Coverage Check table has nothing to
+ * reconcile and passes trivially.
+ */
+export function checkCoverageTableConsistency(planText: string | null): CoverageTableResult {
+  const text = planText ?? '';
+  const rows = parseCoverageCheckTableRows(text);
+  if (!rows || rows.length === 0) return { ok: true };
+
+  const realTaskIds = new Set(extractTaskBlocks(text).map((b) => b.id));
+  const taskStoryMap = extractTaskStoryIds(text);
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 1;
+    const { storyId, taskIds } = rows[i];
+    for (const taskId of taskIds) {
+      if (!realTaskIds.has(taskId)) {
+        return {
+          ok: false,
+          reason: 'coverage-table-gap',
+          gapId: `claim-${rowNum}`,
+          detail: `coverage table row ${rowNum} cites task ${taskId} for story ${storyId}, but no task ${taskId} exists in the plan's task tree`,
+        };
+      }
+      const citingTasksForStory = taskStoryMap.get(storyId);
+      if (!citingTasksForStory || !citingTasksForStory.has(taskId)) {
+        return {
+          ok: false,
+          reason: 'coverage-table-gap',
+          gapId: `claim-${rowNum}`,
+          detail: `coverage table row ${rowNum} claims task ${taskId} covers story ${storyId}, but task ${taskId}'s **Story:** line does not cite story ${storyId}`,
+        };
+      }
+    }
+  }
+
+  return { ok: true };
+}

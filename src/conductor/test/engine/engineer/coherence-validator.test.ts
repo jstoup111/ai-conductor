@@ -15,6 +15,7 @@ import {
   checkFrCoverage,
   checkStoryCoverage,
   checkOrphanTasks,
+  checkCoverageTableConsistency,
   type CrossCheckInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
@@ -597,5 +598,93 @@ describe('checkOrphanTasks', () => {
     if (result.ok) return;
     expect(result.reason).toBe('orphan-task');
     expect(result.gapId).toBe('task-6');
+  });
+});
+
+describe('checkCoverageTableConsistency', () => {
+  it('reports claim-<row> when a coverage-table row cites a task id absent from the task tree', () => {
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+## Coverage Check
+
+| Story | Tasks |
+|---|---|
+| 1 | 1 |
+| 1 | 99 |
+`;
+    const result = checkCoverageTableConsistency(planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('coverage-table-gap');
+    expect(result.gapId).toBe('claim-2');
+    expect(result.detail).toContain('99');
+  });
+
+  it('reports claim-<row> when a table pair contradicts the task tree\'s actual **Story:** citations', () => {
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Build gizmo
+**Story:** Story 2 (happy path)
+**Type:** happy-path
+**Files:** src/gizmo.ts
+
+## Coverage Check
+
+| Story | Tasks |
+|---|---|
+| 1 | 1 |
+| 2 | 1 |
+`;
+    const result = checkCoverageTableConsistency(planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('coverage-table-gap');
+    expect(result.gapId).toBe('claim-2');
+  });
+
+  it('passes when the coverage table is consistent with the task tree', () => {
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Build gizmo
+**Story:** Story 2 (happy path)
+**Type:** happy-path
+**Files:** src/gizmo.ts
+
+## Coverage Check
+
+| Story | Tasks |
+|---|---|
+| 1 | 1 |
+| 2 | 2 |
+`;
+    const result = checkCoverageTableConsistency(planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('passes when the plan has no Coverage Check table at all', () => {
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (happy path)
+**Type:** happy-path
+**Files:** src/widget.ts
+`;
+    const result = checkCoverageTableConsistency(planText);
+    expect(result).toEqual({ ok: true });
   });
 });
