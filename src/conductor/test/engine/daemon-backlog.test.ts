@@ -2277,7 +2277,9 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
 
     // Call fastForwardRoot with the mocked git runner
     // This should NOT throw — fastForwardRoot must never crash the poll loop
-    await expect(fastForwardRoot(dir, log, triageFailingGit)).resolves.toBeUndefined();
+    const outcome = await fastForwardRoot(dir, log, triageFailingGit);
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('dirty');
 
     // Verify: an error was logged with details
     const errorLog = logs.find((l) => l.includes('ERROR') || l.includes('triage'));
@@ -2408,5 +2410,140 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         expect(thirdWarn).not.toContain('src/file2.ts');
       }
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 1 (TI-1 HP1; TI-4) — fastForwardRoot returns a structured outcome.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-backlog — fastForwardRoot structured outcome (Task 1)', () => {
+  let dir: string;
+  let originDir: string;
+  let baseBranch: string;
+  let tmpBase: string;
+
+  beforeEach(async () => {
+    tmpBase = await mkdtemp(join(tmpdir(), 'fast-forward-outcome-'));
+    dir = join(tmpBase, 'work');
+    originDir = join(tmpBase, 'origin.git');
+
+    await mkdir(dir);
+    await mkdir(originDir);
+
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+
+    await writeFile(join(dir, 'README.md'), 'init\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+    baseBranch = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir }).then(
+      (r) => r.stdout.trim(),
+    );
+    await execFile('git', ['push', '-q', '-u', 'origin', baseBranch], { cwd: dir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpBase, { recursive: true, force: true });
+  });
+
+  it('no origin remote → {status: "skipped", cause: "no-origin"}', async () => {
+    await execFile('git', ['remote', 'remove', 'origin'], { cwd: dir });
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome).toEqual({ status: 'skipped', cause: 'no-origin' });
+  });
+
+  it('not on the default branch → {status: "skipped", cause: "not-default-branch"}', async () => {
+    await execFile('git', ['checkout', '-q', '-b', 'feat/other'], { cwd: dir });
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('not-default-branch');
+  });
+
+  it('dirty, unhealable tree → {status: "skipped", cause: "dirty"} with behindOrigin/originHead when determinable', async () => {
+    // Advance origin so the root is genuinely behind.
+    await execFile('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: dir });
+    await writeFile(join(dir, 'upstream.txt'), 'from feat/x\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat commit'], { cwd: dir });
+    await execFile('git', ['push', '-q', 'origin', 'feat/x:' + baseBranch], { cwd: dir });
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    // Dirty the tree with content that matches no candidate branch (unhealable).
+    await writeFile(join(dir, 'README.md'), 'dirty and unexplained\n');
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('dirty');
+    expect(outcome.behindOrigin).toBe(true);
+    expect(typeof outcome.originHead).toBe('string');
+  });
+
+  it('fetch fails (origin unreachable) → {status: "skipped", cause: "fetch-failed"}', async () => {
+    const realGit = makeGitRunner(dir);
+    const failingFetchGit = async (args: string[]) => {
+      if (args[0] === 'fetch') {
+        return { exitCode: 1, stdout: '', stderr: 'simulated offline' };
+      }
+      return (await realGit)(args);
+    };
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m), failingFetchGit);
+    expect(outcome).toEqual({ status: 'skipped', cause: 'fetch-failed' });
+  });
+
+  it('diverged (ff-only merge fails) → {status: "skipped", cause: "diverged", behindOrigin: true, originHead}', async () => {
+    // Diverge: commit locally AND on origin so a --ff-only merge is impossible.
+    await writeFile(join(dir, 'local-only.txt'), 'local change\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'local divergent commit'], { cwd: dir });
+
+    // Advance origin independently via a second clone.
+    const cloneDir = join(tmpBase, 'clone2');
+    await execFile('git', ['clone', '-q', originDir, cloneDir]);
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: cloneDir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: cloneDir });
+    await writeFile(join(cloneDir, 'origin-only.txt'), 'origin change\n');
+    await execFile('git', ['add', '.'], { cwd: cloneDir });
+    await execFile('git', ['commit', '-q', '-m', 'origin divergent commit'], { cwd: cloneDir });
+    await execFile('git', ['push', '-q', 'origin', baseBranch], { cwd: cloneDir });
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('diverged');
+    expect(outcome.behindOrigin).toBe(true);
+    expect(typeof outcome.originHead).toBe('string');
+  });
+
+  it('already up to date → {status: "current"}', async () => {
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome).toEqual({ status: 'current' });
+  });
+
+  it('origin has new commits, ff-only succeeds → {status: "advanced", originHead}', async () => {
+    const cloneDir = join(tmpBase, 'clone1');
+    await execFile('git', ['clone', '-q', originDir, cloneDir]);
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: cloneDir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: cloneDir });
+    await writeFile(join(cloneDir, 'new.txt'), 'new content\n');
+    await execFile('git', ['add', '.'], { cwd: cloneDir });
+    await execFile('git', ['commit', '-q', '-m', 'origin advances'], { cwd: cloneDir });
+    await execFile('git', ['push', '-q', 'origin', baseBranch], { cwd: cloneDir });
+
+    const expectedHead = (
+      await execFile('git', ['rev-parse', baseBranch], { cwd: cloneDir })
+    ).stdout.trim();
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('advanced');
+    expect(outcome.originHead).toBe(expectedHead);
   });
 });

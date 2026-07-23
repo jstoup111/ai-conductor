@@ -358,6 +358,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `conductor.ts`'s group-dispatch JOIN (both the concurrent and serial paths) now
   parks an `authFailure` without consuming retry/escalation budget, matching the
   serial-path behavior (#498, closes #484).
+- Self-host daemon builds now self-refresh their engine checkout from origin before a
+  quiescent engine rebuild, so the rebuild never runs against a stale commit. When the
+  running engine falls behind origin, the daemon logs a loud staleness warning (deduped
+  by cause + SHA so it doesn't repeat every poll tick); when self-heal / auto-restart is
+  disabled, an advisory staleness probe still surfaces the same signal without acting on
+  it. Published engine versions are now stamped with a `.engine-source-sha` sidecar
+  recording the exact source commit they were built from. The origin-fetch cadence is
+  throttled by the new `engine_refresh_min_interval_seconds` config key (default `300`)
+  (#598).
 
 ## Migration
 

@@ -424,20 +424,45 @@ conduct-ts daemon --continuous --no-watch --idle-poll 5
 - **HALT clear on parked feature:** sub-second with event-driven wake (was 5-60s polling window).
 
 **Auto-restart on stale engine (self-host only).** In self-host mode, before starting each feature
-(and at idle) the daemon rebuilds its engine from the fast-forwarded source (content-addressed —
-a no-op when unchanged, an atomic `dist` flip otherwise) and checks whether the running engine has
-gone stale. When it has and no tasks are in-flight, the daemon writes a `.daemon/RESTART-PENDING`
-marker (carrying engine identity metadata) and exits cleanly at the next idle point. On restart,
-the daemon's startup handshake captures the fresh engine identity, detects any non-convergence
-(target identity differs from fresh identity), and clears the marker before dispatch. An external
-respawn transport relaunches with fresh code so the next feature builds on it. Firing at the
-dispatch boundary — not only when the backlog drains — ensures freshly-merged specs are never
-built on stale engine code (the rebuild is required because build artifacts are untracked, so a
-merge alone never moves `dist`). It never interrupts an in-flight build. Enable with
-`auto_restart_on_stale_engine: true` in your project config; ignored in non-self-host
-environments and disabled in once-mode runs. See `../src/conductor/README.md` → "Daemon lifecycle
-controls" for the full handshake and suppression flow. Requires PR #215 respawn transport for
-deployment.
+(and at idle) the daemon first fetches and fast-forwards its local checkout to origin's default
+branch (throttled — see below), then rebuilds its engine from that fast-forwarded source
+(content-addressed — a no-op when unchanged, an atomic `dist` flip otherwise) and checks whether
+the running engine has gone stale. When it has and no tasks are in-flight, the daemon writes a
+`.daemon/RESTART-PENDING` marker (carrying engine identity metadata) and exits cleanly at the next
+idle point. On restart, the daemon's startup handshake captures the fresh engine identity, detects
+any non-convergence (target identity differs from fresh identity), and clears the marker before
+dispatch. An external respawn transport relaunches with fresh code so the next feature builds on
+it. Firing at the dispatch boundary — not only when the backlog drains — ensures freshly-merged
+specs are never built on stale engine code (the rebuild is required because build artifacts are
+untracked, so a merge alone never moves `dist`; and without the fetch-and-fast-forward step, a
+merge landing on origin would never reach the local checkout that `dist` is built from). It never
+interrupts an in-flight build. Enable with `auto_restart_on_stale_engine: true` in your project
+config; ignored in non-self-host environments and disabled in once-mode runs. See
+`../src/conductor/README.md` → "Daemon lifecycle controls" for the full handshake and suppression
+flow. Requires PR #215 respawn transport for deployment.
+
+**Throttled fetch and degraded-path warnings.** The pre-rebuild fetch-and-fast-forward is throttled
+by `engine_refresh_min_interval_seconds` (default 300) so an idle daemon does not hit origin on
+every poll — see [`docs/configuration.md`](configuration.md) for the config key. When the
+fast-forward can't complete cleanly (a dirty tree, a diverged local branch, or a failed `git
+fetch`) and a origin SHA could still be determined, the daemon emits a loud
+`WARN engine-stale: <cause>` log line naming the cause and origin's head SHA, deduped per
+(cause, SHA) pair so a persistent condition warns once and re-arms only when origin advances. The
+warning includes the recovery command: `git pull --ff-only origin <default-branch> && (cd
+src/conductor && npm run build) && conduct daemon restart` — run that manually to clear a dirty
+tree or diverged branch (or resolve the divergence first) and pick the fresh code back up on the
+next restart. No new tasks are blocked by a degraded fetch; it only means the running engine may
+lag until the operator reloads or the condition self-resolves.
+
+**Advisory staleness probe when self-heal is disabled.** Even when `auto_restart_on_stale_engine`
+is off (or the daemon isn't self-host), the daemon still runs an advisory-only, equally-throttled
+probe at the quiescent boundary: it compares the source SHA stamped into the running engine's
+pinned version (the `.engine-source-sha` sidecar, read once at boot — logged on the "daemon
+identity: ..." boot line, or `unknown` if absent) against origin's current head. If origin is
+determinably ahead, it emits the same deduped warning with cause `self-heal-disabled`. This probe
+never fetches more than once per throttle window, never rebuilds, and never restarts — it exists
+purely so an operator running with self-heal disabled still gets a loud heads-up that the engine
+is falling behind, rather than silently accumulating drift.
 
 On failure, conduct sends a desktop notification and drops into an interactive Claude session
 to fix the issue. After you `/quit`, it rechecks artifacts and continues automatically.

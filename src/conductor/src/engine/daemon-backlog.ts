@@ -111,6 +111,47 @@ export type DiscoveryLogger = {
 };
 
 /**
+ * Structured outcome of a `fastForwardRoot` call (TI-1 HP1 / TI-4). Every
+ * skip path carries a `cause` so callers can distinguish WHY a fast-forward
+ * did not happen, without parsing log lines.
+ */
+export type FastForwardOutcome = {
+  status: 'advanced' | 'current' | 'skipped';
+  cause?: 'no-origin' | 'unknown-default' | 'not-default-branch' | 'dirty' | 'diverged' | 'fetch-failed';
+  behindOrigin?: boolean;
+  originHead?: string;
+};
+
+/**
+ * Best-effort probe of how far HEAD is behind `origin/<defaultBranch>`, used
+ * to enrich `dirty`-cause skip outcomes. NEVER throws — any failure (offline,
+ * no origin ref yet, etc.) simply omits the fields rather than blocking the
+ * caller's skip return.
+ */
+async function probeBehindOrigin(
+  git: GitRunner,
+  defaultBranch: string,
+): Promise<{ behindOrigin?: boolean; originHead?: string }> {
+  try {
+    const fetched = await git(['fetch', 'origin', defaultBranch]);
+    if (fetched.exitCode !== 0) return {};
+
+    const originHeadResult = await git(['rev-parse', `origin/${defaultBranch}`]);
+    if (originHeadResult.exitCode !== 0) return {};
+    const originHead = originHeadResult.stdout.trim();
+
+    const countResult = await git(['rev-list', '--count', `HEAD..origin/${defaultBranch}`]);
+    if (countResult.exitCode !== 0) return { originHead };
+    const count = Number.parseInt(countResult.stdout.trim(), 10);
+    if (!Number.isFinite(count)) return { originHead };
+
+    return { behindOrigin: count > 0, originHead };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Fast-forward `projectRoot`'s checkout to origin so newly merged specs become
  * present in the working tree — and therefore in any worktree freshly cut from
  * the default branch. This replaces the old fetch-only discovery ref: instead of
@@ -152,17 +193,17 @@ export async function fastForwardRoot(
   gitOverride?: GitRunner,
   discoveryLogger?: DiscoveryLogger,
   leakWarnState?: LeakWarnState,
-): Promise<void> {
+): Promise<FastForwardOutcome> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
   // No origin → nothing to fast-forward from (local-only repo).
   const remotes = await git(['remote']);
-  if (remotes.exitCode !== 0) return;
+  if (remotes.exitCode !== 0) return { status: 'skipped', cause: 'no-origin' };
   const hasOrigin = remotes.stdout
     .split('\n')
     .map((l) => l.trim())
     .includes('origin');
-  if (!hasOrigin) return;
+  if (!hasOrigin) return { status: 'skipped', cause: 'no-origin' };
 
   // Discover the default branch name (never hardcode 'main').
   // Mirror resolveBase's two-step: symbolic-ref first, remote show fallback.
@@ -174,7 +215,7 @@ export async function fastForwardRoot(
       if (m && m[1] !== '(unknown)') defaultBranch = m[1];
     }
   }
-  if (!defaultBranch) return; // can't determine the branch → do nothing
+  if (!defaultBranch) return { status: 'skipped', cause: 'unknown-default' }; // can't determine the branch → do nothing
 
   // Only fast-forward when the root is actually ON the default branch: advancing
   // some other checked-out branch is not what we want.
@@ -185,7 +226,7 @@ export async function fastForwardRoot(
       `skip fast-forward: root is on '${current || 'unknown'}', not the default branch ` +
         `'${defaultBranch}'. Daemon discovers/builds against the local branch as-is.`,
     );
-    return;
+    return { status: 'skipped', cause: 'not-default-branch' };
   }
 
   // Check for dirty working tree and attempt to heal if possible.
@@ -222,7 +263,8 @@ export async function fastForwardRoot(
                 `content changed between classification and restore; aborting heal. ` +
                 `Working tree remains dirty; skipping fast-forward.`,
             );
-            return;
+            const probe = await probeBehindOrigin(git, defaultBranch);
+            return { status: 'skipped', cause: 'dirty', ...probe };
           }
 
           // Restore modified files
@@ -289,7 +331,8 @@ export async function fastForwardRoot(
               `WARN heal: failed to heal file(s): ${failedFiles.join(', ')}; ` +
                 `tree remains dirty, skipping fast-forward.`,
             );
-            return;
+            const probe = await probeBehindOrigin(git, defaultBranch);
+            return { status: 'skipped', cause: 'dirty', ...probe };
           }
 
           // Fall through to the fetch/merge logic below
@@ -299,7 +342,8 @@ export async function fastForwardRoot(
             `heal error: ${err instanceof Error ? err.message : String(err)}; ` +
               `skipping fast-forward.`,
           );
-          return;
+          const probe = await probeBehindOrigin(git, defaultBranch);
+          return { status: 'skipped', cause: 'dirty', ...probe };
         }
       } else {
         // Tree is dirty and cannot be healed — use fingerprinting to throttle spam (Task 13)
@@ -325,7 +369,8 @@ export async function fastForwardRoot(
           // Fingerprint unchanged: emit a short throttle line instead of full WARN
           log(`dirty tree unchanged since last poll; remaining dirty; skipping fast-forward.`);
         }
-        return;
+        const probe = await probeBehindOrigin(git, defaultBranch);
+        return { status: 'skipped', cause: 'dirty', ...probe };
       }
     }
   } catch (err) {
@@ -337,10 +382,14 @@ export async function fastForwardRoot(
       `ERROR triage: ${err instanceof Error ? err.message : String(err)}; ` +
         `dirty tree (triage error) — skipping fast-forward.`,
     );
-    return;
+    const probe = await probeBehindOrigin(git, defaultBranch);
+    return { status: 'skipped', cause: 'dirty', ...probe };
   }
 
   // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
+  const beforeHeadResult = await git(['rev-parse', 'HEAD']);
+  const beforeHead = beforeHeadResult.exitCode === 0 ? beforeHeadResult.stdout.trim() : null;
+
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
     // Task 17: Log fetch failure via transition-aware logger if provided
@@ -352,7 +401,7 @@ export async function fastForwardRoot(
       `fast-forward: fetch origin ${defaultBranch} failed (offline?); continuing on ` +
         `local ${defaultBranch}.`,
     );
-    return;
+    return { status: 'skipped', cause: 'fetch-failed' };
   }
 
   // Task 17: Log fetch success via transition-aware logger if provided
@@ -366,7 +415,17 @@ export async function fastForwardRoot(
       `fast-forward: local ${defaultBranch} has diverged from origin/${defaultBranch} ` +
         `(non-fast-forward); continuing on local ${defaultBranch}.`,
     );
+    const originHeadResult = await git(['rev-parse', `origin/${defaultBranch}`]);
+    const originHead = originHeadResult.exitCode === 0 ? originHeadResult.stdout.trim() : undefined;
+    return { status: 'skipped', cause: 'diverged', behindOrigin: true, originHead };
   }
+
+  const afterHeadResult = await git(['rev-parse', 'HEAD']);
+  const afterHead = afterHeadResult.exitCode === 0 ? afterHeadResult.stdout.trim() : null;
+  if (beforeHead !== null && afterHead !== null && beforeHead === afterHead) {
+    return { status: 'current' };
+  }
+  return { status: 'advanced', originHead: afterHead ?? undefined };
 }
 
 /** Options for discoverBacklog. */

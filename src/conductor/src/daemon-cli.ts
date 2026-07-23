@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
-import { join } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -43,6 +43,11 @@ import type { ConductState, ConductorEvent, StepName } from './types/index.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
+import {
+  createRefreshThrottle,
+  createStalenessWarner,
+  probeStampedShaBehindOrigin,
+} from './engine/engine-refresh.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -164,6 +169,33 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
  */
 export function engineEntryPathForRepo(projectRoot: string): string {
   return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
+const ENGINE_SOURCE_SHA_SIDECAR = '.engine-source-sha';
+
+/**
+ * Read the source-commit SHA stamped into the pinned `dist-versions/<id>`
+ * directory this daemon is booting out of (`.engine-source-sha`, written by
+ * `publish-engine.mjs` at finalize — Task 4). Resolves `dist` (a symlink to
+ * `dist-versions/<id>`) relative to the given engine entry path
+ * (`<conductorRoot>/dist/index.js`).
+ *
+ * Never throws: returns `'unknown'` whenever `dist` isn't a symlink (e.g. a
+ * plain directory in tests, or a corrupt layout) or the sidecar is absent
+ * (pre-feature published versions never wrote it) — the boot log must never
+ * crash over a missing/optional stamp.
+ */
+export async function readEngineSourceSha(engineEntryPath: string): Promise<string> {
+  const distDir = dirname(engineEntryPath);
+  try {
+    const target = await readlink(distDir);
+    const versionDir = isAbsolute(target) ? target : join(dirname(distDir), target);
+    const sha = await readFile(join(versionDir, ENGINE_SOURCE_SHA_SIDECAR), 'utf-8');
+    return sha.trim();
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -715,11 +747,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
   const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  // Task 8: append the pinned version's stamped source SHA to the boot
+  // "daemon identity: ..." log line (never crashes — 'unknown' when the
+  // `.engine-source-sha` sidecar is absent, e.g. pre-feature versions).
+  const engineSourceSha = await readEngineSourceSha(engineEntryPath);
+  const logWithEngineSourceSha = (msg: string): void => {
+    log(msg.startsWith('daemon identity: ') ? `${msg} (source sha: ${engineSourceSha})` : msg);
+  };
   const engineIdentity = await initStaleEngineState({
     repoPath: projectRoot,
     entryPath: engineEntryPath,
     flag: isArmed,
-    log,
+    log: logWithEngineSourceSha,
   });
 
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
@@ -1282,6 +1321,61 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       rebuildEngine: isSelfHost
         ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
         : undefined,
+      // Fast-forward the harness checkout to origin before each dispatch
+      // (self-host only, NP4) so rebuildEngine above builds from
+      // merge-driven drift instead of a stale local branch (TI-1 HP1).
+      // Throttled (TI-2) via engine_refresh_min_interval_seconds so an idle
+      // daemon does not fetch on every poll. Degraded outcomes (dirty,
+      // diverged, fetch-failed) with a determinable originHead are routed
+      // into the deduped staleness warner (TI-4 HP1/HP2); other causes
+      // (no-origin, unknown-default, not-default-branch) and clean outcomes
+      // (current, advanced) never warn.
+      refreshEngineSource: isSelfHost
+        ? (() => {
+            const minIntervalMs =
+              (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+            const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+            const warner = createStalenessWarner(log);
+            return async () => {
+              if (!throttle.shouldRun()) return;
+              throttle.markRan();
+              const outcome = await fastForwardRoot(projectRoot, log);
+              if (
+                outcome.status === 'skipped' &&
+                (outcome.cause === 'dirty' ||
+                  outcome.cause === 'diverged' ||
+                  outcome.cause === 'fetch-failed') &&
+                outcome.originHead
+              ) {
+                warner.warn(outcome.cause, outcome.originHead, baseBranch);
+              }
+            };
+          })()
+        : undefined,
+      // Task 9 (TI-4 HP3/NP3/NP4): advisory-only staleness probe, wired
+      // UNCONDITIONALLY — it only ever fires at the quiescent boundary where
+      // the armed self-heal gate (staleGatesArmed) declines, i.e. self-host
+      // is off, or the auto-restart flag is off. NEVER rebuilds, NEVER
+      // restarts. Shares the same throttle mechanism as refreshEngineSource
+      // above (TI-2) so a daemon running without self-heal still doesn't
+      // fetch origin on every idle poll. Uses the boot-read `engineSourceSha`
+      // (Task 8) so the ancestry check reflects exactly what this daemon
+      // booted with, not a re-read mid-run.
+      probeEngineStaleness: (() => {
+        const minIntervalMs =
+          (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+        const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+        const warner = createStalenessWarner(log);
+        const git = makeGitRunner(projectRoot);
+        return async () => {
+          if (!throttle.shouldRun()) return;
+          throttle.markRan();
+          const result = await probeStampedShaBehindOrigin(git, engineSourceSha);
+          if (result.outcome === 'behind' && result.originHead && result.defaultBranch) {
+            warner.warn('self-heal-disabled', result.originHead, result.defaultBranch);
+          }
+        };
+      })(),
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks

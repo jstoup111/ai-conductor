@@ -514,6 +514,12 @@ export interface HarnessConfig {
    */
   auto_restart_on_stale_engine?: boolean;
   /**
+   * Minimum interval, in seconds, between engine-refresh (origin fetch)
+   * attempts. Non-numeric, non-finite, zero, or negative values resolve to
+   * the default with a single warning. Default: 300. Never throws.
+   */
+  engine_refresh_min_interval_seconds?: number;
+  /**
    * Auto-resolve merge conflicts on open harness PRs. Extends rebase-resolution
    * beyond finish-time by dispatching a daemon task that polls for and resolves
    * conflicts on previously-built PRs. Absent → disabled (default safe posture).

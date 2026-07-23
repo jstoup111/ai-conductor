@@ -7,11 +7,11 @@
 // identity primitive was only ever tested against a directly-passed fixture).
 
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { engineEntryPathForRepo } from '../../src/daemon-cli.js';
+import { engineEntryPathForRepo, readEngineSourceSha } from '../../src/daemon-cli.js';
 import { captureEngineIdentity } from '../../src/engine/engine-identity.js';
 
 describe('engineEntryPathForRepo (stale-engine checker wiring)', () => {
@@ -33,5 +33,42 @@ describe('engineEntryPathForRepo (stale-engine checker wiring)', () => {
     // the checker would be permanently disabled.
     const preFix = await captureEngineIdentity(join(root, 'dist', 'index.js'));
     expect(preFix).toBeNull();
+  });
+});
+
+describe('readEngineSourceSha (Task 8: boot log carries engine source SHA)', () => {
+  it('reads the .engine-source-sha sidecar from the pinned dist-versions/<id> directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'engine-source-sha-'));
+    const conductorDir = join(root, 'src', 'conductor');
+    const versionDir = join(conductorDir, 'dist-versions', '20260723T000000Z-abc123def456');
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(join(versionDir, 'index.js'), 'export const engine = 1;\n', 'utf-8');
+    await writeFile(join(versionDir, '.engine-source-sha'), 'deadbeef1234567890\n', 'utf-8');
+    await symlink(versionDir, join(conductorDir, 'dist'), 'dir');
+
+    const sha = await readEngineSourceSha(engineEntryPathForRepo(root));
+    expect(sha).toBe('deadbeef1234567890');
+  });
+
+  it('returns "unknown" (no crash) when the sidecar is absent (pre-feature versions)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'engine-source-sha-missing-'));
+    const conductorDir = join(root, 'src', 'conductor');
+    const versionDir = join(conductorDir, 'dist-versions', '20260723T000000Z-fedcba987654');
+    await mkdir(versionDir, { recursive: true });
+    await writeFile(join(versionDir, 'index.js'), 'export const engine = 1;\n', 'utf-8');
+    await symlink(versionDir, join(conductorDir, 'dist'), 'dir');
+
+    const sha = await readEngineSourceSha(engineEntryPathForRepo(root));
+    expect(sha).toBe('unknown');
+  });
+
+  it('returns "unknown" (no crash) when dist is not a symlink at all', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'engine-source-sha-nolink-'));
+    const distDir = join(root, 'src', 'conductor', 'dist');
+    await mkdir(distDir, { recursive: true });
+    await writeFile(join(distDir, 'index.js'), 'export const engine = 1;\n', 'utf-8');
+
+    const sha = await readEngineSourceSha(engineEntryPathForRepo(root));
+    expect(sha).toBe('unknown');
   });
 });

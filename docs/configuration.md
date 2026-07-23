@@ -550,6 +550,25 @@ is gated behind that one flag, so any other repo's build path is byte-for-byte u
 > wired into the daemon loop; the harness can be daemon-registered with self-host mode on. See
 > `src/conductor/README.md → Harness self-host guardrails` for the module + wiring reference.
 
+### Engine origin-refresh throttle (`conduct-ts` only, self-host)
+
+`engine_refresh_min_interval_seconds` — minimum interval, in seconds, between the
+self-host daemon's engine-origin fetch attempts. Before a quiescent engine rebuild, the
+daemon fast-forwards its engine checkout from origin so it never rebuilds against a stale
+commit; this key throttles how often that origin fetch is attempted so an idle daemon
+doesn't hit origin on every poll tick.
+
+```yaml
+engine_refresh_min_interval_seconds: 300   # default; minimum time between origin fetches
+```
+
+Validation/coercion (never throws, never leaves the value `undefined`):
+
+- **Absent or `null`** → resolves to the default `300`, no warning.
+- **A finite positive number** → accepted as-is.
+- **Anything else** (non-numeric, non-finite, zero, or negative) → falls back to `300`
+  and logs one warning naming the invalid value.
+
 ### Plugins (`conduct-ts` only)
 
 The TypeScript conductor supports a plugin system for swapping the LLM provider or UI renderer

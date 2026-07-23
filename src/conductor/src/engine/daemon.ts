@@ -362,6 +362,28 @@ export interface DaemonDeps {
    */
   rebuildEngine?: () => Promise<void>;
 
+  /**
+   * Fast-forwards the daemon's own checkout to origin/<default>, throttled,
+   * before `rebuildEngine` so a rebuild reflects merge-driven drift rather
+   * than a stale local branch (TI-1 HP1). Only wired for self-host daemons;
+   * absent (no-op) everywhere else. A throw is caught and logged — the flow
+   * continues into `rebuildEngine`/`check()` unaffected (non-fatal, same
+   * posture as a failed rebuild). Call site wired in Task 7.
+   */
+  refreshEngineSource?: () => Promise<void>;
+
+  /**
+   * Advisory-only staleness probe (Task 9, TI-4 HP3) invoked at the SAME
+   * quiescent pre-dispatch boundary as `refreshEngineSource`/`rebuildEngine`
+   * whenever the stale-gates chain declines (self-heal disabled: non-self-host
+   * OR the auto-restart flag off). Unlike `refreshEngineSource`, this path
+   * NEVER rebuilds and NEVER restarts — it only warns (via the injected
+   * implementation's own deduped warner) when the daemon's boot-stamped
+   * engine source SHA is determinably behind origin. A throw is caught and
+   * logged; never fatal, never propagates.
+   */
+  probeEngineStaleness?: () => Promise<void>;
+
   // ── Halt-reconciliation hooks (ADR-013) — all OPTIONAL so the pure core
   //    (and its no-git tests) run unchanged when they are absent. ──────────────
   /**
@@ -915,8 +937,38 @@ export async function runDaemon(
    * an in-flight build. Reuses the shipped suppression + requestRestart path.
    */
   const rebuildAndMaybeRestartForStaleEngine = async (): Promise<boolean> => {
-    if (!staleGatesArmed || !deps.staleEngineChecker) return false;
+    if (!staleGatesArmed || !deps.staleEngineChecker) {
+      // Task 9 (TI-4 HP3): self-heal is disabled (non-self-host, or the flag
+      // is off) — the checker/rebuild/restart chain never runs, but still
+      // advisory-probe for staleness at the same quiescent boundary so an
+      // operator running without auto-restart gets warned. Quiescent-only,
+      // never rebuilds, never restarts. Non-fatal: a throw is logged and
+      // swallowed.
+      if (inFlight.size === 0 && deps.probeEngineStaleness) {
+        try {
+          await deps.probeEngineStaleness();
+        } catch (err) {
+          log(
+            `[daemon] engine staleness probe failed: ${err instanceof Error ? err.message : String(err)}; continuing`,
+          );
+        }
+      }
+      return false;
+    }
     if (inFlight.size !== 0) return false;
+
+    // Task 7: fast-forward the engine source before rebuilding, so the
+    // rebuild reflects a merge that landed on origin since the last refresh.
+    // Never fatal — a failed refresh degrades to whatever source is on disk.
+    if (deps.refreshEngineSource) {
+      try {
+        await deps.refreshEngineSource();
+      } catch (err) {
+        log(
+          `[daemon] engine source refresh failed: ${err instanceof Error ? err.message : String(err)}; continuing with current source`,
+        );
+      }
+    }
 
     // Gap A (#309): rebuild so the untracked `dist` reflects fast-forwarded
     // source; without this the content-hash checker never sees merge-driven
@@ -933,6 +985,14 @@ export async function runDaemon(
 
     if (deps.staleEngineChecker.check() !== 'stale') return false;
 
+    // A full stale-and-suppression evaluation just ran for this boundary —
+    // the idle-boundary re-check below is redundant if it's the very next
+    // check reached (e.g. this dispatch attempt errors/parks the item and the
+    // loop goes idle before anything else changes). One-shot: consumed by the
+    // very next idle-boundary check, so a later genuine staleness change is
+    // still observed (#598 Task 15).
+    staleAlreadyHandledByPreflight = true;
+
     const targetIdentity = deps.staleEngineChecker.targetIdentity?.() ?? null;
     if (deps.isSuppressed && (await deps.isSuppressed(targetIdentity))) return false;
     if (inFlight.size !== 0) return false; // re-verify after the async suppression check
@@ -948,6 +1008,15 @@ export async function runDaemon(
   // Task 20: Track episode state to detect when it ends so we can sweep
   // episode-caused HALTs and recover them via the existing rekick path.
   let wasEpisodeActive = false;
+
+  // Set whenever the dispatch-boundary preflight (`rebuildAndMaybeRestartForStaleEngine`)
+  // has run its full refresh/rebuild/check/suppression chain this run. The
+  // idle-boundary stale re-check further below is redundant once the preflight
+  // has already made this decision for the current source/build (nothing
+  // changes between preflight calls), so it's skipped while this is set —
+  // fixes #598 Task 15's regression where both independently invoked
+  // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
+  let staleAlreadyHandledByPreflight = false;
 
   while (true) {
     if (deps.shouldStop?.()) {
@@ -1154,7 +1223,13 @@ export async function runDaemon(
           options.autoRestartOnStaleEngine === true && // gate 3: flag enabled
           deps.staleEngineChecker !== undefined; // gate 4: checker armed
 
-        if (shouldCheckStale && deps.staleEngineChecker) {
+        // One-shot consume: only the very next idle-boundary reach after a
+        // preflight-covered stale evaluation is skipped (#598 Task 15) — a
+        // later genuine staleness change is still observed on subsequent ticks.
+        const skipStaleCheckThisTick = staleAlreadyHandledByPreflight;
+        staleAlreadyHandledByPreflight = false;
+
+        if (shouldCheckStale && deps.staleEngineChecker && !skipStaleCheckThisTick) {
           const verdict = deps.staleEngineChecker.check();
 
           // Task 13: Handle stale verdict with in-flight re-verify
