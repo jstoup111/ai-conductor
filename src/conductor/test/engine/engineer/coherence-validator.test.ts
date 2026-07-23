@@ -12,6 +12,7 @@ import {
   parseCoherenceArtifact,
   crossCheckIds,
   checkOutcomeCoverage,
+  checkFrCoverage,
   type CrossCheckInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 
@@ -331,5 +332,100 @@ describe('checkOutcomeCoverage', () => {
     if (crossCheck.ok) return;
     expect(crossCheck.reason).toBe('fabricated-id');
     expect(crossCheck.fabricatedId).toBe('story-99');
+  });
+});
+
+describe('checkFrCoverage', () => {
+  const PRD_TEXT = `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`;
+
+  it('passes when every PRD FR is cited by a story Requirement line and transitively by a task', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1, FR-2
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+`;
+    const result = checkFrCoverage(PRD_TEXT, storiesText, planText);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('reports a gap for an FR cited by no story', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+`;
+    const result = checkFrCoverage(PRD_TEXT, storiesText, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fr-gap');
+    expect(result.frId).toBe('FR-2');
+    expect(result.storyId).toBeUndefined();
+  });
+
+  it('reports a transitive gap naming both the FR and the story when the only citing story has no task', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when shipped, then it arrives.
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+
+### Acceptance Criteria
+#### Happy Path
+- Given a widget, when returned, then it is refunded.
+`;
+    const planText = `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+`;
+    // FR-2 is cited by story 2, but no task cites story 2 — a transitive
+    // gap, not masked as either a plain uncovered-FR or silently passing.
+    const result = checkFrCoverage(PRD_TEXT, storiesText, planText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('fr-gap');
+    expect(result.frId).toBe('FR-2');
+    expect(result.storyId).toBe('2');
+  });
+
+  it('passes trivially (no PRD, technical track) when prdText is null', () => {
+    const result = checkFrCoverage(null, '## Story 1\n', '### Task 1\n');
+    expect(result).toEqual({ ok: true });
   });
 });

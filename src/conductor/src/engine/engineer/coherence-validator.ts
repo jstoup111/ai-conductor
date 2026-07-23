@@ -319,3 +319,123 @@ export function checkOutcomeCoverage(
 
   return { ok: true };
 }
+
+// --- FR-coverage layer (Task 8) ---
+
+/** `storyId -> Set<FR-N>` from each story block's `**Requirement:**` line(s). */
+function extractStoryRequirementFrIds(storiesText: string | null): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  if (!storiesText) return map;
+  for (const block of splitStoryBlocks(storiesText)) {
+    if (!block.id) continue;
+    const reqLineRe = /\*\*Requirement:\*\*\s*([^\n]*)/gi;
+    const frs = new Set<string>();
+    let lineMatch: RegExpExecArray | null;
+    while ((lineMatch = reqLineRe.exec(block.text)) !== null) {
+      const frRe = /\bFR-\d+[A-Za-z]?\b/gi;
+      let frMatch: RegExpExecArray | null;
+      while ((frMatch = frRe.exec(lineMatch[1])) !== null) {
+        frs.add(frMatch[0].toUpperCase());
+      }
+    }
+    if (frs.size > 0) map.set(block.id, frs);
+  }
+  return map;
+}
+
+/** `storyId -> Set<taskId>` from each plan task block's `**Story:**` line(s). */
+function extractTaskStoryIds(planText: string | null): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  if (!planText) return map;
+
+  const taskHeadingRe = /^###\s+Task\s+([A-Za-z0-9._-]+)/i;
+  const blocks: { id: string; text: string }[] = [];
+  let currentId: string | null = null;
+  let currentLines: string[] = [];
+  for (const line of planText.split('\n')) {
+    const headingMatch = line.match(taskHeadingRe);
+    if (headingMatch) {
+      if (currentId) blocks.push({ id: currentId, text: currentLines.join('\n') });
+      currentId = headingMatch[1];
+      currentLines = [line];
+    } else if (currentId) {
+      currentLines.push(line);
+    }
+  }
+  if (currentId) blocks.push({ id: currentId, text: currentLines.join('\n') });
+
+  for (const block of blocks) {
+    const storyRefRe = /\*\*Story:\*\*\s*(?:story|epic)?\s*([A-Za-z0-9.\-]+)/gi;
+    let storyMatch: RegExpExecArray | null;
+    while ((storyMatch = storyRefRe.exec(block.text)) !== null) {
+      const storyId = storyMatch[1];
+      if (/^(n\/?a|prerequisite|none|all)$/i.test(storyId)) continue;
+      if (!map.has(storyId)) map.set(storyId, new Set());
+      map.get(storyId)!.add(block.id);
+    }
+  }
+  return map;
+}
+
+export type FrCoverageResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'fr-gap';
+      /** The `FR-<n>` id with no covering story, or with a story but no task. */
+      frId: string;
+      /**
+       * The story id that cites the FR but has no covering task — set only
+       * for the transitive gap case, so the report names both the FR and
+       * the story rather than masking the story-level break as a plain
+       * uncovered-FR gap.
+       */
+      storyId?: string;
+    };
+
+/**
+ * Two-hop set-difference check: every PRD FR must be cited by ≥1 story's
+ * `**Requirement:**` line, and at least one of those citing stories must in
+ * turn be cited by ≥1 plan task's `**Story:**` line. An FR cited by no
+ * story is an uncovered-FR gap; an FR whose only citing stor(y/ies) have no
+ * covering task is a transitive gap naming both the FR and the story — the
+ * story-level break is never silently masked as a plain FR gap.
+ *
+ * A technical-track spec has no PRD (`prdText === null`); FR-10 makes that
+ * a trivial pass rather than a gap — no phantom requirement layer.
+ */
+export function checkFrCoverage(
+  prdText: string | null,
+  storiesText: string | null,
+  planText: string | null,
+): FrCoverageResult {
+  const frIds = extractPrdFrIds(prdText);
+  if (frIds.size === 0) return { ok: true };
+
+  const storyFrMap = extractStoryRequirementFrIds(storiesText);
+  const taskStoryMap = extractTaskStoryIds(planText);
+
+  const frToStories = new Map<string, Set<string>>();
+  for (const [storyId, frs] of storyFrMap) {
+    for (const fr of frs) {
+      if (!frToStories.has(fr)) frToStories.set(fr, new Set());
+      frToStories.get(fr)!.add(storyId);
+    }
+  }
+
+  for (const fr of frIds) {
+    const citingStories = frToStories.get(fr);
+    if (!citingStories || citingStories.size === 0) {
+      return { ok: false, reason: 'fr-gap', frId: fr };
+    }
+    const hasCoveringTask = [...citingStories].some(
+      (storyId) => (taskStoryMap.get(storyId)?.size ?? 0) > 0,
+    );
+    if (!hasCoveringTask) {
+      const storyId = [...citingStories].sort()[0];
+      return { ok: false, reason: 'fr-gap', frId: fr, storyId };
+    }
+  }
+
+  return { ok: true };
+}
