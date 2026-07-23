@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ghIssueLabelReader, parsePriorityLabels, type ExecRunner } from '../src/engine/backlog-priority.js';
+import { ghIssueLabelReader, parsePriorityLabels } from '../src/engine/backlog-priority.js';
+import type { GhRunner } from '../src/engine/tracker-client.js';
 import { execFileSync } from 'child_process';
 
 /**
@@ -8,7 +9,7 @@ import { execFileSync } from 'child_process';
  * smoke pass while production ships a broken argv (the exact trap this test
  * exists to catch).
  */
-function realExecRunner(): ExecRunner {
+function realExecRunner(): GhRunner {
   return async (argv: string[]) => {
     const stdout = execFileSync('gh', argv, {
       encoding: 'utf-8',

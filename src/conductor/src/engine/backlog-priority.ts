@@ -1,10 +1,5 @@
 import type { BacklogItem } from './daemon.js';
-
-/**
- * Injectable runner for executing gh CLI commands.
- * Returns the stdout output or throws on failure.
- */
-export type ExecRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+import type { GhRunner } from './tracker-client.js';
 
 /**
  * Priority band type for issue classification in daemon backlog scheduling.
@@ -318,7 +313,7 @@ function parseIssueRef(sourceRef: string): { owner: string; repo: string; number
  * @param runner - Injected executor for gh commands
  * @returns IssueLabelReader function that fetches labels for refs
  */
-export function ghIssueLabelReader(runner: ExecRunner): IssueLabelReader {
+export function ghIssueLabelReader(runner: GhRunner): IssueLabelReader {
   return async (refs: string[]) => {
     const result = new Map<string, string[] | 'not-found'>();
 
