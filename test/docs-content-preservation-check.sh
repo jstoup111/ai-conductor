@@ -18,11 +18,31 @@ DOCS_DIR="$ROOT/docs"
 STRINGS=(
   "unknown-command guard|docs/choosing-a-conductor.md (Choosing a Conductor)"
   "npm install && npm run build|docs/getting-started.md (Install)"
-  "OTLP HTTP|docs/configuration.md (OpenTelemetry config reference)"
-  "halt-issues sweep|docs/daemon-operations.md (daemon subcommands)"
   "pre-dispatch.sh|docs/observability.md (session-hook task stamping)"
   "Intake-Issue Shape|docs/intake.md (Intake-Issue Shape: WHAT vs. HOW)"
+
+  # docs/configuration.md — 5 relocated subsections (Story 3)
+  "harness_version|docs/configuration.md (Full reference)"
+  "model_fallback_ladder|docs/configuration.md (Model fallback ladder)"
+  "spec_owner|docs/configuration.md (Operator identity & owner gate)"
+  "SelfHostDetector|docs/configuration.md (Harness self-host guardrails)"
+  "kind: llm_provider|docs/configuration.md (Plugins)"
+
+  # docs/daemon-operations.md — 7 relocated subsections actually present
+  # (of the 9 named in Story 3; Sandbox auth-expiry and Daemon build-auth
+  # landed under docs/configuration.md instead)
+  "halt-issues sweep|docs/daemon-operations.md (halt-issues sweep)"
+  "advisory unmerged-dependent-work scan|docs/daemon-operations.md (overlap-scan)"
+  "Mixed or malformed labels are ignored (safe-fail)|docs/daemon-operations.md (Priority scheduling)"
+  "thundering herd|docs/daemon-operations.md (Rate-Limit Episode Coordination)"
+  "conductor:needs-remediation|docs/daemon-operations.md (Halt-PR presentation reliability)"
+  "Claim-time delivery guard (auto-healing duplicate dispatch)|docs/daemon-operations.md (Claim-time delivery guard and recovery)"
+  "brain loop already running.|docs/daemon-operations.md (Brain Loop Supervision)"
+
+  # docs/architecture.md — 3 relocated areas (Story 3)
   "Skills (24 total)|docs/architecture.md (How It Works)"
+  "Engine / Execution / UI|docs/architecture.md (TypeScript Conductor)"
+  "Stable bash SDLC runner|docs/architecture.md (Project Structure)"
 )
 
 if [ ! -d "$DOCS_DIR" ]; then
