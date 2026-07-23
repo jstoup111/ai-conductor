@@ -50,6 +50,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Relocated the full `README.md` "## Configuration" reference (config-key table, model
+  fallback ladder, owner gate, self-host guardrails, plugins) into `docs/configuration.md`,
+  leaving a short pointer in the README front door.
+- Relocated the `README.md` task-attribution automation and session-hook dispatch-stamping
+  reference (git-trailer hooks, telemetry-only stamps, fail-open/fail-closed dispatch guards)
+  into `docs/observability.md`, leaving a short pointer in the README front door.
 - CI now skips the heavy `integrity`, `typecheck`, and `conductor` jobs for PRs whose changed
   files are entirely under `.docs/**`, computed by a new `changes` job and the pure
   `.github/scripts/ci-detect-docs-only.sh` predicate; any non-doc file, or an undeterminable

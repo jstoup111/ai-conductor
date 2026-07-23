@@ -113,10 +113,13 @@ fix all references before committing.
 Docs track features. Every change that adds or alters user-facing behavior MUST
 update the relevant documentation in the **same** PR:
 
-- New `conduct`/`conduct-ts` flags or daemon options → update `README.md` and
-  `src/conductor/README.md`.
-- New skill, gate, hook, or HARNESS.md rule → reflect it in the README and the
-  relevant skill/architecture docs.
+- New `conduct`/`conduct-ts` flags or config keys → update `docs/configuration.md`
+  and `src/conductor/README.md`.
+- New daemon options or operational behavior → update `docs/daemon-operations.md`
+  and `src/conductor/README.md`.
+- New skill, gate, hook, or HARNESS.md rule → reflect it in the relevant
+  `docs/*.md` guide (see `README.md`'s Documentation index) and any affected
+  skill/architecture docs.
 - A PR is not complete while its docs are stale. This is in addition to the
   CHANGELOG `[Unreleased]` requirement, not a replacement for it.
 
