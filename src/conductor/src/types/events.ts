@@ -375,6 +375,23 @@ export type ConductorEvent =
       step: StepName;
       unattributedCount: number;
     }
+  // ── Commit-movement liveness floor (adr-2026-07-23-commit-movement-liveness-floor) ──
+  | {
+      /**
+       * Emitted when the build stall breaker's resolved-task count is
+       * pinned across an attempt (the old `no_task_progress` trigger
+       * condition) but HEAD nonetheless moved this attempt — real,
+       * committed work landed without a `Task:` trailer attributing it to
+       * a plan task id. This is telemetry only; it does NOT classify the
+       * attempt as stalled.
+       */
+      type: 'unattributed_progress';
+      step: StepName;
+      attempt: number;
+      resolvedCount: number;
+      headBefore: string | null;
+      headAfter: string | null;
+    }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {
       /** A halt (operator park or daemon HALT) was cleared, resuming the feature. */
