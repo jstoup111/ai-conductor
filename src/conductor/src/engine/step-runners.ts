@@ -25,6 +25,10 @@ import { assembleBuildReviewInputs } from './build-review-inputs.js';
 import { runPerTaskCommitFloor, renderPerTaskFloorReport } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -267,6 +271,8 @@ export interface StepRunnerOptions {
    * DEFAULT_STEP_* baselines when the config omits a field.
    */
   config?: HarnessConfig;
+  /** Provider-native model defaults. Defaults to Claude for compatibility. */
+  modelPolicy?: ProviderModelPolicy;
   /** CLI `--model <name>` override. Applies to every step. */
   modelOverride?: string;
   /** CLI `--effort <level>` override. Applies to every step. */
@@ -303,6 +309,7 @@ export class DefaultStepRunner implements StepRunner {
   private stepCooldown: number;
   private sleepFn: (ms: number) => Promise<void>;
   private config?: HarnessConfig;
+  private modelPolicy: ProviderModelPolicy;
   private modelOverride?: string;
   private effortOverride?: EffortLevel;
   private mode: RunMode;
@@ -323,18 +330,20 @@ export class DefaultStepRunner implements StepRunner {
     this.stepCooldown = options?.stepCooldown ?? 0;
     this.sleepFn = options?.sleepFn ?? defaultSleep;
     this.config = options?.config;
+    this.modelPolicy = options?.modelPolicy ?? CLAUDE_MODEL_POLICY;
     this.modelOverride = options?.modelOverride;
     this.effortOverride = options?.effortOverride;
     this.mode = options?.mode ?? 'default';
-    this.modelAvailability = new ModelAvailability(this.config?.model_fallback_ladder, (line) =>
-      console.warn(line),
+    this.modelAvailability = new ModelAvailability(
+      this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder,
+      (line) => console.warn(line),
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
-    return resolveStepConfig(step, phaseForStep(step), this.config, {
+    return resolveStepConfig(step, phaseForStep(step), this.modelPolicy, this.config, {
       modelCliOverride: this.modelOverride,
       effortCliOverride: this.effortOverride,
       tier,

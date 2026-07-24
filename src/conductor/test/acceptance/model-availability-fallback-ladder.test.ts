@@ -238,18 +238,24 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     expect(invokeCalls.map((c) => c.model)).toEqual(['claude-fable-5-custom', 'fable']);
   });
 
-  it('empty ladder ([]) means NO fallback: unavailable surfaces exactly as today', async () => {
-    const { provider, invokeCalls } = laddderProvider({ fable: modelUnavailable() });
+  it('an explicit empty ladder wins over the Codex policy default fallback ladder', async () => {
+    const codexHead = CODEX_MODEL_POLICY.modelFallbackLadder[0];
+    const { provider, invokeCalls } = laddderProvider({ [codexHead]: modelUnavailable() });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
-      modelOverride: 'fable',
+      modelOverride: codexHead,
+      modelPolicy: CODEX_MODEL_POLICY,
       config: configWithLadder([]),
     });
 
     const result = await runner.run('build', emptyState);
 
-    expect(result.success).toBe(false);
-    expect(invokeCalls).toHaveLength(1);
-    expect(invokeCalls[0].model).toBe('fable');
+    expect({
+      invokedModels: invokeCalls.map((call) => call.model),
+      resultSuccess: result.success,
+    }).toEqual({
+      invokedModels: ['gpt-5.6-sol'],
+      resultSuccess: false,
+    });
   });
 });
 
