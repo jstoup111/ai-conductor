@@ -379,4 +379,64 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.done).toBe(true);
     expect(calls).toBe(0);
   });
+
+  it('stale evidence with no wiringProbe injected fails closed with the plain staleness reason', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      // ctx.wiringProbe intentionally omitted — the re-derivation guard
+      // must not fire without it, so the stale evidence is rejected
+      // exactly as validateWiringEvidence's freshness check reports.
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(
+      `${WIRING_EVIDENCE} is stale — evidence recorded for H1 but HEAD is H2; re-run wiring-reachability analysis at the current HEAD`,
+    );
+  });
+
+  it('indeterminate current HEAD (getHeadSha absent or null) skips the freshness check and never invokes the probe', async () => {
+    const ev: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(ev);
+
+    let calls = 0;
+    const wiringProbe = async (): Promise<WiringEvidence> => {
+      calls++;
+      return ev;
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    // ctx.getHeadSha entirely absent.
+    const resultAbsent = await predicate(dir, { wiringProbe });
+    expect(resultAbsent.done).toBe(true);
+    if (resultAbsent.reason) expect(resultAbsent.reason).not.toMatch(/stale/i);
+
+    // ctx.getHeadSha present but resolves to null.
+    const resultNull = await predicate(dir, {
+      getHeadSha: async () => null,
+      wiringProbe,
+    });
+    expect(resultNull.done).toBe(true);
+    if (resultNull.reason) expect(resultNull.reason).not.toMatch(/stale/i);
+
+    expect(calls).toBe(0);
+  });
 });
