@@ -16,6 +16,29 @@ import {
 } from '../src/engine/model-table-metadata.js';
 import { classifyPinnedSkill } from '../src/tools/generate-model-table.js';
 
+const CLAUDE_NATIVE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku'] as const;
+const CODEX_NATIVE_MODEL_IDS = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+] as const;
+
+function proseSentences(text: string): string[] {
+  return text.split(/[.!?](?:\s|$)/).filter((sentence) => sentence.trim().length > 0);
+}
+
+function proseClauses(text: string): string[] {
+  return text
+    .split(
+      /(?<=[.!?;])\s+|\n+|\s+(?:while|whereas)\s+|,\s+(?=(?:and\s+)?(?:Claude|Codex)\b)/i,
+    )
+    .filter((clause) => clause.trim().length > 0);
+}
+
+function containsToken(text: string, token: string): boolean {
+  return new RegExp(`\\b${token.replaceAll('.', '\\.')}\\b`, 'i').test(text);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RED/GREEN specs for STEP_RATIONALE metadata (.docs/stories/generated-model-table.md,
 // TS-1 happy path 1; negative path 1 — compile-time enforcement).
@@ -70,6 +93,101 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
     // non-string value, this would fail to typecheck.
     const typed = STEP_RATIONALE satisfies Record<StepName, string>;
     expect(typed).toBe(STEP_RATIONALE);
+  });
+
+  it('keeps shared autonomous rationales provider-neutral unless a native model name is provider-labelled', () => {
+    const nestedAgentRationaleSteps = new Set<StepName>(['assess']);
+    const violations = Object.entries(STEP_RATIONALE).flatMap(([step, rationale]) => {
+      if (nestedAgentRationaleSteps.has(step as StepName)) return [];
+      const hasUnlabelledSentence = proseSentences(rationale).some((sentence) => {
+        const namesClaudeModel = CLAUDE_NATIVE_ALIASES.some((alias) =>
+          containsToken(sentence, alias),
+        );
+        const namesCodexModel = CODEX_NATIVE_MODEL_IDS.some((model) =>
+          containsToken(sentence, model),
+        );
+        return (
+          (namesClaudeModel && !/\bClaude\b/i.test(sentence)) ||
+          (namesCodexModel && !/\bCodex\b/i.test(sentence))
+        );
+      });
+
+      return hasUnlabelledSentence ? [step] : [];
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('labels every assess Claude alias while documenting nested specialist-agent selection', () => {
+    const rationale = STEP_RATIONALE.assess;
+    const sentences = proseSentences(rationale);
+    const namedClaudeAliases = [
+      ...new Set(
+        CLAUDE_NATIVE_ALIASES.filter((alias) => containsToken(rationale, alias)),
+      ),
+    ].sort();
+    const labelsEveryNamedAlias = namedClaudeAliases.every((alias) =>
+      sentences.some(
+        (sentence) => containsToken(sentence, alias) && /\bClaude\b/i.test(sentence),
+      ),
+    );
+
+    expect({
+      documentsNestedAgents:
+        /\bdispatches\b[\s\S]*\bspecialists?\b[\s\S]*\b(?:orchestrator|agent)\b/i.test(rationale),
+      namedClaudeAliases,
+      labelsEveryNamedAlias,
+    }).toEqual({
+      documentsNestedAgents: true,
+      namedClaudeAliases: ['opus', 'sonnet'],
+      labelsEveryNamedAlias: true,
+    });
+  });
+});
+
+describe('HARNESS Model Selection introduction', () => {
+  it('describes both built-in provider-native tier families without presenting Claude tiers as universal', () => {
+    const harness = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'HARNESS.md'),
+      'utf8',
+    );
+    const intro =
+      harness.match(
+        /## Model Selection\n([\s\S]*?)<!-- BEGIN GENERATED: model-selection-table -->/,
+      )?.[1] ?? '';
+    const clauses = proseClauses(intro);
+    const describesClaudeFamily = clauses.some(
+      (clause) =>
+        /\bClaude\b/i.test(clause) &&
+        CLAUDE_NATIVE_ALIASES.every((alias) => containsToken(clause, alias)),
+    );
+    const describesCodexFamily = clauses.some(
+      (clause) =>
+        /\bCodex\b/i.test(clause) &&
+        CODEX_NATIVE_MODEL_IDS.every((model) => containsToken(clause, model)),
+    );
+    const hasUnlabelledNativeAlias = clauses.some((clause) => {
+      const namesClaudeModel = CLAUDE_NATIVE_ALIASES.some((alias) =>
+        containsToken(clause, alias),
+      );
+      const namesCodexModel = CODEX_NATIVE_MODEL_IDS.some((model) =>
+        containsToken(clause, model),
+      );
+      return (
+        (namesClaudeModel && !/\bClaude\b/i.test(clause)) ||
+        (namesCodexModel && !/\bCodex\b/i.test(clause))
+      );
+    });
+
+    expect({
+      describesClaudeFamily,
+      describesCodexFamily,
+      hasUnlabelledNativeAlias,
+    }).toEqual({
+      describesClaudeFamily: true,
+      describesCodexFamily: true,
+      hasUnlabelledNativeAlias: false,
+    });
   });
 });
 

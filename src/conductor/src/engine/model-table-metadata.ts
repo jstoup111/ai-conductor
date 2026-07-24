@@ -15,7 +15,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   bootstrap: 'Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on.',
   memory: 'Read/write files, update index — mechanical.',
   assess:
-    'The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents.',
+    'The assess skill dispatches 9 specialists and drives structure verification with Claude Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on Claude Opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
     'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
   prd:
@@ -31,7 +31,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
   architecture_review:
-    'Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews.',
+    'Pre-implementation design feasibility and alignment requires the selected provider policy\'s deepest capability tier.',
   worktree: 'Git operations — mechanical branch/worktree management.',
   acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
   build:
@@ -45,9 +45,11 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review_as_built:
     'The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design.',
   retro: 'Structured analysis from concrete data; Part C (context efficiency) is checklist-based.',
-  rebase: 'Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
+  rebase:
+    'The selected provider policy\'s deepest capability tier guards semantic merges; a wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
   finish: 'Mechanical checks — run tests, check git status, verify coverage.',
-  remediate: 'Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning.',
+  remediate:
+    'The selected provider policy\'s deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. Gap reasoning plus concrete task planning requires deep judgment.',
   attribution_verify: 'Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages.',
 };
 

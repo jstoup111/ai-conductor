@@ -106,29 +106,32 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 
 ## Model Selection
 
-Use the cheapest model that can do the job. Opus for reasoning-heavy work, Sonnet for
-standard implementation, Haiku for mechanical checks.
+Use the least expensive provider-native capability tier that can do the job.
+The Claude autonomous family is `fable`, `opus`, `sonnet`, and `haiku`.
+The Codex autonomous family is `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Each provider policy assigns those native models independently; no cross-provider alias
+translation occurs.
 
 **Two enforcement paths — keep them in sync:**
 - **Autonomous (daemon/conductor):** the Claude and Codex `ProviderModelPolicy` constants
   registered in the provider policy registry are the model, effort, and tier-override source
   of truth.
 - **Interactive (Claude Skill tool / phone):** Claude-only opus-tier skills pin `model: opus`
-  in their SKILL.md frontmatter so a Sonnet/Haiku session still runs them on the right model.
-  Sonnet/haiku and tier-varying skills inherit from the engine or the session.
+  in their SKILL.md frontmatter so a Claude Sonnet/Haiku session still runs them on the right model.
+  Claude Sonnet/Haiku and tier-varying skills inherit from the engine or the session.
 
 This table is the human-readable mirror of both, and is generated — do not hand-edit the rows
 below. Provider policy constants supply autonomous model and effort values; generator metadata
 supplies the rationale and interactive row data. Run `bin/generate-model-table` to regenerate
 this section. CI enforces both content drift (the table matches the source) and Claude-only pins
-(opus-tier skills declare `model: opus` in their SKILL.md frontmatter).
+(Claude Opus-tier skills declare `model: opus` in their SKILL.md frontmatter).
 
 <!-- BEGIN GENERATED: model-selection-table -->
 | Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |
 |---|---|---|---|---|---|---|
 | bootstrap | autonomous engine | sonnet | low | gpt-5.6-terra | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
 | memory | autonomous engine | haiku | low | gpt-5.6-luna | low | Read/write files, update index — mechanical. |
-| assess | autonomous engine | sonnet | high | gpt-5.6-terra | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
+| assess | autonomous engine | sonnet | high | gpt-5.6-terra | high | The assess skill dispatches 9 specialists and drives structure verification with Claude Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on Claude Opus. The orchestrator also sets the env var that cascades effort to subagents. |
 | explore | autonomous engine | fable | low (S), high (M/L) | gpt-5.6-sol | low (S), high (M/L) | Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider's native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work. |
 | prd | autonomous engine | fable | high | gpt-5.6-sol | high | Front-of-funnel requirements and FR authoring has high downstream cascade cost. Each built-in provider policy selects its own deepest model and HIGH effort at every complexity tier; attempt 2 raises reasoning to XHIGH. Later model escalation uses that provider's native order but is a capped no-op for this already-deepest default. |
 | complexity | autonomous engine | sonnet | low | gpt-5.6-terra | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
@@ -137,7 +140,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | plan | autonomous engine | sonnet (S/M), fable (L) | medium (S), high (M), xhigh (L) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S), high (M), xhigh (L) | Structured task breakdown from stories; Large tier selects each provider policy's deepest model for task sequencing and dependency reasoning at scale. |
 | coherence-check | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable). |
 | architecture-diagram | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured output generation from codebase scan — pattern-following. |
-| architecture-review | autonomous engine | fable | high | gpt-5.6-sol | high | Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews. |
+| architecture-review | autonomous engine | fable | high | gpt-5.6-sol | high | Pre-implementation design feasibility and alignment requires the selected provider policy's deepest capability tier. |
 | worktree-manager | autonomous engine | haiku | low | gpt-5.6-luna | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Generating specs from acceptance criteria — templated work. |
 | pipeline | autonomous engine | sonnet | low | gpt-5.6-terra | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
@@ -147,9 +150,9 @@ this section. CI enforces both content drift (the table matches the source) and 
 | prd-audit | autonomous engine | opus | high | gpt-5.6-sol | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
 | architecture-review --as-built | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design. |
 | retro | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured analysis from concrete data; Part C (context efficiency) is checklist-based. |
-| rebase | autonomous engine | fable | max | gpt-5.6-sol | max | Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk. |
+| rebase | autonomous engine | fable | max | gpt-5.6-sol | max | The selected provider policy's deepest capability tier guards semantic merges; a wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk. |
 | finish | autonomous engine | haiku | low | gpt-5.6-luna | low | Mechanical checks — run tests, check git status, verify coverage. |
-| remediate | autonomous engine | fable | high | gpt-5.6-sol | high | Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning. |
+| remediate | autonomous engine | fable | high | gpt-5.6-sol | high | The selected provider policy's deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. Gap reasoning plus concrete task planning requires deep judgment. |
 | attribution-verify | autonomous engine | opus | high | gpt-5.6-sol | high | Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages. |
 | verify-claims | Claude interactive | inherits caller |  |  |  | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
 | domain-reviewer | Claude interactive | sonnet (<50-line diff), opus (≥50-line diff) |  |  |  | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
