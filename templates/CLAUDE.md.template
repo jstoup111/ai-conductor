@@ -24,9 +24,9 @@ Claude Code configuration; do not copy them into this project.
 ## Harness Behavioral Rules
 
 All behavioral rules, model selection, communication protocol, and conventions are defined in
-the harness's `HARNESS.md`.
+the user-scoped `~/.claude/skills/HARNESS.md`.
 
-Claude MUST read and follow HARNESS.md at the start of every session.
+Claude MUST read and follow `~/.claude/skills/HARNESS.md` at the start of every session.
 
 ## Skill References
 

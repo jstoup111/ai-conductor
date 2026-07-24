@@ -10,8 +10,8 @@ cd ai-conductor
 ./bin/install
 ```
 
-This symlinks every skill into both user-scoped discovery directories — `~/.claude/skills/`
-for Claude Code and `~/.codex/skills/` for Codex — and installs the conductor CLI(s) to
+This symlinks every skill and `HARNESS.md` into both user-scoped discovery directories —
+`~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex — and installs the conductor CLI(s) to
 `~/.local/bin/`. It does not install skills into a project; use project-local skills only as
 explicit overrides. `./bin/install` also builds the TypeScript conductor bundle for you —
 it runs `npm install && npm run build` in `src/conductor/` (in both first-run and

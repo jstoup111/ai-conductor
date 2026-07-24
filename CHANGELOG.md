@@ -27,8 +27,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - Bootstrap-generated Claude settings now use portable project-relative permission patterns
   (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
-  Generated `CLAUDE.md` and `AGENTS.md` likewise use harness-relative references instead of
-  machine-specific paths, so they remain valid after a move or worktree checkout.
+  Generated `CLAUDE.md` and `AGENTS.md` now reference the user-scoped installed copy of
+  `HARNESS.md`, rather than a machine-specific harness checkout path, so they remain valid
+  after a move or worktree checkout.
 - Installation now links every harness skill into both user-scoped client directories:
   `~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex. The installer check and
   uninstall paths cover both locations, while project-local skills remain explicit overrides.
@@ -49,6 +50,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Gate-writeback's other-owner skip notices (no implementation PR yet, terminal PR state,
   no `Source-Ref` marker) are now suppressed from the daemon log by default; set
   `daemon_verbose: true` in `.ai-conductor/config.yml` to re-surface them (#840).
+
+## Migration
+
+```bash migration
+# Install the user-scoped HARNESS.md links consumed by generated CLAUDE.md and AGENTS.md.
+./bin/install --update
+```
 
 ### Fixed
 

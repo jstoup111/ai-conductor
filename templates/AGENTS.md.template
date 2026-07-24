@@ -5,7 +5,7 @@
 This project uses the james-stoup-agents harness. Its skills are installed in the user's
 Codex configuration; do not copy them into this project.
 
-Codex MUST read and follow the harness's `HARNESS.md` at the start of every session. A
+Codex MUST read and follow `~/.codex/skills/HARNESS.md` at the start of every session. A
 project-local skill is only appropriate when this project deliberately overrides a harness skill.
 
 ## Agent Personas
