@@ -308,4 +308,31 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.reason).toBeDefined();
     expect(result.reason).toMatch(/wiring probe failed/);
   });
+
+  it('fresh evidence (recorded head === current head) never invokes the probe', async () => {
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(freshEvidence);
+
+    let calls = 0;
+    const wiringProbe = async (): Promise<WiringEvidence> => {
+      calls++;
+      return freshEvidence;
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe,
+    });
+
+    expect(result.done).toBe(true);
+    expect(calls).toBe(0);
+  });
 });
