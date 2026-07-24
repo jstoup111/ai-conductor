@@ -863,6 +863,33 @@ mirroring the `pr-labels.ts`/`build-failure-escalation.ts` seam contract. See
 `src/engine/gate-writeback.ts`, `test/engine/gate-writeback.test.ts`, and
 `test/acceptance/owner-gate-{pr,issue}-writeback.acceptance.test.ts`.
 
+**`daemon_verbose` (#840).** Gate-writeback's other-owner skip notices — a suppressed
+`announceGatedPr` (no PR yet, or a terminal `MERGED`/`CLOSED`/not-found PR state) and a
+suppressed `announceGatedIssue` (missing/unparseable `Source-Ref`) — are default-off log
+noise: they fire on every `discover()` pass for gated specs the daemon can't act on yet and
+otherwise crowd out the daemon's own start/resume/status lines. Set `daemon_verbose: true`
+in `.ai-conductor/config.yml` to re-surface them for debugging; the default (unset or
+`false`) suppresses them while still emitting the daemon's own-work log lines. Validated in
+`engine/config.ts` (must be boolean), typed on `HarnessConfig.daemon_verbose` in
+`types/config.ts`, and threaded into `gatedWritebackDeps.verbose` in `daemon-cli.ts`.
+
+The same flag also governs **`bin/setup` output passthrough**. On a *successful* worktree
+prepare, `runProjectSetup` used to echo every line of the project's `bin/setup` output into
+the daemon log prefixed `setup: ` — dependency-manager chatter, blank spacer lines, and
+`publish-engine`'s machine-readable `{"versionId":…}` JSON. That passthrough accounted for
+55% of `.daemon/daemon.log` (3,875 of 6,990 lines in one observed run, 748 of them blank)
+and is only ever read when setup *fails* — where `SetupFailureError.outputTail` already
+carries a 50-line tail independently. The default now logs a single
+`setup: N line(s) of output suppressed` summary; `daemon_verbose: true` restores the full
+echo. Blank lines are dropped in both modes. Failure behavior is unchanged. Threaded via
+`prepareWorktree(path, log, { verbose })` and `RealDepsConfig.verbose`.
+
+```yaml
+# .ai-conductor/config.yml
+daemon_verbose: true   # default: false — suppresses gate-writeback other-owner skip
+                       # notices and bin/setup success-output passthrough
+```
+
 #### Attribution enforcement: inline build-work commits (#505, advisory since #773)
 
 A Claude session driving a build step can commit or mutate files directly, bypassing
@@ -1604,6 +1631,21 @@ selection table in `HARNESS.md`) in a fresh session — it is deliberately not c
 it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
 cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
 
+**Grading base guarantee (build-review-grades-plan-vs-diff-against-a-stale-o).** The diff
+`build_review` grades is always computed against a freshness-probed base, never a silently-stale
+local tracking ref: `assembleBuildReviewInputs` resolves the merge-base via `resolveFreshBase`
+(`engine/rebase.ts`), which checks the local `origin/<default>` ref against the true remote head
+before grading and refetches when it's behind. This closes an incident class where a stale
+tracking ref made an already-merged, out-of-scope-looking diff appear in-scope to the grader,
+producing a false scope-FAIL. The probe is read-only and fail-soft — no remote or a probe
+failure degrades to the local branch rather than blocking grading — and every grading emits a
+`build_review_base` telemetry event so an operator can see which base a given verdict graded
+against. If a scope-FAIL verdict is later found to have graded a base that was actually stale
+(a "stale-mirage"), the conductor discards that verdict and regrades once against a fresh base
+before falling back to normal kickback routing, bounded to once per feature-session with a HALT
+on a second occurrence. See `docs/daemon-operations.md` → "Fresh-base grading + stale-mirage
+regrade bound" for the full HALT-reason and regrade-semantics writeup.
+
 #### Per-task work-happened floor (advisory, `build_review`)
 
 Separate from — and much lighter than — `build_review`'s completeness rubric above,
@@ -2166,6 +2208,14 @@ the `dist` symlink, and runs GC. Raw `tsup` invocations are guarded and refused 
 wrapper, which errors loudly with remediation guidance). First build post-upgrade migrates an
 existing `dist/` directory into the store (one-time, automatic). See the Migration section in
 `CHANGELOG.md` for upgrade instructions.
+
+At finalize, the wrapper also stamps a `.engine-source-sha` sidecar file into the pinned
+`dist-versions/<id>` directory, containing the source commit SHA the build was produced from.
+The daemon reads this sidecar once at boot (`readEngineSourceSha`, resolving the `dist` symlink
+to its pinned version directory) to report the loaded engine's source SHA on the boot log's
+"daemon identity: ..." line (`unknown` when the sidecar is absent, e.g. a pre-feature published
+version) and to drive the advisory staleness probe described under "Daemon auto-restart on stale
+engine" below.
 
 **Daemon self-termination on missing repo root** (`engine/daemon.ts`) — the daemon checks at the 
 start of each loop iteration whether its repo root has been deleted (e.g., a worktree removed out 
@@ -3841,18 +3891,50 @@ See `.docs/plans/sandbox-auth-expiry-park.md` and `.docs/decisions/adr-2026-07-0
 ### Daemon auto-restart on stale engine (self-host only)
 
 When enabled in self-host mode, the daemon keeps its running engine in sync with merged source.
-**Before starting each feature** (and at idle) it rebuilds the engine from the fast-forwarded
-source — a content-addressed `npm run build` that no-ops when unchanged and atomically flips the
-`dist` symlink otherwise, leaving the running pinned `dist-versions/<id>` untouched — then hashes
-`dist/index.js`. If the running engine is now stale and no tasks are in-flight, it writes a restart
-intent marker (`.daemon/RESTART_PENDING`) and exits with code 0, allowing the configured respawn
-transport (PR #215) to relaunch with fresh code so the next feature is built by that fresh code.
+**Before starting each feature** (and at idle) it first fetches origin and fast-forwards the local
+checkout to origin's default branch (`fastForwardRoot`, throttled by
+`engine_refresh_min_interval_seconds` — see below), then rebuilds the engine from that
+fast-forwarded source — a content-addressed `npm run build` that no-ops when unchanged and
+atomically flips the `dist` symlink otherwise, leaving the running pinned `dist-versions/<id>`
+untouched — then hashes `dist/index.js`. If the running engine is now stale and no tasks are
+in-flight, it writes a restart intent marker (`.daemon/RESTART_PENDING`) and exits with code 0,
+allowing the configured respawn transport (PR #215) to relaunch with fresh code so the next
+feature is built by that fresh code.
 
 The rebuild step exists because engine build artifacts are untracked (#309): a merge advances
 `src/` but never the local `dist` artifact, so without a rebuild the staleness check would never
-observe merge-driven drift. Firing at the **dispatch boundary** (not only when the backlog fully
-drains) matters because a merge that lands new specs takes the dispatch path and skips the
-drained-idle branch — so an idle-only check would build freshly-merged specs on stale engine code.
+observe merge-driven drift. The fetch-and-fast-forward step exists for the same reason one layer
+up: without it, a merge landing on origin would never reach the local checkout that the rebuild
+builds from, so the rebuild alone is not sufficient — both steps are required to close the loop
+from "merged on origin" to "running engine reflects it." Firing at the **dispatch boundary** (not
+only when the backlog fully drains) matters because a merge that lands new specs takes the
+dispatch path and skips the drained-idle branch — so an idle-only check would build
+freshly-merged specs on stale engine code.
+
+**Throttled fetch (`engine_refresh_min_interval_seconds`, default 300, `engine-refresh.ts`).** The
+pre-rebuild fetch is gated by an injectable-clock throttle (`createRefreshThrottle`) shared with
+the advisory probe below, so a busy or idling daemon does not hit origin more than once per
+interval. When `fastForwardRoot` reports a degraded outcome (`dirty`, `diverged`, or
+`fetch-failed`) with a determinable origin head SHA, a deduped `StalenessWarner`
+(`createStalenessWarner`) logs one `WARN engine-stale: <cause>` line naming the cause, origin's
+head SHA, and the reload command (`git pull --ff-only origin <default-branch> && (cd
+src/conductor && npm run build) && conduct daemon restart`); the warning is keyed on
+`(cause, originHead)` so it re-fires only when origin's head SHA changes for that cause, never on
+every throttle-window tick of the same stale condition. Causes that aren't determinable
+(no-origin, unknown-default-branch, not-on-default-branch) or that are clean (`current`,
+`advanced`) never warn.
+
+**Advisory staleness probe when self-heal is off (`probeStampedShaBehindOrigin`).** Independent of
+whether `auto_restart_on_stale_engine` is set, the daemon wires an advisory-only probe at the
+quiescent boundary that compares the source SHA stamped into the currently-running pinned engine
+version (the `.engine-source-sha` sidecar written by `publish-engine.mjs` at finalize, read once
+at boot and surfaced on the "daemon identity: ..." boot log line as `source sha: <sha>`, or
+`unknown` when the sidecar is absent — e.g. a pre-feature published version) against origin's
+current head via `git merge-base --is-ancestor`. When origin is determinably ahead of the stamped
+SHA, it emits the same deduped warning with cause `self-heal-disabled`. This probe shares the same
+throttle mechanism (so it never fetches more than once per interval either) but NEVER rebuilds and
+NEVER restarts — it only surfaces drift for an operator running without self-heal enabled, who
+would otherwise get no signal at all that their daemon's engine has fallen behind origin.
 
 **Configuration:**
 
@@ -3879,9 +3961,9 @@ auto_restart_on_stale_engine: true    # default: false; self-host only, ignored 
   is not automatically relaunched with fresh code
 
 **Detection:** The daemon captures the sha256 of `dist/index.js` at startup and, before each
-dispatch (and at idle), rebuilds from source and re-hashes. A mismatch means the running engine no
-longer matches the freshly-built source. On non-convergence at boot (fresh identity ≠ the restart's
-target) restart is suppressed to avoid thrashing.
+dispatch (and at idle), fetches/fast-forwards origin, rebuilds from that source, and re-hashes. A
+mismatch means the running engine no longer matches the freshly-built source. On non-convergence at
+boot (fresh identity ≠ the restart's target) restart is suppressed to avoid thrashing.
 
 #### Respawn in-place (single-generation) — Fix for #400
 

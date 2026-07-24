@@ -50,6 +50,17 @@ const INCOMPLETE_SENTINEL = '.publish-incomplete';
 // .docs/plans/engine-rebuild-content-cache.md, Design "Sidecar record".
 const SOURCE_KEY_SIDECAR = '.engine-source-key';
 
+// Sidecar file recording the source repo's `git rev-parse HEAD` SHA the
+// version was built from — written beside `SOURCE_KEY_SIDECAR` in the same
+// finalize-path region, following the identical "present only on a fully
+// published version" precedent. Best-effort: a `git rev-parse` failure (not
+// a git repo, detached weirdness, etc.) must never fail an otherwise
+// successful publish — it just means no sidecar is written. Nothing in this
+// script reads it back; it exists for downstream stale-engine-origin
+// tooling (Tasks 8-9). Plan ref:
+// .docs/plans/daemon-stale-engine-origin-advance.md, Task 5.
+const SOURCE_SHA_SIDECAR = '.engine-source-sha';
+
 // Re-exported so existing imports of `assertPublishWrapperEnv` from this
 // module (e.g. tests) keep working; the canonical implementation lives in
 // the shebang-free `publish-guard.mjs` (see that file for why).
@@ -185,6 +196,9 @@ async function cleanupOrphanedStaging(opts) {
  *   engine-store.ts, parallel to `runCommand`/`tsupCommand`. Used both by the
  *   pre-build skip check and to stamp the `.engine-source-key` sidecar on a
  *   fresh publish.
+ * @property {(o: { conductorRoot: string }) => Promise<string>} [getSourceSha]
+ *   - test seam overriding the real `git rev-parse HEAD` invocation used to
+ *   stamp the `.engine-source-sha` sidecar. Parallel to `computeSourceKey`.
  * @property {() => Promise<void>} [simulateCrashAfterFinalize] - test seam
  *   only. If provided, is awaited immediately after the staging dir has been
  *   finalized (renamed into `dist-versions/<id>/`, sentinel written) but
@@ -236,6 +250,12 @@ export async function publish(opts) {
   } = await loadEngineStore();
   const storeRoot = resolveEngineStoreRoot({ conductorRoot, env });
   const computeSourceKey = opts.computeSourceKey ?? computeEngineSourceKey;
+  const getSourceSha =
+    opts.getSourceSha ??
+    (async ({ conductorRoot: root }) => {
+      const { stdout } = await execa('git', ['rev-parse', 'HEAD'], { cwd: root });
+      return stdout.trim();
+    });
 
   await migrateLegacyDistIfNeeded({
     conductorRoot,
@@ -370,6 +390,22 @@ export async function publish(opts) {
     } catch (err) {
       console.error(
         `[publish-engine] failed to write ${SOURCE_KEY_SIDECAR} sidecar (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    // Stamp the source-sha sidecar (Task 5) beside the source-key sidecar —
+    // same "finalized + flipped" precedent. Best-effort: a `git rev-parse`
+    // failure (not a git repo, detached weirdness, etc.) must never fail an
+    // otherwise successful publish; it just means no sidecar is written and
+    // downstream stale-engine-origin tooling falls back accordingly.
+    try {
+      const sourceSha = await getSourceSha({ conductorRoot });
+      await writeFile(join(finalDir, SOURCE_SHA_SIDECAR), sourceSha, 'utf-8');
+    } catch (err) {
+      console.error(
+        `[publish-engine] failed to write ${SOURCE_SHA_SIDECAR} sidecar (non-fatal): ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

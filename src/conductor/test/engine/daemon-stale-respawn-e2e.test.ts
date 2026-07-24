@@ -18,6 +18,12 @@ import {
 import { createRestartRequester } from '../../src/daemon-cli.js';
 import * as restartIntent from '../../src/engine/restart-intent.js';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { fastForwardRoot } from '../../src/engine/daemon-backlog.js';
+import { captureEngineIdentity, createStaleEngineChecker } from '../../src/engine/engine-identity.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCb);
 
 // Capstone acceptance spec for #353 / adr-2026-07-06-stale-engine-respawn-in-place
 // (TR-2, TR-3, TR-4). The production wiring this drives — createRestartRequester
@@ -267,6 +273,484 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         expect(res.stoppedReason).toBe('engine_restart');
       },
     );
+  });
+
+  describe('refreshEngineSource wired before rebuildEngine (Task 7, non-fatal)', () => {
+    it('called before rebuildEngine at the pre-dispatch boundary when staleGatesArmed and inFlight empty', async () => {
+      const callOrder: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        callOrder.push('refresh');
+      });
+      const rebuildEngine = vi.fn(async () => {
+        callOrder.push('rebuild');
+      });
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(callOrder).toEqual(['refresh', 'rebuild']);
+    });
+
+    it('not called again for the second dispatch while the first feature is still in flight', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // Let the dispatch loop start both features; the first ('f0') stays in
+      // flight (never resolved), so the second's pre-dispatch evaluation
+      // window has inFlight non-empty and must skip the refresh call — it
+      // fired exactly once, for the very first (fully-idle) dispatch.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('not called when gates are unarmed (not self-host)', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'stale' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+    });
+
+    it('throwing refreshEngineSource is logged and non-fatal: flow continues into rebuildEngine/check(), no restart triggered by the throw', async () => {
+      const logs: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1); // continued past the throw
+      expect(requestRestart).not.toHaveBeenCalled(); // 'current' verdict, no restart
+      expect(res.stoppedReason).toBe('idle_timeout'); // no crash, feature still dispatched
+      expect(logs.some((m) => m.toLowerCase().includes('refresh'))).toBe(true);
+    });
+
+    it('suppression path still short-circuits: refreshEngineSource + rebuildEngine run, but suppressed identity prevents restart', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'a',
+          targetIdentity: () => 'b',
+        },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        isSuppressed: async () => true,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+  });
+
+  describe('advisory probeEngineStaleness when self-heal is disabled (Task 9, quiescent-only)', () => {
+    it('HP3: probe is invoked at the quiescent (pre-dispatch) boundary when staleGatesArmed is false (not self-host)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails -> staleGatesArmed false
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      // Never rebuilds or restarts from the advisory branch.
+      expect(rebuildEngine).not.toHaveBeenCalled();
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('HP3: probe is invoked when the flag is off even under self-host', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: false, // gate 3 fails -> staleGatesArmed false
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked when staleGatesArmed is true (armed path handles refresh instead)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).not.toHaveBeenCalled();
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked while a build is in flight (quiescent-only)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // f0 dispatches first (quiescent, fires probe), stays in flight; f1's
+      // pre-dispatch evaluation window has inFlight non-empty and must skip.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('a throwing probe is logged and non-fatal (no crash, no restart)', async () => {
+      const logs: string[] = [];
+      const probeEngineStaleness = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+      expect(logs.some((m) => m.toLowerCase().includes('staleness probe') || m.toLowerCase().includes('probe'))).toBe(true);
+    });
+  });
+
+  describe('merged-fix end-to-end propagation (Task 10; #598 TI-1 HP1/HP2/HP3)', () => {
+    // Reuses the same e2e seams as the refreshEngineSource/probeEngineStaleness
+    // describes above (real git fixture + fake-build-command seam): a bare
+    // "origin" remote plus a working clone, and a `fakeRebuild` that stands in
+    // for the heavy `npm run build` step by making "rebuild" a pure function of
+    // the checked-out engine-source file (so a docs-only advance yields a
+    // byte-identical dist/content-hash while an engine-source advance yields a
+    // different one — the same behavior `publish-engine.mjs`'s content-hash
+    // versioning produces, without paying for a real tsup build per test).
+
+    async function initGitRepo(): Promise<{ dir: string; originDir: string; tmpBase: string }> {
+      const tmpBase = await mkdtemp(join(tmpdir(), 'e2e-propagation-'));
+      const dir = join(tmpBase, 'work');
+      const originDir = join(tmpBase, 'origin.git');
+      await mkdir(dir, { recursive: true });
+      await mkdir(originDir, { recursive: true });
+      await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'engine-entry.txt'), 'v1\n');
+      await writeFile(join(dir, 'README.md'), 'init\n');
+      await execFile('git', ['add', '.'], { cwd: dir });
+      await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+      await execFile('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: dir });
+      return { dir, originDir, tmpBase };
+    }
+
+    /** Simulates a merged PR landing on origin/main without touching `dir`
+     * (which stays behind — the incident this feature fixes). */
+    async function advanceOrigin(
+      originDir: string,
+      tmpBase: string,
+      changeKind: 'engine' | 'docs',
+    ): Promise<string> {
+      const otherDir = join(tmpBase, `other-${changeKind}`);
+      await execFile('git', ['clone', '-q', originDir, otherDir]);
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: otherDir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: otherDir });
+      if (changeKind === 'engine') {
+        await writeFile(join(otherDir, 'src', 'engine-entry.txt'), 'v2 — merged engine fix\n');
+      } else {
+        await writeFile(join(otherDir, 'README.md'), 'docs update\n');
+      }
+      await execFile('git', ['add', '.'], { cwd: otherDir });
+      await execFile(
+        'git',
+        ['commit', '-q', '-m', changeKind === 'engine' ? 'fix: engine bug' : 'docs: update'],
+        { cwd: otherDir },
+      );
+      await execFile('git', ['push', '-q', 'origin', 'main'], { cwd: otherDir });
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: otherDir });
+      return stdout.trim();
+    }
+
+    /** Fake build-command seam: "publish" is standing in for
+     * publish-engine.mjs's content-hash-stamped-version behavior — the
+     * published dist is a pure function of the checked-out engine source, so
+     * an engine-source advance produces a NEW version/content-hash and a
+     * docs-only advance reproduces the SAME one. */
+    async function fakePublish(dir: string, distPath: string): Promise<void> {
+      const content = await readFile(join(dir, 'src', 'engine-entry.txt'), 'utf-8').catch(() => '');
+      await mkdir(dirname(distPath), { recursive: true });
+      await writeFile(distPath, content, 'utf-8');
+    }
+
+    async function headSha(dir: string): Promise<string> {
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: dir });
+      return stdout.trim();
+    }
+
+    it('Scenario A (HP1/HP2): behind-origin engine-source advance -> quiescent fast-forward "advanced" -> publish stamps the merge SHA -> checker reports "stale" -> requestRestart fires', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath); // v1: identity currently loaded by the running daemon
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const mergeSha = await advanceOrigin(originDir, tmpBase, 'engine');
+
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => [{ slug: 'pending' }],
+          runFeature: async () => {
+            throw new Error('must never dispatch: the engine is stale before this item runs');
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        // ff outcome: advanced, at the merge commit.
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: mergeSha }));
+        expect(await headSha(dir)).toBe(mergeSha);
+
+        // Publish flips to a new (content-hash) version stamped at the merge SHA.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).not.toBe(capturedIdentity);
+
+        // Checker sees the drift -> stale -> restart requested.
+        expect(checker.check()).toBe('stale');
+        expect(requestRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it('Scenario B (HP3): docs-only advance -> publish content-unchanged (same identity) -> no restart invoked', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath);
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const docsMergeSha = await advanceOrigin(originDir, tmpBase, 'docs');
+
+        let dispatched = false;
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => (dispatched ? [] : [{ slug: 'pending' }]),
+          runFeature: async (item: { slug: string }) => {
+            dispatched = true;
+            return { slug: item.slug, status: 'done' };
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: docsMergeSha }));
+        expect(await headSha(dir)).toBe(docsMergeSha);
+
+        // Docs-only advance: publish reproduces the SAME content-hash identity.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).toBe(capturedIdentity);
+
+        expect(checker.check()).toBe('current');
+        expect(dispatched).toBe(true); // engine wasn't stale, feature ran
+        expect(requestRestart).not.toHaveBeenCalled();
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
+    });
   });
 
   describe('real tmux: session survives, new pid, marker consumed, hyphen marker untouched', () => {

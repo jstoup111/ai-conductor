@@ -88,6 +88,56 @@ describe('engine/worktree-prepare', () => {
     await readFile(join(dir, 'ran.marker'), 'utf-8'); // ran in the worktree cwd
   });
 
+  describe('setup output logging (daemon log noise)', () => {
+    // A successful bin/setup emitting install/build chatter — including a
+    // blank spacer line and publish-engine's machine-readable JSON, the two
+    // shapes that dominated the daemon log.
+    const CHATTY_SETUP =
+      '#!/usr/bin/env bash\n' +
+      'echo "added 402 packages"\n' +
+      'echo ""\n' +
+      'echo "{\\"versionId\\":\\"20260723T113046Z-abc\\",\\"dir\\":\\"/x/y\\"}"\n' +
+      'echo "Setup complete."\n';
+
+    it('summarizes bin/setup output instead of echoing it, by default', async () => {
+      await writeSetup(CHATTY_SETUP);
+      const lines: string[] = [];
+
+      await prepareWorktree(dir, (m) => lines.push(m));
+
+      const setupLines = lines.filter((l) => l.startsWith('setup: '));
+      // No raw passthrough: neither the JSON blob nor the chatter is echoed.
+      expect(setupLines.some((l) => l.includes('versionId'))).toBe(false);
+      expect(setupLines.some((l) => l.includes('added 402 packages'))).toBe(false);
+      // A single summary line reports how much was suppressed (blank dropped).
+      expect(setupLines).toContainEqual(
+        expect.stringContaining('3 line(s) of output suppressed'),
+      );
+      expect(setupLines).toContain('setup: ok');
+    });
+
+    it('echoes full output when verbose is set, still dropping blank lines', async () => {
+      await writeSetup(CHATTY_SETUP);
+      const lines: string[] = [];
+
+      await prepareWorktree(dir, (m) => lines.push(m), { verbose: true });
+
+      const setupLines = lines.filter((l) => l.startsWith('setup: '));
+      expect(setupLines.some((l) => l.includes('versionId'))).toBe(true);
+      expect(setupLines).toContain('setup: added 402 packages');
+      // Blank spacer lines are never echoed, even verbose.
+      expect(setupLines).not.toContain('setup: ');
+      expect(setupLines.some((l) => l.includes('suppressed'))).toBe(false);
+    });
+
+    it('still carries setup output on failure, regardless of verbosity', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho "DIAGNOSTIC_LINE"\nexit 3\n');
+      await expect(prepareWorktree(dir, () => {})).rejects.toMatchObject({
+        outputTail: expect.stringContaining('DIAGNOSTIC_LINE'),
+      });
+    });
+  });
+
   it('rejects with SetupFailureError carrying outputTail when bin/setup exits non-zero', async () => {
     await writeSetup('#!/usr/bin/env bash\necho "line 1"\necho "FAILURE_MARKER" >&2\nexit 3\n');
     try {
@@ -110,10 +160,12 @@ describe('engine/worktree-prepare', () => {
     }
   });
 
-  it('forwards setup output to the log sink', async () => {
+  it('forwards setup output to the log sink under verbose', async () => {
+    // Was unconditional; success output is now summarized by default (see
+    // "setup output logging") and echoed only when verbose is requested.
     await writeSetup('#!/usr/bin/env bash\necho "== Preparing database =="\n');
     const lines: string[] = [];
-    await prepareWorktree(dir, (m) => lines.push(m));
+    await prepareWorktree(dir, (m) => lines.push(m), { verbose: true });
     expect(lines.some((l) => l.includes('Preparing database'))).toBe(true);
     expect(lines.some((l) => l.includes('ok'))).toBe(true);
   });

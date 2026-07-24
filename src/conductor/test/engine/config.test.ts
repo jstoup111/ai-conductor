@@ -974,6 +974,36 @@ complexity:
     });
   });
 
+  describe('daemon_verbose config field', () => {
+    it('accepts true', () => {
+      const result = validateConfig({ daemon_verbose: true });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.daemon_verbose).toBe(true);
+    });
+
+    it('accepts false', () => {
+      const result = validateConfig({ daemon_verbose: false });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.daemon_verbose).toBe(false);
+    });
+
+    it('accepts absent/undefined', () => {
+      const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.daemon_verbose).toBeUndefined();
+    });
+
+    it('rejects a non-boolean value', () => {
+      const result = validateConfig({ daemon_verbose: 'yes' });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toBe('daemon_verbose must be a boolean');
+    });
+  });
+
   describe('auto_restart_on_stale_engine config field', () => {
     it('resolves true to true without warning', () => {
       const result = validateConfig({ auto_restart_on_stale_engine: true });

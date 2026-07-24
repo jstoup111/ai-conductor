@@ -30,6 +30,7 @@ interface GateWritebackDeps {
   runGh?: GhRunner;
   cwd: string;
   log?: (msg: string) => void;
+  verbose?: boolean;
 }
 
 interface GateWritebackModule {
@@ -254,6 +255,7 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
       runGh: gh,
       cwd: '/repo',
       log: (m) => logs.push(m),
+      verbose: true,
     });
 
     expect(anyGhCalled).toBe(false);

@@ -10,6 +10,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- `build_review` now resolves its grading base through a read-only `git ls-remote`
+  freshness probe (`resolveFreshBase`) instead of trusting the local `origin/<default>`
+  tracking ref, refetching only when the ref is behind; fail-soft (no remote / probe
+  failure) degrades to the local branch. Every grading emits a `build_review_base`
+  telemetry event so an operator can see which base a verdict graded against. A scope-FAIL
+  verdict found to have graded a since-stale base ("stale-mirage") is discarded and
+  regraded once against a fresh base per feature-session; a second stale-mirage detection
+  in the same session HALTs instead of re-entering grading. See
+  `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
+
 ### Changed
 
 - Specced (#878, DECIDE artifacts only — not yet built): trailer scans will no longer
@@ -21,14 +34,57 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   entirely, and the anchored `getEvidenceRange` path (reflog-dependent via
   `merge-base --fork-point`) is deliberately left uncached. See
   `.docs/decisions/adr-2026-07-23-trailer-scan-memo-invalidation-key.md`.
+- Bootstrap-generated Claude settings now use portable project-relative permission patterns
+  (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
+  Generated `CLAUDE.md` and `AGENTS.md` now reference the user-scoped installed copy of
+  `HARNESS.md`, rather than a machine-specific harness checkout path, so they remain valid
+  after a move or worktree checkout.
+- Installation now links every harness skill into both user-scoped client directories:
+  `~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex. The installer check and
+  uninstall paths cover both locations, while project-local skills remain explicit overrides.
+  Bootstrap now creates or preserves an `AGENTS.md` from the Codex-aware template so projects
+  can reference the user-scoped harness without copying skills into the repository.
+- Daemon log: a successful `bin/setup` no longer echoes its entire output into
+  `.daemon/daemon.log`. That passthrough was 55% of the log (3,875 of 6,990 lines in one
+  observed run — 748 of them blank, plus `publish-engine`'s raw `{"versionId":…}` JSON) and
+  is only read when setup *fails*, where `SetupFailureError.outputTail` already carries a
+  50-line tail. The default now emits a single `setup: N line(s) of output suppressed`
+  summary; `daemon_verbose: true` restores the full echo. Blank lines are dropped in both
+  modes and failure behavior is unchanged.
 - Source-ref parsing/formatting is now generalized behind a canonical tagged
   `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
   markers and the ledger. Five duplicate ref-parsing implementations were retired
   in favor of the shared shim, with no behavior change for existing GitHub refs.
+- Gate-writeback's other-owner skip notices (no implementation PR yet, terminal PR state,
+  no `Source-Ref` marker) are now suppressed from the daemon log by default; set
+  `daemon_verbose: true` in `.ai-conductor/config.yml` to re-surface them (#840).
+
+## Migration
+
+```bash migration
+# Install the user-scoped HARNESS.md links consumed by generated CLAUDE.md and AGENTS.md.
+./bin/install --update
+```
 
 ### Fixed
 
+- `build_review` could grade a diff against a stale local `origin/<default>` tracking ref
+  instead of the true remote head, producing false out-of-scope scope-FAIL verdicts on
+  content already merged upstream. Grading now resolves its base through a freshness
+  probe before every run (see Added, above).
+- Spec (DECIDE only): intake issues filed via `bin/intake-file` accumulated contradictory
+  duplicate `priority:`/`size:` labels — 23 of 109 open issues were affected. The
+  `intake-label-sync` workflow cannot parse a CLI-authored body (its `extractField` matches
+  only the GitHub issue-form's `### Heading` rendering), so it fell through to its defaults
+  and **added** `priority: medium` / `size: M` on top of the values the CLI had already
+  applied, because the shared `syncIssueLabels` seam writes with an additive `addLabel` —
+  contradicting the same workflow's header claim of a "set labels" full replace. The spec
+  gives the seam a label-authority ladder (explicit > existing > default) applied by a
+  namespace-scoped replace that preserves `engineer:handled`/`blocked_by:#N`, teaches
+  `bin/intake-file` to emit the `### Priority`/`### Size` shape the parser already
+  understands (leaving the issue-form path untouched), and adds a dry-run-by-default
+  `intake-backfill --dedupe` sweep for the already-affected issues (#889).
 - Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
   complete: the build step's own completion predicate only checked
   `.pipeline/task-status.json` rows and missed tasks resolved solely via `Task:` trailer
@@ -345,6 +401,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `conductor.ts`'s group-dispatch JOIN (both the concurrent and serial paths) now
   parks an `authFailure` without consuming retry/escalation budget, matching the
   serial-path behavior (#498, closes #484).
+- Self-host daemon builds now self-refresh their engine checkout from origin before a
+  quiescent engine rebuild, so the rebuild never runs against a stale commit. When the
+  running engine falls behind origin, the daemon logs a loud staleness warning (deduped
+  by cause + SHA so it doesn't repeat every poll tick); when self-heal / auto-restart is
+  disabled, an advisory staleness probe still surfaces the same signal without acting on
+  it. Published engine versions are now stamped with a `.engine-source-sha` sidecar
+  recording the exact source commit they were built from. The origin-fetch cadence is
+  throttled by the new `engine_refresh_min_interval_seconds` config key (default `300`)
+  (#598).
 
 ## Migration
 

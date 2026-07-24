@@ -82,6 +82,36 @@ export type ConductorEvent =
       mtimeMs?: number;
       floorMs?: number;
     }
+  | {
+      /**
+       * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
+       * base-freshness telemetry emitted once per build_review grading,
+       * right after `assembleBuildReviewInputs` resolves — regardless of
+       * how the grading itself turns out. Lets operators see whether the
+       * diff was graded against a freshly-fetched remote head (`fresh:
+       * true`) or a stale tracking ref / no-remote local fallback
+       * (`fresh: false`). Pure telemetry: never affects step outcome.
+       */
+      type: 'build_review_base';
+      mergeBase: string;
+      trackingRefSha: string | null;
+      remoteHeadSha: string | null;
+      fresh: boolean;
+    }
+  | {
+      /**
+       * Task 7 (build-review-grades-plan-vs-diff-against-a-stale-o): emitted
+       * when a build_review FAIL is classified `stale-mirage` — the graded
+       * base was stale, and the flagged content is absent under a fresh
+       * recompute. The stale verdict is discarded and build_review re-runs
+       * against fresh inputs instead of kicking back to build; `regradeCount`
+       * is the per-feature-session counter value AFTER this regrade
+       * (Task 8 reads the same counter to enforce the once-per-session bound).
+       */
+      type: 'build_review_stale_mirage_regrade';
+      mergeBase: string;
+      regradeCount: number;
+    }
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';

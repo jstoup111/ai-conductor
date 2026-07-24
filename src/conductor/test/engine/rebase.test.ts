@@ -6,6 +6,8 @@ import { execa } from 'execa';
 
 import {
   resolveBase,
+  resolveBaseCore,
+  resolveFreshBase,
   isBranchCurrent,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
@@ -99,6 +101,233 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
     expect(base.kind).toBe('local');
     expect(base.ref).toBe('develop');
     expect(base.branch).toBe('develop');
+  });
+
+  it('default-branch discovery failing entirely (no symbolic-ref, no remote show match) degrades to local base', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['remote', 'show', 'origin'], result: { exitCode: 0, stdout: 'no HEAD branch line here' } },
+    ]);
+    const base = await resolveBase(git, 'main');
+    expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+  });
+});
+
+describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
+  it('is the extracted core that resolveBase delegates to — identical result on success', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/trunk\n' },
+      },
+      { match: ['fetch', 'origin', 'trunk'], result: { exitCode: 0 } },
+    ]);
+    const core = await resolveBaseCore(git, 'main');
+    const viaResolveBase = await resolveBase(git, 'main');
+    expect(core).toEqual({ ref: 'origin/trunk', kind: 'remote', branch: 'trunk' });
+    expect(core).toEqual(viaResolveBase);
+  });
+
+  it('no origin → resolveBaseCore returns the local base directly (same as resolveBase)', async () => {
+    const { git } = fakeGit([{ match: ['remote'], result: { stdout: '' } }]);
+    const core = await resolveBaseCore(git, 'main');
+    expect(core).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+  });
+
+  it('fetch failure → resolveBaseCore degrades to local base (same as resolveBase)', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['fetch', 'origin', 'main'], result: { exitCode: 1, stderr: 'unreachable' } },
+    ]);
+    const core = await resolveBaseCore(git, 'main');
+    expect(core.kind).toBe('local');
+    expect(core.branch).toBe('main');
+  });
+});
+
+describe('engine/rebase — resolveFreshBase (Task 2)', () => {
+  const SHA_A = 'a'.repeat(40);
+  const SHA_B = 'b'.repeat(40);
+
+  it('fresh: tracking ref matches ls-remote head → fresh:true, no fetch', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${SHA_A}\n` } },
+      { match: ['ls-remote', 'origin', 'main'], result: { stdout: `${SHA_A}\trefs/heads/main\n` } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    expect(resolution).toEqual({
+      ref: 'origin/main',
+      kind: 'remote',
+      branch: 'main',
+      trackingRefSha: SHA_A,
+      remoteHeadSha: SHA_A,
+      fresh: true,
+    });
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+  });
+
+  it('stale: shas differ → fetch triggered, returns the fetched ref with fresh:false', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${SHA_A}\n` } },
+      { match: ['ls-remote', 'origin', 'main'], result: { stdout: `${SHA_B}\trefs/heads/main\n` } },
+      { match: ['fetch', 'origin', 'main'], result: { exitCode: 0 } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    expect(resolution).toEqual({
+      ref: 'origin/main',
+      kind: 'remote',
+      branch: 'main',
+      trackingRefSha: SHA_A,
+      remoteHeadSha: SHA_B,
+      fresh: false,
+    });
+    expect(calls).toContainEqual(['fetch', 'origin', 'main']);
+  });
+
+  it('stale + probeOnly: no fetch, returns the stale tracking-ref shape unchanged', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${SHA_A}\n` } },
+      { match: ['ls-remote', 'origin', 'main'], result: { stdout: `${SHA_B}\trefs/heads/main\n` } },
+    ]);
+
+    const resolution = await resolveFreshBase(git, { probeOnly: true });
+
+    expect(resolution).toEqual({
+      ref: 'origin/main',
+      kind: 'remote',
+      branch: 'main',
+      trackingRefSha: SHA_A,
+      remoteHeadSha: SHA_B,
+      fresh: false,
+    });
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+  });
+
+  it('no origin → fail-soft: fresh:false, trackingRefSha/remoteHeadSha null, degrades to local branch', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['config', '--get', 'init.defaultBranch'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/main'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/master'], result: { exitCode: 1 } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    expect(resolution).toEqual({
+      ref: 'feature',
+      kind: 'local',
+      branch: 'feature',
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    });
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+    expect(calls.some((c) => c[0] === 'ls-remote')).toBe(false);
+  });
+
+  it('ls-remote failure → fail-soft', async () => {
+    const { git } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${SHA_A}\n` } },
+      { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 1, stderr: 'network error' } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    // Legacy local-only default-branch discovery still finds `main` via the
+    // already-local `refs/remotes/origin/HEAD` symbolic-ref (no network
+    // needed) — restoring the pre-existing offline behavior rather than
+    // degrading further to the current branch.
+    expect(resolution).toEqual({
+      ref: 'main',
+      kind: 'local',
+      branch: 'main',
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    });
+  });
+
+  it('rev-parse failure (no local tracking ref) → fail-soft', async () => {
+    const { git } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 1 } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    // Same legacy-discovery reasoning as the ls-remote-failure case above.
+    expect(resolution).toEqual({
+      ref: 'main',
+      kind: 'local',
+      branch: 'main',
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    });
+  });
+
+  it('default-branch discovery failure → fail-soft', async () => {
+    const { git } = fakeGit([
+      { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['remote', 'show', 'origin'], result: { exitCode: 0, stdout: 'no HEAD branch line here' } },
+      { match: ['config', '--get', 'init.defaultBranch'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/main'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/master'], result: { exitCode: 1 } },
+    ]);
+
+    const resolution = await resolveFreshBase(git);
+
+    expect(resolution).toEqual({
+      ref: 'feature',
+      kind: 'local',
+      branch: 'feature',
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    });
   });
 });
 

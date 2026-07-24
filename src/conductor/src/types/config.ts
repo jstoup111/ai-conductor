@@ -445,6 +445,13 @@ export interface HarnessConfig {
    */
   owner_gate_cutover?: string;
   /**
+   * Controls default-off verbose skip logging in gate-writeback (Task 7/8):
+   * when `true`, gated-spec skip notices (no-PR, terminal-PR, no-Source-Ref)
+   * are re-surfaced on the daemon log; when `false`/absent, they are
+   * suppressed by default.
+   */
+  daemon_verbose?: boolean;
+  /**
    * Attribution enforcement cutover (#505): the ISO-8601 instant on/after
    * which inline build-work attribution enforcement gates activate. Validated
    * at load time — a malformed (unparseable) value is REJECTED rather than
@@ -506,6 +513,12 @@ export interface HarnessConfig {
    * false with a single warning. Default: false. Never throws.
    */
   auto_restart_on_stale_engine?: boolean;
+  /**
+   * Minimum interval, in seconds, between engine-refresh (origin fetch)
+   * attempts. Non-numeric, non-finite, zero, or negative values resolve to
+   * the default with a single warning. Default: 300. Never throws.
+   */
+  engine_refresh_min_interval_seconds?: number;
   /**
    * Auto-resolve merge conflicts on open harness PRs. Extends rebase-resolution
    * beyond finish-time by dispatching a daemon task that polls for and resolves

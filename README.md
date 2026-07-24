@@ -1,14 +1,15 @@
 # James Stoup Agents
 
-A custom development harness for Claude Code. Pure Markdown skills and agent personas that enforce
+A custom development harness for Claude Code and Codex. Pure Markdown skills and agent personas that enforce
 a disciplined SDLC: design docs, user stories with mandatory negative paths, conflict detection,
 TDD with domain review, evaluator-gated code review, and dual retrospectives.
 
-No custom runtime. Claude Code is the execution engine.
+No custom skill runtime. Claude Code powers the conductor automation, and Codex can use the
+same Markdown skills directly.
 
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+
+- [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+ and/or Codex
 - Git
 - A project to work on (Rails+PostgreSQL has full tech-context support; other stacks work with generic skills)
 
@@ -20,8 +21,10 @@ cd ai-conductor
 ./bin/install
 ```
 
-This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor CLI(s) to
-`~/.local/bin/`. See [Getting Started](docs/getting-started.md) for the full install
+This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and
+`~/.codex/skills/` directories and installs the conductor CLI(s) to `~/.local/bin/`. The installer never puts
+the harness skills in a project directory; project-local skills are optional explicit overrides.
+See [Getting Started](docs/getting-started.md) for the full install
 walkthrough (Mermaid renderer setup, verify/update/uninstall, worktree-root guard) and
 [Choosing a Conductor](docs/choosing-a-conductor.md) for the `conduct` vs `conduct-ts`
 comparison — both binaries coexist, `conduct` is the default, `conduct-ts` is opt-in.
@@ -75,7 +78,10 @@ flowchart TB
   through the full SDLC, gated on completion by `build_review`'s LLM-judged completeness
   rubric (plan-vs-diff, fail-closed, self-heals via kickback), self-heals stalls and red CI,
   and opens the implementation PR with a committed shipped-record so the work is never
-  re-dispatched.
+  re-dispatched. Gate-writeback's other-owner skip notices (no PR, terminal PR state, no
+  `Source-Ref`) are suppressed from the daemon log by default and re-surfaced by setting
+  `daemon_verbose: true` in `.ai-conductor/config.yml` (see [Conductor CLI
+  Reference](src/conductor/README.md#gate-write-back-owner-gated-prissue-announcement-tasks-17-21)).
 - **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
   escalates, and signs off version bumps.
 
@@ -94,6 +100,9 @@ Then in the Claude Code session:
 ```
 /conduct
 ```
+
+Or open the project with Codex. Codex discovers the same user-scoped skills, and a bootstrapped
+project's `AGENTS.md` supplies the harness instructions for Codex.
 
 The conductor checks artifact state, tells you what to run next, and blocks when gates
 aren't met — walking you from `/bootstrap` through `/finish`. For the full install

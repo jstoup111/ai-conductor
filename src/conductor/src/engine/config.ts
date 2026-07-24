@@ -190,6 +190,8 @@ export function validateConfig(
     'model_fallback_ladder',
     // Daemon auto-restart on stale engine.
     'auto_restart_on_stale_engine',
+    // Minimum interval between engine-refresh (origin fetch) attempts.
+    'engine_refresh_min_interval_seconds',
     // Auto-resolve merge conflicts on open PRs.
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
@@ -204,6 +206,8 @@ export function validateConfig(
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
     'kickback_escalation',
+    // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
+    'daemon_verbose',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -478,6 +482,12 @@ export function validateConfig(
     if (err) return { ok: false, error: err };
   }
 
+  // daemon_verbose — controls default-off verbose skip logging in gate-writeback.
+  // Absent is allowed; the default-off behavior is applied at the wiring site.
+  if (obj.daemon_verbose !== undefined && typeof obj.daemon_verbose !== 'boolean') {
+    return errVal('daemon_verbose must be a boolean');
+  }
+
   // mergeable_autoresolve
   if (obj.mergeable_autoresolve !== undefined) {
     const err = validateMergeableAutoresolveBlock(obj.mergeable_autoresolve);
@@ -657,6 +667,35 @@ export function validateConfig(
   } else {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
+  }
+
+  // engine_refresh_min_interval_seconds — minimum interval between engine
+  // refresh (origin fetch) attempts, in seconds. Contract (total — never
+  // throws, never undefined):
+  //   C1  absent / null → 300 (default, no warning)
+  //   C2  finite positive number → that value (no warning)
+  //   C3  other value (non-numeric, non-finite, zero, or negative) → 300
+  //       + one warning
+  if (
+    obj.engine_refresh_min_interval_seconds !== undefined &&
+    obj.engine_refresh_min_interval_seconds !== null
+  ) {
+    if (
+      typeof obj.engine_refresh_min_interval_seconds === 'number' &&
+      Number.isFinite(obj.engine_refresh_min_interval_seconds) &&
+      obj.engine_refresh_min_interval_seconds > 0
+    ) {
+      // C2: valid — accept as-is
+    } else {
+      // C3: invalid value — log warning and resolve to default
+      warnings.push(
+        `engine_refresh_min_interval_seconds has invalid value ${JSON.stringify(obj.engine_refresh_min_interval_seconds)}, falling back to 300.`,
+      );
+      obj.engine_refresh_min_interval_seconds = 300;
+    }
+  } else {
+    // C1: absent or null → 300 without warning
+    obj.engine_refresh_min_interval_seconds = 300;
   }
 
   // mergeable_autoresolve — auto-resolve merge conflicts on open PRs.

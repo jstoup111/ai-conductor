@@ -73,13 +73,18 @@ export interface GateWritebackDeps {
    * logs unconditionally (matches prior behavior for one-off/test callers).
    */
   warnedSkips?: Set<string>;
+  /**
+   * Suppresses gated skip notices at default verbosity; verbose surfaces
+   * them (subject to `warnedSkips` dedup).
+   */
+  verbose?: boolean;
 }
 
 /**
  * Log a skip notice at most once per (slug, reason) key for the lifetime of
  * the given `warnedSkips` set. Repeated calls with the same key are silent
- * no-ops after the first. When `warnedSkips` is undefined, always logs
- * (no dedup state to track against).
+ * no-ops after the first. Requires `verbose: true` to log at all; when
+ * `warnedSkips` is undefined, dedup is skipped but the verbose gate still applies.
  */
 function logSkipOnce(
   log: ((msg: string) => void) | undefined,
@@ -87,7 +92,10 @@ function logSkipOnce(
   slug: string,
   reason: string,
   msg: string,
+  verbose?: boolean,
 ): void {
+  if (verbose !== true) return;
+
   if (warnedSkips) {
     const key = `${slug}:${reason}`;
     if (warnedSkips.has(key)) return;
@@ -180,7 +188,7 @@ export async function announceGatedPr(
   prUrl: string,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log, warnedSkips } = deps;
+  const { cwd, log, warnedSkips, verbose } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (!prUrl) {
@@ -190,6 +198,7 @@ export async function announceGatedPr(
       spec.slug,
       'no-pr',
       `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (no PR)`,
+      verbose,
     );
     return;
   }
@@ -202,6 +211,7 @@ export async function announceGatedPr(
       spec.slug,
       'pr-terminal',
       `[gate-writeback] nothing to announce for gated spec "${spec.slug}" (PR ${prUrl} is ${state.state}) — will retry if it revives`,
+      verbose,
     );
     return;
   }
@@ -238,7 +248,7 @@ export async function announceGatedIssue(
   sourceRef: string | undefined,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log, warnedSkips } = deps;
+  const { cwd, log, warnedSkips, verbose } = deps;
   const runGh = deps.runGh ?? makeProductionGh();
 
   if (spec.kind !== 'spec') {
@@ -254,6 +264,7 @@ export async function announceGatedIssue(
       'no-source-ref',
       `[gate-writeback] nothing to announce on an issue for gated spec "${spec.slug}" ` +
         `(no usable Source-Ref, got "${sourceRef ?? ''}") — will retry when one exists`,
+      verbose,
     );
     return;
   }

@@ -2,14 +2,15 @@
 
 ## Harness
 
-This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
+This project uses the james-stoup-agents harness. Its skills are installed in the user's
+Claude Code configuration; do not copy them into this project.
 
 ## Tech Stack
 
 - **Framework:** {{FRAMEWORK}}
 - **Database:** {{DATABASE}}
 - **Test Framework:** {{TEST_FRAMEWORK}}
-- **Tech-Context:** {{TECH_CONTEXT_PATH}} (or "none — skills use generic behavior")
+- **Tech-Context:** `tech-context/{{TECH_CONTEXT_DIR}}/` (or "none — skills use generic behavior")
 
 ## Active Skills
 
@@ -22,17 +23,17 @@ This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
 
 ## Harness Behavioral Rules
 
-All behavioral rules, model selection, communication protocol, and conventions are defined in:
-`{{HARNESS_PATH}}/HARNESS.md`
+All behavioral rules, model selection, communication protocol, and conventions are defined in
+the user-scoped `~/.claude/skills/HARNESS.md`.
 
-Claude MUST read and follow HARNESS.md at the start of every session.
+Claude MUST read and follow `~/.claude/skills/HARNESS.md` at the start of every session.
 
 ## Skill References
 
-Skills are loaded from the harness:
-- Skills: `{{HARNESS_PATH}}/skills/`
-- Agents: `{{HARNESS_PATH}}/agents/`
-- Tech-Context: `{{HARNESS_PATH}}/tech-context/{{TECH_CONTEXT_DIR}}/`
+Harness references use paths relative to the harness root:
+- Skills: `skills/`
+- Agents: `agents/`
+- Tech-Context: `tech-context/{{TECH_CONTEXT_DIR}}/`
 
 ## Project Conventions
 

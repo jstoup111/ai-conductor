@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install — Installs the harness skills and conduct script for use with Claude Code.
+# install — Installs the harness skills and conduct script for Claude Code and Codex.
 #
 # Usage:
 #   ./bin/install          # Install everything
 #   ./bin/install --check  # Check installation status without changing anything
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SKILLS_DIR="${HOME}/.claude/skills"
+HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
+CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
+CODEX_SKILLS_DIR="${HOME}/.codex/skills"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
@@ -38,8 +40,9 @@ info() { echo -e "  ${CYAN}→${NC} $*"; }
 # Auto-discover every skill: any skills/<name>/ directory containing a SKILL.md.
 # Previously this was a hardcoded list that drifted out of sync — new skills
 # (engineer, prd-audit, …) were added to skills/ but forgotten here, so they were
-# never symlinked into ~/.claude/skills/. Enumerating the directory guarantees ALL
-# skills link. Glob results are alphabetically sorted by bash (deterministic order).
+# never symlinked into the user-level skill directories. Enumerating the directory
+# guarantees ALL skills link for both Claude Code and Codex. Glob results are
+# alphabetically sorted by bash (deterministic order).
 SKILLS=()
 for _skill_dir in "${HARNESS_DIR}"/skills/*/; do
   [ -f "${_skill_dir}SKILL.md" ] || continue
@@ -48,6 +51,10 @@ done
 unset _skill_dir
 if [ ${#SKILLS[@]} -eq 0 ]; then
   fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
+  exit 1
+fi
+if [ ! -f "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+  fail "Harness instructions missing: ${HARNESS_INSTRUCTIONS_SOURCE}"
   exit 1
 fi
 
@@ -98,32 +105,60 @@ check_installation() {
     all_ok=false
   fi
 
-  # Check skills directory
-  if [ -d "$SKILLS_DIR" ]; then
-    ok "Skills directory exists ($SKILLS_DIR)"
-  else
-    fail "Skills directory missing ($SKILLS_DIR)"
-    all_ok=false
-  fi
-
-  # Check each skill
+  # Check user-level skill directories. Do not use project-local skill paths as
+  # the install target: both clients discover these skills from their own user
+  # configuration directories.
   local missing=0
   local stale=0
-  for skill in "${SKILLS[@]}"; do
-    if [ -L "${SKILLS_DIR}/${skill}" ]; then
-      local target
-      target=$(readlink -f "${SKILLS_DIR}/${skill}" 2>/dev/null || echo "broken")
-      if [ "$target" = "${HARNESS_DIR}/skills/${skill}" ]; then
-        ok "Skill: ${skill}"
+  local skills_dir client skill target harness_target
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
+    else
+      skills_dir="$CODEX_SKILLS_DIR"
+    fi
+    if [ -d "$skills_dir" ]; then
+      ok "${client} skills directory exists (${skills_dir})"
+    else
+      fail "${client} skills directory missing (${skills_dir})"
+      all_ok=false
+    fi
+
+    for skill in "${SKILLS[@]}"; do
+      target="${skills_dir}/${skill}"
+      if [ -L "$target" ]; then
+        local resolved_target
+        resolved_target=$(readlink -f "$target" 2>/dev/null || echo "broken")
+        if [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
+          ok "${client} skill: ${skill}"
+        else
+          warn "${client} skill: ${skill} — points to ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
+          stale=$((stale + 1))
+        fi
+      elif [ -d "$target" ]; then
+        warn "${client} skill: ${skill} — exists but is not a symlink (may be a copy)"
+        stale=$((stale + 1))
       else
-        warn "Skill: ${skill} — points to ${target} (expected ${HARNESS_DIR}/skills/${skill})"
+        fail "${client} skill: ${skill} — not installed"
+        missing=$((missing + 1))
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      local resolved_harness
+      resolved_harness=$(readlink -f "$harness_target" 2>/dev/null || echo "broken")
+      if [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ok "${client} harness instructions"
+      else
+        warn "${client} harness instructions — point to ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
         stale=$((stale + 1))
       fi
-    elif [ -d "${SKILLS_DIR}/${skill}" ]; then
-      warn "Skill: ${skill} — exists but is not a symlink (may be a copy)"
+    elif [ -e "$harness_target" ]; then
+      warn "${client} harness instructions — exists but is not a symlink"
       stale=$((stale + 1))
     else
-      fail "Skill: ${skill} — not installed"
+      fail "${client} harness instructions — not installed"
       missing=$((missing + 1))
     fi
   done
@@ -965,45 +1000,67 @@ install() {
   echo ""
 
   # 1. Ensure directories exist
-  mkdir -p "$SKILLS_DIR" || warn "Could not create $SKILLS_DIR"
+  mkdir -p "$CLAUDE_SKILLS_DIR" || warn "Could not create $CLAUDE_SKILLS_DIR"
+  mkdir -p "$CODEX_SKILLS_DIR" || warn "Could not create $CODEX_SKILLS_DIR"
   mkdir -p "$LOCAL_BIN" || warn "Could not create $LOCAL_BIN"
   ok "Created directories"
 
-  # 2. Symlink skills
+  # 2. Symlink skills into each client's user-level discovery directory.
+  # Project-local skills remain available only as explicit project overrides.
   local installed=0
   local updated=0
-  for skill in "${SKILLS[@]}"; do
-    local source="${HARNESS_DIR}/skills/${skill}"
-    local target="${SKILLS_DIR}/${skill}"
-
-    if [ ! -d "$source" ]; then
-      warn "Skill source missing: ${source} — skipping"
-      continue
-    fi
-
-    if [ -L "$target" ]; then
-      local current
-      current=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [ "$current" = "$source" ]; then
-        continue  # Already correct
-      fi
-      # Update stale symlink
-      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink update failed"; continue; }
-      updated=$((updated + 1))
+  local skills_dir client skill source target current harness_target
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
     else
-      if [ -e "$target" ]; then
-        warn "Skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
-        mv "$target" "${target}.bak" || { warn "Skill: ${skill} — backup failed, skipping"; continue; }
+      skills_dir="$CODEX_SKILLS_DIR"
+    fi
+    for skill in "${SKILLS[@]}"; do
+      source="${HARNESS_DIR}/skills/${skill}"
+      target="${skills_dir}/${skill}"
+
+      if [ ! -d "$source" ]; then
+        warn "Skill source missing: ${source} — skipping"
+        continue
       fi
-      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink failed"; continue; }
-      installed=$((installed + 1))
+
+      if [ -L "$target" ]; then
+        current=$(readlink -f "$target" 2>/dev/null || echo "")
+        if [ "$current" = "$source" ]; then
+          continue  # Already correct
+        fi
+        ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
+        updated=$((updated + 1))
+      else
+        if [ -e "$target" ]; then
+          warn "${client} skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
+          mv "$target" "${target}.bak" || { warn "${client} skill: ${skill} — backup failed, skipping"; continue; }
+        fi
+        ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink failed"; continue; }
+        installed=$((installed + 1))
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+      if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+      fi
+    else
+      if [ -e "$harness_target" ]; then
+        warn "${client} harness instructions — exists but is not a symlink. Backing up to ${harness_target}.bak"
+        mv "$harness_target" "${harness_target}.bak" || { warn "${client} harness instructions — backup failed"; continue; }
+      fi
+      ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
     fi
   done
 
   if [ "$installed" -gt 0 ] || [ "$updated" -gt 0 ]; then
-    ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} total)"
+    ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} per client)"
   else
-    ok "Skills: all ${#SKILLS[@]} already current"
+    ok "Skills: all ${#SKILLS[@]} already current for Claude Code and Codex"
   fi
 
   # 3. Symlink conduct script
@@ -1126,16 +1183,34 @@ uninstall() {
   echo ""
 
   local removed=0
-  for skill in "${SKILLS[@]}"; do
-    local target="${SKILLS_DIR}/${skill}"
-    if [ -L "$target" ]; then
-      local points_to
-      points_to=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [[ "$points_to" == "${HARNESS_DIR}"* ]]; then
-        rm "$target"
+  local skills_dir client skill target points_to harness_target
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
+    else
+      skills_dir="$CODEX_SKILLS_DIR"
+    fi
+    for skill in "${SKILLS[@]}"; do
+      target="${skills_dir}/${skill}"
+      if [ -L "$target" ]; then
+        points_to=$(readlink -f "$target" 2>/dev/null || echo "")
+        if [[ "$points_to" == "${HARNESS_DIR}"* ]]; then
+          rm "$target"
+          removed=$((removed + 1))
+        else
+          warn "${client} skill: ${skill} — symlink points elsewhere, skipping"
+        fi
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+      if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        rm "$harness_target"
         removed=$((removed + 1))
       else
-        warn "Skill: ${skill} — symlink points elsewhere, skipping"
+        warn "${client} harness instructions — symlink points elsewhere, skipping"
       fi
     fi
   done
