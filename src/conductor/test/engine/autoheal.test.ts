@@ -1976,3 +1976,115 @@ describe('listCommitsWithTrailers with anchor', () => {
     expect(stillBeforeAnchor.length).toBe(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mid-body `Task:` attribution tolerance (#912 follow-up).
+//
+// Git's %(trailers) parser only recognizes the FINAL paragraph block. Build
+// agents sometimes emit the `Task: <id>` line mid-message (subject, blank,
+// `Task: 3`, blank, body paragraphs) — real work then becomes invisible to
+// countResolvedTasks and causes false no_task_progress stalls.
+//
+// Matching rule: a flush-left line that is exactly `Task: <id>` (no leading
+// whitespace, nothing else on the line) counts as attribution. Indented or
+// quoted lines (log excerpts) never match. A real final-block trailer wins:
+// the body fallback is consulted only when git's trailer parse found no
+// `Task` key.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('listCommitsWithTrailers mid-body Task attribution', () => {
+  it('captures a Task: line in a non-final paragraph (production stall shape)', async () => {
+    const mod = await loadAutoheal();
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+
+    // Shape of commit 96993882: subject, blank, Task line, blank, body prose.
+    const commitMessage =
+      'feat: mid-body attribution\n\nTask: 3\n\nThis paragraph explains the change.\nMore detail on another line.\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const result = await mod.listCommitsWithTrailers(gitDir);
+
+    const testCommit = result.find(c => c.subject === 'feat: mid-body attribution');
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toEqual(['3']);
+  });
+
+  it('prefers the final-block trailer when both mid-body line and final trailer exist', async () => {
+    const mod = await loadAutoheal();
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+
+    const commitMessage = 'feat: both forms\n\nTask: 4\n\nBody paragraph.\n\nTask: 5\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const result = await mod.listCommitsWithTrailers(gitDir);
+
+    const testCommit = result.find(c => c.subject === 'feat: both forms');
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toEqual(['5']);
+  });
+
+  it('ignores indented and quoted Task: lines (log excerpts)', async () => {
+    const mod = await loadAutoheal();
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+
+    const commitMessage =
+      'feat: excerpt noise\n\nObserved output:\n\n    Task: 9\n> Task: 8\n\nClosing paragraph.\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const result = await mod.listCommitsWithTrailers(gitDir);
+
+    const testCommit = result.find(c => c.subject === 'feat: excerpt noise');
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toBeUndefined();
+  });
+
+  it('captures a mid-body Task: line even when the final block has an Evidence trailer', async () => {
+    const mod = await loadAutoheal();
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+
+    const commitMessage = 'feat: evidence only final\n\nTask: 4\n\nEvidence: tests-pass\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const result = await mod.listCommitsWithTrailers(gitDir);
+
+    const testCommit = result.find(c => c.subject === 'feat: evidence only final');
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toEqual(['4']);
+    expect(testCommit!.trailers.Evidence).toEqual(['tests-pass']);
+  });
+
+  it('captures mid-body Task: lines through the anchor (evidence-range) path', async () => {
+    const mod = await loadAutoheal();
+
+    // Bare origin so getEvidenceRange can resolve the origin default branch.
+    const bareDir = await mkdtemp(join(tmpdir(), 'midbody-bare-'));
+    await execa('git', ['init', '--bare', '-b', 'main'], { cwd: bareDir });
+    await execa('git', ['remote', 'add', 'origin', bareDir], { cwd: gitDir });
+    await execa('git', ['push', '-u', 'origin', 'main'], { cwd: gitDir });
+    await execa('git', ['remote', 'set-head', 'origin', 'main'], { cwd: gitDir });
+
+    const anchorLog = await execa('git', ['rev-parse', 'HEAD'], { cwd: gitDir });
+    const anchorSha = anchorLog.stdout.trim();
+
+    await writeFile(join(gitDir, 'file.txt'), 'content');
+    await execa('git', ['add', 'file.txt'], { cwd: gitDir });
+    const commitMessage =
+      'feat: anchored mid-body\n\nTask: 7\n\nExplanatory body paragraph.\n';
+    await execa('git', ['commit', '-m', commitMessage], { cwd: gitDir });
+
+    const result = await mod.listCommitsWithTrailers(gitDir, anchorSha);
+
+    const testCommit = result.find(c => c.subject === 'feat: anchored mid-body');
+    expect(testCommit).toBeDefined();
+    expect(testCommit!.trailers.Task).toEqual(['7']);
+
+    await rm(bareDir, { recursive: true, force: true });
+  });
+});
