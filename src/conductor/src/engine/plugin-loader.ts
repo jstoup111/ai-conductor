@@ -4,6 +4,7 @@ import { loadManifestFromFile } from './plugin-manifest.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { PluginManifestError, PluginLoadError, PluginVersionError } from '../types/plugin.js';
 import { ClaudeProvider } from '../execution/claude-provider.js';
+import { CodexProvider } from '../execution/codex-provider.js';
 import { TerminalSubscriber } from '../ui/subscriber.js';
 import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
@@ -130,7 +131,7 @@ export async function discoverPlugins(
 }
 
 /**
- * Registers built-in plugins (ClaudeProvider, TerminalSubscriber, TerminalRenderer) into the registry.
+ * Registers built-in plugins (ClaudeProvider, CodexProvider, TerminalSubscriber, TerminalRenderer) into the registry.
  * Task 11: ClaudeProvider registers as llm_provider:claude
  * Task 12: TerminalSubscriber registers as ui_renderer:terminal (lifecycle wrapper)
  * Feature 1.2 T11: TerminalRenderer also registers as ui_renderer:terminal_renderer (UIRenderer interface)
@@ -144,6 +145,7 @@ export function registerBuiltins(
 ): TerminalSubscriber {
   // Task 11: Register ClaudeProvider
   registry.register('llm_provider', 'claude', new ClaudeProvider());
+  registry.register('llm_provider', 'codex', new CodexProvider());
 
   // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback)
   const subscriber = new TerminalSubscriber(events, renderEvent);
