@@ -196,6 +196,50 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(written).toEqual(computed);
   });
 
+  it('non-JSON evidence file fails closed with an "invalid JSON" reason and never invokes the probe', async () => {
+    await writeFile(join(dir, WIRING_EVIDENCE), 'not json {{{', 'utf-8');
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        probeCalls++;
+        throw new Error('probe should not be called');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(`invalid JSON in ${WIRING_EVIDENCE}`);
+    expect(probeCalls).toBe(0);
+  });
+
+  it('schema-invalid evidence (missing required field) fails closed with the validator reason and never invokes the probe', async () => {
+    const invalidEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      // layer2 intentionally omitted
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(invalidEvidence);
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        probeCalls++;
+        throw new Error('probe should not be called');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(`${WIRING_EVIDENCE} must include a "layer2" object`);
+    expect(probeCalls).toBe(0);
+  });
+
   it('wiringProbe throwing is unsatisfied with a reason naming the probe failure', async () => {
     const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
 
