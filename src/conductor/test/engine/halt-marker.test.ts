@@ -11,8 +11,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-import { writeFile } from 'node:fs/promises';
-import { writeHaltMarker, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { writeHaltMarker, readHaltClass, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
 
 describe('writeHaltMarker', () => {
   let root: string;
@@ -50,5 +50,56 @@ describe('writeHaltMarker', () => {
 
     const contents = await readFile(join(root, HALT_MARKER), 'utf-8');
     expect(contents).toBe('reason');
+  });
+});
+
+describe('readHaltClass', () => {
+  let root: string;
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('returns needs-human when HALT.class contains needs-human (with trailing whitespace)', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), 'needs-human\n', 'utf-8');
+
+    await expect(readHaltClass(root)).resolves.toBe('needs-human');
+  });
+
+  it('returns mechanical when HALT.class contains mechanical (trimmed)', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), '  mechanical  ', 'utf-8');
+
+    await expect(readHaltClass(root)).resolves.toBe('mechanical');
+  });
+
+  it('returns unclassified when the file is absent', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+
+    await expect(readHaltClass(root)).resolves.toBe('unclassified');
+  });
+
+  it('returns unclassified when the file is unreadable', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+
+    await expect(readHaltClass('/nonexistent/root/that/does/not/exist')).resolves.toBe(
+      'unclassified',
+    );
+  });
+
+  it('returns unclassified for unrecognized garbage content', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), 'garbage-value', 'utf-8');
+
+    await expect(readHaltClass(root)).resolves.toBe('unclassified');
   });
 });
