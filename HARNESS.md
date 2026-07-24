@@ -129,18 +129,18 @@ this section. CI enforces both content drift (the table matches the source) and 
 | bootstrap | autonomous engine | sonnet | low | gpt-5.6-terra | low | Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on. |
 | memory | autonomous engine | haiku | low | gpt-5.6-luna | low | Read/write files, update index — mechanical. |
 | assess | autonomous engine | sonnet | high | gpt-5.6-terra | high | The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents. |
-| explore | autonomous engine | fable | low (S), high (M/L) | gpt-5.6-sol | low (S), high (M/L) | Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). S tier drops to LOW effort (DEFAULT_STEP_TIER_OVERRIDES.explore.S) — small/well-understood features need only a fast, lightweight scoping pass, not full branching depth. |
-| prd | autonomous engine | fable | high | gpt-5.6-sol | high | Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need. |
+| explore | autonomous engine | fable | low (S), high (M/L) | gpt-5.6-sol | low (S), high (M/L) | Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider's native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work. |
+| prd | autonomous engine | fable | high | gpt-5.6-sol | high | Front-of-funnel requirements and FR authoring has high downstream cascade cost. Each built-in provider policy selects its own deepest model and HIGH effort at every complexity tier; attempt 2 raises reasoning to XHIGH. Later model escalation uses that provider's native order but is a capped no-op for this already-deepest default. |
 | complexity | autonomous engine | sonnet | low | gpt-5.6-terra | low | Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching. |
 | stories | autonomous engine | sonnet | low (S), medium (M), high (L) | gpt-5.6-terra | low (S), medium (M), high (L) | Pattern-following from design doc, structured output. |
-| conflict-check | autonomous engine | sonnet (S/M), fable (L) | medium | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium | Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L. |
-| plan | autonomous engine | sonnet (S/M), fable (L) | medium (S), high (M), xhigh (L) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S), high (M), xhigh (L) | Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. Enforced via DEFAULT_STEP_TIER_OVERRIDES.plan.L. |
+| conflict-check | autonomous engine | sonnet (S/M), fable (L) | medium | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium | Pairwise comparison is manageable at each provider policy's standard tier with <=15 stories; Large tier selects that provider's deepest model for subtle contradiction detection. |
+| plan | autonomous engine | sonnet (S/M), fable (L) | medium (S), high (M), xhigh (L) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S), high (M), xhigh (L) | Structured task breakdown from stories; Large tier selects each provider policy's deepest model for task sequencing and dependency reasoning at scale. |
 | coherence-check | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable). |
 | architecture-diagram | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured output generation from codebase scan — pattern-following. |
 | architecture-review | autonomous engine | fable | high | gpt-5.6-sol | high | Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews. |
 | worktree-manager | autonomous engine | haiku | low | gpt-5.6-luna | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Generating specs from acceptance criteria — templated work. |
-| pipeline | autonomous engine | sonnet | low | gpt-5.6-terra | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku. S tier pins a fixed max_retries: 3 floor (DEFAULT_STEP_TIER_OVERRIDES.build.S) per the #188 retry-budget floor — small features still get enough rework budget to recover from a bad first pass, even though S otherwise runs lean. |
+| pipeline | autonomous engine | sonnet | low | gpt-5.6-terra | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
 | build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review. |
 | wiring-check | autonomous engine | sonnet | low | gpt-5.6-terra | low | Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and manual_test — mechanical evidence gathering, no generative judgement required. |
 | manual-test | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured validation against stories — pattern-following. |
@@ -175,30 +175,40 @@ this section. CI enforces both content drift (the table matches the source) and 
 | cto-orchestrator | Claude interactive | opus |  |  |  | Cross-referencing 9 reports and prioritizing requires deep reasoning. |
 <!-- END GENERATED: model-selection-table -->
 
-> **Model availability fallback ladder (#186):** When a pinned model (e.g. Fable for
-> rebase/remediate/debugging) is detected unavailable, the daemon automatically retries
-> the next model in `model_fallback_ladder` (default `["fable", "opus", "sonnet"]`)
-> instead of failing the step. Downgrades are per-process — restarting the daemon clears
-> the "known unavailable" cache and retries the top of the ladder — and are logged as
-> `Downgraded from X to Y: reason`. Set `model_fallback_ladder: []` in
-> `.ai-conductor/config.yml` to disable fallback. The `--model` CLI flag and
-> `steps.<step>.model` config still take precedence as an explicit override, and the
-> override itself is checked for availability before use.
+> **Provider-native model availability fallback (#186/#902):** When the requested model
+> is detected unavailable, the daemon descends the selected provider policy's native
+> ladder: Claude uses `fable→opus→sonnet`; Codex uses
+> `gpt-5.6-sol→gpt-5.6-terra→gpt-5.6-luna`. An unavailable model already on the ladder
+> continues only through later, lower rungs; it never restarts at the head. An unavailable
+> opaque/off-ladder override enters at the ladder head, while a successful off-ladder model
+> runs exactly once. A configured `model_fallback_ladder` replaces the provider default
+> exactly, and `model_fallback_ladder: []` disables fallback. Unavailable-model knowledge is
+> held in memory for the lifetime of each `ModelAvailability` instance/runner; multiple
+> independent caches can coexist in one process. Constructing a new runner or restarting
+> retries the originally requested model. Downgrades are logged as
+> `Downgraded from X to Y: reason`. The `--model` CLI flag
+> and `steps.<step>.model` config keep their explicit-override precedence and remain
+> provider-native strings.
 
 > **Retry-as-escalation ladder (#188):** A retry is no longer an identical coin-flip —
 > it deliberately raises capability so the re-run changes the odds. On a step's failed
 > attempt the loop escalates from the resolved base `(model, effort)`, indexed by the
 > 1-based attempt: **attempt 1** runs the base; **attempt 2** bumps effort one level
 > (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model
-> **(attempt − 2) tiers** up the capability ladder (`haiku→sonnet→opus→fable`) —
-> attempt 3 is one tier, attempt 4 two tiers (e.g. a base `sonnet` reaches `fable`),
-> capped at `fable`. Bumps are capped — an effort
-> already at `max` or a model already at `fable` is a no-op rung, never an error. A
+> **(attempt − 2) tiers** up the selected provider's native capability ladder. Claude
+> ascends `haiku→sonnet→opus→fable`; Codex ascends
+> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol`. Attempt 3 is one tier and attempt 4 two
+> tiers. Bumps are capped at the selected policy's top — an effort already at `max` or
+> a model already at its provider's deepest rung is a no-op, never an error. Thus the
+> normal M/L/no-tier `explore` and every `prd` move `high→xhigh` on attempt 2
+> while later model bumps remain capped at their already-selected deepest model
+> (`explore.S` moves `low→medium` but uses the same capped model). A
 > retry budget deeper than 3 authorizes one further tier per extra attempt, so deep
 > budgets escalate to premium models. The
 > model bump expresses *intent* only; it still routes through the #186 availability ladder
-> above, which substitutes a live model if the escalated tier is dead (escalation ascends
-> for upgrade-on-retry; availability descends for substitute-on-dead). Because escalation
+> above, which substitutes a live provider-native model if the escalated tier is dead
+> (escalation ascends for upgrade-on-retry; availability descends from the active rung for
+> substitute-on-dead). Because escalation
 > derives purely from the attempt number, non-budget-consuming retries (rate-limit, stale
 > session, auth park-and-poll) re-run at the *same* rung rather than climbing. Deep-step
 > retry budgets (`explore`, `prd`, `plan`, `build`) drop from 5 to **3** — the floor that

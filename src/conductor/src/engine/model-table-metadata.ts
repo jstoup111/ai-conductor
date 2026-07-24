@@ -6,9 +6,9 @@ import type { StepName } from '../types/steps.js';
 // Human-readable "Why" text for each engine step, keyed by StepName. This is
 // the single source the generated HARNESS.md model-selection table (and the
 // completeness test in test/model-table-metadata.test.ts) draw from. It
-// consolidates rationale that used to live as inline `//` comments on
-// DEFAULT_STEP_MODELS / DEFAULT_STEP_EFFORT in resolved-config.ts, plus the
-// prose "Why" column from HARNESS.md's hand-authored model-selection table.
+// consolidates rationale that used to live beside the autonomous model
+// defaults, plus the prose "Why" column from HARNESS.md's hand-authored
+// model-selection table.
 // ────────────────────────────────────────────────────────────────────────────
 
 export const STEP_RATIONALE: Record<StepName, string> = {
@@ -17,14 +17,16 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   assess:
     'The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
-    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). S tier drops to LOW effort (DEFAULT_STEP_TIER_OVERRIDES.explore.S) — small/well-understood features need only a fast, lightweight scoping pass, not full branching depth.',
-  prd: 'Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need.',
+    'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
+  prd:
+    'Front-of-funnel requirements and FR authoring has high downstream cascade cost. Each built-in provider policy selects its own deepest model and HIGH effort at every complexity tier; attempt 2 raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is a capped no-op for this already-deepest default.',
   complexity:
     'Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching.',
   stories: 'Pattern-following from design doc, structured output.',
   conflict_check:
-    'Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L.',
-  plan: 'Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. Enforced via DEFAULT_STEP_TIER_OVERRIDES.plan.L.',
+    'Pairwise comparison is manageable at each provider policy\'s standard tier with <=15 stories; Large tier selects that provider\'s deepest model for subtle contradiction detection.',
+  plan:
+    'Structured task breakdown from stories; Large tier selects each provider policy\'s deepest model for task sequencing and dependency reasoning at scale.',
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
@@ -32,7 +34,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
     'Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews.',
   worktree: 'Git operations — mechanical branch/worktree management.',
   acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
-  build: 'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku. S tier pins a fixed max_retries: 3 floor (DEFAULT_STEP_TIER_OVERRIDES.build.S) per the #188 retry-budget floor — small features still get enough rework budget to recover from a bad first pass, even though S otherwise runs lean.',
+  build:
+    'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
     'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   wiring_check:
@@ -75,8 +78,8 @@ export const SKILL_STEP_MAP: Record<string, StepName> = {
 
 // Skills whose `model:` pin has no corresponding engine StepName — the skill
 // runs standalone (dispatched directly by the operator/conductor, not as a
-// numbered engine step), so there is no DEFAULT_STEP_MODELS entry to compare
-// the pin against.
+// numbered engine step), so there is no autonomous Claude policy entry to
+// compare the pin against.
 export const PIN_EXEMPT_SKILLS: readonly string[] = [
   'code-review', // dispatches an evaluator agent directly; not an engine step
   'debugging', // standalone investigation skill; not an engine step

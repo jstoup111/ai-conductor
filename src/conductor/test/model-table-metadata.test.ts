@@ -22,6 +22,26 @@ import { classifyPinnedSkill } from '../src/tools/generate-model-table.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('STEP_RATIONALE completeness (TS-1)', () => {
+  it('describes current explore and prd defaults with provider-neutral high-effort policy language', () => {
+    const violations = (['explore', 'prd'] as const).flatMap((step) => {
+      const rationale = STEP_RATIONALE[step];
+      const usesProviderNeutralPolicyLanguage =
+        /\bprovider\b/i.test(rationale) && /\bpolic(?:y|ies)\b/i.test(rationale);
+      const usesApprovedHighEffort =
+        /\b(?:high(?:-|\s+)effort|effort\b[^.!?;\n]*\bhigh)\b/i.test(rationale);
+      const usesStaleLanguage =
+        /\bClaude\b|DEFAULT_STEP_(?:MODELS|EFFORT|TIER_OVERRIDES)|\bmedium(?:-effort|\s+effort)?\b/i.test(
+          rationale,
+        );
+
+      return usesProviderNeutralPolicyLanguage && usesApprovedHighEffort && !usesStaleLanguage
+        ? []
+        : [step];
+    });
+
+    expect(violations).toEqual([]);
+  });
+
   it('has one non-empty rationale for every step represented by both provider policies', () => {
     const missing: string[] = [];
     const empty: string[] = [];
@@ -42,7 +62,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(24);
+    expect(policySteps.size).toBe(25);
   });
 
   it('type-checks as a complete Record<StepName, string>', () => {

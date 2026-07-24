@@ -24,7 +24,7 @@ src/conductor/
 │   │   ├── daemon.ts        # runDaemon — parallel feature worker pool
 │   │   ├── daemon-backlog.ts, daemon-runner.ts, daemon-deps.ts  # backlog + per-feature run
 │   │   ├── hooks.ts         # Step-boundary hook dispatch
-│   │   ├── step-runners.ts  # DefaultStepRunner (Claude provider integration)
+│   │   ├── step-runners.ts  # DefaultStepRunner (provider-policy integration)
 │   │   ├── skill-resolver.ts, resolved-config.ts, config.ts, resume.ts, auto-resume.ts
 │   ├── execution/
 │   │   ├── claude-provider.ts   # execa-based Claude CLI invocation
@@ -162,12 +162,24 @@ by **gate verdicts** instead of a fixed order:
   step), and a `finally` backstop writes a diagnostic `HALT` if a daemon run reaches it
   with neither marker. Interactive runs (`daemon:false`) are untouched — they legitimately
   exit markerless and the daemon never reads their markers.
+- **Provider-aware model policy** (`engine/provider-model-policy.ts`, #902) — each built-in
+  provider owns an independent table of autonomous step models, efforts, tier overrides,
+  model-escalation order, and availability-fallback order. Claude uses native
+  `haiku`/`sonnet`/`opus`/`fable` names; Codex uses
+  `gpt-5.6-luna`/`gpt-5.6-terra`/`gpt-5.6-sol`. There is no runtime alias translation and
+  provider identity is not added to `LLMProvider`. Explicit CLI/config model and effort
+  overrides remain opaque provider-native strings with their existing precedence. Normal
+  M/L/no-tier `explore` and every `prd` use `high`; `explore.S` alone uses `low`.
+  An unknown/plugin key retains the installed provider instance while using the Claude
+  compatibility policy and emitting one warning per composition root; a plugin policy
+  contract is deferred.
 - **Retry-as-escalation** (`engine/escalation.ts`, #188) — a step's retry is not an
   identical re-run: it escalates from the resolved base `(model, effort)`, indexed by the
   1-based attempt. Attempt 1 = base; attempt 2 bumps effort one level
   (`low→medium→high→xhigh→max`); attempt 3+ holds that effort and cumulatively bumps the
   model (attempt − 2) tiers up from base (attempt 3 = one tier, attempt 4 = two tiers, …)
-  (`haiku→sonnet→opus→fable`), capped at `fable` (a no-op rung, not an error).
+  through the selected provider policy's native order, capped at its top rung.
+  Consequently normal `explore` and `prd` retry from `high` to `xhigh` on attempt 2.
   The bumped model still flows through the #186 availability ladder, so a dead escalated
   tier is substituted with a live one. Escalation derives purely from `attempt`, so the
   non-consuming `attempt--; continue` paths (rate-limit, stale session, auth park) re-run
@@ -2020,30 +2032,32 @@ The feature guarantees halt PRs reliably carry **three durable markers**:
 All operations are **best-effort, non-throwing**, and sit behind the injected `GhRunner` seam
 so they are fully unit-testable with the existing `makeFakeGh` pattern.
 
-### Model availability fallback ladder (`engine/model-availability.ts`, #186)
+### Provider-native model availability fallback (`engine/model-availability.ts`, #186/#902)
 
-Steps and skills are pinned to a preferred model (e.g. Fable for `rebase`, `remediate`,
-`debugging`). `step-runners.ts` resolves each step's model through a `ModelAvailability`
-instance before invoking the Claude provider; if the pinned/configured model is detected
-unavailable, `ModelAvailability` walks a fallback ladder and retries the next model down
-instead of failing the step outright.
+`step-runners.ts` resolves each autonomous step's provider-native model through a
+`ModelAvailability` instance before invoking the selected provider. If the requested model
+is detected unavailable, `ModelAvailability` walks the selected provider policy's fallback
+order instead of failing the step outright.
 
-- **`DEFAULT_MODEL_FALLBACK_LADDER`** (`engine/model-availability.ts`):
-  `["fable", "opus", "sonnet"]`.
+- **Built-in policy orders:** Claude descends `fable → opus → sonnet`; Codex descends
+  `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna`.
 - **Config:** `model_fallback_ladder` — an optional top-level array of model names in
   `HarnessConfig` (`types/config.ts`), validated in `config.ts` (must be an array of
-  non-empty strings). Passed into `ModelAvailability`'s constructor by `step-runners.ts`;
-  `undefined` falls back to the default ladder, `[]` disables fallback.
+  non-empty strings). It is an opaque provider-native replacement for the selected policy
+  ladder; `undefined` uses that policy and `[]` disables fallback.
 - **Matching:** exact string match against the configured/pinned model name — no fuzzy or
   prefix matching.
+- **Traversal:** an unavailable model already on the ladder descends from its active rung,
+  never restarts at the head. An unavailable off-ladder override enters at the ladder head;
+  a successful off-ladder override is invoked exactly once.
 - **Caching / restart semantics:** "known unavailable" models are recorded in-memory for
-  the lifetime of the `ModelAvailability` instance (i.e. per daemon/conductor process).
-  Restarting the daemon clears this state, so the next run retries the top of the ladder
-  even for a model that was previously marked unavailable.
+  the lifetime of each `ModelAvailability` instance/runner. Runner and attribution paths
+  can own separate caches in the same process; constructing a new runner or restarting
+  retries the requested model.
 - **Override interaction:** an explicit `--model` CLI flag or `steps.<step>.model` config
   entry still takes precedence over the pinned default, but the override itself is passed
-  through the same availability check and falls back down the ladder if it, too, is
-  unavailable.
+  through the same availability check. Ordinary failures, rate limits, and authentication
+  failures do not advance the ladder or mark a model unavailable.
 - **Logging:** every downgrade is written via the runner's warn callback as
   `Downgraded from <configured> to <fallback>: <reason>`, visible in conductor logs —
   check there when a step unexpectedly ran on a different model than configured.
