@@ -4417,7 +4417,6 @@ export class Conductor {
                       root: this.projectRoot,
                       gradedBaseSha: lastBuildReviewMergeBase,
                       flaggedPaths: extractFlaggedPaths(parsed.reasons),
-                      defaultBranch: '',
                       regrade: async () => 'pass',
                     });
                   } catch {

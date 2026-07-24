@@ -20,7 +20,7 @@
  * Designed contract this spec pins (does not exist yet — RED until authored):
  *   - `src/engine/build-review-disposition.ts` exports:
  *       `runScopeFailDisposition(opts): Promise<Disposition>` where
- *         opts = { git, root, gradedBaseSha, flaggedPaths, defaultBranch, regrade }
+ *         opts = { git, root, gradedBaseSha, flaggedPaths, regrade }
  *         Disposition =
  *           | { kind: 'invalidated'; freshBaseSha: string; regradeResult: 'pass' | 'fail' }
  *           | { kind: 'kicked-to-build' }
@@ -80,7 +80,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: [fixture.mergedOnlyPath],
-        defaultBranch: 'main',
         regrade,
       });
 
@@ -113,7 +112,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: ['feat.txt'],
-        defaultBranch: 'main',
         regrade,
       });
 
@@ -133,7 +131,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: [fixture.mergedOnlyPath],
-        defaultBranch: 'main',
         regrade: async () => 'pass' as const,
       });
       expect(first.kind).toBe('invalidated');
@@ -164,7 +161,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: preSecondStaleRef,
         flaggedPaths: [secondMergedPath],
-        defaultBranch: 'main',
         regrade: async () => {
           regradeCalls++;
           return 'pass' as const;
@@ -190,7 +186,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: [fixture.mergedOnlyPath],
-        defaultBranch: 'main',
         regrade: async () => 'pass' as const,
       });
       expect(first.kind).toBe('invalidated');
@@ -218,7 +213,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: staleAgainSha,
         flaggedPaths: [anotherPath],
-        defaultBranch: 'main',
         regrade: async () => 'pass' as const,
       });
 
@@ -242,7 +236,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: freshSha,
         flaggedPaths: ['feat.txt'],
-        defaultBranch: 'main',
         regrade: async () => {
           regradeCalls++;
           return 'pass' as const;
@@ -264,7 +257,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         // it never vanishes under a fresh recompute.
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: ['feat.txt'],
-        defaultBranch: 'main',
         regrade: async () => 'pass' as const,
       });
 
@@ -292,7 +284,6 @@ describe('build_review fresh-base grading + scope-verdict disposition (real git,
         root: fixture.repo,
         gradedBaseSha: fixture.staleTrackingSha,
         flaggedPaths: [fixture.mergedOnlyPath],
-        defaultBranch: 'main',
         regrade,
       });
 

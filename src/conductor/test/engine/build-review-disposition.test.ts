@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
-  classifyBuildReviewDisposition,
   extractFlaggedPaths,
   diffTouchedPaths,
   runScopeFailDisposition,
@@ -93,117 +92,6 @@ describe('engine/build-review-disposition — diffTouchedPaths', () => {
   });
 });
 
-describe('engine/build-review-disposition — classifyBuildReviewDisposition', () => {
-  let dir: string;
-  let planPath: string;
-
-  beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'build-review-disposition-'));
-    planPath = join(dir, 'plan.md');
-    await writeFile(planPath, '# Plan\n', 'utf-8');
-  });
-
-  afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
-
-  it('classifies stale-mirage: base changed AND flagged path absent from fresh diff', async () => {
-    const { git } = fakeGit([
-      ...freshProbeScript,
-      { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'freshmerge1\n' } },
-      { match: ['diff', 'freshmerge1..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/feat.txt b/feat.txt\n' } },
-    ]);
-
-    const result = await classifyBuildReviewDisposition(
-      git,
-      planPath,
-      { baseRef: 'origin/main', mergeBase: 'stalemerge0' },
-      ['diff touches merged-pr.txt which is out of scope for this plan'],
-    );
-
-    expect(result.disposition).toBe('stale-mirage');
-    expect(result.baseChanged).toBe(true);
-    expect(result.flaggedPaths).toEqual(['merged-pr.txt']);
-    expect(result.freshDiffPaths).toEqual(['feat.txt']);
-  });
-
-  it('classifies genuine: flagged path persists in the fresh diff', async () => {
-    const { git } = fakeGit([
-      ...freshProbeScript,
-      { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'freshmerge1\n' } },
-      {
-        match: ['diff', 'freshmerge1..HEAD'],
-        result: { exitCode: 0, stdout: 'diff --git a/feat.txt b/feat.txt\n' },
-      },
-    ]);
-
-    const result = await classifyBuildReviewDisposition(
-      git,
-      planPath,
-      { baseRef: 'origin/main', mergeBase: 'stalemerge0' },
-      ['diff touches feat.txt which is out of scope for this plan'],
-    );
-
-    expect(result.disposition).toBe('genuine');
-  });
-
-  it('classifies genuine when the base never actually changed, even if flagged path is absent', async () => {
-    const { git } = fakeGit([
-      ...freshProbeScript,
-      { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'samemerge0\n' } },
-      { match: ['diff', 'samemerge0..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/feat.txt b/feat.txt\n' } },
-    ]);
-
-    const result = await classifyBuildReviewDisposition(
-      git,
-      planPath,
-      { baseRef: 'origin/main', mergeBase: 'samemerge0' },
-      ['diff touches merged-pr.txt which is out of scope for this plan'],
-    );
-
-    expect(result.disposition).toBe('genuine');
-    expect(result.baseChanged).toBe(false);
-  });
-
-  it('classifies genuine (safe default) when reasons carry no extractable path, even if base changed', async () => {
-    const { git } = fakeGit([
-      ...freshProbeScript,
-      { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'freshmerge1\n' } },
-      { match: ['diff', 'freshmerge1..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/feat.txt b/feat.txt\n' } },
-    ]);
-
-    const result = await classifyBuildReviewDisposition(
-      git,
-      planPath,
-      { baseRef: 'origin/main', mergeBase: 'stalemerge0' },
-      ['this change is too broad in scope'],
-    );
-
-    expect(result.disposition).toBe('genuine');
-    expect(result.flaggedPaths).toEqual([]);
-  });
-
-  it('never writes/commits/resets git state — only read-only argv (remote/symbolic-ref/rev-parse/ls-remote/merge-base/diff)', async () => {
-    const { git, calls } = fakeGit([
-      ...freshProbeScript,
-      { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'freshmerge1\n' } },
-      { match: ['diff', 'freshmerge1..HEAD'], result: { exitCode: 0, stdout: '' } },
-    ]);
-
-    await classifyBuildReviewDisposition(
-      git,
-      planPath,
-      { baseRef: 'origin/main', mergeBase: 'stalemerge0' },
-      undefined,
-    );
-
-    const mutating = new Set(['commit', 'reset', 'checkout', 'fetch', 'push', 'rebase', 'merge']);
-    for (const call of calls) {
-      expect(mutating.has(call[0])).toBe(false);
-    }
-  });
-});
-
 describe('engine/build-review-disposition — regrade counter persistence', () => {
   let dir: string;
 
@@ -271,7 +159,6 @@ describe('engine/build-review-disposition — runScopeFailDisposition', () => {
       root: dir,
       gradedBaseSha: 'stalesha0',
       flaggedPaths: ['merged-pr.txt'],
-      defaultBranch: 'main',
       regrade: async () => {
         regradeCalls++;
         return 'pass';
@@ -299,7 +186,6 @@ describe('engine/build-review-disposition — runScopeFailDisposition', () => {
       root: dir,
       gradedBaseSha: 'stalesha0',
       flaggedPaths: ['feat.txt'],
-      defaultBranch: 'main',
       regrade: async () => {
         regradeCalls++;
         return 'pass';
@@ -322,7 +208,6 @@ describe('engine/build-review-disposition — runScopeFailDisposition', () => {
       root: dir,
       gradedBaseSha: 'freshsha1', // already fresh
       flaggedPaths: ['merged-pr.txt'],
-      defaultBranch: 'main',
       regrade: async () => 'pass',
     });
     expect(result.kind).toBe('kicked-to-build');
@@ -342,7 +227,6 @@ describe('engine/build-review-disposition — runScopeFailDisposition', () => {
       root: dir,
       gradedBaseSha: 'stalesha0',
       flaggedPaths: ['merged-pr.txt'],
-      defaultBranch: 'main',
       regrade: async () => {
         regradeCalls++;
         return 'pass';

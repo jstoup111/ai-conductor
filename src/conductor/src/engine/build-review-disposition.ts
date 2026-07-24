@@ -2,7 +2,6 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { GitRunner } from './rebase.js';
-import { assembleBuildReviewInputs, type BuildReviewInputs } from './build-review-inputs.js';
 import { changedPathsBetween, resolveFreshBase } from './rebase.js';
 
 // ── Task 6: pure scope-FAIL classifier ───────────────────────────────────────
@@ -19,22 +18,6 @@ import { changedPathsBetween, resolveFreshBase } from './rebase.js';
 // Task 6 wires this classifier to run; it does NOT yet act on the result
 // (skip rework / invalidate-and-regrade is Task 7's `runScopeFailDisposition`,
 // stubbed below).
-
-export type BuildReviewDisposition = 'stale-mirage' | 'genuine';
-
-export interface BuildReviewDispositionResult {
-  disposition: BuildReviewDisposition;
-  /** The fresh recompute's full inputs (merge-base/diff/base-ref actually
-   * used to classify), for callers that want to log/persist evidence. */
-  fresh: BuildReviewInputs;
-  /** Whether the freshly-resolved merge-base differs from the base the FAIL
-   * verdict was originally graded against. */
-  baseChanged: boolean;
-  /** File paths extracted from the FAIL verdict's `reasons` text. */
-  flaggedPaths: string[];
-  /** File paths touched by the freshly recomputed diff. */
-  freshDiffPaths: string[];
-}
 
 /**
  * Extract file-path-like tokens cited in a FAIL verdict's free-form
@@ -64,36 +47,6 @@ export function diffTouchedPaths(diff: string): string[] {
     out.add(m[2]);
   }
   return [...out];
-}
-
-/**
- * Classify a build_review scope FAIL as `stale-mirage` vs `genuine`.
- *
- * `original` is the base evidence (`baseRef`/`mergeBase`) recorded on the
- * `BuildReviewInputs` that produced the FAIL verdict being disposed of;
- * `reasons` is that verdict's `reasons` array.
- */
-export async function classifyBuildReviewDisposition(
-  git: GitRunner,
-  planPath: string,
-  original: Pick<BuildReviewInputs, 'baseRef' | 'mergeBase'>,
-  reasons: string[] | undefined,
-): Promise<BuildReviewDispositionResult> {
-  const fresh = await assembleBuildReviewInputs(git, planPath);
-
-  const flaggedPaths = extractFlaggedPaths(reasons);
-  const freshDiffPaths = diffTouchedPaths(fresh.diff);
-
-  const baseChanged = fresh.mergeBase !== original.mergeBase;
-  // No extractable paths → we cannot prove absence, so treat as persisting
-  // (safe default: never mis-classify an unparseable FAIL as a mirage).
-  const flaggedContentPersists =
-    flaggedPaths.length === 0 || flaggedPaths.some((p) => freshDiffPaths.includes(p));
-
-  const disposition: BuildReviewDisposition =
-    baseChanged && !flaggedContentPersists ? 'stale-mirage' : 'genuine';
-
-  return { disposition, fresh, baseChanged, flaggedPaths, freshDiffPaths };
 }
 
 // ── Tasks 7-8 stub (not yet implemented) ─────────────────────────────────────
@@ -126,7 +79,6 @@ export interface RunScopeFailDispositionOpts {
   gradedBaseSha: string;
   /** Repo-relative paths the verdict cited as out-of-scope. */
   flaggedPaths: string[];
-  defaultBranch: string;
   /** Re-runs build_review against fresh inputs; injected so callers never
    * dispatch an agent session directly from this layer. */
   regrade: () => Promise<'pass' | 'fail'>;
