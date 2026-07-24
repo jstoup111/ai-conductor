@@ -439,4 +439,77 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
 
     expect(calls).toBe(0);
   });
+
+  it('probe result still stale against currentHead (HEAD moved again mid-probe) is called exactly once, no retry loop', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    // The probe's own result is stamped at H3, which still doesn't match
+    // currentHead (H2) — simulating HEAD advancing again mid-probe.
+    const probeResultStaleAgain: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H3',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => {
+        probeCalls++;
+        return probeResultStaleAgain;
+      },
+    });
+
+    expect(probeCalls).toBe(1);
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toMatch(/stale/i);
+  });
+
+  it('single-shot re-derivation replaces the evidence file wholesale, not merged with the stale content', async () => {
+    const staleEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [{ id: 'old-waiver', reason: 'leftover from stale run' }],
+      tasks: [
+        { id: '1', contract: 'src/old.ts#oldThing', gaps: [] },
+        { id: '2', contract: 'src/old2.ts#oldThing2', gaps: [] },
+      ],
+    };
+    await writeEvidence(staleEvidence);
+
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '9', contract: 'src/new.ts#newThing', gaps: [] }],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(true);
+
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written).toEqual(freshEvidence);
+  });
 });
