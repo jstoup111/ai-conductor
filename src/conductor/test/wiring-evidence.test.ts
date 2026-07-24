@@ -284,4 +284,28 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.reason).toContain(gapMessage);
     expect(result.reason).not.toMatch(/stale/i);
   });
+
+  it('stale evidence with a throwing wiringProbe fails closed instead of accepting the stale verdict', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => {
+        throw new Error('probe boom');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toMatch(/wiring probe failed/);
+  });
 });
