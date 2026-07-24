@@ -48,6 +48,7 @@ function fakeDeps(opts: {
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  readHaltClass?: (slug: string) => Promise<'needs-human' | 'mechanical' | 'unclassified'>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -78,6 +79,14 @@ function fakeDeps(opts: {
         }
       : {}),
     ...(opts.isOperatorParked ? { isOperatorParked: opts.isOperatorParked } : {}),
+    ...(opts.readHaltClass
+      ? {
+          readHaltClass: async (slug: string) => {
+            trace.events.push(`readHaltClass:${slug}`);
+            return opts.readHaltClass!(slug);
+          },
+        }
+      : {}),
     hasWarned: async (slug) => warned.has(slug),
     markWarned: async (slug) => {
       warned.add(slug);
@@ -143,6 +152,61 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const res = await rekickSweep(deps, SHA_C);
     expect(res.cleared).toEqual(['x']);
     expect(last.get('x')).toBe(SHA_C);
+  });
+
+  it('a needs-human-classified halt is skipped, not cleared, and never touches abort/clear/lastRekickSha', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'needs-human',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['h']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+    expect(last.has('h')).toBe(false);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('h') && e.includes('needs-human'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('a needs-human-classified halt is skipped again on a second sweep at a NEW sha (not just the FR-9 guard)', async () => {
+    const last = new Map<string, string>();
+    const { deps } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'needs-human',
+    });
+    const res1 = await rekickSweep(deps, SHA_B);
+    expect(res1.skipped).toEqual(['h']);
+    expect(last.has('h')).toBe(false);
+
+    const res2 = await rekickSweep(deps, SHA_C);
+    expect(res2.skipped).toEqual(['h']);
+    expect(res2.cleared).toEqual([]);
+  });
+
+  it('operator-parked AND needs-human: park check fires first, readHaltClass is never called', async () => {
+    const last = new Map<string, string>();
+    let classCalled = false;
+    const { deps, trace } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      isOperatorParked: async () => true,
+      readHaltClass: async () => {
+        classCalled = true;
+        return 'needs-human';
+      },
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['h']);
+    expect(classCalled).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('readHaltClass:'))).toBe(false);
+    const logLine = trace.events.find((e) => e.startsWith('log:') && e.includes('operator-parked'));
+    expect(logLine).toBeDefined();
   });
 
   it('a per-worktree clear error is isolated; the sweep continues', async () => {
