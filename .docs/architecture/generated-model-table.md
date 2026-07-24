@@ -52,9 +52,10 @@ graph TD
   `StepName`, so adding a step without rationale fails `tsc`, not a human
   review. `COMPAT` is the temporary Claude-only pin seam until the interactive
   rows and pins migrate.
-- **Generator** — `GEN` is pure (data in → markdown out); `BIN` is the only entry point the
-  suite and humans use. It executes via `npx tsx` from source specifically to avoid the
-  shared-dist rebuild hazard (rebuilding `dist/` can crash running daemons in other repos).
+- **Generator** — `GEN` is pure (data in → markdown out); `BIN` is the only
+  entry point the suite and humans use. It executes the repository-local
+  `tsx` binary against source specifically to avoid the shared-dist rebuild
+  hazard (rebuilding `dist/` can crash running daemons in other repos).
 - **suite** — extends existing check 5 (presence-only) with content drift (5a) and pin
   agreement (5b). When `src/conductor/node_modules` is missing both degrade to a warning,
   never a false failure.
