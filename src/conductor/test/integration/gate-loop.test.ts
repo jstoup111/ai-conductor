@@ -54,6 +54,7 @@ const FRONT_DONE: ConductState = {
   stories: 'done',
   conflict_check: 'skipped',
   plan: 'done',
+  coherence_check: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -171,6 +172,9 @@ describe('integration/gate-loop', () => {
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
+    } else if (step === 'coherence_check') {
+      await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+      await writeFile(join(dir, '.docs/coherence/p.md'), '| Row |\n|---|\n| x |\n');
     }
     return { success: true };
   }

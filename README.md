@@ -46,8 +46,8 @@ flowchart TB
   end
 
   subgraph ENG["Engineer — spec authoring (supervisor, /engineer)"]
-    CLAIM["claim intake"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs"]
-    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped)"]
+    CLAIM["claim intake<br/>(stages .pipeline/intake-outcomes.md)"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs ·<br/>/coherence-check (M/L tiers)"]
+    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped) ·<br/>coherence gate (fail-closed, waivable)"]
   end
 
   subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
@@ -74,6 +74,20 @@ flowchart TB
 
 - **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
   lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
+  When an idea is claimed from intake, its Desired-outcome bullets are staged to
+  `.pipeline/intake-outcomes.md` so they travel with the worktree. For Medium/Large tier
+  specs, `/coherence-check` (run at the end of DECIDE) authors a committed traceability
+  record — `.docs/coherence/<plan-stem>.md` — mapping outcomes → FRs → stories → tasks
+  with per-row verdicts and quoted evidence. At land time a deterministic **coherence
+  gate** re-derives and cross-checks that record against the real stories/plan/PRD/staged
+  outcomes (fabricated-citation reject, per-layer coverage gaps, plan coverage-table
+  consistency, and a duplicate-intake-claim scan), and blocks the land on any unresolved
+  gap. S-tier specs are exempt, and specs that predate this gate (no `.docs/coherence/`
+  signal in the diff) are never retroactively blocked. A genuine, reasoned exception is
+  waivable with a committed `.docs/coherence-waivers/<plan-stem>.md` carrying a `Waives:
+  <gap-id>[, <gap-id>...]` / `Rationale: <prose>` pair — partial coverage still blocks,
+  naming the unwaived remainder. See [`src/conductor/README.md`](src/conductor/README.md)
+  → "Coherence gate" for the full breakdown.
 - **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
   through the full SDLC, gated on completion by `build_review`'s LLM-judged completeness
   rubric (plan-vs-diff, fail-closed, self-heals via kickback), self-heals stalls and red CI,

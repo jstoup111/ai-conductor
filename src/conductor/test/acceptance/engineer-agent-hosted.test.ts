@@ -76,6 +76,10 @@ async function writeDocsArtifacts(dir: string, idea: string): Promise<void> {
 /** Create the per-idea worktree and write real .docs into it — the pre-`land` state. */
 async function worktreeWithDocs(repo: string, idea: string): Promise<string> {
   const wt = await createEngineerWorktree(repo, idea);
+  // These pre-FR-14 tests aren't about the coherence gate — strip the
+  // production-stamped `.docs/coherence/` signal so they keep landing via the
+  // no-retroactivity legacy disengage.
+  await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   await writeDocsArtifacts(wt.worktreePath, idea);
   return wt.worktreePath;
 }

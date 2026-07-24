@@ -36,6 +36,7 @@ const STEP_PROMPTS: Record<StepName, string> = {
   stories: '/stories',
   conflict_check: '/conflict-check',
   plan: '/plan',
+  coherence_check: '/coherence-check',
   architecture_diagram: '/architecture-diagram',
   architecture_review: '/architecture-review',
   worktree: '/conduct worktree',

@@ -117,6 +117,7 @@ describe('Integration: full conductor flow', () => {
     // the SHIP as-built compliance sweep has nothing to audit.
     const expectedSkipped: StepName[] = [
       'conflict_check',
+      'coherence_check',
       'architecture_diagram',
       'architecture_review',
       'acceptance_specs',

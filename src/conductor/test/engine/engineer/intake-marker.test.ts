@@ -159,6 +159,81 @@ describe('writeIntakeMarker', () => {
     expect(body).toContain('Owner: alice');
     expect(body).not.toContain('Source-Ref:');
   });
+
+  it('carries the verbatim Desired-outcome bullet block when staged outcomes content is given (Task 3)', async () => {
+    const stagedOutcomes = [
+      'Source-Ref: acme/app#7',
+      '',
+      '## Desired outcome',
+      '',
+      '- Given X, the system does Y.',
+      '- Given Z, the system does W.',
+      '',
+    ].join('\n');
+
+    const marker = await writeIntakeMarker(repoPath, 'slug-outcomes', 'acme/app#7', 'alice', undefined, stagedOutcomes);
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'slug-outcomes.md'), 'utf8');
+    expect(body).toContain('Source-Ref: acme/app#7');
+    expect(body).toContain('Owner: alice');
+    expect(body).toContain('## Desired outcome');
+    expect(body).toContain('- Given X, the system does Y.');
+    expect(body).toContain('- Given Z, the system does W.');
+  });
+
+  it('plan-stem filename is unchanged when staged outcomes content is provided', async () => {
+    const stagedOutcomes = ['Source-Ref: acme/app#7', '', '## Desired outcome', '', '- A bullet.', ''].join('\n');
+    const marker = await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', null, undefined, stagedOutcomes);
+    expect(marker).toBe(join(repoPath, '.docs', 'intake', 'the-plan-stem.md'));
+  });
+
+  it('preserves the committed outcome bullet block byte-for-byte across an owner re-stamp rewrite (no stagedOutcomesContent passed)', async () => {
+    const stagedOutcomes = [
+      'Source-Ref: acme/app#7',
+      '',
+      '## Desired outcome',
+      '',
+      '- Given X, the system does Y.',
+      '- Given Z, the system does W.',
+      '',
+    ].join('\n');
+
+    // First write: intake origin with committed outcome bullets.
+    await writeIntakeMarker(repoPath, 'rewrite-slug', 'acme/app#7', null, undefined, stagedOutcomes);
+    const before = await readFile(join(repoPath, '.docs', 'intake', 'rewrite-slug.md'), 'utf8');
+    expect(before).toContain('## Desired outcome');
+
+    // Rewrite: conduct-path owner re-stamp with NO stagedOutcomesContent argument
+    // (mirrors the real re-stamp call site, which doesn't re-read staging).
+    await writeIntakeMarker(repoPath, 'rewrite-slug', undefined, 'alice');
+    const after = await readFile(join(repoPath, '.docs', 'intake', 'rewrite-slug.md'), 'utf8');
+
+    expect(after).toContain('Owner: alice');
+    expect(after).toContain('Source-Ref: acme/app#7');
+    // The Desired-outcome bullet block from the first write must survive
+    // byte-for-byte in the rewritten marker.
+    const outcomesBlock = before.slice(before.indexOf('## Desired outcome'));
+    expect(after).toContain(outcomesBlock);
+  });
+
+  it('chat-origin marker (no staging, no rewrite) keeps today\'s format — no Desired-outcome section', async () => {
+    const marker = await writeIntakeMarker(repoPath, 'chat-origin', 'acme/app#9', 'bob');
+    expect(marker).not.toBeNull();
+    const body = await readFile(join(repoPath, '.docs', 'intake', 'chat-origin.md'), 'utf8');
+    expect(body).toBe(['# Intake origin: chat-origin', '', 'Source-Ref: acme/app#9', 'Owner: bob', ''].join('\n'));
+  });
+
+  it('pinned contract: no .docs/intake/<idea-slug>.md file is ever created — only plan-stem-keyed markers exist', async () => {
+    const stagedOutcomes = ['Source-Ref: acme/app#7', '', '## Desired outcome', '', '- A bullet.', ''].join('\n');
+    await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', 'alice', undefined, stagedOutcomes);
+
+    const { readdir } = await import('node:fs/promises');
+    const files = await readdir(join(repoPath, '.docs', 'intake'));
+    // The idea-slug ('dep-bump'-style raw idea text slug) must never appear as
+    // a filename distinct from the plan-stem the marker is keyed by.
+    expect(files).toEqual(['the-plan-stem.md']);
+    expect(files).not.toContain('idea-slug.md');
+  });
 });
 
 describe('runAuthoring intake marker (FR-1, FR-3)', () => {
@@ -229,6 +304,7 @@ describe('landSpec intake marker (FR-1)', () => {
     // The live path: create the per-idea worktree, the skills write .docs INTO it,
     // then landSpec commits them on spec/<slug> from within the worktree (FR-1/FR-3).
     const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
@@ -249,6 +325,7 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   /** Create the per-idea worktree and seed real .docs into it; returns worktreePath. */
   async function seedWorktree(): Promise<string> {
     const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });

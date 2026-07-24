@@ -410,6 +410,30 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   recording the exact source commit they were built from. The origin-fetch cadence is
   throttled by the new `engine_refresh_min_interval_seconds` config key (default `300`)
   (#598).
+- **DECIDE-phase artifact coherence gate.** A deterministic, land-time check that the
+  intake outcomes → PRD FRs → stories → plan tasks actually agree with each other, so a
+  spec can't land with a plausible plan that quietly drops an outcome, invents an FR, or
+  orphans a story/task. Claiming an idea from intake now stages its Desired-outcome bullets
+  to `.pipeline/intake-outcomes.md` so they travel with the worktree; the new
+  `/coherence-check` skill (Medium/Large tier only) authors the committed traceability
+  record at `.docs/coherence/<plan-stem>.md` at the end of DECIDE; and `land-spec.ts` runs
+  `runCoherenceGate` (`engine/engineer/coherence-validator.ts`), which cross-checks every
+  cited id against the real artifacts (fabricated-citation reject), runs five
+  coverage/consistency layers (outcome, FR, story, orphan-task, coverage-table), scans for
+  duplicate intake claims offline via local git state, and blocks the land on any
+  unresolved gap. Every coverage layer collects ALL of its findings (e.g. every orphan
+  task, every uncovered story), not just its first, so one refusal names the complete gap
+  set and a waiver can cover it in a single pass. Tier S is exempt outright, and specs
+  authored before this gate existed are never retroactively blocked (no
+  `.docs/coherence/` signal in the diff disengages the gate) — worktree creation now
+  always stamps `.docs/coherence/.gitkeep`, so every engineer-authored post-gate spec
+  carries a coherence signal and a skipped `/coherence-check` fails closed at parse
+  instead of disengaging. Outcome bullets are read from `.pipeline/intake-outcomes.md`
+  with a fallback to the committed `.docs/intake/<plan-stem>.md` marker
+  (`readCommittedIntakeOutcomes`) so the outcome layer survives worktree recreation and
+  re-lands. A genuine exception is waivable via a committed
+  `.docs/coherence-waivers/<plan-stem>.md` (`Waives: <gap-id>[, ...]` / `Rationale: <prose>`,
+  fresh-in-diff, partial coverage still blocks).
 
 ## Migration
 

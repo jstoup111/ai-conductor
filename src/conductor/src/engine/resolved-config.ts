@@ -33,6 +33,7 @@ export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
   stories: 'sonnet',
   conflict_check: 'sonnet',
   plan: 'sonnet',
+  coherence_check: 'sonnet',
   architecture_diagram: 'sonnet',
   architecture_review: 'fable',
   worktree: 'haiku',
@@ -60,6 +61,7 @@ export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
   stories: 'medium',
   conflict_check: 'medium',
   plan: 'high',
+  coherence_check: 'medium',
   architecture_diagram: 'medium',
   architecture_review: 'high',
   worktree: 'low',
@@ -92,6 +94,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   stories: 3,
   conflict_check: 3,
   plan: 3,
+  coherence_check: 3,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
@@ -119,6 +122,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   stories: 'manual',
   conflict_check: 'conditional',
   plan: 'manual',
+  coherence_check: 'conditional',
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
@@ -154,6 +158,9 @@ export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
   },
   conflict_check: {
     L: { model: 'fable' },
+  },
+  coherence_check: {
+    L: { model: 'opus' },
   },
   explore: {
     S: { effort: 'low' },

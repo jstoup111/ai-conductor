@@ -49,6 +49,7 @@ afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 // worktree, not the primary checkout); returns the worktree path for landSpec.
 async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<string> {
   const wt = await createEngineerWorktree(repo, 'idea t');
+  await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });

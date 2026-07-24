@@ -73,6 +73,7 @@ async function showOnBranch(branch: string, relPath: string): Promise<string | n
  */
 async function seedWorktree(): Promise<string> {
   const wt = await createEngineerWorktree(repoPath, 'dep bump');
+  await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });

@@ -22,6 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import type { EngineerIO, EngineerDeps } from './engineer/loop.js';
 import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
@@ -102,7 +103,7 @@ export type EngineerDispatch =
   | { kind: 'launch'; idea?: string }
   | { kind: 'guide' }
   | { kind: 'projects' }
-  | { kind: 'worktree'; project: string; idea: string }
+  | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
   | { kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
@@ -176,9 +177,15 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     if (!project || !idea) {
       return { kind: 'guide' };
     }
-    const unk = findUnknownFlag(argv, ['--project', '--idea']);
+    // Optional intake claim context (Task 1): present when the idea came from an
+    // intake envelope (github-issues) — carries the Desired-outcome bullets to
+    // stage into the worktree's .pipeline/ BEFORE any DECIDE artifact is authored.
+    // Absent for human-typed ideas (no staging, no error — Story 1 negative path).
+    const sourceRef = parseFlag(argv, '--source-ref') ?? undefined;
+    const body = parseFlag(argv, '--body') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--project', '--idea', '--source-ref', '--body']);
     if (unk) return { kind: 'reject', sub: 'worktree', flag: unk };
-    return { kind: 'worktree', project, idea };
+    return { kind: 'worktree', project, idea, sourceRef, body };
   }
 
   if (subCmd === 'land') {
@@ -295,6 +302,56 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 }
 
 /** Parse the value of a named flag (e.g. --project foo) from an argv array. */
+// Sanitize a sourceRef for use as a claim-record filename — non-alnum chars become `-`.
+function sanitizeSourceRefForFile(sourceRef: string): string {
+  return sourceRef.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+function claimRecordPath(engDir: string, sourceRef: string): string {
+  return join(engDir, 'claims', `${sanitizeSourceRefForFile(sourceRef)}.json`);
+}
+
+/**
+ * Persist a claim record `{ sourceRef, body }` so a later `engineer worktree
+ * --source-ref <ref>` call (with no `--body`) can resolve the Desired-outcome body
+ * threaded through claim → worktree (FR-13). Best-effort — a write failure must never
+ * fail the claim itself.
+ */
+async function persistClaimRecord(
+  engDir: string,
+  sourceRef: string | null | undefined,
+  body: string | null | undefined,
+): Promise<void> {
+  if (!sourceRef) return;
+  try {
+    const dir = join(engDir, 'claims');
+    await mkdir(dir, { recursive: true });
+    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null }), 'utf8');
+  } catch {
+    // Best-effort — degrade to no staging at worktree time (matches the chat-origin
+    // negative path in worktree-authoring.ts).
+  }
+}
+
+/**
+ * Load a persisted claim record for `sourceRef`. Returns `null` (never throws) when the
+ * record is missing or unreadable — the caller degrades to no body/staging, matching the
+ * existing chat-origin negative-path behavior.
+ */
+async function loadClaimRecord(
+  engDir: string,
+  sourceRef: string,
+): Promise<{ sourceRef: string; body: string | null } | null> {
+  try {
+    const raw = await readFile(claimRecordPath(engDir, sourceRef), 'utf8');
+    const parsed = JSON.parse(raw) as { sourceRef?: string; body?: string | null };
+    if (typeof parsed.sourceRef !== 'string') return null;
+    return { sourceRef: parsed.sourceRef, body: typeof parsed.body === 'string' ? parsed.body : null };
+  } catch {
+    return null;
+  }
+}
+
 function parseFlag(argv: string[], flag: string): string | null {
   const idx = argv.indexOf(flag);
   if (idx === -1 || idx >= argv.length - 1) return null;
@@ -442,8 +499,8 @@ export const SUBCOMMAND_HELP = {
     'Mutates: nothing (read-only).\n' +
     'Loop fit: informational only — inspect which projects the engineer can route ideas to; not a step in the claim → worktree → land → handoff → resolve/forget loop.',
   worktree:
-    'engineer worktree --project <name> --idea "<idea>" — create the per-idea worktree used to author a spec.\n' +
-    'Flags: --project <name> (required), --idea "<text>" (required).\n' +
+    'engineer worktree --project <name> --idea "<idea>" [--source-ref <ref>] — create the per-idea worktree used to author a spec.\n' +
+    'Flags: --project <name> (required), --idea "<text>" (required), --source-ref <ref> (optional — resolves the claim record for intake-sourced ideas).\n' +
     'Mutates: creates a git worktree and branch on disk for the project.\n' +
     'Loop fit: second step of the loop — claim → worktree → land → handoff → resolve/forget.',
   land:
@@ -495,7 +552,7 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer --idea "<text>"                     — launch driving a specific idea (skips intake poll)\n' +
       '  conduct-ts engineer projects                            — list registered projects\n' +
       '  conduct-ts engineer claim                               — dequeue the oldest pending intake idea (JSON)\n' +
-      '  conduct-ts engineer worktree --project <n> --idea "<i>"                     — create the per-idea authoring worktree\n' +
+      '  conduct-ts engineer worktree --project <n> --idea "<i>" [--source-ref <ref>]  — create the per-idea authoring worktree\n' +
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
@@ -715,7 +772,7 @@ export async function dispatchEngineer(
     // makes zero mutation to the primary tree and returns exit 1. Prints
     // `{ slug, branch, worktreePath, reconcile }` on success.
     case 'worktree': {
-      const { project: projectName, idea } = dispatch;
+      const { project: projectName, idea, sourceRef, body } = dispatch;
       const reader = createRegistryReader(registryPath ? { registryPath } : {});
       const allProjects = await reader.listProjects();
       const record = allProjects.find((p) => p.name === projectName);
@@ -732,8 +789,22 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      // FR-13: when --source-ref is given without an explicit --body, resolve the
+      // Desired-outcome body from the claim record persisted at claim time. An
+      // explicit --body always wins. A missing/unreadable record degrades to no
+      // staging (matches worktree-authoring.ts's chat-origin negative path) — never throws.
+      let resolvedBody = body;
+      if (sourceRef && resolvedBody == null) {
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const record = await loadClaimRecord(engDir, sourceRef);
+        resolvedBody = record?.body ?? undefined;
+      }
+
       try {
-        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m));
+        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m), {
+          sourceRef,
+          body: resolvedBody,
+        });
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
       } catch (err: unknown) {
@@ -1063,10 +1134,14 @@ export async function dispatchEngineer(
       } catch {
         // Entry may be absent for a non-recording source — advisory transition.
       }
+      // FR-13: persist a claim record so `engineer worktree --source-ref` can later
+      // resolve the Desired-outcome body without the skill ever passing --body itself.
+      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text);
       print(
         JSON.stringify({
           kind: 'claim',
           text: envelope.text,
+          body: envelope.text,
           source: envelope.source,
           sourceRef: envelope.sourceRef,
         }),

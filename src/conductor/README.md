@@ -3246,9 +3246,12 @@ being silently ignored, matching the top-level unknown-option guard described be
 
 **Per-idea worktree isolation.** The engineer authors, lands, and hands off each idea inside a
 dedicated **git worktree** of the target repo — `conduct-ts engineer worktree --project <n> --idea
-"<i>"` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>` branch (reusing the
-daemon's worktree mechanism, `engine/worktree-shared.ts`), and `land`/`handoff` take a required
-`--worktree <path>`. The target's **primary working tree is never mutated** (no `checkout` dance) so
+"<i>" [--source-ref <ref>]` creates `<target>/.worktrees/engineer-<slug>` on a fresh `spec/<slug>`
+branch (reusing the daemon's worktree mechanism, `engine/worktree-shared.ts`), and `land`/`handoff`
+take a required `--worktree <path>`. For intake-claimed ideas, `--source-ref` resolves the claim
+record persisted at claim time so the Desired-outcome bullets are staged to
+`.pipeline/intake-outcomes.md` at worktree creation (`worktree-authoring.ts`) and travel with the
+spec. The target's **primary working tree is never mutated** (no `checkout` dance) so
 a concurrent daemon build or a second engineer session in the same repo can't collide. Creation
 **strict-aborts** (zero primary-tree mutation) if no worktree can be made — e.g. an unborn/detached
 HEAD with no derivable default branch — and never falls back to the shared checkout. On a successful
@@ -3297,6 +3300,85 @@ Per idea (each isolated so one repo's failure never corrupts another):
    authored-keys ledger. A target with **no remote** is non-fatal: the spec stays committed on the
    branch and the ledger is still recorded so the FR-12 flywheel trend counts the feature. After the
    spec lands, `ensureRunning` is wired (see below) to bring up the target's daemon.
+
+#### Coherence gate (DECIDE artifact coherence check, `runCoherenceGate`)
+
+A deterministic, land-time check that the DECIDE-phase spec artifacts (intake outcomes →
+PRD FRs → stories → plan tasks) actually agree with each other, so a spec can't land with a
+plausible-sounding plan that quietly drops a desired outcome, invents an FR, or leaves a
+story/task orphaned. It is engine-owned, non-LLM (`engine/engineer/coherence-validator.ts` +
+`coherence-waiver.ts`), and runs as a single call-site block in `land-spec.ts` right after the
+DRAFT-ADR gate.
+
+**Outcome staging.** When an idea is claimed from intake, `readStagedIntakeOutcomes`
+(`engine/artifacts.ts`) reads the idea's Desired-outcome bullets and stages them to
+`.pipeline/intake-outcomes.md` in the worktree, so they survive worktree recreation and travel
+with the spec independent of the source issue. If the gitignored staged file is absent (e.g. a
+worktree recreated after the fact, or a re-land), `readCommittedIntakeOutcomes`
+(`outcome-staging.ts`) falls back to the committed `.docs/intake/<stem>.md` marker so the outcome
+layer still engages correctly. A chat-origin or empty-intake idea degrades to zero staged
+outcomes — never a crash.
+
+**Authoring the traceability record (`/coherence-check`).** For Medium/Large tier specs, the
+`/coherence-check` skill runs at the end of DECIDE (after `/plan`) and authors a committed
+Markdown table at `.docs/coherence/<plan-stem>.md`: one row per outcome/FR/story/task, each
+citing the real ids it maps to, a verdict (e.g. `covered`/`gap`), and a quoted evidence excerpt.
+S-tier specs skip it entirely (see tier exemption below).
+
+**What `runCoherenceGate` checks, in order, when engaged:**
+
+1. **`resolveRequiredLayers` — engagement + layer degradation.** Tier `S` is exempt outright
+   (checked first, unconditionally — never misread as a missing-artifact gap). A **legacy
+   change set** — one with no `.docs/coherence/` path anywhere in its idea-attributable diff —
+   disengages the gate entirely (**no-retroactivity**: a spec authored before `/coherence-check`
+   existed is never retroactively blocked). Worktree creation always writes
+   `.docs/coherence/.gitkeep` (`worktree-authoring.ts`), so every engineer-authored post-gate spec
+   carries a coherence signal in its diff and a skipped `/coherence-check` fails closed at parse
+   (step 2) instead of disengaging via no-retroactivity; only genuinely pre-gate worktrees (no
+   stamp in the idea-attributable diff) disengage. Otherwise the gate engages and derives which of five
+   coverage layers (`outcome`, `fr`, `story`, `orphan-task`, `coverage-table`) are required from
+   committed signals only: `story`/`orphan-task`/`coverage-table` are always required once
+   engaged (structural, no external marker needed); `fr` is required unless the track marker says
+   `technical`; `outcome` is required only when there are staged outcome bullets.
+2. **Parse (fail-closed).** `parseCoherenceArtifact` rejects a missing, empty, or unparseable
+   `.docs/coherence/<plan-stem>.md` with a named reason — never a silent pass.
+3. **`crossCheckIds` — fabricated-citation reject.** Every cited id (and every row's own subject
+   id) must resolve against the real story/task/FR/outcome pools derived from the stories file,
+   plan task tree, PRD `## Functional Requirements` section, and staged outcome count. A single
+   id that doesn't resolve is rejected immediately, naming the offending row and id — this check
+   is **never waivable** (an evidentiary defect, not a coverage gap).
+4. **`validateCoherence` — the five coverage/consistency layers**, gated to only the layers
+   `resolveRequiredLayers` required: outcome-coverage (every staged bullet has an affirmative
+   `outcome-<n>` row), FR-coverage (every PRD FR is cited by a story, and that story is covered
+   by a task — two-hop), story-coverage (every story is cited by ≥1 task), orphan-task (every
+   plan task cites a real story, or is `infrastructure`/`refactor` with a declared supporting
+   purpose), and coverage-table consistency (the plan's own `## Coverage Check (story → task)`
+   table doesn't lie about the task tree). Every layer collects ALL of its findings (e.g. every
+   orphan task, every uncovered story), not just its first, rather than stopping at the first
+   failure, so one report names the complete gap set and a waiver can cover it in a single pass.
+5. **`scanDuplicateClaim` — offline duplicate-intake-claim scan.** Reads only local git state
+   (`ls-tree`/`show` against the default branch, never the network): if another
+   `.docs/intake/*.md` marker already committed on the default branch carries the same
+   `Source-Ref` as this spec, it's a duplicate claim (`duplicate:<ref>` gap id), naming the
+   conflicting slug.
+
+**Waiver flow.** Any unresolved gap after all layers run can be waived by a committed
+`.docs/coherence-waivers/<plan-stem>.md`, fresh in this change's diff (a waiver landed by a
+prior spec never satisfies a later one — mirrors the release gate's waiver idiom), carrying:
+
+```
+Waives: <gap-id>[, <gap-id>...]
+
+Rationale: <non-empty prose>
+```
+
+Gap ids must be exactly the ones the validator reported for this change set (a waiver can't cite
+an invented id). **Partial coverage still blocks** — a waiver covering only some of the reported
+gaps names the unwaived remainder rather than silently passing.
+
+**Fail-closed, silent-on-pass.** `runCoherenceGate` resolves with no return value when the gate
+disengages or every layer passes/is fully waived, and throws a single `Error` naming every
+unresolved gap id otherwise — there is no partial-credit or advisory-only mode once engaged.
 
 #### GitHub-issues intake + write-back (Phase 9.3b)
 

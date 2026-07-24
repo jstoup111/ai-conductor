@@ -116,7 +116,10 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
 
     await conductor.run();
 
-    expect(stepsRun[0]).toBe('acceptance_specs');
+    // coherence_check (DECIDE, post-plan) is not in the daemon's
+    // PRESEEDED_DONE list, so it's the first step a fresh daemon-dispatched
+    // run actually executes — acceptance_specs follows it.
+    expect(stepsRun[0]).toBe('coherence_check');
     expect(stepsRun).not.toContain('explore'); // front-half never re-executed
 
     const records = await readRecords(dir);

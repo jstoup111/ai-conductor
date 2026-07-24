@@ -63,6 +63,7 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/specs/2026-07-23-feature.md', 'x'],
     ['.docs/stories/epic-1/a.md', 'x'],
     ['.docs/conflicts/2026-07-23.md', 'x'],
+    ['.docs/coherence/2026-07-23.md', 'x'],
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],

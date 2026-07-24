@@ -117,6 +117,19 @@ export const ALL_STEPS: StepDefinition[] = [
     kickbackTarget: true,
   },
   {
+    // DECIDE-phase coherence gate: authors the committed traceability mapping
+    // (outcomes -> FRs -> stories -> tasks with per-row verdicts) that the
+    // land-time coherence gate validates. M/L tier only — S is skippable.
+    name: 'coherence_check',
+    label: 'Coherence Check',
+    phase: 'DECIDE',
+    enforcement: 'gating',
+    prerequisites: ['plan'],
+    skippableForTiers: ['S'],
+    isCheckpoint: false,
+    skillName: 'coherence-check',
+  },
+  {
     name: 'acceptance_specs',
     label: 'Acceptance Specs',
     phase: 'BUILD',

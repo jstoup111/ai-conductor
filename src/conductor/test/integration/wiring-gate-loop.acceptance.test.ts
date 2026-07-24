@@ -58,6 +58,7 @@ const FRONT_DONE: ConductState = {
   stories: 'done',
   conflict_check: 'skipped',
   plan: 'done',
+  coherence_check: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
