@@ -5,6 +5,15 @@
 Source: jstoup111/ai-conductor#190 (approved Fable rollout plan #186–#194), Approach A
 (declarative pin flip). Track: technical (no PRD). Tier: S.
 
+> **Provider-aware amendment (#902, approved 2026-07-23):** The model assertions
+> in this historical Fable rollout describe the built-in **Claude** policy.
+> Codex uses the independent per-step policy in
+> `model-and-effort-resolution-provider-aware-902.md`; standalone skill pins
+> remain the Claude interactive path. The original `explore`/`prd` `xhigh`
+> effort text was first superseded by #607's `medium` setting, then #902's
+> operator-approved fit review set the current Claude base to `high`;
+> `explore.S` remains the separate `low` override.
+
 Out of scope (deliberate): fable-unavailability degradation is #186's fallback ladder;
 `architecture-review --as-built` stays sonnet; all BUILD generation steps keep their models.
 
@@ -17,8 +26,8 @@ model while generation-heavy steps stay cheap.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given no user/phase config overrides, when `resolveStepConfig('explore', 'DECIDE')` runs, then the resolved model is `fable` and effort remains `xhigh`
-- Given no overrides, when `resolveStepConfig('prd', ...)` runs, then model is `fable` and effort remains `xhigh`
+- Given Claude is selected with no user/phase config overrides, when `resolveStepConfig('explore', 'DECIDE')` runs, then the resolved model is `fable` and effort is `high`
+- Given Claude is selected with no overrides, when `resolveStepConfig('prd', ...)` runs, then model is `fable` and effort is `high`
 - Given no overrides, when `resolveStepConfig('architecture_review', ...)` runs, then model is `fable` and effort remains `high`
 
 #### Negative Paths
@@ -28,7 +37,7 @@ model while generation-heavy steps stay cheap.
 
 ### Done When
 - [ ] `DEFAULT_STEP_MODELS` in `src/conductor/src/engine/resolved-config.ts` has `explore: 'fable'`, `prd: 'fable'`, `architecture_review: 'fable'`; all other entries unchanged
-- [ ] `DEFAULT_STEP_EFFORT` untouched by the diff
+- [ ] The current Claude effort policy has `explore: 'high'` and `prd: 'high'`, while `explore.S` remains `low`, matching the superseding #902 decision
 - [ ] Unit tests in `src/conductor/test/engine/resolved-config.test.ts` updated: the explore-default assertion expects `fable`; a test asserts `architecture_review_as_built` still resolves `sonnet`
 - [ ] `StepConfig.model` doc comment in `src/conductor/src/types/config.ts` lists `fable` among the aliases
 - [ ] `rtk proxy npx vitest run` green in `src/conductor`
