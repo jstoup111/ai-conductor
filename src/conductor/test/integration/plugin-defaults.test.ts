@@ -67,6 +67,23 @@ describe('Integration: plugin defaults', () => {
     expect(provider).toHaveProperty('invokeInteractive');
   });
 
+  it('registers Codex as an opt-in built-in provider without changing the default', async () => {
+    const registry = new PluginRegistry();
+    await discoverPlugins(
+      join(dir, '.ai-conductor', 'plugins', 'global'),
+      join(dir, '.ai-conductor', 'plugins', 'project'),
+      registry,
+    );
+    registerBuiltins(registry, events, () => null);
+    registry.markInitialized();
+
+    const provider = registry.get<LLMProvider>('llm_provider', 'codex');
+
+    expect(provider).toHaveProperty('invoke');
+    expect(provider).toHaveProperty('invokeInteractive');
+    expect(registry.list('llm_provider')).toEqual(expect.arrayContaining(['claude', 'codex']));
+  });
+
   it('Conductor session completes with default ClaudeProvider', async () => {
     // Start with minimal config (no plugin selection)
     const config = {} as any;

@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
+
 ### Changed
 
 - Daemon log: a successful `bin/setup` no longer echoes its entire output into

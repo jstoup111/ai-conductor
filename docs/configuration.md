@@ -96,7 +96,7 @@ complexity:
   default_tier: M              # "S" | "M" | "L" — used when /assess hasn't run yet
 
 # ── Plugin selection (conduct-ts only) ───────────────────────────────────────
-llm_provider: claude           # Which registered LLM provider to use (default: "claude")
+llm_provider: claude           # "claude" (default) or built-in "codex"; custom registered providers also work
 ui_renderer: terminal          # Which registered UI renderer to use (default: "terminal")
 memory_provider: local         # Which memory provider to use (default: "local" — shared canonical store)
 
@@ -608,6 +608,7 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 | Kind | Name | Description |
 |------|------|-------------|
 | `llm_provider` | `claude` | Default — invokes Claude CLI via `execa` |
+| `llm_provider` | `codex` | Invokes `codex exec` with JSONL output and stdin-delivered prompts |
 | `ui_renderer` | `terminal` | Default — ink-based live dashboard |
 | `memory_provider` | `local` | Default — shared canonical store at `~/.ai-conductor/memory/<key>/harness/` symlinked as `.memory/`; recall is agent-driven (no harness-side search) |
 
