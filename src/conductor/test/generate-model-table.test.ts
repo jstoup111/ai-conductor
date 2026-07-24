@@ -49,9 +49,15 @@ const PROSE_AFTER =
   '\nTwo enforcement paths: engine defaults and SKILL.md pins.\n';
 const harnessRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
-const STALE_TABLE = '| Skill/Agent | Model | Effort | Why |\n|---|---|---|---|\n| stale | stale | stale | stale row from a previous run |';
+const STALE_TABLE =
+  '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |\n' +
+  '|---|---|---|---|---|---|---|\n' +
+  '| stale | autonomous engine | stale | stale | stale | stale | stale row from a previous run |';
 
-const NEW_TABLE = '| Skill/Agent | Model | Effort | Why |\n|---|---|---|---|\n| plan | sonnet (S/M), fable (L) | medium (S) | because |';
+const NEW_TABLE =
+  '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |\n' +
+  '|---|---|---|---|---|---|---|\n' +
+  '| plan | autonomous engine | sonnet (S/M), fable (L) | medium (S) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S) | because |';
 
 function fixture(table: string): string {
   return (

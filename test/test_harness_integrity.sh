@@ -234,6 +234,32 @@ else
       assert "bin/generate-model-table --check — unexpected exit code ${model_table_exit}" 1
       ;;
   esac
+
+  # Fixture sub-test: prove the provider-labelled contract is not a
+  # presence-only check. Run the real binary against a temporary HARNESS.md
+  # whose Codex provider label is changed, then require both drift exit 1 and
+  # a useful unified diff naming the changed and canonical labels.
+  model_table_fixture="$(mktemp)"
+  cp "${HARNESS_DIR}/HARNESS.md" "$model_table_fixture"
+  sed -i '0,/| Codex model |/s//| Codex model-drift |/' "$model_table_fixture"
+
+  set +e
+  model_table_fixture_output=$(
+    GENERATE_MODEL_TABLE_HARNESS_MD="$model_table_fixture" \
+      "${HARNESS_DIR}/bin/generate-model-table" --check 2>&1
+  )
+  model_table_fixture_exit=$?
+  set -e
+  rm -f "$model_table_fixture"
+
+  model_table_fixture_ok=1
+  if [ "$model_table_fixture_exit" -eq 1 ] &&
+     echo "$model_table_fixture_output" | grep -Fq -- '-| Skill/Agent | Execution path | Claude model | Claude effort | Codex model-drift | Codex effort | Why |' &&
+     echo "$model_table_fixture_output" | grep -Fq -- '+| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |'; then
+    model_table_fixture_ok=0
+  fi
+  assert "bin/generate-model-table --check — provider-label fixture reports useful drift diff" \
+    "$model_table_fixture_ok"
 fi
 
 # ── 5b. SKILL.md pin agreement ──────────────────────────────────────────────
