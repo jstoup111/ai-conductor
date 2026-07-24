@@ -825,3 +825,109 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
     expect(state.build_routed_reason as string).toMatch(/routed: unresolved \[1, 2, 3\]/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C3 end-to-end (plan Task 12): routing is explicit, never a silent
+// always-pass. A 3-task plan where tasks 1 and 2 resolve (trailer-stamped on
+// attempt 1) but task 3 never does: `build` still routes forward via Task 8
+// (real commit movement keeps landing, budget exhausts) rather than HALTing
+// — but the gap is never swallowed. Both the kickback re-dispatch context
+// (the retry hint handed back to `build`) AND the routed-reason persisted to
+// state name task 3, specifically, as the unresolved id.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-c3-e2e-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initGitRepo(dir);
+    await seedAllArtifactsExceptTaskStatus(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('plan of 3 tasks, 1 and 2 resolved, 3 never resolved → build routes forward; build_review FAIL names task 3; kickback context AND routed-reason both name task 3', async () => {
+    await writePlanAndStatus(dir, 3, []);
+
+    let buildAttempt = 0;
+    const buildRetryReasons: Array<string | undefined> = [];
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async (step: StepName, _state, opts) => {
+        if (step === 'build') {
+          buildAttempt++;
+          buildRetryReasons.push(opts?.retryReason);
+          if (buildAttempt === 1) {
+            // Attempt 1 (of this build-step dispatch): resolve tasks 1 and
+            // 2, task 3 deliberately never gets a trailer.
+            await commitWithTaskTrailer(dir, '1', 1);
+            await commitWithTaskTrailer(dir, '2', 2);
+          } else {
+            // Every later attempt still lands real, unattributed commit
+            // movement — task 3 stays unresolved, but the loop never wedges.
+            await commitPlainWork(dir, buildAttempt);
+          }
+        } else if (step === 'build_review') {
+          const { stdout: headSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['plan task 3 was never resolved'],
+              rubric: { completeness: true },
+              codeStamp: headSha.trim(),
+            }),
+          );
+        }
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stepStarts: StepName[] = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStarts.push(e.step);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    // Routed forward at least once — build_review was reached even though
+    // task 3 never resolved.
+    expect(stepStarts).toContain('build_review');
+
+    // Kickback re-dispatch context (the retry hint `build` receives on its
+    // NEXT dispatch, after build_review's FAIL) names task 3's gap.
+    const hintsAfterKickback = buildRetryReasons.filter((r) => r !== undefined);
+    expect(hintsAfterKickback.length).toBeGreaterThan(0);
+    expect(hintsAfterKickback.some((r) => r!.includes('plan task 3 was never resolved'))).toBe(
+      true,
+    );
+
+    // The routed-reason persisted to state also names task 3, specifically
+    // — never silently drops the gap, and never mis-names a resolved task
+    // (1 or 2) as unresolved.
+    const stateContent = await readFile(statePath, 'utf-8').catch(() => null);
+    const state = stateContent ? (JSON.parse(stateContent) as Record<string, unknown>) : {};
+    expect(typeof state.build_routed_reason).toBe('string');
+    const routedReason = state.build_routed_reason as string;
+    expect(routedReason).toMatch(/routed: unresolved \[3\]/);
+    expect(routedReason).not.toMatch(/unresolved \[.*\b1\b.*\]/);
+    expect(routedReason).not.toMatch(/unresolved \[.*\b2\b.*\]/);
+  });
+});
