@@ -1162,6 +1162,30 @@ async function writeArchitectureReviewAsBuiltCodeStamp(
   await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
 }
 
+/**
+ * Computes fresh wiring evidence via the injected probe and durably writes it
+ * to `path` (creating `.pipeline/` if needed), mirroring the wiring_check
+ * predicate's absent-evidence-file branch. Returns the computed evidence, or
+ * a `{ reason }` failure object if the probe throws.
+ */
+async function deriveAndPersistWiringEvidence(
+  dir: string,
+  path: string,
+  ctx: CompletionContext,
+): Promise<WiringEvidence | { reason: string }> {
+  let computed: WiringEvidence;
+  try {
+    computed = await ctx.wiringProbe!();
+  } catch (err) {
+    return {
+      reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(path, JSON.stringify(computed, null, 2));
+  return computed;
+}
+
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
   Record<StepName, (dir: string, ctx: CompletionContext) => Promise<CompletionResult>>
 > = {
@@ -1928,18 +1952,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
         };
       }
-      let computed: WiringEvidence;
-      try {
-        computed = await ctx.wiringProbe();
-      } catch (err) {
-        return {
-          done: false,
-          reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
-        };
+      const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
+      if ('reason' in derived) {
+        return { done: false, reason: derived.reason };
       }
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(path, JSON.stringify(computed, null, 2));
-      parsed = computed;
+      parsed = derived;
     } else {
       try {
         parsed = JSON.parse(raw);
