@@ -384,6 +384,41 @@ advanced base is integrated before the failed gate re-checks. A plain restart wi
 advance leaves every marker intact. See
 [`../src/conductor/README.md`](../src/conductor/README.md#halt-reconciliation-startup-dashboard--main-advance-re-kick-adr-013).
 
+**Halt classes — needs-human HALTs survive the re-kick sweep.** Every `.pipeline/HALT` may
+carry a machine-readable sidecar, `.pipeline/HALT.class`, written best-effort alongside the
+marker (`writeHaltMarker`). Two classes exist:
+
+- **`needs-human`** — only an operator can resolve this HALT (a validation-group remediation
+  halt, a prd-audit needs-human-DECIDE or un-ALIGNED-FR halt, a build_review scope-FAIL halt,
+  a paused rebase conflict, or a self-host release/version/integrity gate halt).
+- **`mechanical`** — the daemon may safely clear and retry this HALT on the next re-kick (a
+  gate-loop-budget-exceeded halt, or a build-stall/remediation-budget-exhausted halt).
+
+A HALT with no sidecar, an unreadable sidecar, or a sidecar containing anything other than
+those two exact strings reads as **`unclassified`** — this is the safe-degrade case for every
+legacy halt site that predates classification, and for a best-effort sidecar write that failed.
+`unclassified` HALTs keep today's re-kick behavior (they clear and retry on the next base-SHA
+advance), so an unclassified site is never accidentally stricter than before this feature.
+
+The re-kick sweep's per-slug decision order is:
+
+1. **Operator-park check** — a parked slug (`conduct daemon park <slug>`) is skipped outright.
+2. **Processed/shipped dedup** — a slug already recorded as shipped is skipped.
+3. **Halt-class check** — `needs-human` is skipped and logged
+   (`re-kick <slug>: skipped — halt class needs-human (<reason>)`); nothing is touched, so the
+   marker, sidecar, and worktree state are all left exactly as the operator left them.
+   `mechanical` and `unclassified` fall through.
+4. **FR-9 per-SHA guard** — a slug already re-kicked at the current base SHA is not re-kicked
+   again.
+5. **Clear + sentinel** — the marker is cleared and a `.pipeline/REKICK` sentinel is dropped so
+   the feature re-dispatches; the log line now carries the resolved class, e.g.
+   `(halt class: mechanical)`.
+
+**Releasing a needs-human halt** uses the normal HALT-clearing operation — remove
+`.pipeline/HALT` (e.g. after resolving the underlying question and committing a fix). The
+`.pipeline/HALT.class` sidecar is cleared automatically alongside it by `clearMarker`; there is
+no separate classification cleanup step.
+
 The daemon is hosted as a **foreground process inside a per-repo tmux session**
 (`cc-daemon-<slug>`), so you can attach to a *running* daemon on demand — in full color
 — and restart or debug it without hunting for a pid. Its output is still teed to an
