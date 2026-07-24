@@ -850,6 +850,7 @@ export class DefaultStepRunner implements StepRunner {
         residueIds: opts.residueIds,
         featureWorktreePath: opts.projectRoot,
         config: this.config,
+        modelPolicy: this.modelPolicy,
       });
     } catch (err) {
       return {
