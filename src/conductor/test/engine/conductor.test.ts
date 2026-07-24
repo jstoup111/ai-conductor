@@ -51,7 +51,7 @@ import {
   findResumeIndex,
   resolveGroupMembership,
 } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupMember } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
@@ -61,6 +61,7 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -7654,6 +7655,127 @@ describe('engine/conductor', () => {
       expect(runCalls.filter((s) => s === 'plan').length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  it.each([
+    {
+      signal: 'rate-limit',
+      transient: {
+        success: false,
+        rateLimited: true,
+        waitSeconds: 1,
+      } as StepRunResult,
+    },
+    {
+      signal: 'stale-session',
+      transient: {
+        success: false,
+        sessionExpired: true,
+      } as StepRunResult,
+    },
+    {
+      signal: 'auth-park',
+      transient: {
+        success: false,
+        authFailure: true,
+      } as StepRunResult,
+    },
+  ])(
+    'keeps transient re-runs on the same Codex attempt: $signal',
+    async ({ signal, transient }) => {
+      await writeState(statePath, {
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'M',
+        track: 'technical',
+        prd: 'skipped',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+      } as ConductState);
+
+      if (signal === 'auth-park') {
+        const { waitForCredentialsChange } = await import(
+          '../../src/engine/self-host/operator-credentials.js'
+        );
+        vi.mocked(waitForCredentialsChange).mockResolvedValue({
+          type: 'refreshed',
+          credentialsPath: '/.credentials.json',
+        });
+      }
+
+      const dispatches: Array<{ model?: string; effort?: string }> = [];
+      let planCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (
+          step: StepName,
+          _state: ConductState,
+          options?: StepRunOptions,
+        ): Promise<StepRunResult> => {
+          if (step !== 'plan') return { success: true };
+          dispatches.push({
+            model: options?.modelOverride,
+            effort: options?.effortOverride,
+          });
+          planCalls += 1;
+          if (planCalls === 1) return transient;
+          return { success: false, output: 'ordinary plan failure' };
+        }),
+        resetSession: vi.fn().mockResolvedValue(undefined),
+      };
+      const retryEvents: Array<{
+        attempt: number;
+        model?: string;
+        effort?: string;
+      }> = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'plan') {
+          retryEvents.push({
+            attempt: event.attempt,
+            model: event.escalatedModel,
+            effort: event.escalatedEffort,
+          });
+        }
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        resume: true,
+        fromStep: 'plan',
+        sleepFn: vi.fn().mockResolvedValue(undefined),
+        config: {
+          steps: {
+            plan: {
+              model: 'gpt-5.6-luna',
+              effort: 'low',
+              max_retries: 2,
+            },
+          },
+        } as HarnessConfig,
+        modelPolicy: CODEX_MODEL_POLICY,
+        escalateBuildFailure: vi.fn().mockResolvedValue({ prUrl: undefined }),
+      });
+
+      await conductor.run();
+
+      expect({ dispatches, retryEvents }).toEqual({
+        dispatches: [
+          { model: 'gpt-5.6-luna', effort: 'low' },
+          { model: 'gpt-5.6-luna', effort: 'low' },
+          { model: 'gpt-5.6-luna', effort: 'medium' },
+        ],
+        retryEvents: [
+          { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
+        ],
+      });
+    },
+  );
 
   describe('rate-limit handling', () => {
     it('waits and retries without burning retry budget on rate limit', async () => {

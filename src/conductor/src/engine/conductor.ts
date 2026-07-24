@@ -39,6 +39,7 @@ import {
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { escalateAttempt } from './escalation.js';
+import { CLAUDE_MODEL_POLICY, type ProviderModelPolicy } from './provider-model-policy.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
@@ -492,6 +493,11 @@ export interface ConductorOptions {
   fromStep?: StepName;
   mode?: RunMode;
   config?: HarnessConfig;
+  /**
+   * Provider-specific retry escalation ladder. Optional while callers migrate;
+   * Claude remains the compatibility default.
+   */
+  modelPolicy?: ProviderModelPolicy;
   projectRoot: string;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
@@ -821,6 +827,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
+  private readonly modelPolicy: ProviderModelPolicy;
   private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
@@ -1052,6 +1059,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
+    this.modelPolicy = opts.modelPolicy ?? CLAUDE_MODEL_POLICY;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
@@ -3180,6 +3188,7 @@ export class Conductor {
             resolved.effort,
             attempt,
             resolved.escalate,
+            this.modelPolicy,
           );
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
@@ -3587,6 +3596,7 @@ export class Conductor {
                 resolved.effort,
                 attempt + 1,
                 resolved.escalate,
+                this.modelPolicy,
               );
               await emitTracked({
                 type: 'step_retry',
@@ -4245,6 +4255,7 @@ export class Conductor {
                   resolved.effort,
                   attempt + 1,
                   resolved.escalate,
+                  this.modelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',

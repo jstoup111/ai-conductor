@@ -31,6 +31,8 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { validateConfig } from '../../src/engine/config.js';
 import { resolveStepConfig, DEFAULT_STEP_RETRIES } from '../../src/engine/resolved-config.js';
 import { aggregateRetryHotspots, parseEvents } from '../../src/engine/report-renderer.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { writeState } from '../../src/engine/state.js';
 
 // ── Dispatch record for the Conductor-level stories ──────────────────────────
 
@@ -135,6 +137,40 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     for (const d of planDispatches) {
       expect(d).toMatchObject({ model: 'sonnet', effort: 'medium' });
     }
+  });
+
+  it('dispatches Codex retries from Luna through Terra to Sol with escalating effort', async () => {
+    const { runner, forStep } = makeRecordingRunner({
+      plan: () => ({ success: false, output: 'plan failed' }),
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      config: {
+        steps: {
+          plan: {
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      modelPolicy: CODEX_MODEL_POLICY,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(forStep('plan').map(({ model, effort }) => ({ model, effort }))).toEqual([
+      { model: 'gpt-5.6-luna', effort: 'low' },
+      { model: 'gpt-5.6-luna', effort: 'medium' },
+      { model: 'gpt-5.6-terra', effort: 'medium' },
+      { model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
   });
 
   it('S9: exhausted retries HALT correctly — ladder adds no extra attempts', async () => {
@@ -329,6 +365,117 @@ describe('#188 retry-as-escalation — S4 logging', () => {
     const forAttempt = (a: number) => retryEvents.find((e) => e.attempt === a);
     expect(forAttempt(2)).toMatchObject({ escalatedModel: 'sonnet', escalatedEffort: 'high' });
     expect(forAttempt(3)).toMatchObject({ escalatedModel: 'opus', escalatedEffort: 'high' });
+  });
+
+  it('emits upcoming Codex retry rungs after ordinary runner failures', async () => {
+    const retryEvents: Array<{
+      attempt: number;
+      model?: string;
+      effort?: string;
+    }> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'plan') {
+        retryEvents.push({
+          attempt: event.attempt,
+          model: event.escalatedModel,
+          effort: event.escalatedEffort,
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> =>
+        step === 'plan' ? { success: false, output: 'plan failed' } : { success: true },
+      ),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      config: {
+        steps: {
+          plan: {
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      modelPolicy: CODEX_MODEL_POLICY,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(retryEvents).toEqual([
+      { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
+      { attempt: 3, model: 'gpt-5.6-terra', effort: 'medium' },
+      { attempt: 4, model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
+  });
+
+  it('emits upcoming Codex retry rungs after completion misses', async () => {
+    const retryEvents: Array<{
+      attempt: number;
+      model?: string;
+      effort?: string;
+    }> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'plan') {
+        retryEvents.push({
+          attempt: event.attempt,
+          model: event.escalatedModel,
+          effort: event.escalatedEffort,
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
+    };
+    await writeState(statePath, {
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'plan',
+      verifyArtifacts: true,
+      config: {
+        steps: {
+          plan: {
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      modelPolicy: CODEX_MODEL_POLICY,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(retryEvents).toEqual([
+      { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
+      { attempt: 3, model: 'gpt-5.6-terra', effort: 'medium' },
+      { attempt: 4, model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
   });
 
   it('aggregateRetryHotspots surfaces the terminal escalation rung', () => {
