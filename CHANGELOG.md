@@ -60,6 +60,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Resolved-task accounting missed `Task: <id>` attribution lines that build agents emit
+  mid-message instead of in the final trailer block (git's `%(trailers)` only parses the
+  final paragraph), making real committed work invisible to `countResolvedTasks` and
+  contributing to false `no_task_progress` stalls. `listCommitsWithTrailers` /
+  `getEvidenceRange` now fall back to scanning the raw body for flush-left `Task: <id>`
+  lines (no leading whitespace, nothing else on the line — indented/quoted log excerpts
+  never match) when the final-block parse yields no `Task` trailer; a real final trailer
+  still wins, and `canonicalTaskId` aliasing is unchanged.
 - `conduct daemon logs --follow` did not tail: it printed the current snapshot and exited
   after ~0.3s. The follow poll timer was unconditionally `unref()`'d, and the `SIGINT`
   listener that was supposed to hold the process open does not keep node's event loop
