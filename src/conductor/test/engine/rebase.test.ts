@@ -235,6 +235,10 @@ describe('engine/rebase — resolveFreshBase (Task 2)', () => {
     const { git, calls } = fakeGit([
       { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: 'feature\n' } },
       { match: ['remote'], result: { stdout: '' } },
+      { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
+      { match: ['config', '--get', 'init.defaultBranch'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/main'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/master'], result: { exitCode: 1 } },
     ]);
 
     const resolution = await resolveFreshBase(git);
@@ -265,10 +269,14 @@ describe('engine/rebase — resolveFreshBase (Task 2)', () => {
 
     const resolution = await resolveFreshBase(git);
 
+    // Legacy local-only default-branch discovery still finds `main` via the
+    // already-local `refs/remotes/origin/HEAD` symbolic-ref (no network
+    // needed) — restoring the pre-existing offline behavior rather than
+    // degrading further to the current branch.
     expect(resolution).toEqual({
-      ref: 'feature',
+      ref: 'main',
       kind: 'local',
-      branch: 'feature',
+      branch: 'main',
       trackingRefSha: null,
       remoteHeadSha: null,
       fresh: false,
@@ -288,10 +296,11 @@ describe('engine/rebase — resolveFreshBase (Task 2)', () => {
 
     const resolution = await resolveFreshBase(git);
 
+    // Same legacy-discovery reasoning as the ls-remote-failure case above.
     expect(resolution).toEqual({
-      ref: 'feature',
+      ref: 'main',
       kind: 'local',
-      branch: 'feature',
+      branch: 'main',
       trackingRefSha: null,
       remoteHeadSha: null,
       fresh: false,
@@ -304,6 +313,9 @@ describe('engine/rebase — resolveFreshBase (Task 2)', () => {
       { match: ['remote'], result: { stdout: 'origin\n' } },
       { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 1 } },
       { match: ['remote', 'show', 'origin'], result: { exitCode: 0, stdout: 'no HEAD branch line here' } },
+      { match: ['config', '--get', 'init.defaultBranch'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/main'], result: { exitCode: 1 } },
+      { match: ['show-ref', '--verify', '--quiet', 'refs/heads/master'], result: { exitCode: 1 } },
     ]);
 
     const resolution = await resolveFreshBase(git);

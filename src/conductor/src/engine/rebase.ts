@@ -190,6 +190,30 @@ async function currentBranch(git: GitRunner): Promise<string> {
 }
 
 /**
+ * Purely-local default-branch discovery (no network) — the pre-existing
+ * behavior `assembleBuildReviewInputs` relied on before `resolveFreshBase`
+ * existed. Tries, in order: origin/HEAD's symbolic-ref (local ref read),
+ * `init.defaultBranch` config, then whichever of `main`/`master` exists as a
+ * local branch. Used as the fail-soft fallback so a no-remote/probe-failure
+ * degrade never collapses the base to `currentBranch(HEAD)` — that makes
+ * `merge-base(base, HEAD) === HEAD` and the grader sees an empty diff.
+ */
+async function localDefaultBranch(git: GitRunner): Promise<string | null> {
+  const originBranch = await originDefaultBranch(git);
+  if (originBranch) return originBranch;
+
+  const cfg = await git(['config', '--get', 'init.defaultBranch']);
+  if (cfg.exitCode === 0 && cfg.stdout.trim()) return cfg.stdout.trim();
+
+  for (const candidate of ['main', 'master']) {
+    const check = await git(['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`]);
+    if (check.exitCode === 0) return candidate;
+  }
+
+  return null;
+}
+
+/**
  * Shared fresh-base resolver (build-review-grades-plan-vs-diff-against-a-stale-o,
  * Task 2). Probes `refs/remotes/origin/<default>` (the local tracking ref, NOT
  * re-fetched) against `git ls-remote origin <default>` (the true remote head)
@@ -212,10 +236,16 @@ export async function resolveFreshBase(
   const localBase = await currentBranch(git);
 
   const failSoft = async (): Promise<FreshBaseResolution> => {
+    // Prefer the purely-local default-branch discovery (pre-existing
+    // behavior) over `localBase` (the current branch) — using the current
+    // branch as the merge-base ref makes merge-base(ref, HEAD) === HEAD,
+    // handing the grader an empty diff (build-review-grades-plan-vs-diff-
+    // against-a-stale-o retro).
+    const fallbackBranch = (await localDefaultBranch(git)) ?? localBase;
     return {
-      ref: localBase,
+      ref: fallbackBranch,
       kind: 'local',
-      branch: localBase,
+      branch: fallbackBranch,
       trackingRefSha: null,
       remoteHeadSha: null,
       fresh: false,
