@@ -147,17 +147,15 @@ Generate `.claude/settings.json` in two parts: permissions (3d-i) and a pre-PR l
 
 #### 3d-i. Permissions
 
-Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Replace
-`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working
-directory, with leading slash stripped — the template already supplies the `//` prefix
-required by Claude Code's permission path syntax). Create the `.claude/` directory if it
-doesn't exist.
+Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Its `Read(**)`,
+`Edit(**)`, and `Write(**)` patterns are relative to the project, so the generated file
+remains valid when the repository is moved or checked out as a worktree. Create the
+`.claude/` directory if it doesn't exist.
 
 The generated file scopes Read/Edit/Write permission to the entire project tree (including
 dotfiles under `.claude/`, `.pipeline/`, `.docs/`, `.memory/`, `.github/`, etc.) so that
 downstream skills don't block on permission prompts when they touch harness artifacts.
-Absolute paths mean the permissions travel with the project even when invoked from a
-different CWD (e.g., inside a worktree).
+Relative patterns keep the permissions portable across machines and worktrees.
 
 If `.claude/settings.json` already exists, do NOT overwrite it — skip to 3d-ii and merge
 the hook block only if the hook is missing.

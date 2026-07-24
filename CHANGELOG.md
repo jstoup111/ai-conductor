@@ -25,6 +25,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Bootstrap-generated Claude settings now use portable project-relative permission patterns
+  (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
+  Generated `CLAUDE.md` and `AGENTS.md` likewise use harness-relative references instead of
+  machine-specific paths, so they remain valid after a move or worktree checkout.
 - Installation now links every harness skill into both user-scoped client directories:
   `~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex. The installer check and
   uninstall paths cover both locations, while project-local skills remain explicit overrides.

@@ -2,37 +2,35 @@
 
 ## Harness
 
-This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
+This project uses the james-stoup-agents harness. Its skills are installed in the user's
+Codex configuration; do not copy them into this project.
 
-Codex MUST read and follow `{{HARNESS_PATH}}/HARNESS.md` at the start of every session.
-The harness skills are installed in the user's Codex configuration at `~/.codex/skills/`; do
-not copy or install them into this project. A project-local skill is only appropriate when this
-project deliberately overrides a harness skill.
+Codex MUST read and follow the harness's `HARNESS.md` at the start of every session. A
+project-local skill is only appropriate when this project deliberately overrides a harness skill.
 
 ## Agent Personas
 
-Use agent personas from the harness at `{{HARNESS_PATH}}/agents/` when their specialized review
-or implementation roles fit the task.
+Use the harness agent personas when their specialized review or implementation roles fit the task.
 
 ### Generator
-- **Prompt:** `{{HARNESS_PATH}}/agents/generator.md`
+- **Prompt:** `agents/generator.md`
 - **Role:** Implements code via TDD
 - **Context:** Receives only files relevant to current task
 - **Statuses:** DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, NEEDS_DRILL_DOWN, BLOCKED
 
 ### Evaluator
-- **Prompt:** `{{HARNESS_PATH}}/agents/evaluator.md`
+- **Prompt:** `agents/evaluator.md`
 - **Role:** Reviews code with calibrated skepticism
 - **Context:** Fresh context reset — no shared state with generator
 - **Stages:** Spec compliance → Code quality → Domain integrity
 
 ### Domain Reviewer
-- **Prompt:** `{{HARNESS_PATH}}/agents/domain-reviewer.md`
+- **Prompt:** `agents/domain-reviewer.md`
 - **Role:** Checks domain integrity during TDD DOMAIN phases
 - **Authority:** Veto — can reject and send back to RED/GREEN
 
 ### Planner
-- **Prompt:** `{{HARNESS_PATH}}/agents/planner.md`
+- **Prompt:** `agents/planner.md`
 - **Role:** Expands requirements into specifications
 - **Output:** Structured specs with scope, edge cases, and story suggestions
 
