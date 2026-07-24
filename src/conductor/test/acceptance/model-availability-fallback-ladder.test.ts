@@ -104,6 +104,46 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     expect(warned.toLowerCase()).toMatch(/unavailable|not found/);
   });
 
+  it.each([
+    {
+      providerName: 'Claude',
+      ladder: CLAUDE_MODEL_POLICY.modelFallbackLadder,
+      head: CLAUDE_MODEL_POLICY.modelFallbackLadder[0],
+      next: CLAUDE_MODEL_POLICY.modelFallbackLadder[1],
+    },
+    {
+      providerName: 'Codex',
+      ladder: CODEX_MODEL_POLICY.modelFallbackLadder,
+      head: CODEX_MODEL_POLICY.modelFallbackLadder[0],
+      next: CODEX_MODEL_POLICY.modelFallbackLadder[1],
+    },
+  ])(
+    '$providerName modelUnavailable fallback walk remains one autonomous runner attempt',
+    async ({ ladder, head, next }) => {
+      const { provider, invokeCalls } = laddderProvider({
+        [head]: modelUnavailable(),
+        [next]: { success: true, output: 'done', exitCode: 0 },
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        modelOverride: head,
+        config: configWithLadder(ladder),
+      });
+      const runSpy = vi.spyOn(runner, 'run');
+
+      const result = await runner.run('build', emptyState);
+
+      expect({
+        invokedModels: invokeCalls.map((call) => call.model),
+        resultSuccess: result.success,
+        runnerCallCount: runSpy.mock.calls.length,
+      }).toEqual({
+        invokedModels: [head, next],
+        resultSuccess: true,
+        runnerCallCount: 1,
+      });
+    },
+  );
+
   it('Codex Sol/Terra unavailability walks to Luna within the same runner attempt', async () => {
     const { provider, invokeCalls } = laddderProvider({
       'gpt-5.6-sol': modelUnavailable(),

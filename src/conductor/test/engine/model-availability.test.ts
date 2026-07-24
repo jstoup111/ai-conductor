@@ -257,6 +257,283 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(false);
     });
 
+    it.each([
+      { providerName: "Claude", requestedModel: claudeLadder[0] },
+      { providerName: "Codex", requestedModel: codexLadder[0] },
+    ])(
+      "$providerName explicitly configured empty ladder returns modelUnavailable after one requested-model invoke without poisoning the dead cache",
+      async ({ requestedModel }) => {
+        const avail = new ModelAvailability([]);
+        const deadModelsBefore = [...avail.dead];
+        const { provider, invokeCalls } = fakeProvider({
+          [requestedModel]: modelUnavailable(),
+        });
+
+        const result = await avail.invokeWithLadder(provider, {
+          prompt: "hi",
+          sessionId: "s1",
+          resume: false,
+          model: requestedModel,
+        });
+
+        expect({
+          invokedModels: invokeCalls.map((call) => call.model),
+          resultClassification: {
+            success: result.success,
+            modelUnavailable: result.modelUnavailable,
+          },
+          deadModelsBefore,
+          deadModelsAfter: [...avail.dead],
+        }).toEqual({
+          invokedModels: [requestedModel],
+          resultClassification: {
+            success: false,
+            modelUnavailable: true,
+          },
+          deadModelsBefore: [],
+          deadModelsAfter: [],
+        });
+      },
+    );
+
+    it.each([
+      {
+        providerName: "Claude",
+        activeLadder: claudeLadder,
+        explicitModel: "claude-opaque-off-ladder-model",
+      },
+      {
+        providerName: "Codex",
+        activeLadder: codexLadder,
+        explicitModel: "codex-opaque-off-ladder-model",
+      },
+    ])(
+      "$providerName successful explicit off-ladder model is invoked once without poisoning the dead cache",
+      async ({ activeLadder, explicitModel }) => {
+        const avail = new ModelAvailability(activeLadder);
+        const deadModelsBefore = [...avail.dead];
+        const { provider, invokeCalls } = fakeProvider({});
+
+        const result = await avail.invokeWithLadder(provider, {
+          prompt: "hi",
+          sessionId: "s1",
+          resume: false,
+          model: explicitModel,
+        });
+
+        expect({
+          invokedModels: invokeCalls.map((call) => call.model),
+          resultClassification: {
+            success: result.success,
+            modelUnavailable: result.modelUnavailable,
+          },
+          deadModelsBefore,
+          deadModelsAfter: [...avail.dead],
+        }).toEqual({
+          invokedModels: [explicitModel],
+          resultClassification: {
+            success: true,
+            modelUnavailable: undefined,
+          },
+          deadModelsBefore: [],
+          deadModelsAfter: [],
+        });
+      },
+    );
+
+    it.each([
+      {
+        providerName: "Claude",
+        activeLadder: claudeLadder,
+        explicitModel: "claude-opaque-unavailable-model",
+      },
+      {
+        providerName: "Codex",
+        activeLadder: codexLadder,
+        explicitModel: "codex-opaque-unavailable-model",
+      },
+    ])(
+      "$providerName unavailable explicit off-ladder model continues at the active ladder's first live rung",
+      async ({ activeLadder, explicitModel }) => {
+        const avail = new ModelAvailability(activeLadder);
+        const { provider, invokeCalls } = fakeProvider({
+          [explicitModel]: modelUnavailable(),
+          [activeLadder[0]]: { success: true, output: "done", exitCode: 0 },
+        });
+
+        const result = await avail.invokeWithLadder(provider, {
+          prompt: "hi",
+          sessionId: "s1",
+          resume: false,
+          model: explicitModel,
+        });
+
+        expect({
+          invokedModels: invokeCalls.map((call) => call.model),
+          resultClassification: {
+            success: result.success,
+            modelUnavailable: result.modelUnavailable,
+          },
+          deadModels: [...avail.dead],
+        }).toEqual({
+          invokedModels: [explicitModel, activeLadder[0]],
+          resultClassification: {
+            success: true,
+            modelUnavailable: undefined,
+          },
+          deadModels: [explicitModel],
+        });
+      },
+    );
+
+    it.each([
+      {
+        providerName: "Claude",
+        activeLadder: claudeLadder,
+        failureKind: "ordinary failure",
+        explicitModel: "claude-opaque-ordinary-failure-model",
+        failureResult: {
+          success: false,
+          output: "some ordinary error",
+          exitCode: 1,
+          modelUnavailable: undefined,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: undefined,
+          rateLimited: undefined,
+          authFailure: undefined,
+        },
+      },
+      {
+        providerName: "Claude",
+        activeLadder: claudeLadder,
+        failureKind: "rate limit",
+        explicitModel: "claude-opaque-rate-limited-model",
+        failureResult: {
+          success: false,
+          output: "rate limited",
+          exitCode: 1,
+          rateLimited: true,
+          modelUnavailable: false,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: false,
+          rateLimited: true,
+          authFailure: undefined,
+        },
+      },
+      {
+        providerName: "Claude",
+        activeLadder: claudeLadder,
+        failureKind: "authentication failure",
+        explicitModel: "claude-opaque-auth-failure-model",
+        failureResult: {
+          success: false,
+          output: "Not logged in",
+          exitCode: 1,
+          authFailure: true,
+          modelUnavailable: true,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: true,
+          rateLimited: undefined,
+          authFailure: true,
+        },
+      },
+      {
+        providerName: "Codex",
+        activeLadder: codexLadder,
+        failureKind: "ordinary failure",
+        explicitModel: "codex-opaque-ordinary-failure-model",
+        failureResult: {
+          success: false,
+          output: "some ordinary error",
+          exitCode: 1,
+          modelUnavailable: undefined,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: undefined,
+          rateLimited: undefined,
+          authFailure: undefined,
+        },
+      },
+      {
+        providerName: "Codex",
+        activeLadder: codexLadder,
+        failureKind: "rate limit",
+        explicitModel: "codex-opaque-rate-limited-model",
+        failureResult: {
+          success: false,
+          output: "rate limited",
+          exitCode: 1,
+          rateLimited: true,
+          modelUnavailable: false,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: false,
+          rateLimited: true,
+          authFailure: undefined,
+        },
+      },
+      {
+        providerName: "Codex",
+        activeLadder: codexLadder,
+        failureKind: "authentication failure",
+        explicitModel: "codex-opaque-auth-failure-model",
+        failureResult: {
+          success: false,
+          output: "Not logged in",
+          exitCode: 1,
+          authFailure: true,
+          modelUnavailable: true,
+        },
+        expectedClassification: {
+          success: false,
+          modelUnavailable: true,
+          rateLimited: undefined,
+          authFailure: true,
+        },
+      },
+    ])(
+      "$providerName explicit off-ladder model returns $failureKind without advancing or poisoning the dead cache",
+      async ({ activeLadder, explicitModel, failureResult, expectedClassification }) => {
+        const avail = new ModelAvailability(activeLadder);
+        const deadModelsBefore = [...avail.dead];
+        const { provider, invokeCalls } = fakeProvider({
+          [explicitModel]: failureResult,
+        });
+
+        const result = await avail.invokeWithLadder(provider, {
+          prompt: "hi",
+          sessionId: "s1",
+          resume: false,
+          model: explicitModel,
+        });
+
+        expect({
+          invokedModels: invokeCalls.map((call) => call.model),
+          returnedClassification: {
+            success: result.success,
+            modelUnavailable: result.modelUnavailable,
+            rateLimited: result.rateLimited,
+            authFailure: result.authFailure,
+          },
+          deadModelsBefore,
+          deadModelsAfter: [...avail.dead],
+        }).toEqual({
+          invokedModels: [explicitModel],
+          returnedClassification: expectedClassification,
+          deadModelsBefore: [],
+          deadModelsAfter: [],
+        });
+      },
+    );
+
     const ladder = claudeLadder;
 
     it.each(ladder.slice(0, -1).map((_, p) => p))(
