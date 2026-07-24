@@ -106,9 +106,10 @@ import {
 } from './artifacts.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
-  classifyBuildReviewDisposition,
-  incrementRegradeCounter,
-  type BuildReviewDisposition,
+  extractFlaggedPaths,
+  runScopeFailDisposition,
+  readRegradeCount,
+  type Disposition,
 } from './build-review-disposition.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -4388,37 +4389,37 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
-                // Task 6: classification result, consumed by Task 7 (not yet
-                // wired to routing — see below).
-                let buildReviewDisposition: BuildReviewDisposition | undefined;
-                // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o):
-                // disposition classification, BEFORE any rework routing
-                // decision below. Re-probes and recomputes a fresh diff (via
-                // `classifyBuildReviewDisposition`, which reuses
-                // `assembleBuildReviewInputs` — read-only, never mutates git
-                // state) to tell a `stale-mirage` FAIL (flagged content only
-                // appeared because grading ran against a stale base) from a
-                // `genuine` one (flagged content persists under a fresh
-                // recompute). Wiring-only for now: the classification does
-                // not yet change routing — Task 7 consumes it to skip rework
-                // and invalidate-and-regrade on `stale-mirage`. Fully
-                // guarded: a classification failure (e.g. offline) must
-                // never block or alter today's kickback behavior.
+                // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
+                // scope-FAIL disposition, BEFORE any rework routing decision
+                // below (and before the #569 no_task_progress remediation
+                // routing this same conductor uses elsewhere for build
+                // stalls — that routing never applies to build_review, but
+                // ordering here still matters relative to this block's own
+                // kickback-cap HALT further down). `runScopeFailDisposition`
+                // re-probes a fresh base (read-only — never mutates git
+                // history, Story 6) and returns one of:
+                //   - `kicked-to-build`: routes to build rework unchanged
+                //     (today's behavior) — falls through below.
+                //   - `invalidated`: the FAIL graded a stale view; discard
+                //     the verdict and re-run build_review against fresh
+                //     inputs instead of dispatching rework (bounded to once
+                //     per feature-session by the persisted regrade counter).
+                //   - `halt`: a SECOND stale-mirage detection this session —
+                //     never re-enters grading; HALT with the graded/fresh
+                //     base shas, flagged paths, and regrade count consumed.
+                // Fully guarded: a classification failure (e.g. offline)
+                // must never block or alter today's kickback behavior.
+                let scopeFailDisposition: Disposition | undefined;
                 if (lastBuildReviewMergeBase) {
                   try {
-                    const planPath = await resolveFeaturePlanPath(
-                      this.projectRoot,
-                      state.feature_desc,
-                    );
-                    if (planPath) {
-                      const disposition = await classifyBuildReviewDisposition(
-                        makeGitRunner(this.projectRoot),
-                        planPath,
-                        { baseRef: '', mergeBase: lastBuildReviewMergeBase },
-                        parsed.reasons,
-                      );
-                      buildReviewDisposition = disposition.disposition;
-                    }
+                    scopeFailDisposition = await runScopeFailDisposition({
+                      git: makeGitRunner(this.projectRoot),
+                      root: this.projectRoot,
+                      gradedBaseSha: lastBuildReviewMergeBase,
+                      flaggedPaths: extractFlaggedPaths(parsed.reasons),
+                      defaultBranch: '',
+                      regrade: async () => 'pass',
+                    });
                   } catch {
                     // Never block/alter kickback routing over disposition
                     // classification failures — falls through to genuine
@@ -4426,21 +4427,31 @@ export class Conductor {
                   }
                 }
 
-                // Task 7: a `stale-mirage` FAIL graded a stale view of the
-                // diff — discard the verdict and re-run build_review against
-                // fresh inputs instead of kicking back to build. Never
-                // mutates git history (Story 6): re-landing on this same
-                // build_review step index is a plain loop-index rewind, not
-                // a git operation. The regrade counter persisted here is
-                // Task 8's to read for the once-per-session HALT bound —
-                // this task does not enforce that bound itself.
-                if (buildReviewDisposition === 'stale-mirage') {
+                if (scopeFailDisposition?.kind === 'halt') {
+                  const haltBody =
+                    `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
+                    `detection this feature-session — never re-enters grading.\n` +
+                    `gradedBaseSha: ${scopeFailDisposition.gradedBaseSha}\n` +
+                    `freshBaseSha: ${scopeFailDisposition.freshBaseSha}\n` +
+                    `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
+                    `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
+                  await writeHaltMarker(this.projectRoot, haltBody);
+                  await writeState(this.stateFilePath, state);
+                  const reason =
+                    'build_review scope-FAIL disposition HALT: second stale-mirage ' +
+                    'detection this feature-session';
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                if (scopeFailDisposition?.kind === 'invalidated') {
                   await removeBuildReviewVerdict(this.projectRoot).catch(() => {
                     /* best-effort removal */
                   });
-                  const regradeCount = await incrementRegradeCounter(this.projectRoot).catch(
-                    () => 0,
-                  );
+                  const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
                   await emitTracked({
                     type: 'build_review_stale_mirage_regrade',
                     mergeBase: lastBuildReviewMergeBase ?? '',

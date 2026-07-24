@@ -7,22 +7,23 @@ import { promisify } from 'util';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
-// Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on the
-// disposition classifier so the "wired before rework routing" tests can
-// assert it actually runs, without needing a real git remote in this
-// fixture's throwaway repo. Resolves 'genuine' by default (task 6 is
-// wiring-only — the classification must not change kickback routing yet).
-const classifyBuildReviewDispositionMock = vi.fn(async () => ({
-  disposition: 'genuine' as const,
-  fresh: {} as unknown,
-  baseChanged: false,
-  flaggedPaths: [] as string[],
-  freshDiffPaths: [] as string[],
-}));
-vi.mock('../../src/engine/build-review-disposition.js', () => ({
-  classifyBuildReviewDisposition: (...args: unknown[]) =>
-    classifyBuildReviewDispositionMock(...(args as [])),
-}));
+// Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on
+// `runScopeFailDisposition` (the Task 7/8 disposition + HALT-bound
+// orchestrator conductor.ts now calls before rework routing) so the "wired
+// before rework routing" tests can assert it actually runs, without needing
+// a real git remote in this fixture's throwaway repo. Resolves
+// 'kicked-to-build' by default — the classic genuine-FAIL routing this
+// suite pins must stay unchanged.
+const runScopeFailDispositionMock = vi.fn(async () => ({ kind: 'kicked-to-build' as const }));
+vi.mock('../../src/engine/build-review-disposition.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/engine/build-review-disposition.js')>();
+  return {
+    ...actual,
+    runScopeFailDisposition: (...args: unknown[]) =>
+      runScopeFailDispositionMock(...(args as [])),
+  };
+});
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
@@ -1212,19 +1213,20 @@ describe('integration/gate-loop', () => {
     });
   });
 
-  describe('build_review scope-FAIL disposition classification (Task 6, wiring-only)', () => {
-    // Task 6 wires `classifyBuildReviewDisposition` to run before rework
+  describe('build_review scope-FAIL disposition classification (Task 8)', () => {
+    // conductor.ts wires `runScopeFailDisposition` to run before rework
     // routing whenever a build_review dispatch assembled base-freshness
-    // evidence — but does NOT yet act on its result (Task 7). This pins:
-    // (a) it runs, (b) with the graded merge-base and the FAIL verdict's
-    // reasons, and (c) today's kickback-to-build routing is unchanged
-    // regardless of what it returns.
+    // evidence, and acts on its result (invalidate-and-regrade / halt /
+    // kicked-to-build). This pins: (a) it runs, (b) with the graded
+    // merge-base and the FAIL verdict's flagged paths, and (c) a
+    // `kicked-to-build` disposition leaves today's kickback-to-build
+    // routing unchanged.
     function reviewFailConfig() {
       return { build_review: { enabled: true } };
     }
 
-    it('runs the classifier on a build_review FAIL and leaves kickback-to-build routing unchanged', async () => {
-      classifyBuildReviewDispositionMock.mockClear();
+    it('runs the disposition orchestrator on a build_review FAIL and leaves kickback-to-build routing unchanged for a kicked-to-build verdict', async () => {
+      runScopeFailDispositionMock.mockClear();
       await writeState(statePath, { ...FRONT_DONE });
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
@@ -1294,16 +1296,14 @@ describe('integration/gate-loop', () => {
       });
       await conductor.run();
 
-      // (a)/(b): classifier ran, with the graded merge-base and reasons.
-      expect(classifyBuildReviewDispositionMock).toHaveBeenCalled();
-      const [, , original, reasons] = classifyBuildReviewDispositionMock.mock.calls[0] as [
-        unknown,
-        unknown,
-        { mergeBase: string },
-        string[],
+      // (a)/(b): disposition orchestrator ran, with the graded merge-base
+      // and the flagged path extracted from the FAIL verdict's reasons.
+      expect(runScopeFailDispositionMock).toHaveBeenCalled();
+      const [opts] = runScopeFailDispositionMock.mock.calls[0] as [
+        { gradedBaseSha: string; flaggedPaths: string[] },
       ];
-      expect(original.mergeBase).toBe('stalemergesha0');
-      expect(reasons).toEqual(['diff touches merged-pr.txt which is out of scope']);
+      expect(opts.gradedBaseSha).toBe('stalemergesha0');
+      expect(opts.flaggedPaths).toEqual(['merged-pr.txt']);
 
       // (c): kickback-to-build routing is unchanged today.
       expect(kicks).toContainEqual({ from: 'build_review', to: 'build' });
