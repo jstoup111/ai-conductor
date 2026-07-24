@@ -72,7 +72,7 @@ None — all changes are inside `src/conductor`; existing unit-test harness
 - src/conductor/src/engine/halt-marker.ts — HaltClass type, HALT_CLASS_MARKER, classified write
 - src/conductor/src/engine/halt-marker.test.ts — new tests
 
-**Wired-into:** src/conductor/src/engine/self-host/gate-halt.ts#writeGateHalt,
+**Wired-into:** src/conductor/src/engine/self-host/gate-halt.ts#writeSelfHostHalt,
 src/conductor/src/engine/rebase.ts (conflict HALT), src/conductor/src/engine/conductor.ts
 (build-stall / gate-budget / needs-human HALTs) — all pass a halt class to
 `writeHaltMarker`; `HALT_CLASS_MARKER` is consumed by
