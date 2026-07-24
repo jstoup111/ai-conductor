@@ -11,7 +11,7 @@ import {
   resolveBuildReviewConfig,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 describe('engine/resolved-config', () => {
   describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
@@ -415,6 +415,155 @@ describe('engine/resolved-config', () => {
     it('plan.S and build.S max_retries are pinned at exactly 3', () => {
       expect(CLAUDE_MODEL_POLICY.stepTierOverrides.plan?.S?.max_retries).toBe(3);
       expect(CLAUDE_MODEL_POLICY.stepTierOverrides.build?.S?.max_retries).toBe(3);
+    });
+  });
+
+  describe('resolveStepConfig — provider-aware model and effort precedence boundaries', () => {
+    const policies = [
+      {
+        name: 'Codex',
+        policy: CODEX_MODEL_POLICY,
+        opaqueModel: 'sonnet',
+        conflictingModel: 'gpt-5.6-sol',
+      },
+      {
+        name: 'Claude',
+        policy: CLAUDE_MODEL_POLICY,
+        opaqueModel: 'gpt-5.6-sol',
+        conflictingModel: 'sonnet',
+      },
+    ] as const;
+
+    const modelCases = policies.flatMap(({ name, policy, opaqueModel, conflictingModel }) => [
+      {
+        name: `${name}: CLI model beats step tier model`,
+        policy,
+        expected: opaqueModel,
+        config: { steps: { plan: { by_tier: { L: { model: conflictingModel } } } } } as HarnessConfig,
+        options: { tier: 'L' as const, modelCliOverride: opaqueModel },
+      },
+      {
+        name: `${name}: step tier model beats step model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          steps: { plan: { model: conflictingModel, by_tier: { L: { model: opaqueModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: step model beats phase tier model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          steps: { plan: { model: opaqueModel } },
+          phases: { DECIDE: { by_tier: { L: { model: conflictingModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase tier model beats phase model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          phases: { DECIDE: { model: conflictingModel, by_tier: { L: { model: opaqueModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase model beats defaults model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          defaults: { model: conflictingModel },
+          phases: { DECIDE: { model: opaqueModel } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: defaults model beats policy tier model`,
+        policy,
+        expected: opaqueModel,
+        config: { defaults: { model: opaqueModel } } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: policy tier model beats policy base model`,
+        policy,
+        expected: policy.stepTierOverrides.plan?.L?.model,
+        config: undefined,
+        options: { tier: 'L' as const },
+      },
+    ]);
+
+    it.each(modelCases)('$name', ({ policy, expected, config, options }) => {
+      expect(resolveStepConfig('plan', 'DECIDE', policy, config, options).model).toBe(expected);
+    });
+
+    const effortCases = policies.flatMap(({ name, policy }) => [
+      {
+        name: `${name}: CLI effort beats step tier effort`,
+        policy,
+        expected: 'max',
+        config: { steps: { plan: { by_tier: { L: { effort: 'low' } } } } } as HarnessConfig,
+        options: { tier: 'L' as const, effortCliOverride: 'max' as const },
+      },
+      {
+        name: `${name}: step tier effort beats step effort`,
+        policy,
+        expected: 'max',
+        config: {
+          steps: { plan: { effort: 'low', by_tier: { L: { effort: 'max' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: step effort beats phase tier effort`,
+        policy,
+        expected: 'max',
+        config: {
+          steps: { plan: { effort: 'max' } },
+          phases: { DECIDE: { by_tier: { L: { effort: 'low' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase tier effort beats phase effort`,
+        policy,
+        expected: 'max',
+        config: {
+          phases: { DECIDE: { effort: 'low', by_tier: { L: { effort: 'max' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase effort beats defaults effort`,
+        policy,
+        expected: 'max',
+        config: {
+          defaults: { effort: 'low' },
+          phases: { DECIDE: { effort: 'max' } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: defaults effort beats policy tier effort`,
+        policy,
+        expected: 'low',
+        config: { defaults: { effort: 'low' } } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: policy tier effort beats policy base effort`,
+        policy,
+        expected: policy.stepTierOverrides.plan?.L?.effort,
+        config: undefined,
+        options: { tier: 'L' as const },
+      },
+    ]);
+
+    it.each(effortCases)('$name', ({ policy, expected, config, options }) => {
+      expect(resolveStepConfig('plan', 'DECIDE', policy, config, options).effort).toBe(expected);
     });
   });
 
