@@ -2071,9 +2071,14 @@ dispatched before the pipeline boots) surface state without attaching:
   independent of pidfile liveness — so a stale pidfile with a live orphaned session is
   distinguishable). A registered path that no longer exists is reported as `path missing`;
   a single bad repo never aborts the sweep.
-- **`conduct-ts daemon logs [--repo <path>] [--follow] [--all]`** — print (or `--follow`,
-  `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or every registered
-  repo (`--all`). A missing log prints a friendly note rather than erroring.
+- **`conduct-ts daemon logs [--repo <path>] [--follow] [--all] [--lines N|-n N]`** — print
+  (or `--follow`, `tail -f` semantics) `.daemon/daemon.log` for one repo (default: cwd) or
+  every registered repo (`--all`). A missing log prints a friendly note rather than erroring.
+  `--lines N` bounds the snapshot to the last N lines (non-numeric/non-positive N → whole
+  file). While following, the poll timer is deliberately **not** unref'd
+  (`followDaemonLog(..., { unref: false })`) — it is the only handle holding the event loop
+  open, since a `SIGINT` listener does not keep node alive; unref'ing it made `--follow`
+  print the snapshot and exit immediately instead of tailing.
 
 **Kickback and operator-back lines (`renderDaemonEvent`, `daemon-cli.ts`).** Two step-loop
 events get their own prominent, non-dimmed line format so an operator scanning the log (live

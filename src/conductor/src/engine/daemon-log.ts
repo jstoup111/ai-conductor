@@ -134,6 +134,13 @@ export interface FollowOpts {
   startOffset?: number;
   /** Start the interval timer automatically (default true). Tests pass false. */
   auto?: boolean;
+  /**
+   * Unref the poll timer so it never keeps the process alive (default true —
+   * safe for embedders). A foreground `tail -f` MUST pass false: nothing else
+   * holds the event loop open (a SIGINT listener does not), so an unref'd
+   * follower exits the moment the initial snapshot finishes printing.
+   */
+  unref?: boolean;
 }
 
 /**
@@ -193,8 +200,10 @@ export function followDaemonLog(
     timer = setInterval(() => {
       void poll();
     }, intervalMs);
-    // Don't keep the event loop alive solely for the poll timer.
-    if (typeof timer.unref === 'function') timer.unref(); // portability-ok: guarded typeof check; only detaches this internal poll interval from process exit, no effect on daemon lifecycle or output
+    // Don't keep the event loop alive solely for the poll timer — unless the
+    // caller is a foreground follower whose only reason to stay alive IS this
+    // timer (see FollowOpts.unref).
+    if ((opts.unref ?? true) && typeof timer.unref === 'function') timer.unref(); // portability-ok: guarded typeof check; only detaches this internal poll interval from process exit, no effect on daemon lifecycle or output
   }
 
   return { stop, poll };

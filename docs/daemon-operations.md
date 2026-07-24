@@ -412,7 +412,12 @@ conduct-ts daemon logs
 conduct-ts daemon logs --follow            # tail -f
 conduct-ts daemon logs --repo /path/to/repo
 conduct-ts daemon logs --all               # every registered repo
+conduct-ts daemon logs --lines 50          # last 50 lines (alias: -n 50)
 ```
+
+`--follow` prints the current tail, then streams appended lines until Ctrl-C
+(`--all` is a static snapshot only). `--lines N`/`-n N` bounds the snapshot to the
+last N lines; a missing or non-numeric N falls back to the whole current log file.
 
 The management/observability verbs (`start`/`stop`/`restart`/`connect`/`debug`/`status`/
 `logs`) are dispatched before the bare `conduct-ts daemon` run, so they're never mistaken

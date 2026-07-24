@@ -13,6 +13,11 @@ import {
 import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
+/** Count of ref'd (event-loop-holding) timers; unref'd timers are excluded. */
+function activeTimeouts(): number {
+  return process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+}
+
 describe('engine/daemon-log', () => {
   let dir: string;
 
@@ -272,6 +277,24 @@ describe('engine/daemon-log', () => {
       await expect(handle.poll()).resolves.toBeUndefined();
       handle.stop();
       expect(seen).toEqual([]);
+    });
+
+    // A `tail -f` that does not hold the event loop open is not a tail: the CLI
+    // printed its snapshot and exited immediately because the poll timer was
+    // unconditionally unref'd and a SIGINT listener does NOT keep node alive.
+    it('unref: false keeps the poll timer holding the event loop open', () => {
+      const before = activeTimeouts();
+      const handle = followDaemonLog(dir, () => {}, { intervalMs: 50, unref: false });
+      expect(activeTimeouts()).toBe(before + 1);
+      handle.stop();
+      expect(activeTimeouts()).toBe(before);
+    });
+
+    it('defaults to an unref’d timer so embedders are never pinned alive', () => {
+      const before = activeTimeouts();
+      const handle = followDaemonLog(dir, () => {}, { intervalMs: 50 });
+      expect(activeTimeouts()).toBe(before);
+      handle.stop();
     });
   });
 });
