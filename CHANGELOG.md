@@ -25,6 +25,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Specced (#878, DECIDE artifacts only — not yet built): trailer scans will no longer
+  re-spawn an identical git subprocess fan on an unchanged HEAD. `listCommitsWithTrailers`
+  (no-anchor path) gets an in-process memo keyed on `(projectRoot, headSha, mergeBase)`
+  with both key components re-probed by cheap git plumbing on every call, plus a
+  per-project-root memo of the derived `origin/<default>` ref. `countResolvedTasks` /
+  `resolveTaskIds` results stay byte-for-byte identical, fail-soft paths bypass the cache
+  entirely, and the anchored `getEvidenceRange` path (reflog-dependent via
+  `merge-base --fork-point`) is deliberately left uncached. See
+  `.docs/decisions/adr-2026-07-23-trailer-scan-memo-invalidation-key.md`.
 - Bootstrap-generated Claude settings now use portable project-relative permission patterns
   (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
   Generated `CLAUDE.md` and `AGENTS.md` now reference the user-scoped installed copy of
