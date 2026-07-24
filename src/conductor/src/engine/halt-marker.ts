@@ -7,7 +7,7 @@
 // change to how the marker is written or where it lives had to be mirrored across
 // all of them. Both the constant and the best-effort writer now live here.
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -43,5 +43,22 @@ export async function writeHaltMarker(
   await writeFile(join(projectRoot, HALT_MARKER), body, 'utf-8').catch(() => {});
   if (haltClass !== undefined) {
     await writeFile(join(projectRoot, HALT_CLASS_MARKER), haltClass, 'utf-8').catch(() => {});
+  }
+}
+
+/**
+ * Read and classify `.pipeline/HALT.class` under `worktreePath`. Tolerant by
+ * design: a missing file, an unreadable file (permissions, missing parent
+ * dir, etc.), or unrecognized content all resolve to `'unclassified'` rather
+ * than throwing — callers (e.g. the daemon re-kick sweep) must never crash
+ * on a HALT sidecar read.
+ */
+export async function readHaltClass(worktreePath: string): Promise<HaltClass | 'unclassified'> {
+  try {
+    const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
+    if (contents === 'needs-human' || contents === 'mechanical') return contents;
+    return 'unclassified';
+  } catch {
+    return 'unclassified';
   }
 }
