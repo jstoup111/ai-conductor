@@ -11,8 +11,7 @@ drift/pin checks.
 graph TD
     subgraph engine["src/conductor/src/engine (typed source of truth)"]
         POLICY["provider-model-policy.ts<br/>Claude + Codex step models / efforts<br/>provider-native S / M / L overrides"]
-        COMPAT["resolved-config.ts<br/>deprecated Claude aliases<br/>temporary pin compatibility"]
-        META["model-table-metadata.ts<br/>STEP_RATIONALE per StepName<br/>EXTRA_MODEL_TABLE_ROWS<br/>SKILL_STEP_MAP + PIN_EXEMPTIONS"]
+        META["model-table-metadata.ts<br/>STEP_RATIONALE per StepName<br/>Claude-interactive EXTRA_MODEL_TABLE_ROWS<br/>Claude-scoped SKILL_STEP_MAP + PIN_EXEMPTIONS"]
     end
 
     subgraph tools["Generator"]
@@ -27,13 +26,11 @@ graph TD
 
     subgraph suite["Integrity suite (bash)"]
         CHK5["check 5a: table content drift<br/>bin/generate-model-table check-mode"]
-        CHK5B["check 5b: SKILL.md pin vs engine default"]
+        CHK5B["check 5b: SKILL.md pin vs Claude policy default"]
         DEGRADE["degradation guard:<br/>node_modules absent → warn + skip"]
     end
 
     POLICY --> GEN
-    POLICY --> COMPAT
-    COMPAT --> GEN
     META --> GEN
     GEN --> BIN
     BIN -- "write mode: rewrite marked region" --> HMD
@@ -50,8 +47,8 @@ graph TD
 - **engine** — TypeScript package. `POLICY` independently owns Claude and
   Codex autonomous defaults and tier overrides. `META` is compiled against
   `StepName`, so adding a step without rationale fails `tsc`, not a human
-  review. `COMPAT` is the temporary Claude-only pin seam until the interactive
-  rows and pins migrate.
+  review. Interactive rows and hand-authored skill pins are explicitly scoped
+  to the Claude policy.
 - **Generator** — `GEN` is pure (data in → markdown out); `BIN` is the only
   entry point the suite and humans use. It executes the repository-local
   `tsx` binary against source specifically to avoid the shared-dist rebuild
@@ -65,5 +62,6 @@ graph TD
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-24 | Removed the temporary resolver-alias pin seam; pins now read the Claude policy directly | As-built verification after issue #902 Task 20 |
 | 2026-07-24 | Replaced legacy resolver-default source with Claude/Codex policies and seven-column provider rows | As-built verification after issue #902 Task 16 |
 | 2026-07-03 | Initial generation | DECIDE phase for intake jstoup111/ai-conductor#187 |

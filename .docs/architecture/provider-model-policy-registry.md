@@ -15,12 +15,13 @@ graph LR
     end
 
     subgraph plugins ["Provider plugin registry"]
+        PD["await external plugin discovery<br/>before built-ins / freeze / selection"]
         PK["selected llm_provider key"]
         PI["LLMProvider instance<br/>interface unchanged"]
     end
 
     subgraph policy ["engine/provider-model-policy.ts"]
-        PR["policy lookup<br/>built-in keys only"]
+        PR["policy lookup<br/>built-in policies + compatibility"]
         CP["Claude policy<br/>explicit per-step table<br/>models unchanged<br/>explore / prd effort high"]
         XP["Codex policy<br/>explicit per-step table<br/>Luna / Terra / Sol"]
         LC["legacy compatibility<br/>unknown key uses Claude policy<br/>warning once"]
@@ -45,8 +46,10 @@ graph LR
         HM["HARNESS.md<br/>provider-labelled values"]
     end
 
-    IC --> PK
-    DC --> PK
+    IC --> PD
+    DC --> PD
+    PD --> PK
+    PD --> PI
     IC --> PI
     DC --> PI
     PK --> PR
@@ -155,6 +158,7 @@ an independent table:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-24 | Added awaited plugin discovery before provider selection and compatibility-policy lookup | As-built verification after issue #902 Task 20 |
 | 2026-07-23 | Added conductor/group/attribution and daemon auxiliary wiring; corrected escalation ownership | Plan-update pass for issue #902 |
 | 2026-07-23 | Raised normal explore/PRD effort to high; retained explore.S low | Operator-approved effort amendment for issue #902 |
 | 2026-07-23 | Initial generation | DECIDE architecture for issue #902 |
