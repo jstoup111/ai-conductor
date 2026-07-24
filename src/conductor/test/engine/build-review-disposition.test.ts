@@ -7,6 +7,10 @@ import {
   classifyBuildReviewDisposition,
   extractFlaggedPaths,
   diffTouchedPaths,
+  runScopeFailDisposition,
+  resetRegradeCounter,
+  readRegradeCount,
+  incrementRegradeCounter,
 } from '../../src/engine/build-review-disposition.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 
@@ -197,5 +201,160 @@ describe('engine/build-review-disposition — classifyBuildReviewDisposition', (
     for (const call of calls) {
       expect(mutating.has(call[0])).toBe(false);
     }
+  });
+});
+
+describe('engine/build-review-disposition — regrade counter persistence', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'regrade-counter-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('readRegradeCount is 0 when no counter file exists yet', async () => {
+    expect(await readRegradeCount(dir)).toBe(0);
+  });
+
+  it('incrementRegradeCounter persists and returns the new count, and is read back by readRegradeCount', async () => {
+    expect(await incrementRegradeCounter(dir)).toBe(1);
+    expect(await readRegradeCount(dir)).toBe(1);
+    expect(await incrementRegradeCounter(dir)).toBe(2);
+    expect(await readRegradeCount(dir)).toBe(2);
+  });
+
+  it('resetRegradeCounter zeroes an already-incremented counter', async () => {
+    await incrementRegradeCounter(dir);
+    await incrementRegradeCounter(dir);
+    expect(await readRegradeCount(dir)).toBe(2);
+    await resetRegradeCounter(dir);
+    expect(await readRegradeCount(dir)).toBe(0);
+  });
+
+  it('readRegradeCount is 0 for an unparseable counter file (fail-open to a fresh session)', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'build-review-regrade.json'), 'not json', 'utf-8');
+    expect(await readRegradeCount(dir)).toBe(0);
+  });
+});
+
+describe('engine/build-review-disposition — runScopeFailDisposition', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'run-scope-fail-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const freshRevParseFreshRef = {
+    match: ['rev-parse', 'origin/main'],
+    result: { exitCode: 0, stdout: 'freshsha1\n' },
+  };
+
+  it('invalidated: base changed and flagged path absent from the fresh merge-base diff — regrade runs exactly once', async () => {
+    const { git } = fakeGit([
+      ...freshProbeScript,
+      freshRevParseFreshRef,
+      { match: ['merge-base', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'freshsha1\n' } },
+      { match: ['diff', '--name-only', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'feat.txt\n' } },
+    ]);
+    let regradeCalls = 0;
+    const result = await runScopeFailDisposition({
+      git,
+      root: dir,
+      gradedBaseSha: 'stalesha0',
+      flaggedPaths: ['merged-pr.txt'],
+      defaultBranch: 'main',
+      regrade: async () => {
+        regradeCalls++;
+        return 'pass';
+      },
+    });
+    expect(result.kind).toBe('invalidated');
+    if (result.kind === 'invalidated') {
+      expect(result.freshBaseSha).toBe('freshsha1');
+      expect(result.regradeResult).toBe('pass');
+    }
+    expect(regradeCalls).toBe(1);
+    expect(await readRegradeCount(dir)).toBe(1);
+  });
+
+  it('kicked-to-build: flagged path persists in the fresh diff — never invalidates, never regrades', async () => {
+    const { git } = fakeGit([
+      ...freshProbeScript,
+      freshRevParseFreshRef,
+      { match: ['merge-base', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'freshsha1\n' } },
+      { match: ['diff', '--name-only', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'feat.txt\n' } },
+    ]);
+    let regradeCalls = 0;
+    const result = await runScopeFailDisposition({
+      git,
+      root: dir,
+      gradedBaseSha: 'stalesha0',
+      flaggedPaths: ['feat.txt'],
+      defaultBranch: 'main',
+      regrade: async () => {
+        regradeCalls++;
+        return 'pass';
+      },
+    });
+    expect(result.kind).toBe('kicked-to-build');
+    expect(regradeCalls).toBe(0);
+    expect(await readRegradeCount(dir)).toBe(0);
+  });
+
+  it('kicked-to-build: base never actually changed, even if the flagged path is absent from the diff', async () => {
+    const { git } = fakeGit([
+      ...freshProbeScript,
+      freshRevParseFreshRef,
+      { match: ['merge-base', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'freshsha1\n' } },
+      { match: ['diff', '--name-only', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'feat.txt\n' } },
+    ]);
+    const result = await runScopeFailDisposition({
+      git,
+      root: dir,
+      gradedBaseSha: 'freshsha1', // already fresh
+      flaggedPaths: ['merged-pr.txt'],
+      defaultBranch: 'main',
+      regrade: async () => 'pass',
+    });
+    expect(result.kind).toBe('kicked-to-build');
+  });
+
+  it('halt: a second stale-mirage detection this session never re-enters grading', async () => {
+    const { git } = fakeGit([
+      ...freshProbeScript,
+      freshRevParseFreshRef,
+      { match: ['merge-base', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'freshsha1\n' } },
+      { match: ['diff', '--name-only', 'freshsha1', 'HEAD'], result: { exitCode: 0, stdout: 'feat.txt\n' } },
+    ]);
+    await incrementRegradeCounter(dir); // simulate an already-consumed regrade this session
+    let regradeCalls = 0;
+    const result = await runScopeFailDisposition({
+      git,
+      root: dir,
+      gradedBaseSha: 'stalesha0',
+      flaggedPaths: ['merged-pr.txt'],
+      defaultBranch: 'main',
+      regrade: async () => {
+        regradeCalls++;
+        return 'pass';
+      },
+    });
+    expect(result.kind).toBe('halt');
+    if (result.kind === 'halt') {
+      expect(result.gradedBaseSha).toBe('stalesha0');
+      expect(result.freshBaseSha).toBe('freshsha1');
+      expect(result.flaggedPaths).toEqual(['merged-pr.txt']);
+      expect(result.regradeCount).toBe(1);
+    }
+    expect(regradeCalls).toBe(0);
   });
 });

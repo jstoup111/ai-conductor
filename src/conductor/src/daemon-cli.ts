@@ -1828,6 +1828,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'build_review_stale_mirage_regrade': {
+      // Task 7: a stale-mirage FAIL was discarded and build_review is
+      // re-running against fresh inputs — routine, not a warning.
+      const base = event.mergeBase ? event.mergeBase.slice(0, 12) : '(unknown)';
+      log(
+        `${dot} ${chalk.dim(`build_review stale-mirage regrade (base ${base}, count ${event.regradeCount})`)}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —

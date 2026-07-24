@@ -102,10 +102,12 @@ import {
   type RemediationGap,
   type CompletionContext,
   ACCEPTANCE_SPECS_RED_EVIDENCE,
+  removeBuildReviewVerdict,
 } from './artifacts.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   classifyBuildReviewDisposition,
+  incrementRegradeCounter,
   type BuildReviewDisposition,
 } from './build-review-disposition.js';
 import { execFile } from 'node:child_process';
@@ -4419,10 +4421,36 @@ export class Conductor {
                     }
                   } catch {
                     // Never block/alter kickback routing over disposition
-                    // classification failures — Task 7 will consume
-                    // `buildReviewDisposition` when set; routing below is
-                    // unchanged either way.
+                    // classification failures — falls through to genuine
+                    // routing below either way.
                   }
+                }
+
+                // Task 7: a `stale-mirage` FAIL graded a stale view of the
+                // diff — discard the verdict and re-run build_review against
+                // fresh inputs instead of kicking back to build. Never
+                // mutates git history (Story 6): re-landing on this same
+                // build_review step index is a plain loop-index rewind, not
+                // a git operation. The regrade counter persisted here is
+                // Task 8's to read for the once-per-session HALT bound —
+                // this task does not enforce that bound itself.
+                if (buildReviewDisposition === 'stale-mirage') {
+                  await removeBuildReviewVerdict(this.projectRoot).catch(() => {
+                    /* best-effort removal */
+                  });
+                  const regradeCount = await incrementRegradeCounter(this.projectRoot).catch(
+                    () => 0,
+                  );
+                  await emitTracked({
+                    type: 'build_review_stale_mirage_regrade',
+                    mergeBase: lastBuildReviewMergeBase ?? '',
+                    regradeCount,
+                  });
+                  await saveStepStatus(this.stateFilePath, step.name, 'failed');
+                  state[step.name] = 'failed';
+                  await writeState(this.stateFilePath, state);
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  continue;
                 }
 
                 // D2: a build_review FAIL that re-enters right after a prior

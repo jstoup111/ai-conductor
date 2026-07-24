@@ -980,6 +980,23 @@ export function validateWiringEvidence(
 export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
 
 /**
+ * Deletes the build_review verdict artifact (build-review-grades-plan-vs-
+ * diff-against-a-stale-o, Task 7). Called on a `stale-mirage` disposition:
+ * the FAIL verdict graded a stale view of the diff, so it must be discarded
+ * outright rather than routed to build rework. `build_review` is deliberately
+ * NOT a member of `STALE_SWEEP_STEPS` / never consulted by
+ * `sweptArtifactStillValid` (gate-code-validity-on-redispatch, #817) — its
+ * verdict artifact carries no `codeStamp`-preserve path that could
+ * reconstruct a deleted verdict, so this removal is final: the next
+ * `build_review` dispatch must write a brand-new verdict from scratch.
+ * Best-effort: a missing file (already removed, or never written) is a no-op,
+ * not an error.
+ */
+export async function removeBuildReviewVerdict(dir: string): Promise<void> {
+  await rm(join(dir, BUILD_REVIEW_VERDICT), { force: true });
+}
+
+/**
  * Which rubric category the grader flagged, when the verdict is FAIL. All
  * fields optional — a grader may flag one, several, or (rarely) none of the
  * categories while still returning FAIL with free-form `reasons`.

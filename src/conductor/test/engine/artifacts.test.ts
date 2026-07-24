@@ -44,6 +44,8 @@ import {
   MANUAL_TEST_SKIP_SENTINEL,
   readManualTestFailRows,
   stampCode,
+  BUILD_REVIEW_VERDICT,
+  removeBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
 
@@ -3484,6 +3486,36 @@ Task 1 → Task 2
         const result = await checkStepCompletion(dir, 'build');
         expect(result).toEqual({ done: true });
       });
+    });
+  });
+
+  describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
+    it('deletes an existing build_review verdict artifact', async () => {
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: {} }));
+      await removeBuildReviewVerdict(dir);
+      await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
+    });
+
+    it('is a no-op (does not throw) when the artifact does not exist', async () => {
+      await expect(removeBuildReviewVerdict(dir)).resolves.toBeUndefined();
+    });
+
+    it('a removed verdict is never reconstructed by the #817 code-stamp preserve path — build_review is not a STALE_SWEEP_STEPS member', async () => {
+      // gate-code-validity-on-redispatch (#817)'s preserve mechanism only
+      // ever applies to STALE_SWEEP_STEPS (manual_test, prd_audit,
+      // architecture_review_as_built); build_review is deliberately absent
+      // from that set (artifacts.ts's `sweptArtifactStillValid` is only ever
+      // called for those three steps), so once this helper deletes the
+      // verdict file, `checkStepCompletion(dir, 'build_review')` can only
+      // read "missing verdict" — never a preserved/reconstructed prior PASS.
+      await createFile(
+        BUILD_REVIEW_VERDICT,
+        JSON.stringify({ verdict: 'PASS', rubric: {}, codeStamp: 'deadbeef' }),
+      );
+      await removeBuildReviewVerdict(dir);
+      const result = await checkStepCompletion(dir, 'build_review');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no build-review verdict/i);
     });
   });
 });
