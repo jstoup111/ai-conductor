@@ -1339,6 +1339,20 @@ on every base-SHA advance).
   through the abort-rebase / clear-marker / re-dispatch cycle on every subsequent base-SHA
   advance, eliminating the spurious re-kicks #205 reported.
 
+- **Halt-class guard — needs-human halts survive the sweep.** A HALT may carry a
+  best-effort sidecar, `.pipeline/HALT.class` (`needs-human` | `mechanical`), written by
+  `writeHaltMarker` (`engine/halt-marker.ts`) alongside `.pipeline/HALT`. The sweep's
+  per-slug order is now: operator-park check → processed/shipped dedup →
+  **halt-class check** (`needs-human` is skipped and logged, nothing touched;
+  `mechanical`/`unclassified` fall through) → the existing per-SHA guard → clear-marker +
+  `REKICK` sentinel. A HALT with no sidecar, an unreadable one, or a value that isn't
+  exactly `needs-human`/`mechanical` reads as `unclassified` and keeps the pre-existing
+  re-kick-on-sweep behavior — legacy halt sites and best-effort write failures degrade
+  safely rather than becoming stricter. `clearMarker` removes both `.pipeline/HALT` and
+  `.pipeline/HALT.class`, so releasing a needs-human halt is still just `rm .pipeline/HALT`
+  — no separate sidecar cleanup. See `docs/daemon-operations.md` for the operator-facing
+  decision table.
+
 #### Merged-PR guard: out-of-band merge detection (#358)
 
 When the daemon's kickback rewind discovers the feature's recorded PR has been merged out-of-band

@@ -51,6 +51,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   no `Source-Ref` marker) are now suppressed from the daemon log by default; set
   `daemon_verbose: true` in `.ai-conductor/config.yml` to re-surface them (#840).
 
+### Fixed
+
+- Needs-human halts are no longer wiped by the main-advance re-kick sweep. Halts now carry
+  a machine-readable class (`needs-human` | `mechanical`) written alongside
+  `.pipeline/HALT`, and the sweep checks it before clearing a marker: `needs-human` halts
+  (validation-group remediation, prd-audit needs-human-DECIDE/un-ALIGNED-FR, build_review
+  scope-FAIL, rebase conflicts, self-host release/version/integrity gates) are skipped
+  outright, while `mechanical` halts (gate-loop-budget-exceeded, build-stall/remediation-
+  budget-exhausted) and legacy `unclassified` sites keep today's auto-clear-and-retry
+  behavior. See `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+
 ## Migration
 
 ```bash migration
