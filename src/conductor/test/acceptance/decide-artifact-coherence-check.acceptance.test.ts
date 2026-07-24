@@ -176,6 +176,7 @@ interface SeedOverrides {
   track?: string; // 'product' | 'technical'
   stageOutcomes?: boolean; // write .pipeline/intake-outcomes.md
   waiver?: string | null; // .docs/coherence-waivers/<stem>.md content
+  stampCoherenceSignal?: boolean; // default true; false simulates a pre-FR-14 legacy worktree
 }
 
 /**
@@ -195,10 +196,18 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     track = 'product',
     stageOutcomes = true,
     waiver = null,
+    stampCoherenceSignal = true,
   } = overrides;
 
   const wt = await createEngineerWorktree(repoPath, idea);
   const dir = wt.worktreePath;
+
+  if (!stampCoherenceSignal) {
+    // Simulate a pre-FR-14 legacy worktree: strip the production-stamped
+    // `.docs/coherence/` signal that createEngineerWorktree just wrote, so the
+    // idea-attributable diff carries NO coherence path at all.
+    await rm(join(dir, '.docs', 'coherence'), { recursive: true, force: true });
+  }
   const w = (rel: string, content: string) => writeFile(join(dir, '.docs', rel), content);
 
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -227,16 +236,13 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await w('decisions/adr-coherence.md', APPROVED_ADR);
   }
 
-  // Always mark that this idea's DECIDE flow ran the /coherence-check step
-  // (a `.docs/coherence/` signal in the idea-attributable diff), even when a
-  // test omits the actual mapping artifact — so a "missing artifact" negative
-  // test exercises the fail-closed missing-artifact rule rather than the
-  // no-retroactivity legacy-change-set disengage (which is for specs whose
-  // diff carries NO coherence signal at all, predating the step existing).
-  if (tier !== 'S') {
-    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
-    await w('coherence/.gitkeep', '');
-  }
+  // NOTE: the `.docs/coherence/.gitkeep` signal used to be hand-planted here.
+  // It is now stamped by the PRODUCTION worktree-creation path itself
+  // (createEngineerWorktree, FR-14) — every worktree carries it unconditionally,
+  // so a "missing artifact" negative test exercises the fail-closed
+  // missing-artifact rule (via the real stamp) rather than a fixture shortcut.
+  // The no-retroactivity legacy-change-set disengage is covered by a dedicated
+  // test below that deletes the stamp to simulate a pre-gate worktree.
 
   if (coherence !== null) {
     await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
@@ -358,6 +364,50 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
     ).rejects.toThrow(/outcome-\d+/i);
+  });
+
+  it('negative (real staging writer, not the fixture): an intake body staged via createEngineerWorktree({sourceRef, body}) with an unmapped outcome bullet is refused with an outcome-<n> gap id', async () => {
+    // Drive the REAL claim-time staging writer (worktree-authoring.ts's
+    // createEngineerWorktree -> stageIntakeOutcomes), not seedWorktree's
+    // hand-planted .pipeline/intake-outcomes.md — proving FR-2's outcome-coverage
+    // layer fires against production-written state, not a test fixture shortcut.
+    const intakeBody = ['## Desired outcome', '', ...OUTCOME_BULLETS, ''].join('\n');
+    const wt = await createEngineerWorktree(repoPath, 'coherence demo', undefined, {
+      sourceRef: SOURCE_REF,
+      body: intakeBody,
+    });
+    const dir = wt.worktreePath;
+    const w = (rel: string, content: string) => writeFile(join(dir, '.docs', rel), content);
+
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'conflicts'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+
+    await w('specs/coherence-demo.md', PRD);
+    await w('stories/coherence-demo.md', STORIES);
+    await w('plans/coherence-demo.md', PLAN);
+    await w('complexity/coherence-demo.md', '# Complexity\n\nTier: M\n');
+    await w('track/coherence-demo.md', '# Track\n\nTrack: product\n');
+    await w('conflicts/coherence-demo.md', '# Conflicts\n\nClean.\n');
+    await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
+    await w('decisions/adr-coherence.md', APPROVED_ADR);
+
+    // Drop the row covering the second outcome bullet — an unmapped outcome.
+    const gapped = COHERENCE.replace(
+      '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n',
+      '',
+    );
+    await w('coherence/coherence-demo.md', gapped);
+
+    await expect(
+      landSpec(target(), 'coherence demo', dir, SOURCE_REF, landOpts()),
+    ).rejects.toThrow(/outcome-2/i);
   });
 });
 
@@ -665,6 +715,15 @@ describe('Story 14 / FR-14 — fail-closed on missing/empty/unparseable record',
 
   it('happy: S-tier ordering — a missing artifact never fires the fail-closed rejection for tier S', async () => {
     const wt = await seedWorktree('coherence demo', { tier: 'S', coherence: null });
+    await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
+  });
+
+  it('happy: no-retroactivity is preserved — a full DECIDE artifact set with NO .docs/coherence/ path (legacy, pre-gate worktree) lands without coherence validation', async () => {
+    const wt = await seedWorktree('coherence demo', {
+      tier: 'M',
+      coherence: null,
+      stampCoherenceSignal: false,
+    });
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
   });
 });

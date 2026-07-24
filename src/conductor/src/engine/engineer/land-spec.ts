@@ -43,7 +43,11 @@ import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planSt
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
-import { INTAKE_OUTCOMES_RELATIVE_PATH, readStagedIntakeOutcomes } from './outcome-staging.js';
+import {
+  INTAKE_OUTCOMES_RELATIVE_PATH,
+  readStagedIntakeOutcomes,
+  readCommittedIntakeOutcomes,
+} from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
@@ -296,7 +300,14 @@ export async function landSpec(
   //     this idea's diff) — all logic lives in coherence-validator.ts /
   //     coherence-waiver.ts; this is the single call-site block.
   const markerSlug = planStem(planFile);
-  const stagedOutcomes = await readStagedIntakeOutcomes(worktreePath);
+  let stagedOutcomes = await readStagedIntakeOutcomes(worktreePath);
+  if (!stagedOutcomes.required && stagedOutcomes.sourceRef === null) {
+    // Fallback (FR-2): the gitignored .pipeline/ staging file is absent —
+    // possibly because it was never written (broken --source-ref wiring) or
+    // was lost on worktree recreation (#497). Fall back to the committed
+    // .docs/intake/<planStem>.md marker, which carries the same bullets.
+    stagedOutcomes = await readCommittedIntakeOutcomes(worktreePath, markerSlug);
+  }
   await runCoherenceGate({
     worktreePath,
     canonicalPath: canonical,

@@ -3,12 +3,13 @@
 // DECIDE artifact is authored.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, access, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   stageIntakeOutcomes,
   readStagedIntakeOutcomes,
+  readCommittedIntakeOutcomes,
   INTAKE_OUTCOMES_RELATIVE_PATH,
 } from '../../../src/engine/engineer/outcome-staging.js';
 
@@ -94,5 +95,56 @@ describe('stageIntakeOutcomes', () => {
     // The staged file must still be present — this module never deletes it.
     const contents = await readFile(stagedPath!, 'utf8');
     expect(contents).toContain('Keep me');
+  });
+});
+
+describe('readCommittedIntakeOutcomes', () => {
+  let worktreePath: string;
+
+  beforeEach(async () => {
+    worktreePath = await mkdtemp(join(tmpdir(), 'engineer-outcome-staging-'));
+  });
+
+  afterEach(async () => {
+    await rm(worktreePath, { recursive: true, force: true });
+  });
+
+  async function writeMarker(planStem: string, contents: string): Promise<void> {
+    const intakeDir = join(worktreePath, '.docs', 'intake');
+    await mkdir(intakeDir, { recursive: true });
+    await writeFile(join(intakeDir, `${planStem}.md`), contents, 'utf8');
+  }
+
+  it('reads Source-Ref and Desired-outcome bullets from the committed .docs/intake/<planStem>.md marker', async () => {
+    await writeMarker(
+      'my-plan-stem',
+      '# Intake origin: my-plan-stem\n\n' +
+        'Source-Ref: owner/repo#42\n\n' +
+        '## Desired outcome\n\n' +
+        '- Bullet one\n' +
+        '- Bullet two\n',
+    );
+
+    const result = await readCommittedIntakeOutcomes(worktreePath, 'my-plan-stem');
+    expect(result).toEqual({
+      required: true,
+      bullets: ['- Bullet one', '- Bullet two'],
+      sourceRef: 'owner/repo#42',
+    });
+  });
+
+  it('reports outcome layer not required when the marker exists but has no Desired-outcome bullets', async () => {
+    await writeMarker(
+      'my-plan-stem',
+      '# Intake origin: my-plan-stem\n\nSource-Ref: owner/repo#7\n',
+    );
+
+    const result = await readCommittedIntakeOutcomes(worktreePath, 'my-plan-stem');
+    expect(result).toEqual({ required: false, bullets: [], sourceRef: 'owner/repo#7' });
+  });
+
+  it('reports outcome layer not required when no marker file exists', async () => {
+    const result = await readCommittedIntakeOutcomes(worktreePath, 'no-such-stem');
+    expect(result).toEqual({ required: false, bullets: [], sourceRef: null });
   });
 });

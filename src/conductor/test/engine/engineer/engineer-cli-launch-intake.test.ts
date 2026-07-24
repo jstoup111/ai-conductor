@@ -376,6 +376,7 @@ describe('write-back via --source-ref', () => {
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath }]);
     const wt = await createEngineerWorktree(repoPath, idea);
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });
@@ -395,6 +396,7 @@ describe('write-back via --source-ref', () => {
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath, remote: 'https://example.invalid/repo.git' }]);
     const wt = await createEngineerWorktree(repoPath, idea);
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });

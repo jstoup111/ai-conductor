@@ -304,6 +304,7 @@ describe('landSpec intake marker (FR-1)', () => {
     // The live path: create the per-idea worktree, the skills write .docs INTO it,
     // then landSpec commits them on spec/<slug> from within the worktree (FR-1/FR-3).
     const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
@@ -324,6 +325,7 @@ describe('landSpec owner stamp (FR-4 — every land path, incl. no-remote/local-
   /** Create the per-idea worktree and seed real .docs into it; returns worktreePath. */
   async function seedWorktree(): Promise<string> {
     const wt = await createEngineerWorktree(repoPath, 'dep bump');
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await mkdir(join(wt.worktreePath, '.docs', 'specs'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'stories'), { recursive: true });
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });

@@ -112,3 +112,40 @@ export async function readStagedIntakeOutcomes(
 
   return { required: bullets.length > 0, bullets, sourceRef };
 }
+
+/**
+ * Fallback read path (FR-2): read the committed intake marker
+ * `.docs/intake/<planStem>.md` when the gitignored `.pipeline/intake-outcomes.md`
+ * staging file is absent — e.g. because the worktree was recreated (#497) or
+ * because `engineer worktree` was invoked without `--source-ref`, so nothing was
+ * ever staged. The marker carries the same `Source-Ref:` line and
+ * `## Desired outcome` bullets byte-for-byte (written by intake-marker.ts), so
+ * this parses with the identical bullet regex/shape as `readStagedIntakeOutcomes`.
+ *
+ * No-op-tolerant: returns `{required: false, bullets: [], sourceRef: null}` when
+ * the marker file doesn't exist, or when it exists but has zero Desired-outcome
+ * bullets.
+ */
+export async function readCommittedIntakeOutcomes(
+  worktreePath: string,
+  planStem: string,
+): Promise<StagedIntakeOutcomes> {
+  const markerPath = join(worktreePath, '.docs', 'intake', `${planStem}.md`);
+
+  let contents: string;
+  try {
+    contents = await readFile(markerPath, 'utf8');
+  } catch {
+    return { required: false, bullets: [], sourceRef: null };
+  }
+
+  const sourceRefMatch = contents.match(/^Source-Ref:\s*(.+)$/m);
+  const sourceRef = sourceRefMatch ? sourceRefMatch[1].trim() : null;
+
+  const bullets = contents
+    .split('\n')
+    .filter((line) => /^\s*-\s/.test(line))
+    .map((line) => line.trim());
+
+  return { required: bullets.length > 0, bullets, sourceRef };
+}
