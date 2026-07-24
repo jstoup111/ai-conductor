@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   spliceGeneratedRegion,
   assertNoDuplicateRowNames,
@@ -45,6 +47,7 @@ const PROSE_BEFORE = '# Harness Behavioral Rules\n\nSome hand-authored prose abo
 const PROSE_AFTER =
   '\n\n> Interim fallback note (#186): survives byte-identical outside the region.\n' +
   '\nTwo enforcement paths: engine defaults and SKILL.md pins.\n';
+const harnessRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const STALE_TABLE = '| Skill/Agent | Model | Effort | Why |\n|---|---|---|---|\n| stale | stale | stale | stale row from a previous run |';
 
@@ -304,6 +307,28 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     }
   });
 
+  it('labels every non-engine row as Claude interactive without invented effort or Codex values', () => {
+    expect(
+      buildExtraRows().map(
+        ({ name, executionPath, claudeEffort, codexModel, codexEffort }) => ({
+          name,
+          executionPath,
+          claudeEffort,
+          codexModel,
+          codexEffort,
+        }),
+      ),
+    ).toEqual(
+      buildExtraRows().map(({ name }) => ({
+        name,
+        executionPath: 'Claude interactive',
+        claudeEffort: '',
+        codexModel: '',
+        codexEffort: '',
+      })),
+    );
+  });
+
   it('maps display names: snake_case -> kebab-case, build -> pipeline, worktree -> worktree-manager, acceptance_specs -> writing-system-tests', () => {
     expect(stepDisplayName('architecture_diagram')).toBe('architecture-diagram');
     expect(stepDisplayName('build')).toBe('pipeline');
@@ -419,6 +444,44 @@ describe('runGenerateModelTable — CLI write mode + idempotency', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('buildPinsJson', () => {
+  it('derives mapped pins from the supplied Claude policy', () => {
+    const buildPinsForClaudePolicy = buildPinsJson as unknown as (
+      claudePolicy: ProviderModelPolicy,
+    ) => ReturnType<typeof buildPinsJson>;
+    const claudePolicy = {
+      ...CLAUDE_MODEL_POLICY,
+      stepModels: { ...CLAUDE_MODEL_POLICY.stepModels, rebase: 'opus' },
+    };
+
+    expect(buildPinsForClaudePolicy(claudePolicy).rebase).toEqual({ expected: 'opus' });
+  });
+
+  it('does not let a synthetic Codex-only model difference affect Claude pins', async () => {
+    vi.resetModules();
+    vi.doMock('../src/engine/provider-model-policy.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/engine/provider-model-policy.js')>(
+        '../src/engine/provider-model-policy.js',
+      );
+      return {
+        ...actual,
+        CODEX_MODEL_POLICY: {
+          ...actual.CODEX_MODEL_POLICY,
+          stepModels: { ...actual.CODEX_MODEL_POLICY.stepModels, assess: 'sol' },
+        },
+      };
+    });
+
+    try {
+      const mod = await import('../src/tools/generate-model-table.js');
+      expect(mod.buildPinsJson().assess).toEqual({
+        expected: CLAUDE_MODEL_POLICY.stepModels.assess,
+      });
+    } finally {
+      vi.doUnmock('../src/engine/provider-model-policy.js');
+      vi.resetModules();
+    }
+  });
+
   it('emits an entry for every mapped skill with the untiered engine-default model', () => {
     const pins = buildPinsJson();
 
@@ -452,6 +515,45 @@ describe('buildPinsJson', () => {
     const pins = buildPinsJson();
     expect(pins['code-review']).toEqual({ exempt: true });
   });
+});
+
+describe('harness integrity pin mismatch boundary', () => {
+  it('fails nonzero and names the Claude skill whose seeded pin disagrees', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'harness-pin-mismatch-'));
+    const fixtureSkillsDir = join(dir, 'skills');
+    const assessDir = join(fixtureSkillsDir, 'assess');
+    const assessSkillPath = join(harnessRoot, 'skills', 'assess', 'SKILL.md');
+
+    try {
+      await mkdir(assessDir, { recursive: true });
+      const assessSkill = await readFile(assessSkillPath, 'utf8');
+      await writeFile(
+        join(assessDir, 'SKILL.md'),
+        assessSkill.replace(/^model:\s*sonnet$/m, 'model: opus'),
+        'utf8',
+      );
+
+      const result = spawnSync('bash', [join(harnessRoot, 'test', 'test_harness_integrity.sh')], {
+        cwd: harnessRoot,
+        env: {
+          ...process.env,
+          HARNESS_INTEGRITY_TEST_SKILLS_DIR: fixtureSkillsDir,
+          HARNESS_INTEGRITY_TEST_PINS_JSON: JSON.stringify(buildPinsJson()),
+        },
+        encoding: 'utf8',
+      });
+      const output = `${result.stdout}${result.stderr}`;
+
+      expect({
+        failed: result.status !== 0,
+        namesAffectedSkill: output.includes(
+          "assess — pin/expected disagreement: pinned='opus' expected='sonnet'",
+        ),
+      }).toEqual({ failed: true, namesAffectedSkill: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('runGenerateModelTable --pins mode', () => {

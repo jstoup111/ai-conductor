@@ -97,10 +97,21 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     expect(names.length).toBe(EXPECTED_EXTRA_ROW_NAMES.length);
   });
 
-  it('has non-empty model and rationale text for every row', () => {
+  it('has a complete Claude-interactive seven-column shape for every row', () => {
     for (const row of EXTRA_MODEL_TABLE_ROWS) {
-      expect(row.model.trim().length, `row "${row.name}" has empty model text`).toBeGreaterThan(0);
-      expect(row.rationale.trim().length, `row "${row.name}" has empty rationale text`).toBeGreaterThan(0);
+      expect(row.executionPath, `row "${row.name}" has the wrong execution path`).toBe(
+        'Claude interactive',
+      );
+      expect(
+        row.claudeModel.trim().length,
+        `row "${row.name}" has empty Claude model text`,
+      ).toBeGreaterThan(0);
+      expect(row.claudeEffort, `row "${row.name}" invents Claude effort`).toBe('');
+      expect(row.codexModel, `row "${row.name}" invents a Codex model`).toBe('');
+      expect(row.codexEffort, `row "${row.name}" invents Codex effort`).toBe('');
+      expect(row.why.trim().length, `row "${row.name}" has empty rationale text`).toBeGreaterThan(
+        0,
+      );
     }
   });
 });

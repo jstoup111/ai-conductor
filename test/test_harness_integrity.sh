@@ -253,13 +253,21 @@ if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
 elif ! command -v jq >/dev/null 2>&1; then
   warn_check "model-table pin check skipped — jq not installed" 1
 else
-  pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
-  pins_exit=$?
+  if [ -n "${HARNESS_INTEGRITY_TEST_PINS_JSON:-}" ]; then
+    pins_json=$HARNESS_INTEGRITY_TEST_PINS_JSON
+    pins_exit=0
+  else
+    set +e
+    pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
+    pins_exit=$?
+    set -e
+  fi
+  pin_skills_dir="${HARNESS_INTEGRITY_TEST_SKILLS_DIR:-${HARNESS_DIR}/skills}"
 
   if [ "$pins_exit" -ne 0 ] || ! echo "$pins_json" | jq -e . >/dev/null 2>&1; then
     assert "bin/generate-model-table --pins produced parseable JSON" 1
   else
-    for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
+    for skill_file in "${pin_skills_dir}"/*/SKILL.md; do
       [ -f "$skill_file" ] || continue
       skill_name=$(basename "$(dirname "$skill_file")")
 

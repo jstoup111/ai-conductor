@@ -9,7 +9,6 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { StepName, ComplexityTier } from '../types/index.js';
-import { DEFAULT_STEP_MODELS } from '../engine/resolved-config.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -320,12 +319,12 @@ export function buildEngineRows(
 export function buildExtraRows(): ModelTableRow[] {
   return EXTRA_MODEL_TABLE_ROWS.map((row) => ({
     name: row.name,
-    executionPath: '',
-    claudeModel: row.model,
-    claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
-    why: row.rationale,
+    executionPath: row.executionPath,
+    claudeModel: row.claudeModel,
+    claudeEffort: row.claudeEffort,
+    codexModel: row.codexModel,
+    codexEffort: row.codexEffort,
+    why: row.why,
   }));
 }
 
@@ -367,20 +366,22 @@ export function renderModelTable(): string {
 //
 // Pure builder for `--pins` mode's JSON output (TS-4 happy path 1). Every
 // skill in SKILL_STEP_MAP gets an `{ "expected": "<model>" }` entry, where
-// "<model>" remains the legacy Claude *untiered* default
-// (DEFAULT_STEP_MODELS[step] — the tier-override base value, not a
-// tier-suffixed rendering). Provider-aware pin output is deferred to Task 17.
+// "<model>" is the Claude *untiered* default (the tier-override base value,
+// not a tier-suffixed rendering). Interactive skill pins are Claude-scoped;
+// Codex policy values never participate in this comparison.
 // Every skill in PIN_EXEMPT_SKILLS gets an `{ "exempt": true }` entry. No
 // filesystem access.
 // ────────────────────────────────────────────────────────────────────────────
 
 export type PinsJson = Record<string, { expected: string } | { exempt: true }>;
 
-export function buildPinsJson(): PinsJson {
+export function buildPinsJson(
+  claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+): PinsJson {
   const result: PinsJson = {};
 
   for (const [skill, step] of Object.entries(SKILL_STEP_MAP)) {
-    result[skill] = { expected: DEFAULT_STEP_MODELS[step] };
+    result[skill] = { expected: claudePolicy.stepModels[step] };
   }
 
   for (const skill of PIN_EXEMPT_SKILLS) {
