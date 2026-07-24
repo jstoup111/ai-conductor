@@ -421,9 +421,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   cited id against the real artifacts (fabricated-citation reject), runs five
   coverage/consistency layers (outcome, FR, story, orphan-task, coverage-table), scans for
   duplicate intake claims offline via local git state, and blocks the land on any
-  unresolved gap. Tier S is exempt outright, and specs authored before this gate existed
-  are never retroactively blocked (no `.docs/coherence/` signal in the diff disengages the
-  gate). A genuine exception is waivable via a committed
+  unresolved gap. Every coverage layer collects ALL of its findings (e.g. every orphan
+  task, every uncovered story), not just its first, so one refusal names the complete gap
+  set and a waiver can cover it in a single pass. Tier S is exempt outright, and specs
+  authored before this gate existed are never retroactively blocked (no
+  `.docs/coherence/` signal in the diff disengages the gate) — worktree creation now
+  always stamps `.docs/coherence/.gitkeep`, so every engineer-authored post-gate spec
+  carries a coherence signal and a skipped `/coherence-check` fails closed at parse
+  instead of disengaging. Outcome bullets are read from `.pipeline/intake-outcomes.md`
+  with a fallback to the committed `.docs/intake/<plan-stem>.md` marker
+  (`readCommittedIntakeOutcomes`) so the outcome layer survives worktree recreation and
+  re-lands. A genuine exception is waivable via a committed
   `.docs/coherence-waivers/<plan-stem>.md` (`Waives: <gap-id>[, ...]` / `Rationale: <prose>`,
   fresh-in-diff, partial coverage still blocks).
 
