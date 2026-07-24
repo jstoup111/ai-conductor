@@ -716,3 +716,112 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
     expect(state.build_routed_reason).toBeUndefined();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kickback bound on routed builds (plan Task 11): a build that only ever
+// reaches `build_review` via Task 8's routed exit must inherit the SAME
+// `MAX_KICKBACKS_PER_GATE` bound a normal completion.done-advanced build
+// gets — the routed entry must never bypass the anti-ping-pong counter.
+// Covers the no-op-commit gaming shape too: an operator (or a misbehaving
+// agent) could try to farm the routed seam by landing trivial commits every
+// attempt without ever resolving a plan task; this proves that shape still
+// terminates at the cap instead of looping forever.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('routed builds inherit the kickback bound (plan Task 11)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-routed-kickback-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initGitRepo(dir);
+    await seedAllArtifactsExceptTaskStatus(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('routed build → build_review FAIL, repeated, stops at MAX_KICKBACKS_PER_GATE (no infinite route→FAIL loop); no-op-commit gaming is bounded the same way', async () => {
+    // 3-task plan, zero completed rows — no attempt ever resolves a plan
+    // task, so every `build` dispatch exhausts its retry budget and reaches
+    // `build_review` only via Task 8's routed exit (never completion.done).
+    await writePlanAndStatus(dir, 3, []);
+
+    let seq = 0;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async (step: StepName) => {
+        if (step === 'build') {
+          seq++;
+          // No-op-commit gaming shape: a trivial, content-varying commit
+          // every attempt — real HEAD movement, never a resolved task.
+          await commitPlainWork(dir, seq);
+        } else if (step === 'build_review') {
+          const { stdout: headSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['no plan task was ever resolved'],
+              rubric: { completeness: true },
+              codeStamp: headSha.trim(),
+            }),
+          );
+        }
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const kickbackEvents: Array<{ from: string; to: string; count: number }> = [];
+    events.on('kickback', (e) => {
+      if (e.type === 'kickback') kickbackEvents.push({ from: e.from, to: e.to, count: e.count });
+    });
+    const stepStarts: StepName[] = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStarts.push(e.step);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    // The routed seam engaged repeatedly — build_review was reached more
+    // than once, each time via Task 8's routing branch (the plan never
+    // resolves, so completion.done for `build` is never true).
+    expect(stepStarts.filter((s) => s === 'build_review').length).toBeGreaterThan(1);
+
+    // Kickback fired, from build_review to build, bounded by the cap — never
+    // an unbounded route→FAIL loop.
+    expect(kickbackEvents.length).toBeGreaterThan(0);
+    expect(kickbackEvents.length).toBeLessThanOrEqual(2); // MAX_KICKBACKS_PER_GATE
+    for (const k of kickbackEvents) {
+      expect(k.from).toBe('build_review');
+      expect(k.to).toBe('build');
+    }
+
+    // Terminal state: bounded HALT naming the kickback cap, not an infinite
+    // loop (the run always returns from conductor.run()).
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltContent).toMatch(/build_review FAIL unresolved after \d+ build kickback\(s\) \(cap 2\)/);
+
+    // The routed reason was recorded on (at least) the first routed entry —
+    // proof the routed path, not completion.done, is what fed build_review
+    // each cycle.
+    const stateContent = await readFile(statePath, 'utf-8').catch(() => null);
+    const state = stateContent ? (JSON.parse(stateContent) as Record<string, unknown>) : {};
+    expect(typeof state.build_routed_reason).toBe('string');
+    expect(state.build_routed_reason as string).toMatch(/routed: unresolved \[1, 2, 3\]/);
+  });
+});
