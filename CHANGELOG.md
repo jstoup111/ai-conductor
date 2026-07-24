@@ -60,6 +60,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `conduct daemon logs --follow` did not tail: it printed the current snapshot and exited
+  after ~0.3s. The follow poll timer was unconditionally `unref()`'d, and the `SIGINT`
+  listener that was supposed to hold the process open does not keep node's event loop
+  alive — so the loop drained immediately. `followDaemonLog` now takes an `unref` option
+  (default `true`, unchanged for embedders) and the CLI follow path passes `unref: false`.
+- `conduct daemon logs --lines N` (and `-n N`) was accepted by `runDaemonLogs` but never
+  parsed from argv, so the flag was silently ignored and the whole log printed. The flag is
+  now parsed (`--lines N`, `--lines=N`, `-n N`); a non-numeric or non-positive value falls
+  back to the full file rather than truncating the snapshot to nothing.
 - `build_review` could grade a diff against a stale local `origin/<default>` tracking ref
   instead of the true remote head, producing false out-of-scope scope-FAIL verdicts on
   content already merged upstream. Grading now resolves its base through a freshness
