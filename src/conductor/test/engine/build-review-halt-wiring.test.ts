@@ -179,6 +179,10 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     expect(haltBody).toContain(`freshBaseSha: ${secondFreshSha}`);
     expect(haltBody).toContain(`flaggedPaths: ${secondMergedPath}`);
     expect(haltBody).toContain('regradeCount: 1');
+    // A second stale-mirage scope-FAIL disposition never re-enters grading —
+    // only an operator can resolve it, so the HALT is classified needs-human.
+    const haltClass = await readFile(join(repo, '.pipeline/HALT.class'), 'utf-8');
+    expect(haltClass).toBe('needs-human');
   }, 30000);
 
   it('negative: a genuine (non-stale-mirage) build_review FAIL still routes to build rework unchanged, never HALTs on disposition', async () => {
