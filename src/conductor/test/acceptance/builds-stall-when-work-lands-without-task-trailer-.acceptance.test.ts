@@ -8,6 +8,9 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepName } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
+import { countResolvedTasks } from '../../src/engine/task-progress.js';
+import { buildProgressReKickDeps } from '../../src/daemon-cli.js';
+import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Builds stall when work lands without Task: trailer
@@ -929,5 +932,87 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
     expect(routedReason).toMatch(/routed: unresolved \[3\]/);
     expect(routedReason).not.toMatch(/unresolved \[.*\b1\b.*\]/);
     expect(routedReason).not.toMatch(/unresolved \[.*\b2\b.*\]/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Consumer parity (plan Task 13): `countResolvedTasks` — the SAME fold
+// `daemon-cli.ts`'s `buildProgressReKickDeps().isProgressReKickEligible`
+// (:435 area) and `conductor.ts`'s kickback-escalation baselines
+// (`captureKickbackToBuildContext`/`checkKickbackToBuildEscalation`, ~:1965/
+// :1988) both read — has no signature or semantics change from this
+// feature. Task 8/9's routing branch adds new CALL SITES but never touches
+// `countResolvedTasks`/`resolveTaskIds` themselves. Pins the values these
+// two real consumers observe across rows-only / trailers-only / mixed
+// fixtures. Expected: no production change — this is a parity pin.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('countResolvedTasks consumer parity under the floor (plan Task 13)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-parity-'));
+    await initGitRepo(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function stampLastResolvedCount(root: string, count: number): Promise<void> {
+    const evidence = await createTaskEvidence(root);
+    evidence.lastResolvedCount = count;
+    await evidence.write();
+  }
+
+  it('rows-only: countResolvedTasks=2, and isProgressReKickEligible reflects the exact same fold (no drift)', async () => {
+    await writePlanAndStatus(dir, 5, [1, 2]); // 2 of 5 rows completed, no trailers
+    expect(await countResolvedTasks(dir)).toBe(2);
+
+    const worktreeBase = join(dir, '..');
+    const slug = dir.split('/').pop()!;
+    const { isProgressReKickEligible } = buildProgressReKickDeps(
+      { build_progress_halt: { enabled: true } },
+      worktreeBase,
+    );
+    // Live count (2) > last-dispatch-stamped count (1) → eligible for re-kick.
+    await stampLastResolvedCount(dir, 1);
+    expect(await isProgressReKickEligible!(slug)).toBe(true);
+    // Live count (2) == last-dispatch-stamped count (2) → not eligible.
+    await stampLastResolvedCount(dir, 2);
+    expect(await isProgressReKickEligible!(slug)).toBe(false);
+  });
+
+  it('trailers-only: countResolvedTasks=2 when rows are all pending but 2 ids carry Task: trailers', async () => {
+    await writePlanAndStatus(dir, 5, []); // all pending
+    await commitWithTaskTrailer(dir, '1', 1);
+    await commitWithTaskTrailer(dir, '2', 2);
+    expect(await countResolvedTasks(dir)).toBe(2);
+
+    const worktreeBase = join(dir, '..');
+    const slug = dir.split('/').pop()!;
+    const { isProgressReKickEligible } = buildProgressReKickDeps(
+      { build_progress_halt: { enabled: true } },
+      worktreeBase,
+    );
+    await stampLastResolvedCount(dir, 0);
+    expect(await isProgressReKickEligible!(slug)).toBe(true);
+  });
+
+  it('mixed rows + trailers: countResolvedTasks unions completed rows and trailer ids (no double count on overlap)', async () => {
+    await writePlanAndStatus(dir, 5, [1]); // row 1 completed
+    await commitWithTaskTrailer(dir, '1', 1); // same id 1, also trailer-stamped — union, not double-count
+    await commitWithTaskTrailer(dir, '2', 2); // additionally resolves id 2 via trailer only
+    expect(await countResolvedTasks(dir)).toBe(2);
+
+    const worktreeBase = join(dir, '..');
+    const slug = dir.split('/').pop()!;
+    const { isProgressReKickEligible } = buildProgressReKickDeps(
+      { build_progress_halt: { enabled: true } },
+      worktreeBase,
+    );
+    await stampLastResolvedCount(dir, 2);
+    expect(await isProgressReKickEligible!(slug)).toBe(false); // no drift since dispatch
+    await stampLastResolvedCount(dir, 1);
+    expect(await isProgressReKickEligible!(slug)).toBe(true); // real forward progress since dispatch
   });
 });
