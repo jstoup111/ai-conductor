@@ -122,6 +122,23 @@ describe('engine/build-review-disposition — regrade counter persistence', () =
     expect(await readRegradeCount(dir)).toBe(0);
   });
 
+  it('resetRegradeCounter never creates .pipeline/ when no counter exists', async () => {
+    // Regression: resetting at fresh-session start used to mkdir `.pipeline/`
+    // unconditionally. An otherwise-empty `.pipeline/` is not inert — the
+    // pre-dispatch attribution guard early-returns "intact" only when the
+    // directory is absent, so conjuring it flips the guard into its
+    // "machinery incomplete" branch, suppressing the build-step marker
+    // (#505 TS-3) and, where enforcement is on, opening a HALT path.
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(join(dir, '.pipeline'))).toBe(false);
+
+    await resetRegradeCounter(dir);
+
+    expect(existsSync(join(dir, '.pipeline'))).toBe(false);
+    // A missing counter already reads as a fresh session.
+    expect(await readRegradeCount(dir)).toBe(0);
+  });
+
   it('readRegradeCount is 0 for an unparseable counter file (fail-open to a fresh session)', async () => {
     const { mkdir } = await import('node:fs/promises');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
