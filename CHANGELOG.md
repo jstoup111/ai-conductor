@@ -21,6 +21,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   regraded once against a fresh base per feature-session; a second stale-mirage detection
   in the same session HALTs instead of re-entering grading. See
   `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
 
 ### Changed
 
