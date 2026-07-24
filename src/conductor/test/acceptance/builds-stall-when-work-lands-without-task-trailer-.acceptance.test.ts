@@ -167,7 +167,12 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
   function makeConductor(
     maxRetries: number,
     runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> },
-  ): { conductor: Conductor; stallEvents: Array<{ reason: string }>; unattributedEvents: UnattributedProgressEvent[] } {
+  ): {
+    conductor: Conductor;
+    stallEvents: Array<{ reason: string }>;
+    unattributedEvents: UnattributedProgressEvent[];
+    onRecovery: ReturnType<typeof vi.fn>;
+  } {
     const stallEvents: Array<{ reason: string }> = [];
     events.on('build_stall', (e) => {
       if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
@@ -190,7 +195,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       maxRetries,
       onRecovery,
     });
-    return { conductor, stallEvents, unattributedEvents };
+    return { conductor, stallEvents, unattributedEvents, onRecovery };
   }
 
   it('attempt >= 2, resolved count pinned, HEAD moves every attempt (real commits, no Task: trailer) → never classified as a stall; unattributed_progress emitted', async () => {
@@ -295,5 +300,55 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.some((e) => e.reason === 'halt_marker')).toBe(true);
     expect(stallEvents.some((e) => e.reason === 'no_task_progress')).toBe(false);
     expect(unattributedEvents).toHaveLength(0);
+  });
+
+  it('C2 — attempt 1 lands one commit, attempts 2..N land nothing (count pinned) → attempts 2+ still classify no_task_progress and HALT; per-attempt baseline, not per-step', async () => {
+    // Proves per-attempt granularity: a per-step-baseline implementation
+    // (comparing every attempt's HEAD against `headShaBeforeBuild`, captured
+    // once at step entry) would incorrectly read every later attempt as
+    // "live" because HEAD moved once, at attempt 1, somewhere in the step.
+    // The correct per-attempt implementation re-baselines
+    // `headShaAttemptStart` to the attempt-end SHA after each attempt, so
+    // attempts 2..N — which land zero commits — see HEAD unmoved relative to
+    // THEIR OWN start and classify no_task_progress exactly as today.
+    await writePlanAndStatus(dir, 3, []); // zero completed rows; no trailer commits ever land
+
+    let seq = 0;
+    let calls = 0;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async () => {
+        calls++;
+        if (calls === 1) {
+          seq++;
+          await commitPlainWork(dir, seq); // ONLY attempt 1 lands a real commit
+        }
+        // attempts 2..N: no commit, count stays pinned at 0
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { conductor, stallEvents, unattributedEvents, onRecovery } = makeConductor(3, runner);
+    await conductor.run();
+
+    // Attempt 1 lands the only commit but the breaker only classifies from
+    // attempt >= 2, so attempt 1 itself never gets checked (no
+    // unattributed_progress, no stall). Attempts 2+: HEAD did NOT move
+    // relative to THEIR OWN start (attempt 1's single commit is stale
+    // history by then) — classified no_task_progress, same as if no commit
+    // had ever landed in the step at all.
+    expect(stallEvents.filter((e) => e.reason === 'no_task_progress').length).toBeGreaterThan(0);
+    expect(unattributedEvents).toHaveLength(0);
+
+    // The build must still reach the same terminal outcome as today's
+    // genuine-wedge path — one early commit must not blind the wedge
+    // detector for the rest of the step. This fixture runs non-daemon (no
+    // `daemon: true` on the Conductor), so the recovery menu (`onRecovery`),
+    // not the `.pipeline/HALT` file, is the terminal signal — the HALT file
+    // is daemon-only (see conductor.ts's `LOOP_HALT_MARKER` write sites,
+    // all gated on `this.daemon`).
+    expect(onRecovery).toHaveBeenCalled();
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltContent).toBeNull();
   });
 });
