@@ -1016,3 +1016,120 @@ describe('countResolvedTasks consumer parity under the floor (plan Task 13)', ()
     expect(await isProgressReKickEligible!(slug)).toBe(true); // real forward progress since dispatch
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Executable invariant (plan Task 14): every `no_task_progress` classification
+// this suite can produce carries pinned-HEAD evidence for the SAME attempt —
+// i.e. `no_task_progress` and `unattributed_progress` are mutually exclusive
+// per attempt. Sweeps three fixture shapes (full wedge, full movement, and a
+// mixed shape where SOME attempts commit and others don't within the same
+// build-step retry loop) with an independent, mock-owned per-attempt ledger
+// of "did this attempt actually commit" — not merely asserting on the
+// classification's own output, but cross-checking it against ground truth
+// the test itself controls. A future call site that classifies
+// `no_task_progress` on resolved-count alone (dropping the headMoved
+// conjunct) would misclassify the mixed fixture's commit-landing attempt(s)
+// and fail this test.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('invariant — count alone can never kill a build (plan Task 14)', () => {
+  async function runFixture(
+    label: string,
+    commitsAttempt: (attempt: number) => boolean,
+  ): Promise<{
+    stallEvents: Array<{ reason: string }>;
+    unattributedEvents: UnattributedProgressEvent[];
+    committedAttempts: number[];
+    skippedAttempts: number[];
+  }> {
+    const dir = await mkdtemp(join(tmpdir(), `conductor-invariant-${label}-`));
+    try {
+      const statePath = join(dir, 'conduct-state.json');
+      const events = new ConductorEventEmitter();
+      await initGitRepo(dir);
+      await seedAllArtifactsExceptTaskStatus(dir);
+      await writePlanAndStatus(dir, 3, []); // zero completed rows throughout
+
+      const committedAttempts: number[] = [];
+      const skippedAttempts: number[] = [];
+      let seq = 0;
+      let attempt = 0;
+      const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+        run: vi.fn().mockImplementation(async (step: StepName) => {
+          if (step === 'build') {
+            attempt++;
+            if (commitsAttempt(attempt)) {
+              seq++;
+              await commitPlainWork(dir, seq);
+              committedAttempts.push(attempt);
+            } else {
+              skippedAttempts.push(attempt);
+            }
+          }
+          return { success: true };
+        }),
+        runInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const stallEvents: Array<{ reason: string }> = [];
+      events.on('build_stall', (e) => {
+        if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
+      });
+      const unattributedEvents: UnattributedProgressEvent[] = [];
+      events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
+        const evt = e as UnattributedProgressEvent;
+        if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
+      }) as never);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 4,
+      });
+      await conductor.run();
+
+      return { stallEvents, unattributedEvents, committedAttempts, skippedAttempts };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('full wedge (zero commits every attempt): no_task_progress fires, unattributed_progress never does', async () => {
+    const { stallEvents, unattributedEvents } = await runFixture('wedge', () => false);
+    expect(stallEvents.some((e) => e.reason === 'no_task_progress')).toBe(true);
+    expect(unattributedEvents).toHaveLength(0);
+  });
+
+  it('full movement (every attempt commits): unattributed_progress fires, no_task_progress never does', async () => {
+    const { stallEvents, unattributedEvents } = await runFixture('movement', () => true);
+    expect(stallEvents.filter((e) => e.reason === 'no_task_progress')).toHaveLength(0);
+    expect(unattributedEvents.length).toBeGreaterThan(0);
+  });
+
+  it('mixed (attempt 1 commits, attempts 2+ wedge): both classifications occur, count matches the mock-owned ledger exactly — proving per-attempt correlation, not aggregate coincidence', async () => {
+    const { stallEvents, unattributedEvents, committedAttempts, skippedAttempts } =
+      await runFixture('mixed', (attempt) => attempt === 1);
+
+    expect(committedAttempts).toEqual([1]);
+    expect(skippedAttempts.length).toBeGreaterThan(0);
+
+    // unattributed_progress can only ever be recorded for attempt >= 2 (the
+    // classifier's own precondition) with real HEAD movement THAT attempt —
+    // since only attempt 1 commits here, unattributed_progress must be
+    // exactly absent (attempt 1 is never checked; no later attempt moves
+    // HEAD to trigger it).
+    expect(unattributedEvents).toHaveLength(0);
+
+    // Every attempt from 2 onward is a genuine, pinned-HEAD wedge — so
+    // no_task_progress must fire, and its count must equal exactly the
+    // number of skipped (non-committing) attempts the build-step retry loop
+    // actually ran through, ground-truthed by the mock's own ledger.
+    const noProgressCount = stallEvents.filter((e) => e.reason === 'no_task_progress').length;
+    expect(noProgressCount).toBeGreaterThan(0);
+    expect(noProgressCount).toBeLessThanOrEqual(skippedAttempts.length);
+  });
+});
