@@ -102,6 +102,7 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
+import { readHaltClass } from './engine/halt-marker.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
@@ -1211,6 +1212,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     hasRebaseInProgress: (slug) => hasRebaseInProgress(join(worktreeBase, slug)),
     abortRebase: (slug) => abortRebase(join(worktreeBase, slug)),
     clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+    // Task 5: real classification read wired into the sweep — a needs-human
+    // HALT is skipped instead of re-kicked (see daemon-rekick.ts rekickSweep).
+    readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
     lastRekickSha,
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),

@@ -575,6 +575,26 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     await expect(clearMarker(dir)).resolves.toBeUndefined();
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(true);
   });
+
+  it('clearMarker also removes .pipeline/HALT.class when present (Task 5)', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), 'gate loop budget exceeded\n', 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+
+    await clearMarker(dir);
+
+    expect(await fileExists(join(p, 'HALT.class'))).toBe(false);
+  });
+
+  it('clearMarker is a no-op-safe when .pipeline/HALT.class is absent (Task 5)', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), 'some reason\n', 'utf-8');
+
+    await expect(clearMarker(dir)).resolves.toBeUndefined();
+    expect(await fileExists(join(p, 'HALT.class'))).toBe(false);
+  });
 });
 
 // ── FR-12: resumeRebaseFirst (isolated repo, daemon-equivalent real git) ───────

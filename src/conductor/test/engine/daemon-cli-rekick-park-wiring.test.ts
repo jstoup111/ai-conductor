@@ -65,3 +65,42 @@ describe('Task 6 — daemon-cli wires the real isOperatorParked dep into the re-
     }
   });
 });
+
+describe('Task 5 — daemon-cli wires the real readHaltClass dep into the re-kick sweep', () => {
+  it('imports readHaltClass from halt-marker.ts and wires it into the rekickDeps object', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+
+    // 1. The real production primitive is imported from halt-marker.ts.
+    expect(source).toMatch(
+      /import\s*\{[^}]*readHaltClass[^}]*\}\s*from\s*['"]\.\/engine\/halt-marker\.js['"]/,
+    );
+
+    // 2. The rekickDeps object assembled for rekickSweep includes a
+    //    `readHaltClass` field that calls the imported primitive.
+    const rekickDepsMatch = source.match(
+      /const rekickDeps:\s*RekickSweepDeps\s*=\s*\{([\s\S]*?)\n\s*\};/,
+    );
+    expect(rekickDepsMatch, 'expected a `rekickDeps: RekickSweepDeps = { ... }` block').toBeTruthy();
+    const rekickDepsBody = rekickDepsMatch![1];
+
+    expect(rekickDepsBody).toMatch(/readHaltClass\s*:/);
+    expect(rekickDepsBody).toMatch(/readHaltClass\(/);
+  });
+
+  it('the real readHaltClass primitive resolves to "unclassified" against a fresh fixture worktree', async () => {
+    const { readHaltClass } = (await import('../../src/engine/halt-marker.js')) as {
+      readHaltClass: (worktreePath: string) => Promise<'needs-human' | 'mechanical' | 'unclassified'>;
+    };
+
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-cli-halt-class-wiring-'));
+    try {
+      expect(await readHaltClass(worktreePath)).toBe('unclassified');
+
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreePath, '.pipeline', 'HALT.class'), 'needs-human\n', 'utf-8');
+      expect(await readHaltClass(worktreePath)).toBe('needs-human');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+});
