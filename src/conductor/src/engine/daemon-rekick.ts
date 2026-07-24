@@ -171,8 +171,11 @@ export async function rekickSweep(
 
     // needs-human classified halt: only an operator can resolve it. Skip on
     // EVERY sweep (not bounded by SHA) — never abort/clear/sentinel/lastRekickSha.
+    // The resolved class (when the dep is present) is reused below in the
+    // clear-path log line so mechanical/unclassified re-kicks are observable.
+    let haltClass: HaltClass | 'unclassified' | undefined;
     if (deps.readHaltClass) {
-      let haltClass: HaltClass | 'unclassified' = 'unclassified';
+      haltClass = 'unclassified';
       try {
         haltClass = await deps.readHaltClass(slug);
       } catch {
@@ -203,7 +206,10 @@ export async function rekickSweep(
     } catch {
       /* best-effort: a missing reason is logged as unknown */
     }
-    log(`re-kick ${slug} @ ${sha.slice(0, 12)} — ${reason}`);
+    log(
+      `re-kick ${slug} @ ${sha.slice(0, 12)} — ${reason}` +
+        (haltClass !== undefined ? ` (halt class: ${haltClass})` : ''),
+    );
 
     // FR-7b: abort a paused rebase BEFORE clearing. A failed abort leaves the
     // marker intact (no half-clear of a corrupt rebase state) and skips it.

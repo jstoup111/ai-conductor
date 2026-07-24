@@ -189,6 +189,60 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(res2.cleared).toEqual([]);
   });
 
+  it('a mechanical-classified halt clears normally and the log line names the halt class', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['m'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'mechanical',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['m']);
+    expect(trace.cleared.has('m')).toBe(true);
+    expect(last.get('m')).toBe(SHA_B);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('m') && e.includes('mechanical'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('an unclassified halt (readHaltClass resolves to unclassified) still clears and the log line names it unclassified', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['u'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'unclassified',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['u']);
+    expect(last.get('u')).toBe(SHA_B);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('u') && e.includes('unclassified'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('no readHaltClass dep at all still clears the slug normally (backward-compat)', async () => {
+    const last = new Map<string, string>();
+    const { deps } = fakeDeps({ halted: ['n'], lastRekickSha: last });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['n']);
+    expect(last.get('n')).toBe(SHA_B);
+  });
+
+  it('a mechanical-classified slug already re-kicked at SHA X is still skipped by the FR-9 per-SHA guard', async () => {
+    const last = new Map<string, string>([['m', SHA_B]]);
+    const { deps, trace } = fakeDeps({
+      halted: ['m'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'mechanical',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['m']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.cleared.has('m')).toBe(false);
+  });
+
   it('operator-parked AND needs-human: park check fires first, readHaltClass is never called', async () => {
     const last = new Map<string, string>();
     let classCalled = false;
