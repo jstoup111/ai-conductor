@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { HALT_MARKER } from './halt-marker.js';
+import { HALT_MARKER, type HaltClass } from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -77,6 +77,15 @@ export interface RekickSweepDeps {
    * behavior is unchanged (backward-compatible).
    */
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Classify a slug's live HALT via `.pipeline/HALT.class`. `needs-human`
+   * halts are skipped (never cleared) — only an operator can resolve them.
+   * Checked AFTER isOperatorParked/isProcessed, BEFORE the FR-9 SHA guard, so
+   * a needs-human halt is skipped on every sweep, not just once per SHA.
+   * Absent, or resolving to `mechanical`/`unclassified` → behavior unchanged
+   * (falls through to the existing FR-9 guard and clear path).
+   */
+  readHaltClass?: (slug: string) => Promise<HaltClass | 'unclassified'>;
 }
 
 export interface RekickSweepResult {
@@ -156,6 +165,28 @@ export async function rekickSweep(
           if (deps.markWarned) await deps.markWarned(slug);
           else fallback.add(slug);
         }
+        continue;
+      }
+    }
+
+    // needs-human classified halt: only an operator can resolve it. Skip on
+    // EVERY sweep (not bounded by SHA) — never abort/clear/sentinel/lastRekickSha.
+    if (deps.readHaltClass) {
+      let haltClass: HaltClass | 'unclassified' = 'unclassified';
+      try {
+        haltClass = await deps.readHaltClass(slug);
+      } catch {
+        /* best-effort: an unreadable class falls through as unclassified */
+      }
+      if (haltClass === 'needs-human') {
+        skipped.push(slug);
+        let classReason = 'unknown';
+        try {
+          classReason = await deps.readHaltReason(slug);
+        } catch {
+          /* best-effort */
+        }
+        log(`re-kick ${slug}: skipped — halt class needs-human (${classReason})`);
         continue;
       }
     }
