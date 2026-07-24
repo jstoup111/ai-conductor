@@ -387,3 +387,105 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(unattributedEvents).toHaveLength(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED spec for plan Task 7 ("budget exhaustion with real work must route to
+// build_review"). Tasks 1-6 (already landed) stop the retry loop from
+// MISCLASSIFYING an unattributed-but-real-work attempt as `no_task_progress`
+// — but they do not yet decide what happens when the fixed `stepMaxRetries`
+// budget is exhausted while EVERY attempt moved HEAD (i.e. every attempt
+// classified `unattributed_progress`, never `no_task_progress`). Today,
+// conductor.ts's exhaustion tail (~4386-5154) always treats a non-succeeded
+// build step as a hard failure and falls through to the generic
+// "step 'build' failed in auto mode (retries exhausted)" HALT
+// (conductor.ts:5130) via LOOP_HALT_MARKER — there is no routing to
+// build_review for this case yet (that's plan Task 8, GREEN). This spec
+// pins the desired end-state and MUST fail against today's code.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('budget exhaustion with real, unattributed commits every attempt (RED — plan Task 7)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-exhaustion-routing-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initGitRepo(dir);
+    await seedAllArtifactsExceptTaskStatus(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('every attempt moves HEAD (unattributed_progress, never no_task_progress) → step advances to build_review, no terminal no_task_progress HALT is written, and the routed reason names the unresolved plan task ids', async () => {
+    // 3-task plan, zero completed rows — none of the 3 plan task ids ever
+    // resolve across the whole retry budget, but every attempt lands a real,
+    // trailer-less commit (HEAD moves every time).
+    await writePlanAndStatus(dir, 3, []);
+
+    let seq = 0;
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async () => {
+        seq++;
+        await commitPlainWork(dir, seq); // real commit, unattributed — HEAD moves every attempt
+        // Deliberately never satisfy the build-step completion gate so the
+        // loop runs out the full fixed retry budget.
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stallEvents: Array<{ reason: string }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
+    });
+    const unattributedEvents: UnattributedProgressEvent[] = [];
+    events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
+      const evt = e as UnattributedProgressEvent;
+      if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
+    }) as never);
+    const stepStarts: StepName[] = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStarts.push(e.step);
+    });
+
+    // Daemon + auto mode: the exhaustion-tail HALT/routing behavior this
+    // spec targets is gated on `this.daemon` / `this.mode === 'auto'` (see
+    // conductor.ts's LOOP_HALT_MARKER write sites and the auto-mode
+    // unattended-failure branch at ~4386-5154).
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    // (a) step advances to build_review, not HALT.
+    expect(stepStarts).toContain('build_review');
+
+    // No attempt should ever have classified no_task_progress — every
+    // attempt moved HEAD.
+    expect(stallEvents.filter((e) => e.reason === 'no_task_progress')).toHaveLength(0);
+    expect(unattributedEvents.length).toBeGreaterThan(0);
+
+    // (b) no terminal no_task_progress HALT file is written at all.
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltContent).toBeNull();
+
+    // (c) the routed reason names the unresolved plan task ids (1, 2, 3 —
+    // none of them ever resolved across the exhausted budget).
+    const stateContent = await readFile(statePath, 'utf-8').catch(() => null);
+    const combined = `${haltContent ?? ''}\n${stateContent ?? ''}`;
+    expect(combined).toMatch(/\b1\b/);
+    expect(combined).toMatch(/\b2\b/);
+    expect(combined).toMatch(/\b3\b/);
+  });
+});
