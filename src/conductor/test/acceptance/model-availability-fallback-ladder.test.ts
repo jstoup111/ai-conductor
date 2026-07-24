@@ -3,6 +3,10 @@ import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/executi
 import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Model availability probe + fallback ladder"
@@ -60,6 +64,10 @@ function warnLines(): string {
   return warnSpy.mock.calls.map((c) => c.join(' ')).join('\n');
 }
 
+function configWithLadder(ladder: readonly string[]): HarnessConfig {
+  return { model_fallback_ladder: ladder } as unknown as HarnessConfig;
+}
+
 describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', () => {
   it('healthy configured model: exactly one invocation, zero downgrade noise', async () => {
     const { provider, invokeCalls } = laddderProvider({});
@@ -82,7 +90,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     const result = await runner.run('build', emptyState);
@@ -96,6 +104,26 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     expect(warned.toLowerCase()).toMatch(/unavailable|not found/);
   });
 
+  it('Codex Sol/Terra unavailability walks to Luna within the same runner attempt', async () => {
+    const { provider, invokeCalls } = laddderProvider({
+      'gpt-5.6-sol': modelUnavailable(),
+      'gpt-5.6-terra': modelUnavailable(),
+      'gpt-5.6-luna': { success: true, output: 'done', exitCode: 0 },
+    });
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+      modelOverride: 'gpt-5.6-sol',
+      config: configWithLadder(CODEX_MODEL_POLICY.modelFallbackLadder),
+    });
+
+    await runner.run('build', emptyState);
+
+    expect(invokeCalls.map((c) => c.model)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]);
+  });
+
   it('unavailable at every ladder position walks the full prefix before succeeding', async () => {
     const { provider, invokeCalls } = laddderProvider({
       fable: modelUnavailable(),
@@ -104,7 +132,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     const result = await runner.run('build', emptyState);
@@ -120,7 +148,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     );
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     const result = await runner.run('build', emptyState);
@@ -144,7 +172,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     const result = await runner.run('build', emptyState);
@@ -161,7 +189,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'claude-fable-5-custom',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     const result = await runner.run('build', emptyState);
@@ -174,7 +202,7 @@ describe('In-attempt ladder walk on the autonomous entry point (TS-2, TS-4)', ()
     const { provider, invokeCalls } = laddderProvider({ fable: modelUnavailable() });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: [] } as unknown as HarnessConfig,
+      config: configWithLadder([]),
     });
 
     const result = await runner.run('build', emptyState);
@@ -193,7 +221,7 @@ describe('Cache consult on the interactive dispatch path (TS-3 negative path)', 
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
 
     // First: an autonomous step reactively discovers fable is dead.
@@ -220,7 +248,7 @@ describe('Cache consult on the interactive dispatch path (TS-3 negative path)', 
     });
     const firstRunner = new DefaultStepRunner(firstProvider, 'session-1', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
     await firstRunner.run('build', emptyState);
 
@@ -230,7 +258,7 @@ describe('Cache consult on the interactive dispatch path (TS-3 negative path)', 
     });
     const secondRunner = new DefaultStepRunner(secondProvider, 'session-2', '/tmp/project', {
       modelOverride: 'fable',
-      config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
+      config: configWithLadder(CLAUDE_MODEL_POLICY.modelFallbackLadder),
     });
     const result = await secondRunner.run('build', emptyState);
 
