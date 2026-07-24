@@ -187,6 +187,7 @@ import {
   writeStallQuestionEvidence,
   writeStallHalt,
   normalizeTasks,
+  resolveTaskIds,
 } from './task-progress.js';
 import {
   makeGitRunner,
@@ -3600,6 +3601,14 @@ export class Conductor {
         // iteration so it always reflects "HEAD at the start of THIS
         // attempt", not "HEAD at step entry".
         let headShaAttemptStart: string | null = headShaBeforeBuild;
+        // Plan Task 8 (builds-stall-when-work-lands-without-task-trailer-):
+        // true if ANY attempt in this build step's retry loop moved HEAD
+        // (i.e. emitted `unattributed_progress` at least once) — real,
+        // uncommitted-to-a-task work landed even though the retry budget
+        // ultimately exhausted. Consulted at the exhaustion tail below to
+        // route through the completion-seam success path instead of the
+        // generic "retries exhausted" HALT.
+        let anyAttemptMovedHead = false;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -4334,6 +4343,7 @@ export class Conductor {
                     headBefore: headShaAttemptStart,
                     headAfter: headShaAttemptEnd,
                   });
+                  anyAttemptMovedHead = true;
                 }
 
                 // T4: within-dispatch progress-bypass gate. A completion-gate
@@ -4808,6 +4818,56 @@ export class Conductor {
                 const freshEvidence = await createTaskEvidence(this.projectRoot);
                 freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
                 await freshEvidence.write();
+              }
+              // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
+              // budget exhausted with NO attempt ever satisfying the
+              // completion gate would normally fall straight into the
+              // `!succeeded` HALT/recovery path below. But if at least one
+              // attempt moved HEAD with real, unattributed commits
+              // (`anyAttemptMovedHead`), the work is genuinely landing —
+              // it's just not stamped against a plan task row. Treat that
+              // as a routing problem, not a stall: exit through the exact
+              // same success seam `completion.done` uses (no second advance
+              // code path) so the run proceeds to `build_review`, and record
+              // which plan task ids were left unresolved so an operator can
+              // still see the gap in `conduct-state.json`.
+              if (step.name === 'build' && anyAttemptMovedHead) {
+                let routedReason: string | undefined;
+                try {
+                  const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
+                  const raw = await readFile(statusPath, 'utf-8');
+                  const parsed = JSON.parse(raw) as unknown;
+                  const tasks = normalizeTasks(parsed);
+                  const planIds = tasks
+                    .map((t) => t.id)
+                    .filter((id): id is string => id !== undefined);
+                  const resolved = await resolveTaskIds(this.projectRoot, planIds);
+                  const unresolvedIds = planIds.filter((id) => !resolved.has(id));
+                  routedReason = `routed: unresolved [${unresolvedIds.join(', ')}] after ${attempt} attempts with commit movement`;
+                } catch {
+                  // Fail-soft: if task-status.json is missing/unparseable we
+                  // still route (real commits landed — the whole point of
+                  // this seam), just without an ids list in the reason.
+                  routedReason = `routed: unresolved [] after ${attempt} attempts with commit movement`;
+                }
+                state.build_routed_reason = routedReason;
+                // Persist immediately: the loop's normal success tail calls
+                // `saveStepStatus`, which reads the CURRENT on-disk state,
+                // flips only `step.name`/`last_step`, and writes it back — an
+                // in-memory-only field set here would never reach disk
+                // otherwise, since saveStepStatus's read-modify-write starts
+                // from whatever is already persisted, not from this `state`
+                // object.
+                await writeState(this.stateFilePath, state);
+                if (this.taskEvidence) {
+                  const freshEvidence = await createTaskEvidence(this.projectRoot);
+                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                  await freshEvidence.write();
+                }
+                succeeded = true;
+                successOutput = result.output;
+                stepResult = result;
+                break;
               }
               break;
             }
