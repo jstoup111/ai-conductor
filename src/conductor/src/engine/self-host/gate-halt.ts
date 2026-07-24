@@ -31,7 +31,7 @@ export async function writeSelfHostHalt(projectRoot: string, reason: string): Pr
     `  1. Address the gate reason above.\n` +
     `  2. Re-install the harness (bin/install --update) and run /verify.\n` +
     `  3. rm .pipeline/HALT, then merge the PR yourself.\n`;
-  await writeHaltMarker(projectRoot, body);
+  await writeHaltMarker(projectRoot, body, 'needs-human');
 }
 
 /** First non-empty, trimmed line of a text blob, or null when there is none. */
