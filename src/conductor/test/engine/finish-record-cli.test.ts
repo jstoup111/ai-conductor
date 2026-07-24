@@ -458,6 +458,21 @@ describe('engine/finish-record-cli', () => {
       expect(marker.trim()).toBe('pr');
     });
 
+    it('choice=pr writes the engine-owned DONE terminal marker after verification', async () => {
+      await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        passingRunners,
+      );
+
+      await expect(readFile(join(existingAbsDir, 'DONE'), 'utf-8')).resolves.toBeDefined();
+    });
+
     it('choice=pr with no pre-existing state file creates one containing pr_url', async () => {
       const code = await dispatchFinishRecord(
         {

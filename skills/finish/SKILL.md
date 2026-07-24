@@ -274,14 +274,15 @@ completion gate can verify the step actually did something:
   `.pipeline/finish-choice` and, for `pr`, `state.pr_url` atomically after
   re-verifying the PR/push. Do NOT hand-write these files yourself when
   running auto/unattended.
-- **Interactive mode (Options 1–4, user chose manually)**: marker semantics
-  are unchanged — write the outcome by hand as described below:
-  - **Always**: write the chosen option to `.pipeline/finish-choice` as one of
-    the literal strings `pr`, `merge-local`, `keep`, or `discard`.
-  - **Option 2 (PR) only**: also write the resulting PR URL to
-    `.pipeline/conduct-state.json` as `pr_url` (the conductor will pick it up
-    from there; if the underlying `/pr` skill prints the URL to stdout the
-    conductor can also scrape it).
+- **Interactive mode (Options 1–4, user chose manually)**:
+  - **Option 2 (PR)**: after the PR/push STOP gate passes, the final action MUST
+    be `conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir
+    /abs/path/to/.pipeline`. Do not write `finish-choice` or `pr_url` by hand:
+    the recorder verifies the PR and push, then writes both records plus the
+    terminal `.pipeline/DONE` marker.
+  - **Other outcomes**: write the chosen option to
+    `.pipeline/finish-choice` as one of the literal strings `merge-local`,
+    `keep`, or `discard`, as described below.
 
 Without one of these, the conductor will treat the step as failed and re-run
 it, even if the skill itself reports success.
@@ -320,7 +321,7 @@ conductor reads.
 
 #### STOP Gate: Verify Push + PR Before Recording Choice
 
-Before writing `finish-choice=pr` and `pr_url`, verify both the PR and the push:
+Before running `finish-record` for the PR choice, verify both the PR and the push:
 
 1. **PR exists and has a non-empty URL:**
    ```
@@ -335,7 +336,8 @@ Before writing `finish-choice=pr` and `pr_url`, verify both the PR and the push:
    If this exits non-zero, `HEAD` is not an ancestor of the remote tracking ref —
    the push did not land, or the remote never updated locally (stale tracking ref).
 
-**If EITHER check fails, STOP immediately.** Do NOT write `finish-choice=pr` or `pr_url`.
+**If EITHER check fails, STOP immediately.** Do NOT run `finish-record`, write
+`finish-choice=pr`, or write `pr_url`.
 Explain what failed and what to do next:
 
 - **If the PR check failed:** "The PR URL is empty or inaccessible. Verify `gh pr view`
@@ -354,8 +356,12 @@ Explain what failed and what to do next:
   the shipped-fact atomically. The command NEVER blocks the ship: on any
   failure it warns and exits 0 — continue (dedup degrades to the local ledger).
 - Return the PR URL to the user
-- Write the PR URL to `.pipeline/conduct-state.json` (`pr_url` field)
-- Write `pr` to `.pipeline/finish-choice`
+- As the final action, run:
+  ```
+  conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+  ```
+  This is the only writer for `pr_url`, `finish-choice=pr`, and the terminal
+  `.pipeline/DONE` marker. If it fails, do not hand-write a substitute record.
 
 **Option 3: Keep as-is**
 - No action needed
