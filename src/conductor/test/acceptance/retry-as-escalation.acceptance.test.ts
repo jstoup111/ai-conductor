@@ -264,11 +264,10 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
     return { provider, invokeCalls };
   }
 
-  it('an attempt-3 escalated target (opus) that is dead is substituted by the #186 ladder', async () => {
+  it('an unavailable attempt-3 target (opus) descends from its active ladder rung to sonnet', async () => {
     // The conductor would hand modelOverride='opus' at attempt 3 for a base
-    // sonnet step. opus is unavailable this process, so effectiveModel must
-    // substitute a live tier from the availability ladder rather than dispatch
-    // on the dead one.
+    // sonnet step. opus is unavailable this process, so the availability walk
+    // must continue downward from opus to sonnet rather than wrap to fable.
     const { provider, invokeCalls } = ladderProvider({
       opus: {
         success: false,
@@ -276,7 +275,7 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
         exitCode: 1,
         modelUnavailable: true,
       },
-      fable: { success: true, output: 'done', exitCode: 0 },
+      sonnet: { success: true, output: 'done', exitCode: 0 },
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
@@ -286,7 +285,7 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
 
     expect(result.success).toBe(true);
     // opus was attempted then substituted; the step ran on a LIVE model, not opus.
-    expect(invokeCalls.map((c) => c.model)).toEqual(['opus', 'fable']);
+    expect(invokeCalls.map((c) => c.model)).toEqual(['opus', 'sonnet']);
     const last = invokeCalls[invokeCalls.length - 1];
     expect(last.model).not.toBe('opus');
     // The escalated effort override still flows through unchanged.
