@@ -286,55 +286,61 @@ describe('#902 built-in provider policy matrix', () => {
 
 describe('#902 provider-native retry escalation', () => {
   it('bumps effort on attempt 2 and model on attempt 3 within each provider order', () => {
-    const escalate = escalateAttempt as unknown as (
-      model: string,
-      effort: EffortLevel,
-      attempt: number,
-      enabled: boolean,
-      policy: AcceptancePolicy,
-    ) => { model: string; effort: EffortLevel };
-
-    expect(escalate('gpt-5.6-luna', 'low', 1, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-luna', 'low', 1, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-luna',
       effort: 'low',
     });
-    expect(escalate('gpt-5.6-luna', 'low', 2, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-luna', 'low', 2, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-luna',
       effort: 'medium',
     });
-    expect(escalate('gpt-5.6-luna', 'low', 3, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-luna', 'low', 3, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-terra',
       effort: 'medium',
     });
-    expect(escalate('gpt-5.6-luna', 'low', 4, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-luna', 'low', 4, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-sol',
       effort: 'medium',
     });
-    expect(escalate('gpt-5.6-sol', 'max', 8, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-sol', 'max', 8, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-sol',
       effort: 'max',
     });
-    expect(escalate('custom-model', 'high', 8, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('custom-model', 'high', 8, true, CODEX_POLICY)).toEqual({
       model: 'custom-model',
       effort: 'xhigh',
     });
-    expect(escalate('gpt-5.6-luna', 'low', 8, false, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-luna', 'low', 8, false, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-luna',
       effort: 'low',
     });
 
-    expect(escalate('haiku', 'low', 3, true, CLAUDE_POLICY)).toEqual({
+    expect(escalateAttempt('haiku', 'low', 3, true, CLAUDE_POLICY)).toEqual({
       model: 'sonnet',
       effort: 'medium',
     });
-    expect(escalate('fable', 'high', 2, true, CLAUDE_POLICY)).toEqual({
+    expect(escalateAttempt('fable', 'high', 2, true, CLAUDE_POLICY)).toEqual({
       model: 'fable',
       effort: 'xhigh',
     });
-    expect(escalate('gpt-5.6-sol', 'high', 2, true, CODEX_POLICY)).toEqual({
+    expect(escalateAttempt('gpt-5.6-sol', 'high', 2, true, CODEX_POLICY)).toEqual({
       model: 'gpt-5.6-sol',
       effort: 'xhigh',
     });
+
+    for (const policy of [CLAUDE_POLICY, CODEX_POLICY]) {
+      for (const step of ['explore', 'prd'] as const) {
+        const resolved = resolveWithPolicy(policy, step);
+        expect(resolved.effort).toBe('high');
+        expect(escalateAttempt(
+          resolved.model,
+          resolved.effort,
+          2,
+          true,
+          policy,
+        ).effort).toBe('xhigh');
+      }
+    }
   });
 });
 
