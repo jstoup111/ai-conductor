@@ -1200,6 +1200,20 @@ export class DefaultStepRunner implements StepRunner {
         'it. The step is NOT complete until `finish-record` exits 0.';
     }
 
+    // Interactive/default Finish preserves the human's outcome choice. A PR
+    // choice still has to go through the canonical verified recorder so the
+    // engine creates its terminal marker rather than leaving the daemon to
+    // rediscover this worktree as unfinished.
+    if (step === 'finish' && this.mode !== 'auto') {
+      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
+      prompt +=
+        '\n\nFINISH RECORDING — the human chooses the finish outcome. If they choose a PR, after creating or ' +
+        'reusing the PR and verifying it, you MUST run:\n' +
+        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
+        'This verified command records the PR outcome and writes the terminal completion marker. Do not write ' +
+        'the marker or state files by hand.';
+    }
+
     if (retryReason) {
       prompt = `RETRY: ${retryReason}\n${prompt}`;
     }

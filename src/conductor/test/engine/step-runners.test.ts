@@ -339,16 +339,17 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).toContain('conduct-ts finish-record --choice keep --pipeline-dir .pipeline');
   });
 
-  it('non-auto or non-finish prompts remain unchanged (no finish-record command)', async () => {
+  it('non-auto finish prompts include the canonical finish-record command while non-finish prompts remain unchanged', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
       totalSteps: 14,
+      pipelineDir: '/wt/feature-x/.pipeline',
     });
 
     // finish, but not auto mode (collaborative path)
     await runner.run('finish', emptyState);
     const finishOpts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-    expect(finishOpts.systemPrompt).not.toContain('finish-record');
+    expect(finishOpts.systemPrompt).toMatch(/conduct-ts finish-record --choice pr --pr-url \S+ --pipeline-dir \/wt\/feature-x\/\.pipeline/);
 
     vi.clearAllMocks();
 
