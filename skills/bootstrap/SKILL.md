@@ -293,11 +293,15 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
 
-### 6. Generate or Update CLAUDE.md
+### 6. Generate or Update Agent Instructions
 
 - **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template` (includes HARNESS.md reference)
 - **Existing CLAUDE.md:** Verify it references `HARNESS.md`. If missing, append the reference block.
   Never overwrite user content. Behavioral rules live in HARNESS.md, not in the project CLAUDE.md.
+- **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
+  harness entry point while keeping the skills themselves user-scoped at `~/.codex/skills/`.
+- **Existing AGENTS.md:** Verify it references `HARNESS.md`; append the Codex harness reference
+  block if needed. Never overwrite user content.
 
 ### 7. Bootstrap Memory (Existing Projects Only)
 

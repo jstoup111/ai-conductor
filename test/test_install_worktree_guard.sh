@@ -167,6 +167,8 @@ assert "--update --allow-worktree-root exits zero" \
   "$([ "$CODE" -eq 0 ]; echo $?)"
 assert "override run links skills into the throwaway HOME" \
   "$([ -L "$HOME4/.claude/skills/tdd" ]; echo $?)"
+assert "override run links Codex skills into the throwaway HOME" \
+  "$([ -L "$HOME4/.codex/skills/tdd" ]; echo $?)"
 assert "override run links conduct into the throwaway HOME" \
   "$([ -L "$HOME4/.local/bin/conduct" ]; echo $?)"
 assert "override run writes settings.json in the throwaway HOME" \
@@ -208,6 +210,8 @@ assert "no refusal message on a non-worktree root" \
   "$(echo "$OUT" | grep -q "Refusing to install"; [ $? -ne 0 ]; echo $?)"
 assert "install proceeded normally (skills linked)" \
   "$([ -L "$HOME6/.claude/skills/tdd" ]; echo $?)"
+assert "install proceeded normally (Codex skills linked)" \
+  "$([ -L "$HOME6/.codex/skills/tdd" ]; echo $?)"
 
 # ─── Sanity: default install on a main-style root without the flag ─────────────
 
@@ -221,6 +225,14 @@ assert "default install on a non-worktree root still works (guard inert)" \
   "$([ "$CODE" -eq 0 ]; echo $?)"
 assert "skills linked on the plain-root install" \
   "$([ -L "$HOME7/.claude/skills/tdd" ]; echo $?)"
+assert "Codex skills linked on the plain-root install" \
+  "$([ -L "$HOME7/.codex/skills/tdd" ]; echo $?)"
+
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
+assert "uninstall removes Claude user-scoped skills" \
+  "$([ ! -e "$HOME7/.claude/skills/tdd" ]; echo $?)"
+assert "uninstall removes Codex user-scoped skills" \
+  "$([ ! -e "$HOME7/.codex/skills/tdd" ]; echo $?)"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 

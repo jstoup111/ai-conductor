@@ -1,8 +1,18 @@
-# Agents — {{PROJECT_NAME}}
+# {{PROJECT_NAME}} — Codex Instructions
+
+## Harness
+
+This project uses the james-stoup-agents harness at `{{HARNESS_PATH}}`.
+
+Codex MUST read and follow `{{HARNESS_PATH}}/HARNESS.md` at the start of every session.
+The harness skills are installed in the user's Codex configuration at `~/.codex/skills/`; do
+not copy or install them into this project. A project-local skill is only appropriate when this
+project deliberately overrides a harness skill.
 
 ## Agent Personas
 
-This project uses agent personas from the harness at `{{HARNESS_PATH}}/agents/`.
+Use agent personas from the harness at `{{HARNESS_PATH}}/agents/` when their specialized review
+or implementation roles fit the task.
 
 ### Generator
 - **Prompt:** `{{HARNESS_PATH}}/agents/generator.md`
