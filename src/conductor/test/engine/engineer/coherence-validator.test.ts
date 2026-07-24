@@ -332,8 +332,9 @@ describe('checkOutcomeCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
-    expect(result.gapId).toBe('outcome-2');
-    expect(result.bullet).toBe('- Support returns.');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-2');
+    expect(result.gaps[0].bullet).toBe('- Support returns.');
   });
 
   it('reports a gap outcome-<n> when the matching row has a negative verdict', () => {
@@ -348,8 +349,9 @@ describe('checkOutcomeCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
-    expect(result.gapId).toBe('outcome-2');
-    expect(result.bullet).toBe('- Support returns.');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-2');
+    expect(result.gaps[0].bullet).toBe('- Support returns.');
   });
 
   it('reports a gap outcome-<n> when the row has an affirmative verdict but a blank Cited-Ids cell', () => {
@@ -364,8 +366,9 @@ describe('checkOutcomeCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
-    expect(result.gapId).toBe('outcome-2');
-    expect(result.bullet).toBe('- Support returns.');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-2');
+    expect(result.gaps[0].bullet).toBe('- Support returns.');
   });
 
   it('reports a gap outcome-<n> when the row cites only a non-story id despite an affirmative verdict', () => {
@@ -380,8 +383,9 @@ describe('checkOutcomeCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('outcome-gap');
-    expect(result.gapId).toBe('outcome-2');
-    expect(result.bullet).toBe('- Support returns.');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-2');
+    expect(result.gaps[0].bullet).toBe('- Support returns.');
   });
 
   it('surfaces a gap when coverage is asserted via a nonexistent story id (reuses the fabrication path)', () => {
@@ -457,8 +461,9 @@ describe('checkFrCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('fr-gap');
-    expect(result.frId).toBe('FR-2');
-    expect(result.storyId).toBeUndefined();
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].frId).toBe('FR-2');
+    expect(result.gaps[0].storyId).toBeUndefined();
   });
 
   it('reports a transitive gap naming both the FR and the story when the only citing story has no task', () => {
@@ -491,8 +496,9 @@ describe('checkFrCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('fr-gap');
-    expect(result.frId).toBe('FR-2');
-    expect(result.storyId).toBe('2');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].frId).toBe('FR-2');
+    expect(result.gaps[0].storyId).toBe('2');
   });
 
   it('passes trivially (no PRD, technical track) when prdText is null', () => {
@@ -556,8 +562,9 @@ describe('checkStoryCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('story-gap');
-    expect(result.gapId).toBe('story-2');
-    expect(result.title).toBe('Widget returns');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('story-2');
+    expect(result.gaps[0].title).toBe('Widget returns');
   });
 
   it('fails closed with unparseable-stories when the stories file has zero parseable blocks', () => {
@@ -636,7 +643,8 @@ describe('checkOrphanTasks', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('orphan-task');
-    expect(result.gapId).toBe('task-4');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('task-4');
   });
 
   it('reports task-<id> for an infrastructure task with an empty/missing **Story:** line', () => {
@@ -651,7 +659,8 @@ describe('checkOrphanTasks', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('orphan-task');
-    expect(result.gapId).toBe('task-5');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('task-5');
   });
 
   it('reports task-<id> when there is no **Story:** line and the type is not infrastructure/refactor', () => {
@@ -665,7 +674,8 @@ describe('checkOrphanTasks', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('orphan-task');
-    expect(result.gapId).toBe('task-6');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('task-6');
   });
 });
 
@@ -689,8 +699,9 @@ describe('checkCoverageTableConsistency', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('coverage-table-gap');
-    expect(result.gapId).toBe('claim-2');
-    expect(result.detail).toContain('99');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('claim-2');
+    expect(result.gaps[0].detail).toContain('99');
   });
 
   it('reports claim-<row> when a table pair contradicts the task tree\'s actual **Story:** citations', () => {
@@ -717,7 +728,8 @@ describe('checkCoverageTableConsistency', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('coverage-table-gap');
-    expect(result.gapId).toBe('claim-2');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('claim-2');
   });
 
   it('passes when the coverage table is consistent with the task tree', () => {

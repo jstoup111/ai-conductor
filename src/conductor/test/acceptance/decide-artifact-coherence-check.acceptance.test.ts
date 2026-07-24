@@ -480,6 +480,49 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
     ).rejects.toThrow(/task-\S+/i);
   });
 
+  it('negative (FR-9): TWO orphan tasks are BOTH reported in one refusal, and a waiver naming both ids lands', async () => {
+    // Add two orphan tasks (citing a nonexistent story) on top of the plan's
+    // two already-valid tasks — a single refusal must name BOTH orphan ids,
+    // not just the first, so a waiver can cover the full set in one pass.
+    const planWithTwoOrphans = PLAN.replace(
+      '## Task Dependency Graph',
+      [
+        '### Task 3: orphan one',
+        '**Story:** Story 404 (nonexistent)',
+        '**Type:** happy-path',
+        '**Files likely touched:**',
+        '- src/orphan-one.ts',
+        '',
+        '### Task 4: orphan two',
+        '**Story:** Story 405 (also nonexistent)',
+        '**Type:** happy-path',
+        '**Files likely touched:**',
+        '- src/orphan-two.ts',
+        '',
+        '## Task Dependency Graph',
+      ].join('\n'),
+    );
+
+    const refused = await seedWorktree('coherence demo', { plan: planWithTwoOrphans });
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'coherence demo', refused, SOURCE_REF, landOpts());
+    } catch (e) {
+      caught = e instanceof Error ? e : new Error(String(e));
+    }
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(/task-3/);
+    expect(caught!.message).toMatch(/task-4/);
+
+    // A waiver naming BOTH ids must land (the waiver vocabulary spans the
+    // full reported set in one pass, per the coherence-waiver parser).
+    const waiver = 'Waives: task-3, task-4\n\nRationale: both orphan tasks are deliberate spikes, tracked in #541.\n';
+    const waived = await seedWorktree('coherence demo waived', { plan: planWithTwoOrphans, waiver });
+    await expect(
+      landSpec(target(), 'coherence demo waived', waived, SOURCE_REF, landOpts()),
+    ).resolves.toBeDefined();
+  });
+
   it('happy: an infrastructure task with a declared supporting purpose is covered without a story id', async () => {
     const plan = PLAN.replace(
       '**Story:** Story 2 (happy path — stories map)\n**Type:** happy-path',

@@ -289,15 +289,21 @@ export function crossCheckIds(
 /** Verdicts treated as affirmative coverage for the outcome-coverage layer. */
 const NEGATIVE_VERDICTS: ReadonlySet<string> = new Set(['gap', 'missing', 'uncovered', 'fail']);
 
+/** A single uncovered outcome bullet: the `outcome-<n>` id and its verbatim text. */
+export interface OutcomeGapFinding {
+  /** The `outcome-<n>` id (1-indexed) of the uncovered bullet. */
+  gapId: string;
+  /** The verbatim staged outcome bullet with no affirmative coverage. */
+  bullet: string;
+}
+
 export type OutcomeCoverageResult =
   | { ok: true }
   | {
       ok: false;
       reason: 'outcome-gap';
-      /** The `outcome-<n>` id (1-indexed) of the uncovered bullet. */
-      gapId: string;
-      /** The verbatim staged outcome bullet with no affirmative coverage. */
-      bullet: string;
+      /** Every uncovered outcome bullet, not just the first — FR-9. */
+      gaps: OutcomeGapFinding[];
     };
 
 /**
@@ -306,7 +312,8 @@ export type OutcomeCoverageResult =
  * affirmative verdict. A bullet with no row at all, or whose row carries a
  * negative verdict (gap/missing/uncovered/fail), is reported as a gap naming
  * the `outcome-<n>` id and quoting the bullet verbatim — never silently
- * dropped.
+ * dropped. ALL uncovered bullets are collected (FR-9), not just the first,
+ * so a waiver can name the full set in one pass.
  *
  * This layer checks presence/verdict of the outcome row itself AND that it
  * cites at least one real story id (`storyIds`) — a row with an affirmative
@@ -325,29 +332,37 @@ export function checkOutcomeCoverage(
     if (row.rowClass === 'outcome') outcomeRowsById.set(row.id, row);
   }
 
+  const gaps: OutcomeGapFinding[] = [];
   for (let n = 1; n <= outcomeBullets.length; n++) {
     const gapId = `outcome-${n}`;
     const row = outcomeRowsById.get(gapId);
     const citesStory = !!row && row.citedIds.some((id) => storyIds.has(id));
     if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()) || !citesStory) {
-      return { ok: false, reason: 'outcome-gap', gapId, bullet: outcomeBullets[n - 1] };
+      gaps.push({ gapId, bullet: outcomeBullets[n - 1] });
     }
   }
 
+  if (gaps.length > 0) return { ok: false, reason: 'outcome-gap', gaps };
   return { ok: true };
 }
 
 // --- Story-coverage layer (Task 9) ---
+
+/** A single uncovered story: the `story-<id>` id and its title. */
+export interface StoryGapFinding {
+  /** The `story-<id>` id of the uncovered story. */
+  gapId: string;
+  /** The story's title, taken from its `## Story <id>: <title>` heading. */
+  title: string;
+}
 
 export type StoryCoverageResult =
   | { ok: true }
   | {
       ok: false;
       reason: 'story-gap';
-      /** The `story-<id>` id of the uncovered story. */
-      gapId: string;
-      /** The story's title, taken from its `## Story <id>: <title>` heading. */
-      title: string;
+      /** Every uncovered story, not just the first — FR-9. */
+      gaps: StoryGapFinding[];
     }
   | {
       ok: false;
@@ -383,18 +398,15 @@ export function checkStoryCoverage(
 
   const covered = collectPlanCoverage(planText ?? '');
 
+  const gaps: StoryGapFinding[] = [];
   for (const block of idBlocks) {
     const id = block.id!;
     if (!covered.has(`${id}|*`)) {
-      return {
-        ok: false,
-        reason: 'story-gap',
-        gapId: `story-${id}`,
-        title: extractStoryTitle(block.text),
-      };
+      gaps.push({ gapId: `story-${id}`, title: extractStoryTitle(block.text) });
     }
   }
 
+  if (gaps.length > 0) return { ok: false, reason: 'story-gap', gaps };
   return { ok: true };
 }
 
@@ -455,20 +467,26 @@ function extractTaskStoryIds(planText: string | null): Map<string, Set<string>> 
   return map;
 }
 
+/** A single uncovered FR: its id and, for the transitive case, the citing story with no task. */
+export interface FrGapFinding {
+  /** The `FR-<n>` id with no covering story, or with a story but no task. */
+  frId: string;
+  /**
+   * The story id that cites the FR but has no covering task — set only
+   * for the transitive gap case, so the report names both the FR and
+   * the story rather than masking the story-level break as a plain
+   * uncovered-FR gap.
+   */
+  storyId?: string;
+}
+
 export type FrCoverageResult =
   | { ok: true }
   | {
       ok: false;
       reason: 'fr-gap';
-      /** The `FR-<n>` id with no covering story, or with a story but no task. */
-      frId: string;
-      /**
-       * The story id that cites the FR but has no covering task — set only
-       * for the transitive gap case, so the report names both the FR and
-       * the story rather than masking the story-level break as a plain
-       * uncovered-FR gap.
-       */
-      storyId?: string;
+      /** Every uncovered FR, not just the first — FR-9. */
+      gaps: FrGapFinding[];
     };
 
 /**
@@ -501,34 +519,43 @@ export function checkFrCoverage(
     }
   }
 
+  const gaps: FrGapFinding[] = [];
   for (const fr of frIds) {
     const citingStories = frToStories.get(fr);
     if (!citingStories || citingStories.size === 0) {
-      return { ok: false, reason: 'fr-gap', frId: fr };
+      gaps.push({ frId: fr });
+      continue;
     }
     const hasCoveringTask = [...citingStories].some(
       (storyId) => (taskStoryMap.get(storyId)?.size ?? 0) > 0,
     );
     if (!hasCoveringTask) {
       const storyId = [...citingStories].sort()[0];
-      return { ok: false, reason: 'fr-gap', frId: fr, storyId };
+      gaps.push({ frId: fr, storyId });
     }
   }
 
+  if (gaps.length > 0) return { ok: false, reason: 'fr-gap', gaps };
   return { ok: true };
 }
 
 // --- Orphan-task layer (Task 10) ---
+
+/** A single orphan task: the `task-<id>` id and its title. */
+export interface OrphanTaskFinding {
+  /** The `task-<id>` id of the orphan task. */
+  gapId: string;
+  /** The task's title, taken from its `### Task <id>: <title>` heading. */
+  title: string;
+}
 
 export type OrphanTaskResult =
   | { ok: true }
   | {
       ok: false;
       reason: 'orphan-task';
-      /** The `task-<id>` id of the orphan task. */
-      gapId: string;
-      /** The task's title, taken from its `### Task <id>: <title>` heading. */
-      title: string;
+      /** Every orphan task, not just the first — FR-9. */
+      gaps: OrphanTaskFinding[];
     };
 
 /** A parsed plan task block: id, title, and its raw `**Story:**`/`**Type:**` lines. */
@@ -615,6 +642,7 @@ export function checkOrphanTasks(
 
   const taskBlocks = extractTaskBlocks(planText ?? '');
 
+  const gaps: OrphanTaskFinding[] = [];
   for (const task of taskBlocks) {
     const storyLineRaw = extractStoryLineRaw(task.text);
     const typeLineRaw = extractTypeLineRaw(task.text);
@@ -627,14 +655,10 @@ export function checkOrphanTasks(
     const isSupportingType = SUPPORTING_TYPES.has(type);
     if (isSupportingType && declaresSupportingPurpose(storyLineRaw)) continue;
 
-    return {
-      ok: false,
-      reason: 'orphan-task',
-      gapId: `task-${task.id}`,
-      title: task.title,
-    };
+    gaps.push({ gapId: `task-${task.id}`, title: task.title });
   }
 
+  if (gaps.length > 0) return { ok: false, reason: 'orphan-task', gaps };
   return { ok: true };
 }
 
@@ -642,15 +666,21 @@ export function checkOrphanTasks(
 
 // --- Coverage-table consistency layer (Task 11) ---
 
+/** A single inconsistent coverage-table row: the `claim-<row>` id and explanation. */
+export interface CoverageTableFinding {
+  /** The `claim-<row>` id of the offending table row (1-indexed data rows). */
+  gapId: string;
+  /** Human-readable explanation of what the table claims vs. what the task tree shows. */
+  detail: string;
+}
+
 export type CoverageTableResult =
   | { ok: true }
   | {
       ok: false;
       reason: 'coverage-table-gap';
-      /** The `claim-<row>` id of the offending table row (1-indexed data rows). */
-      gapId: string;
-      /** Human-readable explanation of what the table claims vs. what the task tree shows. */
-      detail: string;
+      /** Every inconsistent row, not just the first — FR-9. */
+      gaps: CoverageTableFinding[];
     };
 
 /** A single row of the plan's `## Coverage Check (story → task)` table. */
@@ -720,30 +750,29 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
   const realTaskIds = new Set(extractTaskBlocks(text).map((b) => b.id));
   const taskStoryMap = extractTaskStoryIds(text);
 
+  const gaps: CoverageTableFinding[] = [];
   for (let i = 0; i < rows.length; i++) {
     const rowNum = i + 1;
     const { storyId, taskIds } = rows[i];
     for (const taskId of taskIds) {
       if (!realTaskIds.has(taskId)) {
-        return {
-          ok: false,
-          reason: 'coverage-table-gap',
+        gaps.push({
           gapId: `claim-${rowNum}`,
           detail: `coverage table row ${rowNum} cites task ${taskId} for story ${storyId}, but no task ${taskId} exists in the plan's task tree`,
-        };
+        });
+        continue;
       }
       const citingTasksForStory = taskStoryMap.get(storyId);
       if (!citingTasksForStory || !citingTasksForStory.has(taskId)) {
-        return {
-          ok: false,
-          reason: 'coverage-table-gap',
+        gaps.push({
           gapId: `claim-${rowNum}`,
           detail: `coverage table row ${rowNum} claims task ${taskId} covers story ${storyId}, but task ${taskId}'s **Story:** line does not cite story ${storyId}`,
-        };
+        });
       }
     }
   }
 
+  if (gaps.length > 0) return { ok: false, reason: 'coverage-table-gap', gaps };
   return { ok: true };
 }
 
@@ -842,24 +871,28 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
     extractStoryIds(inputs.storiesText),
   );
   if (!outcomeResult.ok) {
-    gaps.push({
-      layer: 'outcome',
-      gapId: outcomeResult.gapId,
-      artifact: 'intake outcomes',
-      item: outcomeResult.bullet,
-    });
+    for (const gap of outcomeResult.gaps) {
+      gaps.push({
+        layer: 'outcome',
+        gapId: gap.gapId,
+        artifact: 'intake outcomes',
+        item: gap.bullet,
+      });
+    }
   }
 
   const frResult = checkFrCoverage(inputs.prdText, inputs.storiesText, inputs.planText);
   if (!frResult.ok) {
-    gaps.push({
-      layer: 'fr',
-      gapId: frResult.frId,
-      artifact: 'PRD',
-      item: frResult.storyId
-        ? `${frResult.frId} is cited by story-${frResult.storyId} but no task covers that story`
-        : `${frResult.frId} is not cited by any story's Requirement line`,
-    });
+    for (const gap of frResult.gaps) {
+      gaps.push({
+        layer: 'fr',
+        gapId: gap.frId,
+        artifact: 'PRD',
+        item: gap.storyId
+          ? `${gap.frId} is cited by story-${gap.storyId} but no task covers that story`
+          : `${gap.frId} is not cited by any story's Requirement line`,
+      });
+    }
   }
 
   const storyResult = checkStoryCoverage(inputs.storiesText, inputs.planText);
@@ -872,33 +905,39 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         item: 'stories file has no parseable story blocks',
       });
     } else {
-      gaps.push({
-        layer: 'story',
-        gapId: storyResult.gapId,
-        artifact: 'stories',
-        item: storyResult.title,
-      });
+      for (const gap of storyResult.gaps) {
+        gaps.push({
+          layer: 'story',
+          gapId: gap.gapId,
+          artifact: 'stories',
+          item: gap.title,
+        });
+      }
     }
   }
 
   const orphanResult = checkOrphanTasks(inputs.storiesText, inputs.planText);
   if (!orphanResult.ok) {
-    gaps.push({
-      layer: 'orphan-task',
-      gapId: orphanResult.gapId,
-      artifact: 'plan',
-      item: orphanResult.title,
-    });
+    for (const gap of orphanResult.gaps) {
+      gaps.push({
+        layer: 'orphan-task',
+        gapId: gap.gapId,
+        artifact: 'plan',
+        item: gap.title,
+      });
+    }
   }
 
   const coverageTableResult = checkCoverageTableConsistency(inputs.planText);
   if (!coverageTableResult.ok) {
-    gaps.push({
-      layer: 'coverage-table',
-      gapId: coverageTableResult.gapId,
-      artifact: 'plan',
-      item: coverageTableResult.detail,
-    });
+    for (const gap of coverageTableResult.gaps) {
+      gaps.push({
+        layer: 'coverage-table',
+        gapId: gap.gapId,
+        artifact: 'plan',
+        item: gap.detail,
+      });
+    }
   }
 
   if (gaps.length === 0) return { ok: true };
