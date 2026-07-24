@@ -28,15 +28,34 @@ import type { ConductState } from '../../src/types/index.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
+import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
 
-async function seedToBuildReview(statePath: string, repo: string): Promise<void> {
+async function seedToBuildReview(
+  statePath: string,
+  repo: string,
+  opts?: { markRemainingStepsDone?: boolean },
+): Promise<void> {
   const res = await readState(statePath);
   const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+  let seenBuildReview = false;
   for (const s of ALL_STEPS) {
-    if (s.name === 'build_review') break;
-    state[s.name] = 'done';
+    if (s.name === 'build_review') {
+      seenBuildReview = true;
+      continue;
+    }
+    if (!seenBuildReview) {
+      state[s.name] = 'done';
+    } else if (opts?.markRemainingStepsDone) {
+      // Pre-mark every step after build_review as already-done, so a run
+      // scoped to exercising ONLY build_review's own outcome terminates
+      // cleanly once build_review succeeds, instead of continuing on into
+      // unrelated later-step gates (which are out of scope here and would
+      // otherwise HALT on their own unmet completion criteria).
+      state[s.name] = 'done';
+    }
   }
   state.complexity_tier = 'L';
   state.feature_desc = 'feat';
@@ -358,5 +377,186 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     if (haltContent !== null) {
       expect(haltContent).not.toContain('second stale-mirage');
     }
+  }, 30000);
+
+  it('Task 9 (a): a stale-mirage scope FAIL never dispatches rework — it is invalidated, the verdict artifact is removed, and the regrade PASSes', async () => {
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+
+    await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
+
+    const calls: StepName[] = [];
+    const buildReviewCallCount = { n: 0 };
+    // On the second build_review dispatch (the regrade the disposition layer
+    // triggers on `invalidated`), the conductor must have already removed the
+    // stale FAIL verdict artifact (`removeBuildReviewVerdict`) BEFORE
+    // re-entering — asserted here by checking the file is absent the moment
+    // this fake runner is re-invoked, before it writes anything itself.
+    let verdictAbsentOnRegradeEntry: boolean | null = null;
+
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        calls.push(step);
+        if (step === 'build_review') {
+          buildReviewCallCount.n += 1;
+          if (buildReviewCallCount.n === 1) {
+            await writeFile(
+              join(repo, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: 'FAIL',
+                reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
+                rubric: {},
+              }),
+            );
+            return {
+              success: true,
+              baseFreshness: {
+                mergeBase: fixture.staleTrackingSha,
+                trackingRefSha: null,
+                remoteHeadSha: null,
+                fresh: false,
+              },
+            };
+          }
+          // Regrade re-entry.
+          verdictAbsentOnRegradeEntry = await readFile(
+            join(repo, '.pipeline/build-review.json'),
+            'utf-8',
+          )
+            .then(() => false)
+            .catch(() => true);
+          await writeFile(
+            join(repo, '.pipeline/build-review.json'),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: {} }),
+          );
+          return {
+            success: true,
+            baseFreshness: {
+              mergeBase: fixture.freshRemoteSha,
+              trackingRefSha: fixture.freshRemoteSha,
+              remoteHeadSha: fixture.freshRemoteSha,
+              fresh: true,
+            },
+          };
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build_review',
+    } as never);
+
+    await conductor.run();
+
+    // No rework dispatch: the invalidated path never routes to `build`.
+    expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+    // A regrade occurred: build_review was re-entered exactly once.
+    expect(buildReviewCallCount.n).toBe(2);
+    expect(await readRegradeCount(repo)).toBe(1);
+    // The stale FAIL verdict was removed before the regrade re-entry wrote
+    // its own (fresh) verdict.
+    expect(verdictAbsentOnRegradeEntry).toBe(true);
+    // The regrade PASSed: final verdict artifact reflects PASS, not the
+    // discarded stale FAIL.
+    const finalVerdict = JSON.parse(
+      await readFile(join(repo, '.pipeline/build-review.json'), 'utf-8'),
+    );
+    expect(finalVerdict.verdict).toBe('PASS');
+    // No disposition HALT fired for this (single) stale-mirage detection.
+    const haltContent = await readFile(join(repo, HALT_MARKER), 'utf-8').catch(() => null);
+    if (haltContent !== null) {
+      expect(haltContent).not.toContain('second stale-mirage');
+    }
+  }, 30000);
+
+  it('Task 9 (d): offline degrade — a repo with no origin remote still completes a build_review grading pass on the local branch, never HALTing or throwing', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-halt-wiring-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+
+    // A plain, remote-less repo — no `origin` configured at all.
+    const repo = join(dir, 'no-remote-repo');
+    await mkdir(repo, { recursive: true });
+    await execFile('git', ['init', '-q', '-b', 'main', repo]);
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+    await execFile('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+    await writeFile(join(repo, 'base.txt'), 'base\n');
+    await execFile('git', ['add', '-A'], { cwd: repo });
+    await execFile('git', ['commit', '-q', '-m', 'base'], { cwd: repo });
+    await writeFile(join(repo, 'feat.txt'), 'feature work\n');
+    await execFile('git', ['add', '-A'], { cwd: repo });
+    await execFile('git', ['commit', '-q', '-m', 'feature work'], { cwd: repo });
+
+    await mkdir(join(repo, '.docs/plans'), { recursive: true });
+    await writeFile(join(repo, '.docs/plans/feat.md'), '# Implementation Plan: feat\n\nDo the thing.\n');
+
+    await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step: StepName): Promise<StepRunResult> => {
+        calls.push(step);
+        if (step === 'build_review') {
+          // Exercises the REAL production fail-soft resolver
+          // (assembleBuildReviewInputs -> resolveFreshBase) against a repo
+          // with no origin remote: it must degrade to the local branch
+          // without throwing, rather than the fake-verdict shortcut the
+          // other specs in this file use.
+          const inputs = await assembleBuildReviewInputs(
+            makeGitRunner(repo),
+            join(repo, '.docs/plans/feat.md'),
+          );
+          expect(inputs.baseKind).toBe('local');
+          expect(inputs.fresh).toBe(false);
+          expect(inputs.remoteHeadSha).toBeNull();
+
+          await writeFile(
+            join(repo, '.pipeline/build-review.json'),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: {} }),
+          );
+          return {
+            success: true,
+            baseFreshness: {
+              mergeBase: inputs.mergeBase,
+              trackingRefSha: inputs.trackingRefSha,
+              remoteHeadSha: inputs.remoteHeadSha,
+              fresh: inputs.fresh,
+            },
+          };
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build_review',
+    } as never);
+
+    await conductor.run();
+
+    expect(calls.filter((s) => s === 'build_review').length).toBeGreaterThanOrEqual(1);
+    const finalVerdict = JSON.parse(
+      await readFile(join(repo, '.pipeline/build-review.json'), 'utf-8'),
+    );
+    expect(finalVerdict.verdict).toBe('PASS');
+    const haltContent = await readFile(join(repo, HALT_MARKER), 'utf-8').catch(() => null);
+    expect(haltContent).toBeNull();
   }, 30000);
 });
