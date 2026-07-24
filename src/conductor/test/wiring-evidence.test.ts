@@ -210,4 +210,39 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.reason).toBeDefined();
     expect(result.reason).toContain('wiring probe failed: probe boom');
   });
+
+  it('stale evidence (recorded head != current head) with a wiringProbe injected re-derives fresh evidence instead of failing closed', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(true);
+    if (result.reason) {
+      expect(result.reason).not.toMatch(/stale/i);
+    }
+
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written.head).toBe('H2');
+  });
 });
