@@ -1631,6 +1631,21 @@ selection table in `HARNESS.md`) in a fresh session — it is deliberately not c
 it adds one additional model dispatch per build attempt. Leave it disabled for low-stakes or
 cost-sensitive projects; the legacy `build → manual_test` topology is unaffected either way.
 
+**Grading base guarantee (build-review-grades-plan-vs-diff-against-a-stale-o).** The diff
+`build_review` grades is always computed against a freshness-probed base, never a silently-stale
+local tracking ref: `assembleBuildReviewInputs` resolves the merge-base via `resolveFreshBase`
+(`engine/rebase.ts`), which checks the local `origin/<default>` ref against the true remote head
+before grading and refetches when it's behind. This closes an incident class where a stale
+tracking ref made an already-merged, out-of-scope-looking diff appear in-scope to the grader,
+producing a false scope-FAIL. The probe is read-only and fail-soft — no remote or a probe
+failure degrades to the local branch rather than blocking grading — and every grading emits a
+`build_review_base` telemetry event so an operator can see which base a given verdict graded
+against. If a scope-FAIL verdict is later found to have graded a base that was actually stale
+(a "stale-mirage"), the conductor discards that verdict and regrades once against a fresh base
+before falling back to normal kickback routing, bounded to once per feature-session with a HALT
+on a second occurrence. See `docs/daemon-operations.md` → "Fresh-base grading + stale-mirage
+regrade bound" for the full HALT-reason and regrade-semantics writeup.
+
 #### Per-task work-happened floor (advisory, `build_review`)
 
 Separate from — and much lighter than — `build_review`'s completeness rubric above,

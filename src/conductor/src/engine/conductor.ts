@@ -102,8 +102,16 @@ import {
   type RemediationGap,
   type CompletionContext,
   ACCEPTANCE_SPECS_RED_EVIDENCE,
+  removeBuildReviewVerdict,
 } from './artifacts.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
+import {
+  extractFlaggedPaths,
+  runScopeFailDisposition,
+  readRegradeCount,
+  resetRegradeCounter,
+  type Disposition,
+} from './build-review-disposition.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -336,6 +344,19 @@ export interface StepRunResult {
    * used for this invocation (post model-availability/ladder resolution).
    */
   model?: string;
+  /**
+   * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
+   * freshness evidence from `assembleBuildReviewInputs`, set on every
+   * `runBuildReview` return path once inputs were successfully assembled.
+   * Pure telemetry — the conductor emits a `build_review_base` event from
+   * it and never lets it affect step outcome.
+   */
+  baseFreshness?: {
+    mergeBase: string;
+    trackingRefSha: string | null;
+    remoteHeadSha: string | null;
+    fresh: boolean;
+  };
 }
 
 /**
@@ -1732,8 +1753,21 @@ export class Conductor {
     // missing.
     const sessionStartedAt = Date.now();
     state.session_started_at = sessionStartedAt;
-    if (!state.run_started_at) state.run_started_at = sessionStartedAt;
+    const isFreshFeatureSession = !state.run_started_at;
+    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
     await writeState(this.stateFilePath, state);
+
+    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
+    // feature-session must not inherit a prior session's stale-mirage regrade
+    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
+    // survives from a previous feature would otherwise start this session
+    // already at (or over) the once-per-session bound and HALT on its first
+    // real detection. Best-effort: never block session start on this reset.
+    if (isFreshFeatureSession) {
+      await resetRegradeCounter(this.projectRoot).catch(() => {
+        // Missing/unwritable counter file — nothing to reset.
+      });
+    }
 
     // Load task evidence sidecar for durable no-evidence counter (Task 12).
     // The counter is a durable telemetry record of consecutive gate misses
@@ -1873,6 +1907,14 @@ export class Conductor {
     // Per-gate count of kickback re-opens this feature, for the anti-ping-pong
     // cap. Drives the gate-driven tail (see advanceTail).
     const kickbackCounts = new Map<StepName, number>();
+    // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): the
+    // merge-base a build_review dispatch actually graded against (set from
+    // `result.baseFreshness` right after the step runs, read back much
+    // further down in the gate-driven tail's build_review-FAIL branch, which
+    // no longer has `result` in scope). `undefined` whenever the most recent
+    // build_review dispatch never assembled inputs (e.g. plan resolution
+    // failed before `assembleBuildReviewInputs` ran).
+    let lastBuildReviewMergeBase: string | undefined;
     // Per-gate count of consecutive selector re-selects without satisfaction,
     // for the stuck-gate HALT guard (see advanceTail).
     const stuckGate = new Map<StepName, number>();
@@ -3286,6 +3328,27 @@ export class Conductor {
             // completes, further down.
           }
 
+          // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
+          // base-freshness telemetry. Fire-and-forget: emitted whenever
+          // runBuildReview successfully assembled grader inputs (any outcome
+          // after that point — success, dispatch failure, rate limit, etc.
+          // all carry `baseFreshness`), guarded so telemetry can never fail
+          // or block the build_review step itself.
+          if (step.name === 'build_review' && result.baseFreshness) {
+            lastBuildReviewMergeBase = result.baseFreshness.mergeBase;
+            try {
+              await emitTracked({
+                type: 'build_review_base',
+                mergeBase: result.baseFreshness.mergeBase,
+                trackingRefSha: result.baseFreshness.trackingRefSha,
+                remoteHeadSha: result.baseFreshness.remoteHeadSha,
+                fresh: result.baseFreshness.fresh,
+              });
+            } catch {
+              // Never block/fail build_review over telemetry emission.
+            }
+          }
+
           // Task 3 (#671): unattributed-dispatch loud signal. Fires at the
           // build dispatch seam itself — earlier than and distinct from
           // detectZeroWorkProduct/the evidence gate — when this cycle's
@@ -4340,6 +4403,80 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
+                // scope-FAIL disposition, BEFORE any rework routing decision
+                // below (and before the #569 no_task_progress remediation
+                // routing this same conductor uses elsewhere for build
+                // stalls — that routing never applies to build_review, but
+                // ordering here still matters relative to this block's own
+                // kickback-cap HALT further down). `runScopeFailDisposition`
+                // re-probes a fresh base (read-only — never mutates git
+                // history, Story 6) and returns one of:
+                //   - `kicked-to-build`: routes to build rework unchanged
+                //     (today's behavior) — falls through below.
+                //   - `invalidated`: the FAIL graded a stale view; discard
+                //     the verdict and re-run build_review against fresh
+                //     inputs instead of dispatching rework (bounded to once
+                //     per feature-session by the persisted regrade counter).
+                //   - `halt`: a SECOND stale-mirage detection this session —
+                //     never re-enters grading; HALT with the graded/fresh
+                //     base shas, flagged paths, and regrade count consumed.
+                // Fully guarded: a classification failure (e.g. offline)
+                // must never block or alter today's kickback behavior.
+                let scopeFailDisposition: Disposition | undefined;
+                if (lastBuildReviewMergeBase) {
+                  try {
+                    scopeFailDisposition = await runScopeFailDisposition({
+                      git: makeGitRunner(this.projectRoot),
+                      root: this.projectRoot,
+                      gradedBaseSha: lastBuildReviewMergeBase,
+                      flaggedPaths: extractFlaggedPaths(parsed.reasons),
+                      regrade: async () => 'pass',
+                    });
+                  } catch {
+                    // Never block/alter kickback routing over disposition
+                    // classification failures — falls through to genuine
+                    // routing below either way.
+                  }
+                }
+
+                if (scopeFailDisposition?.kind === 'halt') {
+                  const haltBody =
+                    `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
+                    `detection this feature-session — never re-enters grading.\n` +
+                    `gradedBaseSha: ${scopeFailDisposition.gradedBaseSha}\n` +
+                    `freshBaseSha: ${scopeFailDisposition.freshBaseSha}\n` +
+                    `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
+                    `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
+                  await writeHaltMarker(this.projectRoot, haltBody);
+                  await writeState(this.stateFilePath, state);
+                  const reason =
+                    'build_review scope-FAIL disposition HALT: second stale-mirage ' +
+                    'detection this feature-session';
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                if (scopeFailDisposition?.kind === 'invalidated') {
+                  await removeBuildReviewVerdict(this.projectRoot).catch(() => {
+                    /* best-effort removal */
+                  });
+                  const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
+                  await emitTracked({
+                    type: 'build_review_stale_mirage_regrade',
+                    mergeBase: lastBuildReviewMergeBase ?? '',
+                    regradeCount,
+                  });
+                  await saveStepStatus(this.stateFilePath, step.name, 'failed');
+                  state[step.name] = 'failed';
+                  await writeState(this.stateFilePath, state);
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  continue;
+                }
+
                 // D2: a build_review FAIL that re-enters right after a prior
                 // kickback-to-build cycle made zero net progress on an
                 // unchanged verdict escalates to HALT on this cycle instead

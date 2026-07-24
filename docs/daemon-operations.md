@@ -252,6 +252,53 @@ completely — only the original `prd_audit`-only short-circuit runs, and the ot
 steps burn their full retry budget before routing at `step_failed`, exactly as before this
 feature. See `../src/conductor/README.md` for the implementation details.
 
+**Fresh-base grading + stale-mirage regrade bound (build-review-grades-plan-vs-diff-against-a-stale-o).**
+Before every `build_review` grading, the conductor probes freshness of the local
+`origin/<default>` tracking ref against the true remote head (`resolveFreshBase`,
+`engine/rebase.ts`) — a read-only `git ls-remote` probe, refetching only when the
+tracking ref is behind. This prevents a stale local ref from producing a diff that
+includes commits already merged upstream, which previously caused false out-of-scope
+FAIL verdicts. Fail-soft: no configured remote, or a probe failure, degrades to
+grading against the local branch plus one advisory log line — it never blocks
+grading. Each grading emits a `build_review_base` event
+(`{mergeBase, trackingRefSha, remoteHeadSha, fresh}`), rendered as a dim daemon-log
+line, so an operator can see exactly which base a verdict graded against.
+
+If `build_review` still returns a scope-FAIL verdict, the conductor re-probes
+freshness once more (before any rework routing) and classifies the FAIL as either:
+
+- **`genuine`** — the flagged content persists under a fresh recompute. Routing is
+  unchanged: the FAIL kicks back to `build` for rework, same as before this feature.
+- **`stale-mirage`** — the flagged content only appears because the graded base was
+  stale, and is absent under a fresh recompute. The stale FAIL verdict artifact is
+  removed (not preserved by #817 code-stamp preservation), rework is skipped, and
+  `build_review` re-runs once against fresh inputs. This is bounded to **one regrade
+  per feature-session**, tracked by a persisted counter at
+  `.pipeline/build-review-regrade.json`; the counter resets when a new feature-session
+  starts.
+
+**HALT: second stale-mirage detection this feature-session.** If a SECOND
+`stale-mirage` classification occurs in the same feature-session — the regrade bound
+already consumed — the conductor writes `.pipeline/HALT` instead of re-entering
+grading again. The HALT body carries:
+
+- `gradedBaseSha` — the merge-base the FAILing verdict was actually graded against
+- `freshBaseSha` — the merge-base resolved by the re-probe
+- `flaggedPaths` — the out-of-scope paths the verdict cited
+- `regradeCount` — the number of regrades already consumed this session (always ≥1)
+
+Repeated stale-mirage detections in the same session point to something the
+one-shot regrade can't resolve on its own — most often a remote that keeps
+advancing faster than the daemon can regrade, or a build_review verdict that's
+misclassifying genuinely-in-scope content as stale. Investigate by comparing
+`gradedBaseSha`/`freshBaseSha` against `origin/<default>` directly (`git log
+gradedBaseSha..freshBaseSha`) to confirm the remote really moved, and re-read the
+verdict's flagged paths against the current diff. Once resolved, clear
+`.pipeline/HALT` as with any other HALT to resume; the regrade counter resets on
+the next feature-session, so a resumed build gets its own fresh regrade budget.
+No git history is mutated anywhere in this path — only read-only probes and
+verdict-artifact removal.
+
 On any irrecoverable daemon HALT that stranded committed work — a build/gating-step failure, a
 prd-audit gap needing human DECIDE, the kickback/stuck-gate caps, or an unexpected error (rebase
 conflicts excluded) — when the branch has at least one commit, the daemon pushes it and opens a

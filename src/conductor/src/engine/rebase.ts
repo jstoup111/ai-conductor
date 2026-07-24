@@ -103,8 +103,14 @@ export async function originDefaultBranch(git: GitRunner): Promise<string | null
  *     fetched, → `origin/<default>` (kind 'remote');
  *   - if there is no origin, or discovery/fetch fails → the LOCAL `localBase`
  *     branch (kind 'local'), with no hardcoded 'main'.
+ *
+ * Extracted core seam (build-review-grades-plan-vs-diff-against-a-stale-o,
+ * Task 1): shared by `resolveBase` (the rebase gate) and, in Task 2, the
+ * ls-remote freshness probe (`resolveFreshBase`) — both need "discover
+ * default branch, fetch it, degrade to local on any failure" without
+ * duplicating the discover+fetch logic.
  */
-export async function resolveBase(
+export async function resolveBaseCore(
   git: GitRunner,
   localBase: string,
 ): Promise<ResolvedBase> {
@@ -141,6 +147,160 @@ export async function resolveBase(
     return { ref: localBase, kind: 'local', branch: localBase };
   }
   return { ref: `origin/${defaultBranch}`, kind: 'remote', branch: defaultBranch };
+}
+
+/**
+ * Public entry point used by the rebase gate. Thin delegate over
+ * `resolveBaseCore` — kept as a separate name for call-site clarity/back-compat;
+ * behavior is identical.
+ */
+export async function resolveBase(
+  git: GitRunner,
+  localBase: string,
+): Promise<ResolvedBase> {
+  return resolveBaseCore(git, localBase);
+}
+
+/**
+ * A fresh-base resolution: everything `resolveBase` returns, plus the
+ * ls-remote freshness evidence (Task 2, ai-conductor
+ * build-review-grades-plan-vs-diff-against-a-stale-o). `fresh: true` means the
+ * tracking ref already matched `ls-remote`'s reported head (no fetch was
+ * needed); `fresh: false` covers both "fetched a stale ref" and "no remote /
+ * probe failure — degraded to local" (`remoteHeadSha` is `null` in the latter
+ * case).
+ */
+export interface FreshBaseResolution extends ResolvedBase {
+  trackingRefSha: string | null;
+  remoteHeadSha: string | null;
+  fresh: boolean;
+}
+
+/**
+ * The current checked-out branch name (short form), or `null` if it cannot be
+ * determined (detached HEAD, empty repo, etc). Used as the `localBase`
+ * fallback for `resolveBaseCore` when `resolveFreshBase` has no explicit
+ * caller-supplied local base (its contract takes none — see
+ * `FreshBaseResolution` callers in the acceptance spec).
+ */
+async function currentBranch(git: GitRunner): Promise<string> {
+  const r = await git(['symbolic-ref', '--short', 'HEAD']);
+  if (r.exitCode === 0 && r.stdout.trim()) return r.stdout.trim();
+  return 'HEAD';
+}
+
+/**
+ * Purely-local default-branch discovery (no network) — the pre-existing
+ * behavior `assembleBuildReviewInputs` relied on before `resolveFreshBase`
+ * existed. Tries, in order: origin/HEAD's symbolic-ref (local ref read),
+ * `init.defaultBranch` config, then whichever of `main`/`master` exists as a
+ * local branch. Used as the fail-soft fallback so a no-remote/probe-failure
+ * degrade never collapses the base to `currentBranch(HEAD)` — that makes
+ * `merge-base(base, HEAD) === HEAD` and the grader sees an empty diff.
+ */
+async function localDefaultBranch(git: GitRunner): Promise<string | null> {
+  const originBranch = await originDefaultBranch(git);
+  if (originBranch) return originBranch;
+
+  const cfg = await git(['config', '--get', 'init.defaultBranch']);
+  if (cfg.exitCode === 0 && cfg.stdout.trim()) return cfg.stdout.trim();
+
+  for (const candidate of ['main', 'master']) {
+    const check = await git(['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`]);
+    if (check.exitCode === 0) return candidate;
+  }
+
+  return null;
+}
+
+/**
+ * Shared fresh-base resolver (build-review-grades-plan-vs-diff-against-a-stale-o,
+ * Task 2). Probes `refs/remotes/origin/<default>` (the local tracking ref, NOT
+ * re-fetched) against `git ls-remote origin <default>` (the true remote head)
+ * to decide whether a fetch is actually needed:
+ *
+ *   - shas match → `fresh: true`, no fetch performed.
+ *   - shas differ → `fresh: false`; fetches (via `resolveBaseCore`) and
+ *     resolves to the freshly-fetched ref, UNLESS `opts.probeOnly` is set, in
+ *     which case no fetch happens and the pre-existing tracking ref/kind/branch
+ *     shape is returned unchanged.
+ *   - any git/network error (no origin, discovery failure, ls-remote failure,
+ *     rev-parse failure) → fail-soft to `resolveBaseCore`'s local-fallback
+ *     shape, with `trackingRefSha: null`, `remoteHeadSha: null`, `fresh: false`.
+ *     Never throws.
+ */
+export async function resolveFreshBase(
+  git: GitRunner,
+  opts: { probeOnly?: boolean } = {},
+): Promise<FreshBaseResolution> {
+  const localBase = await currentBranch(git);
+
+  const failSoft = async (): Promise<FreshBaseResolution> => {
+    // Prefer the purely-local default-branch discovery (pre-existing
+    // behavior) over `localBase` (the current branch) — using the current
+    // branch as the merge-base ref makes merge-base(ref, HEAD) === HEAD,
+    // handing the grader an empty diff (build-review-grades-plan-vs-diff-
+    // against-a-stale-o retro).
+    const fallbackBranch = (await localDefaultBranch(git)) ?? localBase;
+    return {
+      ref: fallbackBranch,
+      kind: 'local',
+      branch: fallbackBranch,
+      trackingRefSha: null,
+      remoteHeadSha: null,
+      fresh: false,
+    };
+  };
+
+  try {
+    const remotes = await git(['remote']);
+    const hasOrigin = remotes.exitCode === 0 &&
+      remotes.stdout.split('\n').map((l) => l.trim()).includes('origin');
+    if (!hasOrigin) return failSoft();
+
+    const defaultBranch = await originDefaultBranch(git);
+    if (!defaultBranch) return failSoft();
+
+    const trackingRef = await git(['rev-parse', `refs/remotes/origin/${defaultBranch}`]);
+    if (trackingRef.exitCode !== 0 || !trackingRef.stdout.trim()) return failSoft();
+    const trackingRefSha = trackingRef.stdout.trim();
+
+    const lsRemote = await git(['ls-remote', 'origin', defaultBranch]);
+    if (lsRemote.exitCode !== 0) return failSoft();
+    const lines = lsRemote.stdout.split('\n');
+    const line = lines.find((l) => l.includes(`refs/heads/${defaultBranch}`));
+    if (!line) return failSoft();
+    const remoteHeadSha = line.split(/\s+/)[0]?.trim();
+    if (!remoteHeadSha) return failSoft();
+
+    if (trackingRefSha === remoteHeadSha) {
+      return {
+        ref: `origin/${defaultBranch}`,
+        kind: 'remote',
+        branch: defaultBranch,
+        trackingRefSha,
+        remoteHeadSha,
+        fresh: true,
+      };
+    }
+
+    // Stale: tracking ref lags the true remote head.
+    if (opts.probeOnly) {
+      return {
+        ref: `origin/${defaultBranch}`,
+        kind: 'remote',
+        branch: defaultBranch,
+        trackingRefSha,
+        remoteHeadSha,
+        fresh: false,
+      };
+    }
+
+    const fetched = await resolveBaseCore(git, localBase);
+    return { ...fetched, trackingRefSha, remoteHeadSha, fresh: false };
+  } catch {
+    return failSoft();
+  }
 }
 
 // ── Satisfied predicate (FR-4) ───────────────────────────────────────────────

@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- `build_review` now resolves its grading base through a read-only `git ls-remote`
+  freshness probe (`resolveFreshBase`) instead of trusting the local `origin/<default>`
+  tracking ref, refetching only when the ref is behind; fail-soft (no remote / probe
+  failure) degrades to the local branch. Every grading emits a `build_review_base`
+  telemetry event so an operator can see which base a verdict graded against. A scope-FAIL
+  verdict found to have graded a since-stale base ("stale-mirage") is discarded and
+  regraded once against a fresh base per feature-session; a second stale-mirage detection
+  in the same session HALTs instead of re-entering grading. See
+  `docs/daemon-operations.md` and `src/conductor/README.md` for details.
 - Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
 
 ### Changed
@@ -34,6 +43,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `build_review` could grade a diff against a stale local `origin/<default>` tracking ref
+  instead of the true remote head, producing false out-of-scope scope-FAIL verdicts on
+  content already merged upstream. Grading now resolves its base through a freshness
+  probe before every run (see Added, above).
 - Spec (DECIDE only): intake issues filed via `bin/intake-file` accumulated contradictory
   duplicate `priority:`/`size:` labels — 23 of 109 open issues were affected. The
   `intake-label-sync` workflow cannot parse a CLI-authored body (its `extractField` matches

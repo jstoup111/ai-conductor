@@ -206,6 +206,30 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     expect(backLine).not.toMatch(/\bKICKBACK\b/);
   });
 
+  it('renders build_review_base as a dim freshness summary', () => {
+    const fresh = lines({
+      type: 'build_review_base',
+      mergeBase: 'abc1234567890def',
+      trackingRefSha: 'abc1234567890def',
+      remoteHeadSha: 'abc1234567890def',
+      fresh: true,
+    });
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toContain('build_review base');
+    expect(fresh[0]).toContain('abc123456789');
+    expect(fresh[0]).toContain('fresh: true');
+
+    const stale = lines({
+      type: 'build_review_base',
+      mergeBase: 'deadbeef0000111',
+      trackingRefSha: 'deadbeef0000111',
+      remoteHeadSha: '1111222233334444',
+      fresh: false,
+    });
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain('fresh: false');
+  });
+
   it('renders exactly the previously-rendering event types plus navigation_back', () => {
     // One minimal, valid sample per ConductorEvent variant (see types/events.ts).
     // Some variants (e.g. gate_verdict) only render conditionally; the sample
@@ -263,6 +287,13 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
         attempts: 1,
         phase: 'detected',
       },
+      {
+        type: 'build_review_base',
+        mergeBase: 'abc1234567890',
+        trackingRefSha: 'abc1234567890',
+        remoteHeadSha: 'abc1234567890',
+        fresh: true,
+      },
     ];
 
     const renderingTypes = new Set(
@@ -288,6 +319,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_progress',
       'build_no_progress',
       'build_stall',
+      'build_review_base',
     ]);
 
     expect(renderingTypes).toEqual(expected);
