@@ -1526,6 +1526,65 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
+    // REGRESSION PIN: when the intervening build cycle makes real forward
+    // progress each round (so D2's no-op guard never fires) but manual_test
+    // keeps FAILing, the gate-loop budget (MAX_KICKBACKS_PER_GATE) is what
+    // eventually stops the loop — a "gate selected N times without
+    // satisfying" halt, not a product/plan gap. It must be classified
+    // mechanical so the re-kick sweep keeps retrying it on base advance.
+    it('manual_test FAIL that exhausts the gate-loop kickback budget (no D2 no-op) HALTs mechanical', async () => {
+      await seedToManualTest();
+      let buildAttempt = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            buildAttempt++;
+            // Grow resolved-task count every attempt so
+            // classifyBuildProgress sees real forward progress each round —
+            // D2's no-op re-entry guard never fires, letting the loop spend
+            // every kickback toward MAX_KICKBACKS_PER_GATE instead.
+            const tasks = [
+              { id: 'task-1', status: 'completed' },
+              ...Array.from({ length: buildAttempt }, (_, i) => ({
+                id: `extra-${i + 1}`,
+                status: 'completed',
+              })),
+            ];
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+          } else if (step === 'manual_test') {
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), FAIL_RESULTS);
+          }
+          return { success: true };
+        }),
+      };
+      let halted = false;
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/manual-test FAIL unresolved/);
+
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('mechanical');
+    });
+
     it('hands BUILD the FAIL rows + the no-whitewash contract in its retryReason', async () => {
       await seedToManualTest();
       const { runner } = failingManualTestRunner();
@@ -2475,6 +2534,12 @@ describe('engine/conductor', () => {
       const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(haltContent).toContain('Remediation budget exhausted');
       expect(haltContent).toContain('max 2 kickbacks per gate');
+
+      // A build stall is a transient/mechanical condition (no product/plan
+      // gap) — the re-kick sweep must keep retrying it on base advance, so
+      // it is classified mechanical, never needs-human.
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('mechanical');
     });
   });
 

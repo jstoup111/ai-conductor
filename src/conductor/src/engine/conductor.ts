@@ -2090,12 +2090,7 @@ export class Conductor {
         `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
         `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
         (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
-      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
-        () => {
-          /* best-effort marker */
-        },
-      );
+      await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
       await writeState(this.stateFilePath, state);
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
@@ -4034,16 +4029,7 @@ export class Conductor {
                       const haltContent =
                         effectiveQuestion +
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
-                      await mkdir(join(this.projectRoot, '.pipeline'), {
-                        recursive: true,
-                      }).catch(() => {});
-                      await writeFile(
-                        join(this.projectRoot, LOOP_HALT_MARKER),
-                        haltContent + '\n',
-                        'utf-8',
-                      ).catch(() => {
-                        /* best-effort marker */
-                      });
+                      await writeHaltMarker(this.projectRoot, haltContent + '\n', 'mechanical');
                       await writeState(this.stateFilePath, state);
                       const prUrl = await this.surfaceRemediationPr(haltContent);
                       await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
