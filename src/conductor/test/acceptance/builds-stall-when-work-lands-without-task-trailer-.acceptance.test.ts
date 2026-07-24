@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepName } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Builds stall when work lands without Task: trailer
@@ -350,5 +351,39 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(onRecovery).toHaveBeenCalled();
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltContent).toBeNull();
+  });
+
+  it('Story 1 negative path 3 — SHA read fails (returns null) on one side of the comparison, count pinned → still classifies no_task_progress (fail-closed, never fabricates liveness from missing data)', async () => {
+    await writePlanAndStatus(dir, 3, []); // zero completed rows, count pinned at 0 throughout
+
+    const realCurrentCommitSha = projectPrelude.currentCommitSha;
+    const spy = vi.spyOn(projectPrelude, 'currentCommitSha');
+    let call = 0;
+    spy.mockImplementation(async (root: string) => {
+      call++;
+      // Fail exactly one read per attempt (simulating a transient git
+      // error / unreadable SHA) so the comparison always has one null
+      // side and one real side — this must NEVER be read as "moved".
+      if (call % 2 === 0) return null;
+      return realCurrentCommitSha(root);
+    });
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async () => {
+        // No commit lands — count stays pinned regardless of SHA reads.
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const { conductor, stallEvents, unattributedEvents } = makeConductor(3, runner);
+    await conductor.run();
+    spy.mockRestore();
+
+    // The floor must degrade fail-closed: a null/unreadable SHA read must
+    // never suppress the genuine no_task_progress stall it would otherwise
+    // classify. It may only ever cause a stall to still fire — never mask one.
+    expect(stallEvents.some((e) => e.reason === 'no_task_progress')).toBe(true);
+    expect(unattributedEvents).toHaveLength(0);
   });
 });

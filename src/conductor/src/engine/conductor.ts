@@ -3842,7 +3842,14 @@ export class Conductor {
                 // whether HEAD actually moved THIS attempt. `headShaAfterBuild`
                 // was already computed above for zero-work-product detection.
                 const headShaAttemptEnd = headShaAfterBuild;
-                const headMovedThisAttempt = headShaAttemptEnd !== headShaAttemptStart;
+                // Fail-closed: a null/unreadable SHA on either side must
+                // never be treated as "moved" — only count movement when
+                // BOTH reads succeeded and differ. This can only ever
+                // cause a stall to still be classified, never suppress one.
+                const headMovedThisAttempt =
+                  headShaAttemptEnd !== null &&
+                  headShaAttemptStart !== null &&
+                  headShaAttemptEnd !== headShaAttemptStart;
                 if (markerSet) {
                   stalled = 'halt_marker';
                 } else if (
