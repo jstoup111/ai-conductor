@@ -72,7 +72,11 @@ None — all changes are inside `src/conductor`; existing unit-test harness
 - src/conductor/src/engine/halt-marker.ts — HaltClass type, HALT_CLASS_MARKER, classified write
 - src/conductor/src/engine/halt-marker.test.ts — new tests
 
-**Wired-into:** none (inert until src/conductor/src/engine/daemon-rekick.ts)
+**Wired-into:** src/conductor/src/engine/self-host/gate-halt.ts#writeGateHalt,
+src/conductor/src/engine/rebase.ts (conflict HALT), src/conductor/src/engine/conductor.ts
+(build-stall / gate-budget / needs-human HALTs) — all pass a halt class to
+`writeHaltMarker`; `HALT_CLASS_MARKER` is consumed by
+src/conductor/src/engine/daemon-rekick.ts#clearMarker (Tasks 5-9)
 
 **Dependencies:** none
 
@@ -94,7 +98,9 @@ None — all changes are inside `src/conductor`; existing unit-test harness
 - src/conductor/src/engine/halt-marker.ts — readHaltClass
 - src/conductor/src/engine/halt-marker.test.ts — tests
 
-**Wired-into:** none (inert until src/conductor/src/engine/daemon-rekick.ts)
+**Wired-into:** src/conductor/src/daemon-cli.ts#rekick sweep deps construction
+(`readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug))`), consumed by
+src/conductor/src/engine/daemon-rekick.ts#rekickSweep (Tasks 3 and 5)
 
 **Dependencies:** Task 1
 
