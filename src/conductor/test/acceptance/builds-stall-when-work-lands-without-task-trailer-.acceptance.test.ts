@@ -620,3 +620,99 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     expect(stepStartsRouted).toContain('build_review');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wedge preservation (plan Task 10): the routing seam added in Task 8 is
+// gated strictly on `anyAttemptMovedHead` — a genuine wedge (zero commits
+// across every attempt, resolved-count pinned) must still hit today's
+// #569 remediation-prompt synthesis and terminal no_task_progress HALT path
+// exactly as before. No production code change is expected for this task;
+// this pins the pre-existing behavior so a future change to the Task 8
+// routing branch cannot silently widen it to swallow real stalls.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('genuine wedge preserved — remediation and HALT shapes unchanged (plan Task 10)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-wedge-preserved-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initGitRepo(dir);
+    await seedAllArtifactsExceptTaskStatus(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('budget exhausts with zero commits across every build attempt → #569 remediation prompt synthesized, terminal no_task_progress HALT written, no routing to build_review', async () => {
+    // 3-task plan, zero completed rows, and — unlike every other fixture in
+    // this file — the `build` step NEVER lands a commit. HEAD never moves,
+    // resolved count never moves: a genuine wedge.
+    await writePlanAndStatus(dir, 3, []);
+
+    const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockResolvedValue({ success: true }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const stallEvents: Array<{ reason: string }> = [];
+    events.on('build_stall', (e) => {
+      if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
+    });
+    const unattributedEvents: unknown[] = [];
+    events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
+      unattributedEvents.push(e);
+    }) as never);
+    const stepStarts: StepName[] = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStarts.push(e.step);
+    });
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+
+    await conductor.run();
+
+    // Never routed — no attempt ever moved HEAD, so Task 8's routing branch
+    // must never engage.
+    expect(stepStarts).not.toContain('build_review');
+    expect(unattributedEvents).toHaveLength(0);
+
+    // Classified as a genuine wedge, same as today.
+    expect(stallEvents.some((e) => e.reason === 'no_task_progress')).toBe(true);
+
+    // #569 remediation prompt synthesis shape is preserved — this fixture's
+    // stub `stepRunner.run('remediate', ...)` returns success without
+    // writing a usable `.pipeline/remediation.json`, so the dispatch
+    // degrades and the synthesized question surfaces into the stall
+    // question evidence file exactly as it does today.
+    const questionContent = await readFile(
+      join(dir, '.pipeline/build-stall-question.md'),
+      'utf-8',
+    ).catch(() => null);
+    expect(questionContent).toMatch(/^Build stall: no forward progress \(resolved \d+ → \d+ tasks\)\. Completion gate: .+\.$/m);
+
+    // Terminal HALT reason shape preserved — "build stalled: no task
+    // progress…" — and it must be the ONLY reason on disk (never overwritten
+    // by, nor coexisting with, a routed reason).
+    const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
+    expect(haltContent).toMatch(/build stalled: no task progress/);
+
+    // No routed reason was ever recorded into state — the field Task 8
+    // introduced stays entirely absent on the genuine-wedge path.
+    const stateContent = await readFile(statePath, 'utf-8').catch(() => null);
+    const state = stateContent ? (JSON.parse(stateContent) as Record<string, unknown>) : {};
+    expect(state.build_routed_reason).toBeUndefined();
+  });
+});
