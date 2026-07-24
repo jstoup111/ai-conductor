@@ -109,6 +109,7 @@ import {
   extractFlaggedPaths,
   runScopeFailDisposition,
   readRegradeCount,
+  resetRegradeCounter,
   type Disposition,
 } from './build-review-disposition.js';
 import { execFile } from 'node:child_process';
@@ -1752,8 +1753,21 @@ export class Conductor {
     // missing.
     const sessionStartedAt = Date.now();
     state.session_started_at = sessionStartedAt;
-    if (!state.run_started_at) state.run_started_at = sessionStartedAt;
+    const isFreshFeatureSession = !state.run_started_at;
+    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
     await writeState(this.stateFilePath, state);
+
+    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
+    // feature-session must not inherit a prior session's stale-mirage regrade
+    // count — a reused worktree whose `.pipeline/build-review-regrade.json`
+    // survives from a previous feature would otherwise start this session
+    // already at (or over) the once-per-session bound and HALT on its first
+    // real detection. Best-effort: never block session start on this reset.
+    if (isFreshFeatureSession) {
+      await resetRegradeCounter(this.projectRoot).catch(() => {
+        // Missing/unwritable counter file — nothing to reset.
+      });
+    }
 
     // Load task evidence sidecar for durable no-evidence counter (Task 12).
     // The counter is a durable telemetry record of consecutive gate misses
