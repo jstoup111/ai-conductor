@@ -6,33 +6,36 @@ import type { StepName } from '../types/steps.js';
 // Human-readable "Why" text for each engine step, keyed by StepName. This is
 // the single source the generated HARNESS.md model-selection table (and the
 // completeness test in test/model-table-metadata.test.ts) draw from. It
-// consolidates rationale that used to live as inline `//` comments on
-// DEFAULT_STEP_MODELS / DEFAULT_STEP_EFFORT in resolved-config.ts, plus the
-// prose "Why" column from HARNESS.md's hand-authored model-selection table.
+// consolidates rationale that used to live beside the autonomous model
+// defaults, plus the prose "Why" column from HARNESS.md's hand-authored
+// model-selection table.
 // ────────────────────────────────────────────────────────────────────────────
 
 export const STEP_RATIONALE: Record<StepName, string> = {
   bootstrap: 'Detection and scaffolding — largely mechanical. Authors the project CLAUDE.md every later step depends on.',
   memory: 'Read/write files, update index — mechanical.',
   assess:
-    'The assess skill dispatches 9 specialists and drives structure verification (sonnet); the final cross-referencing of all 9 reports is the cto-orchestrator agent on opus. The orchestrator also sets the env var that cascades effort to subagents.',
+    'The assess skill dispatches 9 specialists and drives structure verification with Claude Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on Claude Opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
-    'Divergent discovery: approach trade-offs + product/technical track classification. Front-of-funnel, high branching factor, localized mistake cost with a 3-retry escalating budget (#188). Fable is the premium-priced tier ($10/$50 per 1M, ~2x Opus), run here at MEDIUM effort: cost-per-outcome favours a strong model at moderate depth over a cheaper model at high depth, while preserving enough branching for a high-fan-out ideation step (conservative setting vs the more aggressive low-effort thesis). S tier drops to LOW effort (DEFAULT_STEP_TIER_OVERRIDES.explore.S) — small/well-understood features need only a fast, lightweight scoping pass, not full branching depth.',
-  prd: 'Front-of-funnel PRD authoring: requirements + FRs. Fable handles product writing competently, run at MEDIUM effort — its own priority is speed over supreme depth, so paying the premium ($10/$50 per 1M, ~2x Opus) at max depth was mis-scoped; medium effort matches the early-design need.',
+    'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
+  prd:
+    'Front-of-funnel requirements and FR authoring has high downstream cascade cost. Each built-in provider policy selects its own deepest model and HIGH effort at every complexity tier; attempt 2 raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is a capped no-op for this already-deepest default.',
   complexity:
     'Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching.',
   stories: 'Pattern-following from design doc, structured output.',
   conflict_check:
-    'Pairwise comparison is manageable for Sonnet with <=15 stories; Large tier escalates to Fable for subtle contradiction detection. Enforced via DEFAULT_STEP_TIER_OVERRIDES.conflict_check.L.',
-  plan: 'Structured task breakdown from stories; Large tier escalates to Fable for task sequencing and dependency reasoning at scale. Enforced via DEFAULT_STEP_TIER_OVERRIDES.plan.L.',
+    'Pairwise comparison is manageable at each provider policy\'s standard tier with <=15 stories; Large tier selects that provider\'s deepest model for subtle contradiction detection.',
+  plan:
+    'Structured task breakdown from stories; Large tier selects each provider policy\'s deepest model for task sequencing and dependency reasoning at scale.',
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
   architecture_review:
-    'Pre-implementation design feasibility and alignment: Fable provides sufficient reasoning for early-stage architecture reviews.',
+    'Pre-implementation design feasibility and alignment requires the selected provider policy\'s deepest capability tier.',
   worktree: 'Git operations — mechanical branch/worktree management.',
   acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
-  build: 'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Haiku stalled on real coding tasks (e.g. multi-file rescue-wiring tests), so this runs on Sonnet for reliable code authoring; genuinely mechanical steps (memory, worktree, finish, conduct) stay on Haiku. S tier pins a fixed max_retries: 3 floor (DEFAULT_STEP_TIER_OVERRIDES.build.S) per the #188 retry-budget floor — small features still get enough rework budget to recover from a bad first pass, even though S otherwise runs lean.',
+  build:
+    'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
     'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   wiring_check:
@@ -42,9 +45,11 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   architecture_review_as_built:
     'The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design.',
   retro: 'Structured analysis from concrete data; Part C (context efficiency) is checklist-based.',
-  rebase: 'Fable guards semantic merges; wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
+  rebase:
+    'The selected provider policy\'s deepest capability tier guards semantic merges; a wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
   finish: 'Mechanical checks — run tests, check git status, verify coverage.',
-  remediate: 'Fable guards failure disposition; false HALT wastes context, wrong routing misroutes rework. Gap reasoning + concrete task planning.',
+  remediate:
+    'The selected provider policy\'s deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. Gap reasoning plus concrete task planning requires deep judgment.',
   attribution_verify: 'Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages.',
 };
 
@@ -54,10 +59,12 @@ export const STEP_RATIONALE: Record<StepName, string> = {
 // Every `skills/*/SKILL.md` that carries a hand-authored `model:` pin in its
 // frontmatter must be accounted for here — either mapped to the engine
 // StepName it corresponds to (so the pin can be checked against
-// DEFAULT_STEP_MODELS) or listed as exempt (skill has no 1:1 engine step, so
-// there is nothing to compare the pin against). An unmapped, non-exempt
-// pinned skill is a hard failure — see classifyPinnedSkill in
-// src/tools/generate-model-table.ts (TS-1 negative path 2 / TS-4).
+// CLAUDE_MODEL_POLICY.stepModels) or listed as exempt (skill has no 1:1
+// engine step, so there is nothing to compare the pin against). Interactive
+// pins are Claude-scoped; Codex policy values do not participate. An
+// unmapped, non-exempt pinned skill is a hard failure — see
+// classifyPinnedSkill in src/tools/generate-model-table.ts (TS-1 negative
+// path 2 / TS-4).
 // ────────────────────────────────────────────────────────────────────────────
 
 export const SKILL_STEP_MAP: Record<string, StepName> = {
@@ -73,8 +80,8 @@ export const SKILL_STEP_MAP: Record<string, StepName> = {
 
 // Skills whose `model:` pin has no corresponding engine StepName — the skill
 // runs standalone (dispatched directly by the operator/conductor, not as a
-// numbered engine step), so there is no DEFAULT_STEP_MODELS entry to compare
-// the pin against.
+// numbered engine step), so there is no autonomous Claude policy entry to
+// compare the pin against.
 export const PIN_EXEMPT_SKILLS: readonly string[] = [
   'code-review', // dispatches an evaluator agent directly; not an engine step
   'debugging', // standalone investigation skill; not an engine step
@@ -86,11 +93,12 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // Extra model-table rows
 //
 // Rows for skills/agents that are NOT engine steps (no StepName / no entry in
-// DEFAULT_STEP_MODELS) but that HARNESS.md's hand-authored model-selection
-// table still documents: domain-reviewer/evaluator (dispatched sub-agents),
-// code-review/debugging/simplify/engineer (skills with their own model pin
-// but no engine step), conduct/pr (orchestration skills), tdd-red/tdd-green
-// (TDD sub-phases), and the 10 cto-* assess specialists.
+// CLAUDE_MODEL_POLICY.stepModels) but that HARNESS.md's model-selection table
+// still documents on the Claude interactive path: domain-reviewer/evaluator
+// (dispatched sub-agents), code-review/debugging/simplify/engineer (skills
+// with their own model pin but no engine step), conduct/pr (orchestration
+// skills), tdd-red/tdd-green (TDD sub-phases), and the 10 cto-* assess
+// specialists.
 // Rendered after the engine rows by the generator (Task 5).
 //
 // NOTE: "writing-system-tests" is deliberately NOT listed here — it is the
@@ -105,126 +113,216 @@ export interface ExtraModelTableRow {
    *  both this list and the engine-derived rows — enforced by
    *  assertNoDuplicateRowNames() in generate-model-table.ts. */
   name: string;
-  /** "Recommended Model" column text, verbatim. */
-  model: string;
-  /** "Why" column text, verbatim. */
-  rationale: string;
+  executionPath: 'Claude interactive';
+  claudeModel: string;
+  claudeEffort: '';
+  codexModel: '';
+  codexEffort: '';
+  why: string;
 }
 
 export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
   {
     name: 'verify-claims',
-    model: 'inherits caller',
-    rationale:
+    executionPath: 'Claude interactive',
+    claudeModel: 'inherits caller',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why:
       'Cross-cutting correctness protocol applied within the invoking skill\'s context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller\'s model.',
   },
   {
     name: 'domain-reviewer',
-    model: 'sonnet (<50-line diff), opus (≥50-line diff)',
-    rationale:
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet (<50-line diff), opus (≥50-line diff)',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why:
       'Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment.',
   },
   {
     name: 'evaluator',
-    model:
+    executionPath: 'Claude interactive',
+    claudeModel:
       'sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance)',
-    rationale: 'Right-sized by batch content.',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Right-sized by batch content.',
   },
   {
     name: 'code-review',
-    model: 'opus',
-    rationale: 'Multi-dimensional analysis (spec, quality, domain).',
+    executionPath: 'Claude interactive',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Multi-dimensional analysis (spec, quality, domain).',
   },
   {
     name: 'debugging',
-    model: 'fable',
-    rationale: 'Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'fable',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes.',
   },
   {
     name: 'simplify',
-    model: 'sonnet',
-    rationale: 'Pattern matching for duplication and complexity — structured checklist work.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Pattern matching for duplication and complexity — structured checklist work.',
   },
   {
     name: 'engineer',
-    model: 'fable',
-    rationale:
+    executionPath: 'Claude interactive',
+    claudeModel: 'fable',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why:
       'Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus).',
   },
   {
     name: 'intake',
-    model: 'inherits caller',
-    rationale:
+    executionPath: 'Claude interactive',
+    claudeModel: 'inherits caller',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why:
       'Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch.',
   },
   {
     name: 'conduct',
-    model: 'haiku',
-    rationale: 'Artifact checking and status reporting — mechanical.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'haiku',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Artifact checking and status reporting — mechanical.',
   },
   {
     name: 'pr',
-    model: 'sonnet',
-    rationale: 'Diff analysis and structured PR body — templated output.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Diff analysis and structured PR body — templated output.',
   },
   {
     name: 'tdd-red',
-    model: 'sonnet',
-    rationale: 'Writing one test at a time — focused, constrained.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Writing one test at a time — focused, constrained.',
   },
   {
     name: 'tdd-green',
-    model: 'sonnet',
-    rationale: 'Writing minimal implementation — constrained scope.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Writing minimal implementation — constrained scope.',
   },
   {
     name: 'cto-security',
-    model: 'opus',
-    rationale: 'Deep security analysis requires reasoning about attack vectors.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Deep security analysis requires reasoning about attack vectors.',
   },
   {
     name: 'cto-data-integrity',
-    model: 'opus',
-    rationale: 'Transaction and race condition analysis requires deep reasoning.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Transaction and race condition analysis requires deep reasoning.',
   },
   {
     name: 'cto-dependencies',
-    model: 'sonnet',
-    rationale: 'Checklist-based package and license scanning.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Checklist-based package and license scanning.',
   },
   {
     name: 'cto-architecture',
-    model: 'opus',
-    rationale: 'Cross-module coherence and coupling analysis requires deep reasoning.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Cross-module coherence and coupling analysis requires deep reasoning.',
   },
   {
     name: 'cto-duplication',
-    model: 'sonnet',
-    rationale: 'Pattern matching across modules — structured checklist work.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Pattern matching across modules — structured checklist work.',
   },
   {
     name: 'cto-testing',
-    model: 'sonnet',
-    rationale: 'Coverage gap analysis and test quality review — structured.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Coverage gap analysis and test quality review — structured.',
   },
   {
     name: 'cto-infrastructure',
-    model: 'sonnet',
-    rationale: 'Infrastructure config review — checklist-based.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Infrastructure config review — checklist-based.',
   },
   {
     name: 'cto-observability',
-    model: 'sonnet',
-    rationale: 'Error handling and logging pattern review — checklist-based.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Error handling and logging pattern review — checklist-based.',
   },
   {
     name: 'cto-devex',
-    model: 'sonnet',
-    rationale: 'Documentation and tooling review — checklist-based.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Documentation and tooling review — checklist-based.',
   },
   {
     name: 'cto-orchestrator',
-    model: 'opus',
-    rationale: 'Cross-referencing 9 reports and prioritizing requires deep reasoning.',
+    executionPath: 'Claude interactive',
+    claudeModel: 'opus',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: 'Cross-referencing 9 reports and prioritizing requires deep reasoning.',
   },
 ];

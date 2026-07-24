@@ -6,6 +6,14 @@
 `adr-2026-07-03-generated-model-table-single-source`)
 **Tier:** M
 
+> **Provider-aware amendment (#902, approved 2026-07-23):** Engine-step rows
+> now source and label both built-in provider policies. References below to the
+> original `DEFAULT_STEP_MODELS`, `DEFAULT_STEP_EFFORT`, and
+> `DEFAULT_STEP_TIER_OVERRIDES` source mean the corresponding exhaustive
+> provider-policy records after the #902 refactor. `SKILL.md` pins,
+> `EXTRA_MODEL_TABLE_ROWS`, and `--pins` remain the explicitly labelled Claude
+> interactive path and validate against the Claude policy.
+
 ---
 
 ## Story: Typed model-table metadata is the single source of truth

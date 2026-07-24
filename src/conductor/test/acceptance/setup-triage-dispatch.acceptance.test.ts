@@ -56,6 +56,18 @@ type FutureDeps = FeatureRunnerDeps & {
   dispatchFixSession?: (...args: unknown[]) => Promise<unknown>;
 };
 
+it('daemon setup-fix dispatch carries the selected provider model policy', async () => {
+  const source = await readFile(
+    new URL('../../src/daemon-cli.ts', import.meta.url),
+    'utf8',
+  );
+  const marker = source.indexOf('featureDesc: `setup-fix-${item.slug}`');
+  const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
+  const constructorEnd = source.indexOf('});', marker);
+
+  expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+});
+
 describe('acceptance: setup-before-dispatch wedge — deterministic setup-failure triage (#446)', () => {
   let dir: string;
   const counterFiles: string[] = [];

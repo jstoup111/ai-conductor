@@ -33,6 +33,10 @@ import { join, dirname } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { ModelAvailability } from './model-availability.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
 import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
@@ -56,6 +60,8 @@ export interface VerifierDispatchOptions {
   featureWorktreePath: string;
   /** Harness config for model/effort resolution. */
   config?: HarnessConfig;
+  /** Selected provider policy for model/effort resolution. */
+  modelPolicy?: ProviderModelPolicy;
   /** Git commit range for candidate collection (defaults to origin/main..HEAD). */
   commitRange?: string;
   /** Optional GitRunner injection for testing. */
@@ -238,6 +244,7 @@ export async function dispatchAttributionVerifier(
     residueIds,
     featureWorktreePath,
     config,
+    modelPolicy = CLAUDE_MODEL_POLICY,
     commitRange = 'origin/main..HEAD',
     gitRunner: injectedGit,
     bookkeepingCommits,
@@ -247,6 +254,7 @@ export async function dispatchAttributionVerifier(
   const resolved = resolveStepConfig(
     'attribution_verify',
     'BUILD',
+    modelPolicy,
     config,
     {},
   );
@@ -322,8 +330,9 @@ export async function dispatchAttributionVerifier(
     invokeInteractive: (invokeOpts) => provider.invokeInteractive(invokeOpts),
   };
 
-  const modelAvailability = new ModelAvailability(config?.model_fallback_ladder, (line) =>
-    console.warn(line),
+  const modelAvailability = new ModelAvailability(
+    config?.model_fallback_ladder ?? modelPolicy.modelFallbackLadder,
+    (line) => console.warn(line),
   );
 
   // Build system prompt for the step.
@@ -383,4 +392,3 @@ You are running the semantic attribution verification step. Your job is to match
 
 Complete this step, write the verdict to .pipeline/attribution-verdict.json, then exit.`;
 }
-

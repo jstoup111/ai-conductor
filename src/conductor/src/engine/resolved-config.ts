@@ -6,78 +6,19 @@ import type {
   ReviewMode,
   StepConfig,
   PhaseConfig,
-  TierOverride,
   SelfHostActivation,
 } from '../types/config.js';
 import { getStepDefinition } from './steps.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
 
-// ────────────────────────────────────────────────────────────────────────────
-// Built-in defaults
-//
-// These apply when nothing is set in config. The effort values map to Claude's
-// native `/effort` levels and are passed via CLAUDE_CODE_EFFORT_LEVEL env var
-// on the subprocess. Reviews default per step. Tune per step/phase in YAML.
-//
-// Rationale for each step's model/effort choice lives in `STEP_RATIONALE`
-// (./model-table-metadata.ts), which also feeds the generated HARNESS.md
-// model-selection table. Keep these value maps and that metadata in sync.
-// ────────────────────────────────────────────────────────────────────────────
-
-export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'sonnet',
-  memory: 'haiku',
-  assess: 'sonnet',
-  explore: 'fable',
-  prd: 'fable',
-  complexity: 'sonnet',
-  stories: 'sonnet',
-  conflict_check: 'sonnet',
-  plan: 'sonnet',
-  coherence_check: 'sonnet',
-  architecture_diagram: 'sonnet',
-  architecture_review: 'fable',
-  worktree: 'haiku',
-  acceptance_specs: 'sonnet',
-  build: 'sonnet',
-  build_review: 'opus',
-  wiring_check: 'sonnet',
-  manual_test: 'sonnet',
-  prd_audit: 'opus',
-  architecture_review_as_built: 'sonnet',
-  retro: 'sonnet',
-  rebase: 'fable',
-  finish: 'haiku',
-  remediate: 'fable',
-  attribution_verify: 'opus',
-};
-
-export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
-  bootstrap: 'low',
-  memory: 'low',
-  assess: 'high',
-  explore: 'medium',
-  prd: 'medium',
-  complexity: 'low',
-  stories: 'medium',
-  conflict_check: 'medium',
-  plan: 'high',
-  coherence_check: 'medium',
-  architecture_diagram: 'medium',
-  architecture_review: 'high',
-  worktree: 'low',
-  acceptance_specs: 'medium',
-  build: 'low',
-  build_review: 'high',
-  wiring_check: 'low',
-  manual_test: 'medium',
-  prd_audit: 'high',
-  architecture_review_as_built: 'medium',
-  retro: 'medium',
-  rebase: 'max',
-  finish: 'low',
-  remediate: 'high',
-  attribution_verify: 'high',
-};
+// Legacy aliases retained for existing consumers. New resolution accepts a
+// provider policy explicitly, so these never participate in provider-aware
+// resolution.
+export const DEFAULT_STEP_MODELS = CLAUDE_MODEL_POLICY.stepModels;
+export const DEFAULT_STEP_EFFORT = CLAUDE_MODEL_POLICY.stepEfforts;
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
@@ -140,35 +81,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
 
-/**
- * Per-step complexity-tier overrides. Applied on top of step config at
- * resolve time when `state.complexity_tier` matches. Only listed steps are
- * tier-aware; everything else ignores the tier.
- */
-export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
-  Record<StepName, Partial<Record<ComplexityTier, TierOverride>>>
-> = {
-  stories: {
-    S: { effort: 'low' },
-    L: { effort: 'high' },
-  },
-  plan: {
-    S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh', model: 'fable' },
-  },
-  conflict_check: {
-    L: { model: 'fable' },
-  },
-  coherence_check: {
-    L: { model: 'opus' },
-  },
-  explore: {
-    S: { effort: 'low' },
-  },
-  build: {
-    S: { max_retries: 3 },
-  },
-};
+export const DEFAULT_STEP_TIER_OVERRIDES = CLAUDE_MODEL_POLICY.stepTierOverrides;
 
 export const FALLBACK_MODEL = 'sonnet';
 export const FALLBACK_EFFORT: EffortLevel = 'medium';
@@ -225,15 +138,40 @@ export interface ResolveOptions {
  *   4. phases.<PHASE>.by_tier.<tier>
  *   5. phases.<PHASE>
  *   6. defaults
- *   7. Hardcoded built-in (DEFAULT_STEP_*)
+ *   7. Provider policy
  *   8. Fallback
  */
 export function resolveStepConfig(
   step: StepName,
   phase: Phase,
+  policy: ProviderModelPolicy,
   config?: HarnessConfig,
-  options: ResolveOptions = {},
+  options?: ResolveOptions,
+): ResolvedStepConfig;
+/** @deprecated Pass a ProviderModelPolicy as the third argument. */
+export function resolveStepConfig(
+  step: StepName,
+  phase: Phase,
+  config?: HarnessConfig,
+  options?: ResolveOptions,
+): ResolvedStepConfig;
+export function resolveStepConfig(
+  step: StepName,
+  phase: Phase,
+  policyOrConfig?: ProviderModelPolicy | HarnessConfig,
+  configOrOptions?: HarnessConfig | ResolveOptions,
+  legacyOptions: ResolveOptions = {},
 ): ResolvedStepConfig {
+  const hasExplicitPolicy = policyOrConfig !== undefined && 'stepModels' in policyOrConfig;
+  const policy = hasExplicitPolicy
+    ? policyOrConfig as ProviderModelPolicy
+    : CLAUDE_MODEL_POLICY;
+  const config = hasExplicitPolicy
+    ? configOrOptions as HarnessConfig | undefined
+    : policyOrConfig as HarnessConfig | undefined;
+  const options = hasExplicitPolicy
+    ? legacyOptions
+    : configOrOptions as ResolveOptions | undefined ?? {};
   const stepCfg: StepConfig | undefined = config?.steps?.[step];
   const phaseCfg: PhaseConfig | undefined = config?.phases?.[phase];
   const defaultsCfg = config?.defaults;
@@ -243,9 +181,8 @@ export function resolveStepConfig(
   const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
   const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
 
-  // Tier-specific overrides from hardcoded built-ins
-  const hardcodedStepTier = tier
-    ? DEFAULT_STEP_TIER_OVERRIDES[step]?.[tier]
+  const policyStepTier = tier
+    ? policy.stepTierOverrides[step]?.[tier]
     : undefined;
 
   const model =
@@ -255,8 +192,8 @@ export function resolveStepConfig(
     phaseTier?.model ??
     phaseCfg?.model ??
     defaultsCfg?.model ??
-    hardcodedStepTier?.model ??
-    DEFAULT_STEP_MODELS[step] ??
+    policyStepTier?.model ??
+    policy.stepModels[step] ??
     FALLBACK_MODEL;
 
   const effort: EffortLevel =
@@ -266,8 +203,8 @@ export function resolveStepConfig(
     phaseTier?.effort ??
     phaseCfg?.effort ??
     defaultsCfg?.effort ??
-    hardcodedStepTier?.effort ??
-    DEFAULT_STEP_EFFORT[step] ??
+    policyStepTier?.effort ??
+    policy.stepEfforts[step] ??
     FALLBACK_EFFORT;
 
   const max_retries =
@@ -276,7 +213,7 @@ export function resolveStepConfig(
     phaseTier?.max_retries ??
     phaseCfg?.max_retries ??
     defaultsCfg?.max_retries ??
-    hardcodedStepTier?.max_retries ??
+    policyStepTier?.max_retries ??
     DEFAULT_STEP_RETRIES[step] ??
     FALLBACK_RETRIES;
 

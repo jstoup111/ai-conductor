@@ -1,6 +1,8 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
+import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
 
-export const DEFAULT_MODEL_FALLBACK_LADDER: string[] = ["fable", "opus", "sonnet"];
+/** @deprecated Use CLAUDE_MODEL_POLICY.modelFallbackLadder instead. */
+export const DEFAULT_MODEL_FALLBACK_LADDER: readonly string[] = CLAUDE_MODEL_POLICY.modelFallbackLadder;
 
 export interface EffectiveModelResult {
   model: string;
@@ -16,11 +18,11 @@ export interface EffectiveModelResult {
  * purely in-memory and does not persist across process restarts.
  */
 export class ModelAvailability {
-  private readonly ladder: string[];
+  private readonly ladder: readonly string[];
   private readonly warn?: (line: string) => void;
   readonly dead: Set<string> = new Set();
 
-  constructor(ladder?: string[], warn?: (line: string) => void) {
+  constructor(ladder?: readonly string[], warn?: (line: string) => void) {
     this.ladder = ladder === undefined ? DEFAULT_MODEL_FALLBACK_LADDER : ladder;
     this.warn = warn;
   }
@@ -38,7 +40,10 @@ export class ModelAvailability {
       return { model: configured, downgraded: false };
     }
 
-    for (const candidate of this.ladder) {
+    const configuredIndex = this.ladder.indexOf(configured);
+    const candidates = configuredIndex >= 0 ? this.ladder.slice(configuredIndex + 1) : this.ladder;
+
+    for (const candidate of candidates) {
       if (!this.dead.has(candidate)) {
         this.emitWarn(configured, candidate, `${configured} is not available (unavailable)`);
         return { model: candidate, downgraded: true };

@@ -39,6 +39,7 @@ import {
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { escalateAttempt } from './escalation.js';
+import { CLAUDE_MODEL_POLICY, type ProviderModelPolicy } from './provider-model-policy.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
@@ -492,6 +493,11 @@ export interface ConductorOptions {
   fromStep?: StepName;
   mode?: RunMode;
   config?: HarnessConfig;
+  /**
+   * Provider-specific retry escalation ladder. Optional while callers migrate;
+   * Claude remains the compatibility default.
+   */
+  modelPolicy?: ProviderModelPolicy;
   projectRoot: string;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
@@ -821,6 +827,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
+  private readonly modelPolicy: ProviderModelPolicy;
   private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
@@ -1052,6 +1059,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
+    this.modelPolicy = opts.modelPolicy ?? CLAUDE_MODEL_POLICY;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
@@ -2206,9 +2214,15 @@ export class Conductor {
         // Resolve per-step config (model, effort, retries, review…). Tier is
         // threaded in so `by_tier` overrides apply when the feature's complexity
         // is known (post-complexity step).
-        const resolved = resolveStepConfig(step.name, step.phase, this.config, {
-          tier: state.complexity_tier,
-        });
+        const resolved = resolveStepConfig(
+          step.name,
+          step.phase,
+          this.modelPolicy,
+          this.config,
+          {
+            tier: state.complexity_tier,
+          },
+        );
 
         // Check if step is disabled via config
         if (resolved.disabled) {
@@ -2296,7 +2310,13 @@ export class Conductor {
           // dispatches — real fan-out of the still-dispatchable members lands
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
-          const membership = resolveGroupMembership(builtinGroup, state, groupTrack, this.config);
+          const membership = resolveGroupMembership(
+            builtinGroup,
+            state,
+            groupTrack,
+            this.modelPolicy,
+            this.config,
+          );
           // Engagement is keyed to the group's first NON-SKIPPED member, not
           // blindly to members[0]. A nominal entry the serial walk already
           // skip-marked (e.g. manual_test config-disabled for self-host
@@ -3180,6 +3200,7 @@ export class Conductor {
             resolved.effort,
             attempt,
             resolved.escalate,
+            this.modelPolicy,
           );
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
@@ -3587,6 +3608,7 @@ export class Conductor {
                 resolved.effort,
                 attempt + 1,
                 resolved.escalate,
+                this.modelPolicy,
               );
               await emitTracked({
                 type: 'step_retry',
@@ -4245,6 +4267,7 @@ export class Conductor {
                   resolved.effort,
                   attempt + 1,
                   resolved.escalate,
+                  this.modelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',
@@ -6299,14 +6322,19 @@ export function resolveGroupMembership(
   group: StepGroup,
   state: ConductState,
   track: Track,
+  modelPolicy: ProviderModelPolicy,
   config?: HarnessConfig,
 ): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
   const tier = state.complexity_tier ?? 'L';
   const members: GroupMember[] = group.members.map((name) => {
     const stepDef = getStepDefinition(name);
-    const resolved = resolveStepConfig(stepDef.name, stepDef.phase, config, {
-      tier: state.complexity_tier,
-    });
+    const resolved = resolveStepConfig(
+      stepDef.name,
+      stepDef.phase,
+      modelPolicy,
+      config,
+      { tier: state.complexity_tier },
+    );
     const skip =
       stepDef.skippableForTiers.includes(tier) ||
       (stepDef.skippableForTracks ?? []).includes(track) ||
