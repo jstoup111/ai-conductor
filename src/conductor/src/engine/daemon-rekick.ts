@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { HALT_MARKER, type HaltClass } from './halt-marker.js';
+import { HALT_MARKER, HALT_CLASS_MARKER, type HaltClass } from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -317,6 +317,9 @@ export async function clearMarker(worktreePath: string): Promise<void> {
     // no-op (story negative path), not an error.
   });
   await rm(halt, { force: true });
+  // Best-effort: the classification sidecar is stale once the HALT it
+  // classified is cleared. Absent is fine — no-op-safe.
+  await rm(join(worktreePath, HALT_CLASS_MARKER), { force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
