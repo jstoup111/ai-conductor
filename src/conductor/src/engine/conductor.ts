@@ -3095,6 +3095,14 @@ export class Conductor {
         // work that produced no new commits, or nothing dispatched at all).
         const headShaBeforeBuild: string | null =
           step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
+        // adr-2026-07-23-commit-movement-liveness-floor: per-attempt SHA
+        // baseline for the `no_task_progress` breaker's liveness-floor
+        // conjunct — distinct from `headShaBeforeBuild` above (which is
+        // captured once at step entry for zero-work-product telemetry).
+        // Re-rolled to the attempt-end SHA at the bottom of each retry
+        // iteration so it always reflects "HEAD at the start of THIS
+        // attempt", not "HEAD at step entry".
+        let headShaAttemptStart: string | null = headShaBeforeBuild;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -3829,14 +3837,44 @@ export class Conductor {
                 retryResolvedBefore = resolvedTasksBefore;
                 retryResolvedAfter = resolvedTasksAfter;
                 const markerSet = await haltMarkerExists(this.projectRoot);
+                // adr-2026-07-23-commit-movement-liveness-floor: attempt-end
+                // SHA compared against `headShaAttemptStart` to decide
+                // whether HEAD actually moved THIS attempt. `headShaAfterBuild`
+                // was already computed above for zero-work-product detection.
+                const headShaAttemptEnd = headShaAfterBuild;
+                const headMovedThisAttempt = headShaAttemptEnd !== headShaAttemptStart;
                 if (markerSet) {
                   stalled = 'halt_marker';
-                } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
+                } else if (
+                  attempt >= 2 &&
+                  resolvedTasksAfter <= resolvedTasksBefore &&
+                  !headMovedThisAttempt
+                ) {
                   stalled = 'no_task_progress';
                   // #569 Task 5: record a distinct, actionable reason for
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
                   lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
+                } else if (
+                  attempt >= 2 &&
+                  resolvedTasksAfter <= resolvedTasksBefore &&
+                  headMovedThisAttempt
+                ) {
+                  // Real, committed work landed this attempt but the
+                  // resolved-task count didn't move (no `Task:` trailer
+                  // attributed it to a plan task id) — this is NOT a stall.
+                  // Emit telemetry only; fall through to the normal retry
+                  // path below. Deliberately does not feed the #280
+                  // count-moved progress-bypass gate, which stays keyed on
+                  // count movement, not this HEAD-movement floor.
+                  await emitTracked({
+                    type: 'unattributed_progress',
+                    step: step.name,
+                    attempt,
+                    resolvedCount: resolvedTasksAfter,
+                    headBefore: headShaAttemptStart,
+                    headAfter: headShaAttemptEnd,
+                  });
                 }
 
                 // T4: within-dispatch progress-bypass gate. A completion-gate
@@ -4267,6 +4305,7 @@ export class Conductor {
                   }
                 }
                 resolvedTasksBefore = resolvedTasksAfter;
+                headShaAttemptStart = headShaAfterBuild;
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
