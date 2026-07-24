@@ -4,7 +4,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load as loadYaml } from 'js-yaml';
 import type { StepName } from '../src/types/steps.js';
-import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../src/engine/provider-model-policy.js';
 import {
   STEP_RATIONALE,
   SKILL_STEP_MAP,
@@ -19,11 +22,15 @@ import { classifyPinnedSkill } from '../src/tools/generate-model-table.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('STEP_RATIONALE completeness (TS-1)', () => {
-  it('has a non-empty rationale entry for every key in DEFAULT_STEP_MODELS', () => {
+  it('has one non-empty rationale for every step represented by both provider policies', () => {
     const missing: string[] = [];
     const empty: string[] = [];
+    const policySteps = new Set([
+      ...Object.keys(CLAUDE_MODEL_POLICY.stepModels),
+      ...Object.keys(CODEX_MODEL_POLICY.stepModels),
+    ]);
 
-    for (const step of Object.keys(DEFAULT_STEP_MODELS) as StepName[]) {
+    for (const step of policySteps as Set<StepName>) {
       if (!(step in STEP_RATIONALE)) {
         missing.push(step);
         continue;
@@ -35,6 +42,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
+    expect(policySteps.size).toBe(24);
   });
 
   it('type-checks as a complete Record<StepName, string>', () => {

@@ -23,8 +23,15 @@ import {
   REMEDIATION_COMMAND,
   type CliIO,
 } from '../src/tools/generate-model-table.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from '../src/engine/provider-model-policy.js';
 import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
 import { SKILL_STEP_MAP, PIN_EXEMPT_SKILLS } from '../src/engine/model-table-metadata.js';
+import { STEP_RATIONALE } from '../src/engine/model-table-metadata.js';
+import type { ComplexityTier, StepName } from '../src/types/steps.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED/GREEN specs for the pure marker-region splicer (.docs/stories/
@@ -179,40 +186,104 @@ describe('assertNoDuplicateRowNames (TS-1 negative path 3)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('renderModelTable (TS-2 happy path 2)', () => {
-  it('outputs the header row', () => {
+  it('outputs the exact provider-labelled seven-column header', () => {
     const table = renderModelTable();
-    expect(table).toContain('| Skill/Agent | Model | Effort | Why |');
+    expect(table.split('\n').slice(0, 2)).toEqual([
+      '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
+      '|---|---|---|---|---|---|---|',
+    ]);
   });
 
-  it('renders the "plan" row model with tier suffixes: sonnet (S/M), fable (L)', () => {
-    const row = buildEngineRows().find((r) => r.name === 'plan');
-    expect(row).toBeDefined();
-    expect(row!.model).toBe('sonnet (S/M), fable (L)');
+  it('renders all 24 autonomous engine rows from both provider policies, including every S/M/L variation', () => {
+    const tiers: readonly ComplexityTier[] = ['S', 'M', 'L'];
+    const renderPolicyField = (
+      policy: ProviderModelPolicy,
+      step: StepName,
+      field: 'model' | 'effort',
+    ): string => {
+      const groups: Array<{ value: string; tiers: ComplexityTier[] }> = [];
+      for (const tier of tiers) {
+        const override = policy.stepTierOverrides[step]?.[tier]?.[field];
+        const value =
+          override ?? (field === 'model' ? policy.stepModels[step] : policy.stepEfforts[step]);
+        const group = groups.find((candidate) => candidate.value === value);
+        if (group) group.tiers.push(tier);
+        else groups.push({ value, tiers: [tier] });
+      }
+      return groups.length === 1
+        ? groups[0]!.value
+        : groups.map((group) => `${group.value} (${group.tiers.join('/')})`).join(', ');
+    };
+
+    const expected = (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => ({
+      name: stepDisplayName(step),
+      executionPath: 'autonomous engine',
+      claudeModel: renderPolicyField(CLAUDE_MODEL_POLICY, step, 'model'),
+      claudeEffort: renderPolicyField(CLAUDE_MODEL_POLICY, step, 'effort'),
+      codexModel: renderPolicyField(CODEX_MODEL_POLICY, step, 'model'),
+      codexEffort: renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
+      why: STEP_RATIONALE[step],
+    }));
+
+    expect(buildEngineRows()).toEqual(expected);
   });
 
-  it('renders the "plan" row effort with tier suffixes: medium (S), high (M), xhigh (L)', () => {
-    const row = buildEngineRows().find((r) => r.name === 'plan');
-    expect(row).toBeDefined();
-    expect(row!.effort).toBe('medium (S), high (M), xhigh (L)');
-  });
+  it('fails closed and identifies the provider, field, and step for every missing policy value', () => {
+    const buildRowsWithPolicies = buildEngineRows as unknown as (
+      claudePolicy: ProviderModelPolicy,
+      codexPolicy: ProviderModelPolicy,
+    ) => ReturnType<typeof buildEngineRows>;
 
-  it('renders "conflict-check" the same way as "plan": sonnet (S/M), fable (L)', () => {
-    const row = buildEngineRows().find((r) => r.name === 'conflict-check');
-    expect(row).toBeDefined();
-    expect(row!.model).toBe('sonnet (S/M), fable (L)');
-  });
+    const withoutStepValue = (
+      policy: ProviderModelPolicy,
+      field: 'stepModels' | 'stepEfforts',
+      step: StepName,
+    ): ProviderModelPolicy => {
+      const values = { ...policy[field] } as Record<string, unknown>;
+      delete values[step];
+      return { ...policy, [field]: values } as unknown as ProviderModelPolicy;
+    };
+    const cases = [
+      {
+        provider: 'Claude',
+        field: 'model',
+        claude: withoutStepValue(CLAUDE_MODEL_POLICY, 'stepModels', 'bootstrap'),
+        codex: CODEX_MODEL_POLICY,
+      },
+      {
+        provider: 'Claude',
+        field: 'effort',
+        claude: withoutStepValue(CLAUDE_MODEL_POLICY, 'stepEfforts', 'bootstrap'),
+        codex: CODEX_MODEL_POLICY,
+      },
+      {
+        provider: 'Codex',
+        field: 'model',
+        claude: CLAUDE_MODEL_POLICY,
+        codex: withoutStepValue(CODEX_MODEL_POLICY, 'stepModels', 'bootstrap'),
+      },
+      {
+        provider: 'Codex',
+        field: 'effort',
+        claude: CLAUDE_MODEL_POLICY,
+        codex: withoutStepValue(CODEX_MODEL_POLICY, 'stepEfforts', 'bootstrap'),
+      },
+    ] as const;
 
-  it('renders a tier-invariant step (e.g. "complexity") without a tier suffix', () => {
-    const row = buildEngineRows().find((r) => r.name === 'complexity');
-    expect(row).toBeDefined();
-    expect(row!.model).toBe('sonnet');
-    expect(row!.effort).toBe('low');
-  });
+    const messages = cases.map(({ claude, codex }) => {
+      try {
+        buildRowsWithPolicies(claude, codex);
+        return '<no error>';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
 
-  it('includes explicit rows for "complexity" and "architecture-review --as-built"', () => {
-    const names = buildEngineRows().map((r) => r.name);
-    expect(names).toContain('complexity');
-    expect(names).toContain('architecture-review --as-built');
+    expect(messages).toEqual(
+      cases.map(({ provider, field }) =>
+        expect.stringMatching(new RegExp(`missing.*${provider}.*${field}.*bootstrap`, 'i')),
+      ),
+    );
   });
 
   it('renders extra rows after all engine rows', () => {
@@ -469,13 +540,16 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
 
   it('changed engine default (e.g. stories model flipped) -> exit 1, diff shows the stale row, file untouched', async () => {
     vi.resetModules();
-    vi.doMock('../src/engine/resolved-config.js', async () => {
-      const actual = await vi.importActual<typeof import('../src/engine/resolved-config.js')>(
-        '../src/engine/resolved-config.js',
+    vi.doMock('../src/engine/provider-model-policy.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/engine/provider-model-policy.js')>(
+        '../src/engine/provider-model-policy.js',
       );
       return {
         ...actual,
-        DEFAULT_STEP_MODELS: { ...actual.DEFAULT_STEP_MODELS, stories: 'fable' },
+        CLAUDE_MODEL_POLICY: {
+          ...actual.CLAUDE_MODEL_POLICY,
+          stepModels: { ...actual.CLAUDE_MODEL_POLICY.stepModels, stories: 'fable' },
+        },
       };
     });
 
@@ -497,7 +571,7 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
       const after = await readFile(harnessPath, 'utf8');
       expect(after).toBe(before);
     } finally {
-      vi.doUnmock('../src/engine/resolved-config.js');
+      vi.doUnmock('../src/engine/provider-model-policy.js');
       vi.resetModules();
     }
   });
