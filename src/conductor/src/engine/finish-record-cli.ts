@@ -211,5 +211,9 @@ export async function dispatchFinishRecord(
 
   await writeFile(markerPath, `${cmd.choice}\n`, 'utf-8');
 
+  if (cmd.choice === 'pr') {
+    await writeFile(join(cmd.pipelineDir, 'DONE'), '', 'utf-8');
+  }
+
   return 0;
 }
