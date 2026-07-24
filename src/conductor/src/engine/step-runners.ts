@@ -45,9 +45,10 @@ const STEP_PROMPTS: Record<StepName, string> = {
   // the fresh-session assembly logic (see resolveRebaseConflict pattern),
   // not by invoking a literal `/build-review` skill.
   build_review: '/build-review',
-  // Engine-native (like complexity/rebase) — the completion predicate reads
-  // or computes the wiring-reachability evidence file directly; no skill
-  // dispatch. Present only to keep the Record<StepName, string> exhaustive.
+  // The gate's evidence (.pipeline/wiring-evidence.json) is deterministically
+  // computed engine-side by the completion predicate, not by the LLM — but
+  // the step itself IS dispatched normally via `/conduct wiring-check` when
+  // gaps need remediation (only the evidence computation is engine-native).
   wiring_check: '/conduct wiring-check',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',

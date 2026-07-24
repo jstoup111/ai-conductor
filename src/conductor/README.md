@@ -1706,9 +1706,14 @@ waived, closed means the waiver has expired (gap), and a `gh` error fails closed
 `gh` is never invoked for path-form refs.
 
 **Evidence.** The probe's findings are written to `.pipeline/wiring-evidence.json`
-(`WiringEvidence` schema) with a freshness check — a stale HEAD sha invalidates the evidence
-and forces a re-check. `CompletionContext.wiringProbe` is the injection seam the completion
-predicate uses to invoke the probe live and durably write evidence.
+(`WiringEvidence` schema) with a freshness check against the current HEAD sha. Evidence
+matching HEAD short-circuits the completion check without invoking the probe at all. Evidence
+recorded at a prior HEAD is no longer rejected outright — it is re-derived in-process, once,
+via `CompletionContext.wiringProbe` (the injection seam the completion predicate uses to
+invoke the probe live and durably write fresh evidence); this re-derivation is single-shot,
+at most one probe invocation per completion check. A schema-invalid evidence file, or a probe
+that fails or throws during re-derivation, still fails closed — it is never treated as
+passing or silently recomputed into a passing result.
 
 **Config.**
 
