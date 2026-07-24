@@ -416,6 +416,12 @@ describe('engine/rebase — HALT (FR-8)', () => {
     expect(note).toContain('git rebase --continue');
     expect(note).toContain('.pipeline/HALT');
   });
+
+  it('classifies rebase-conflict HALTs as needs-human via the sidecar', async () => {
+    await writeHalt(dir, ['src/feature.ts']);
+    const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+    expect(cls).toBe('needs-human');
+  });
 });
 
 describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {

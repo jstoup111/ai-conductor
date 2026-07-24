@@ -505,7 +505,7 @@ export async function writeHalt(
     `  2. git rebase --continue\n` +
     `  3. rm .pipeline/HALT\n` +
     `  4. Re-queue the feature for the daemon.\n`;
-  await writeHaltMarker(projectRoot, note);
+  await writeHaltMarker(projectRoot, note, 'needs-human');
 }
 
 // ── Outcome model ────────────────────────────────────────────────────────────
