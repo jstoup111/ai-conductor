@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
+  resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
 import type { EffortLevel } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/steps.js';
@@ -217,5 +218,57 @@ it('defines exhaustive, provider-native, deeply frozen built-in model policies',
       claude: true,
       codex: true,
     },
+  });
+});
+
+it('looks up built-in policies and warns with an actionable Claude-compatible fallback', () => {
+  const warnings: string[] = [];
+  const warn = (message: string): void => {
+    warnings.push(message);
+  };
+  const claude = resolveProviderModelPolicy('claude', warn);
+  const codex = resolveProviderModelPolicy('codex', warn);
+  const knownWarningCount = warnings.length;
+  const unknownProviderKey = 'nebula-adapter';
+  const firstUnknown = resolveProviderModelPolicy(unknownProviderKey, warn);
+  const secondUnknown = resolveProviderModelPolicy(unknownProviderKey, warn);
+  const unknownWithoutWarn = resolveProviderModelPolicy('silent-nebula-adapter');
+
+  expect({
+    claudeIsExactPolicy: claude === CLAUDE_MODEL_POLICY,
+    codexIsExactPolicy: codex === CODEX_MODEL_POLICY,
+    knownWarningCount,
+    repeatedUnknownsAreExactClaudePolicy:
+      firstUnknown === CLAUDE_MODEL_POLICY &&
+      secondUnknown === CLAUDE_MODEL_POLICY,
+    unknownWithoutWarnIsExactClaudePolicy:
+      unknownWithoutWarn === CLAUDE_MODEL_POLICY,
+    unknownWarningCount: warnings.length,
+    warningDetails: warnings.map((warning) => ({
+      namesUnknownProvider: warning.includes(unknownProviderKey),
+      explainsCompatibilityDefault:
+        /Claude-compatible model defaults are being used/i.test(warning),
+      directsPolicyAddition:
+        /add (?:a )?provider model policy/i.test(warning),
+    })),
+  }).toEqual({
+    claudeIsExactPolicy: true,
+    codexIsExactPolicy: true,
+    knownWarningCount: 0,
+    repeatedUnknownsAreExactClaudePolicy: true,
+    unknownWithoutWarnIsExactClaudePolicy: true,
+    unknownWarningCount: 2,
+    warningDetails: [
+      {
+        namesUnknownProvider: true,
+        explainsCompatibilityDefault: true,
+        directsPolicyAddition: true,
+      },
+      {
+        namesUnknownProvider: true,
+        explainsCompatibilityDefault: true,
+        directsPolicyAddition: true,
+      },
+    ],
   });
 });
