@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
 
@@ -503,5 +504,390 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
     ],
     conductorConstructionCount: 1,
     conductorReceivesExactPolicy: true,
+  });
+});
+
+it('binds every production step-resolution call to the policy owned by its execution scope', async () => {
+  const productionRoot = new URL('../../src/', import.meta.url);
+  const sourceUrls: URL[] = [];
+  const collectSources = async (directory: URL): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true });
+    await Promise.all(entries.map(async (entry) => {
+      const entryUrl = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
+      if (entry.isDirectory()) {
+        await collectSources(entryUrl);
+      } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
+        sourceUrls.push(entryUrl);
+      }
+    }));
+  };
+  await collectSources(productionRoot);
+
+  const configPath = fileURLToPath(new URL('../../tsconfig.json', import.meta.url));
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  const parsedConfig = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    fileURLToPath(new URL('../../', import.meta.url)),
+  );
+  const program = ts.createProgram({
+    rootNames: sourceUrls.map(fileURLToPath),
+    options: parsedConfig.options,
+  });
+  const checker = program.getTypeChecker();
+  const resolverSource = program.getSourceFile(
+    fileURLToPath(new URL('../../src/engine/resolved-config.ts', import.meta.url)),
+  );
+  const resolverModule = resolverSource &&
+    checker.getSymbolAtLocation(resolverSource);
+  const resolverSymbol = resolverModule &&
+    checker.getExportsOfModule(resolverModule).find(
+      (symbol) => symbol.name === 'resolveStepConfig',
+    );
+  const canonicalSymbol = (node: ts.Node): ts.Symbol | undefined => {
+    let symbol = checker.getSymbolAtLocation(node);
+    while (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    return symbol;
+  };
+  const isResolverDeclarationName = (node: ts.Identifier): boolean =>
+    resolverSymbol?.declarations?.some(
+      (declaration) =>
+        'name' in declaration &&
+        declaration.name === node,
+    ) ?? false;
+  const isImportOrExportBinding = (node: ts.Identifier): boolean => {
+    let current: ts.Node | undefined = node;
+    while (
+      current &&
+      !ts.isSourceFile(current) &&
+      !ts.isStatement(current)
+    ) {
+      if (
+        ts.isImportSpecifier(current) ||
+        ts.isImportClause(current) ||
+        ts.isNamespaceImport(current) ||
+        ts.isExportSpecifier(current)
+      ) return true;
+      current = current.parent;
+    }
+    return false;
+  };
+  const unwrapExpression = (node: ts.Expression): ts.Expression => {
+    let current = node;
+    while (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertionExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
+      current = current.expression;
+    }
+    return current;
+  };
+  const referenceExpression = (node: ts.Identifier): ts.Expression => {
+    if (
+      ts.isPropertyAccessExpression(node.parent) &&
+      node.parent.name === node
+    ) {
+      return node.parent;
+    }
+    return node;
+  };
+  const callForReference = (
+    expression: ts.Expression,
+  ): ts.CallExpression | undefined => {
+    let current: ts.Expression = expression;
+    while (
+      current.parent &&
+      (
+        ts.isParenthesizedExpression(current.parent) ||
+        ts.isAsExpression(current.parent) ||
+        ts.isTypeAssertionExpression(current.parent) ||
+        ts.isNonNullExpression(current.parent) ||
+        ts.isSatisfiesExpression(current.parent)
+      )
+    ) {
+      current = current.parent;
+    }
+    return ts.isCallExpression(current.parent) &&
+        unwrapExpression(current.parent.expression) === unwrapExpression(current)
+      ? current.parent
+      : undefined;
+  };
+  const isComputedResolverAccess = (
+    node: ts.Node,
+  ): node is ts.ElementAccessExpression =>
+    ts.isElementAccessExpression(node) &&
+    node.argumentExpression !== undefined &&
+    (
+      ts.isStringLiteral(node.argumentExpression) ||
+      ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)
+    ) &&
+    node.argumentExpression.text === 'resolveStepConfig';
+  const enclosingFunction = (
+    node: ts.Node,
+  ): ts.FunctionDeclaration | ts.MethodDeclaration | undefined => {
+    let current: ts.Node | undefined = node.parent;
+    while (
+      current &&
+      !ts.isFunctionDeclaration(current) &&
+      !ts.isMethodDeclaration(current)
+    ) {
+      current = current.parent;
+    }
+    return current &&
+        (ts.isFunctionDeclaration(current) || ts.isMethodDeclaration(current))
+      ? current
+      : undefined;
+  };
+  const enclosingClass = (
+    node: ts.Node,
+  ): ts.ClassDeclaration | ts.ClassExpression | undefined => {
+    let current: ts.Node | undefined = node.parent;
+    while (
+      current &&
+      !ts.isClassDeclaration(current) &&
+      !ts.isClassExpression(current)
+    ) {
+      current = current.parent;
+    }
+    return current &&
+        (ts.isClassDeclaration(current) || ts.isClassExpression(current))
+      ? current
+      : undefined;
+  };
+  const parameterContaining = (
+    declaration: ts.Declaration,
+  ): ts.ParameterDeclaration | undefined => {
+    let current: ts.Node | undefined = declaration;
+    while (current && !ts.isParameter(current)) current = current.parent;
+    return current && ts.isParameter(current) ? current : undefined;
+  };
+  const policyProvenance = (
+    argument: ts.Expression | undefined,
+    call: ts.CallExpression,
+  ): string => {
+    if (!argument) return '<missing>';
+    const expression = unwrapExpression(argument);
+    const scope = enclosingFunction(call);
+    if (ts.isIdentifier(expression)) {
+      const symbol = canonicalSymbol(expression);
+      const declaration = symbol?.declarations?.find((candidate) => {
+        const parameter = parameterContaining(candidate);
+        return parameter !== undefined && parameter.parent === scope;
+      });
+      const type = checker.typeToString(checker.getTypeAtLocation(expression));
+      if (declaration) return `parameter:${expression.text}:${type}`;
+
+      const optionBinding = symbol?.declarations?.find(
+        (candidate): candidate is ts.BindingElement => {
+          if (
+            !scope ||
+            !ts.isBindingElement(candidate) ||
+            !ts.isObjectBindingPattern(candidate.parent) ||
+            !ts.isVariableDeclaration(candidate.parent.parent)
+          ) return false;
+          const variable = candidate.parent.parent;
+          const source = variable.initializer &&
+            unwrapExpression(variable.initializer);
+          if (!source || !ts.isIdentifier(source)) return false;
+          const sourceSymbol = canonicalSymbol(source);
+          const parameter = scope.parameters.find(
+            (scopeParameter) =>
+              ts.isIdentifier(scopeParameter.name) &&
+              canonicalSymbol(scopeParameter.name) === sourceSymbol &&
+              checker.typeToString(
+                  checker.getTypeAtLocation(scopeParameter.name),
+                ) === 'VerifierDispatchOptions',
+          );
+          const defaultPolicy = candidate.initializer &&
+            unwrapExpression(candidate.initializer);
+          const defaultSymbol = defaultPolicy &&
+              ts.isIdentifier(defaultPolicy)
+            ? canonicalSymbol(defaultPolicy)
+            : undefined;
+          const canonicalClaudeDefault = defaultSymbol?.declarations?.some(
+            (defaultDeclaration) =>
+              ts.isVariableDeclaration(defaultDeclaration) &&
+              ts.isIdentifier(defaultDeclaration.name) &&
+              defaultDeclaration.name.text === 'CLAUDE_MODEL_POLICY' &&
+              defaultDeclaration.getSourceFile().fileName.endsWith(
+                '/engine/provider-model-policy.ts',
+              ),
+          );
+          return parameter !== undefined && canonicalClaudeDefault === true;
+        },
+      );
+      return optionBinding && type === 'ProviderModelPolicy'
+        ? `option:${expression.text}:${type}`
+        : `unproven:${expression.getText()}:${type}`;
+    }
+    if (
+      ts.isPropertyAccessExpression(expression) &&
+      expression.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+      const symbol = canonicalSymbol(expression.name);
+      const owner = enclosingClass(call);
+      const declaration = symbol?.declarations?.find((candidate) => {
+        if (ts.isPropertyDeclaration(candidate)) {
+          return candidate.parent === owner;
+        }
+        return ts.isParameter(candidate) &&
+          ts.isConstructorDeclaration(candidate.parent) &&
+          candidate.parent.parent === owner;
+      });
+      const type = checker.typeToString(checker.getTypeAtLocation(expression));
+      const ownerName = owner?.name?.text ?? '<anonymous>';
+      return declaration
+        ? `property:${ownerName}.${expression.name.text}:${type}`
+        : `unproven:${expression.getText()}:${type}`;
+    }
+    return `unproven:${expression.getText()}:${
+      checker.typeToString(checker.getTypeAtLocation(expression))
+    }`;
+  };
+
+  const callSites: Array<{
+    file: string;
+    scope: string;
+    argumentCount: number;
+    policyProvenance: string;
+  }> = [];
+  const unexpectedReferences: string[] = [];
+  const recordResolverReference = (
+    expression: ts.Expression,
+    sourceFile: ts.SourceFile,
+    file: string,
+    requiresCanonicalSymbol: boolean,
+  ): void => {
+    if (
+      requiresCanonicalSymbol &&
+      canonicalSymbol(expression) !== resolverSymbol
+    ) {
+      unexpectedReferences.push(
+        `${file}:computed-unresolved:${
+          sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line +
+          1
+        }`,
+      );
+      return;
+    }
+    const call = callForReference(expression);
+    if (!call) {
+      unexpectedReferences.push(
+        `${file}:${sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line + 1}`,
+      );
+      return;
+    }
+    const scopeNode = enclosingFunction(call);
+    const scope = scopeNode?.name?.getText(sourceFile) ?? '<unknown>';
+    callSites.push({
+      file,
+      scope,
+      argumentCount: call.arguments.length,
+      policyProvenance: policyProvenance(call.arguments[2], call),
+    });
+  };
+  for (const sourceUrl of sourceUrls.sort(
+    (left, right) => left.pathname.localeCompare(right.pathname),
+  )) {
+    const filePath = fileURLToPath(sourceUrl);
+    const sourceFile = program.getSourceFile(filePath);
+    if (!sourceFile) continue;
+    const file = sourceUrl.pathname.slice(productionRoot.pathname.length);
+    const visit = (node: ts.Node): void => {
+      if (isComputedResolverAccess(node)) {
+        recordResolverReference(node, sourceFile, file, true);
+      } else if (
+        ts.isIdentifier(node) &&
+        canonicalSymbol(node) === resolverSymbol &&
+        !isResolverDeclarationName(node) &&
+        !isImportOrExportBinding(node)
+      ) {
+        recordResolverReference(
+          referenceExpression(node),
+          sourceFile,
+          file,
+          false,
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
+
+  const computedMutation = ts.createSourceFile(
+    'computed-resolver-mutation.ts',
+    `
+      resolverNamespace['resolveStepConfig'](
+        step,
+        phase,
+        modelPolicy,
+        config,
+        options,
+      );
+      const escapedResolver = resolverNamespace[\`resolveStepConfig\`];
+    `,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const computedMutationReferences: string[] = [];
+  const visitComputedMutation = (node: ts.Node): void => {
+    if (isComputedResolverAccess(node)) {
+      computedMutationReferences.push(
+        callForReference(node) ? 'computed-call' : 'computed-non-call',
+      );
+    }
+    ts.forEachChild(node, visitComputedMutation);
+  };
+  visitComputedMutation(computedMutation);
+
+  expect(
+    {
+      callSites: callSites.sort((left, right) =>
+        `${left.file}#${left.scope}`.localeCompare(
+          `${right.file}#${right.scope}`,
+        )
+      ),
+      computedMutationReferences,
+      unexpectedReferences: unexpectedReferences.sort(),
+    },
+  ).toEqual({
+    callSites: [
+      {
+        file: 'engine/attribution-lane.ts',
+        scope: 'dispatchAttributionVerifier',
+        argumentCount: 5,
+        policyProvenance: 'option:modelPolicy:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/conductor.ts',
+        scope: 'resolveGroupMembership',
+        argumentCount: 5,
+        policyProvenance: 'parameter:modelPolicy:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/conductor.ts',
+        scope: 'run',
+        argumentCount: 5,
+        policyProvenance: 'property:Conductor.modelPolicy:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/step-runners.ts',
+        scope: 'resolvedConfigFor',
+        argumentCount: 5,
+        policyProvenance:
+          'property:DefaultStepRunner.modelPolicy:ProviderModelPolicy',
+      },
+    ],
+    computedMutationReferences: [
+      'computed-call',
+      'computed-non-call',
+    ],
+    unexpectedReferences: [],
   });
 });
