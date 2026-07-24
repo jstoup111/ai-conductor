@@ -52,17 +52,34 @@ grep -E 'build_stall|build_no_progress|zero_work_product|rate_limit|credentials_
 
 #### `no_task_progress`
 
-The build step's circuit breaker. From attempt 2 onward, if the count of resolved plan tasks
-did not increase over the previous attempt, the step is declared stalled. The resolved count is
-the **union** of two sources:
+The build step's circuit breaker. From attempt 2 onward, the step is declared stalled only when
+**both** signals stay pinned across the attempt: the count of resolved plan tasks did not
+increase, **and** HEAD did not move. The resolved count is the **union** of two sources:
 
 - rows in `.pipeline/task-status.json` whose `status` is `completed` or `skipped`, and
 - plan task ids carried by `Task: <id>` trailers on commits in
   `merge-base(origin/<default-branch>, HEAD)..HEAD`.
 
 So a task committed with a valid `Task:` trailer counts as resolved even if its row was never
-flipped. Conversely, work committed with **no** `Task:` trailer and no row update is invisible
-to the breaker — that is the most common cause of a *false* stall on real work.
+flipped. Work committed with **no** `Task:` trailer and no row update is invisible to the
+*count* — but not to the breaker, because it still moves HEAD.
+
+**Commit movement is the liveness authority
+(adr-2026-07-23-commit-movement-liveness-floor).** The attributed-task count is advisory
+routing and telemetry; it never independently proves a build is stuck. An attempt that lands
+real, committed-but-un-trailered work moves HEAD while the count stays pinned, and is
+classified `unattributed_progress` — telemetry, not a stall — instead of `no_task_progress`.
+A SHA read that fails on either side of the attempt is treated fail-closed, degrading to the
+old count-only behavior. A genuine wedge (zero commits, count pinned) still stalls and halts
+exactly as before: count alone can never kill a build.
+
+If the build step's retry budget then exhausts with at least one HEAD-moving attempt, the run
+does **not** take the generic "retries exhausted" HALT. It routes into `build_review` — the
+sole completion authority — through the same seam a normally-completed build uses, recording
+the unresolved plan task ids in `conduct-state.json` (`build_routed_reason`). That is not an
+always-pass: `build_review` re-grades the diff independently and can still FAIL the routed
+build, kicking it back to `build` under the same `MAX_KICKBACKS_PER_GATE` bound as any other
+`build_review` kickback. A build with zero commit movement across every attempt never routes.
 
 In daemon mode the engine synthesizes a remediation prompt into
 `.pipeline/build-stall-question.md` and dispatches `/remediate`, bounded to 2 remediation
@@ -196,7 +213,9 @@ Pick the branch that matches the diagnosis. Every step says what it changes.
 
 ### The stall was a false negative — real work exists
 
-The commits are on the branch but carry no `Task:` trailer, so the breaker cannot see them.
+The commits are on the branch but carry no `Task:` trailer, so the resolved-task count cannot
+see them and the build completion gate keeps reporting those ids as pending. (The stall breaker
+itself is not fooled — those commits move HEAD — but the count still drives the gate.)
 Do not re-run the tasks. Make the work visible instead:
 
 1. Confirm the commits exist and check their trailers:

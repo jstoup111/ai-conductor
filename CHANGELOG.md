@@ -312,6 +312,20 @@ test_suite:
 
 ### Fixed
 
+- A build step whose retry budget exhausted was terminally HALTed with a generic
+  "retries exhausted" message even when every attempt landed real, committed work that
+  simply never carried a `Task:` trailer — the attributed count is advisory
+  routing/telemetry only, but the exhaustion tail treated it as proof the build was
+  stuck. `Conductor.run()` now tracks whether any attempt moved HEAD
+  (`anyAttemptMovedHead`); when the budget exhausts with real commit movement, the run
+  routes through the same advance seam `completion.done` uses into `build_review` (the
+  sole completion authority) instead of HALTing, recording the unresolved plan task ids
+  into `conduct-state.json`. This is never an always-pass: `build_review` independently
+  re-grades the diff and can still FAIL a routed build, kicking it back to `build` under
+  the same `MAX_KICKBACKS_PER_GATE` bound as any other build_review kickback. A genuine
+  wedge (zero commit movement across every attempt) is unaffected and keeps today's
+  remediation-then-HALT path unchanged. See `adr-2026-07-23-commit-movement-liveness-floor`,
+  `docs/explanation/gates.md`, and `docs/runbooks/stalled-or-stuck-feature.md` for details.
 - Resolved-task accounting missed `Task: <id>` attribution lines that build agents emit
   mid-message instead of in the final trailer block (git's `%(trailers)` only parses the
   final paragraph), making real committed work invisible to `countResolvedTasks` and
