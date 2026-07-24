@@ -10,8 +10,10 @@ cd ai-conductor
 ./bin/install
 ```
 
-This symlinks all 20 skills into `~/.claude/skills/` and installs the conductor CLI(s) to
-`~/.local/bin/`. `./bin/install` also builds the TypeScript conductor bundle for you —
+This symlinks every skill into both user-scoped discovery directories — `~/.claude/skills/`
+for Claude Code and `~/.codex/skills/` for Codex — and installs the conductor CLI(s) to
+`~/.local/bin/`. It does not install skills into a project; use project-local skills only as
+explicit overrides. `./bin/install` also builds the TypeScript conductor bundle for you —
 it runs `npm install && npm run build` in `src/conductor/` (in both first-run and
 `--update` mode) and symlinks `conduct-ts` once the bundle exists. The build needs
 Node >= 20.5 (the repo pins 20.19.2 via `.tool-versions`); if Node is too old or `npm`
@@ -74,6 +76,7 @@ After running `/bootstrap` on a project, it creates:
 
 ```
 your-project/
+├── AGENTS.md                # Codex instructions; references user-scoped harness skills
 ├── .claude/
 │   └── settings.json        # Project-scoped Read/Edit/Write permissions +
 │                            # pre-PR lint hook (PreToolUse on gh pr create)
