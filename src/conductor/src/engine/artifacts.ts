@@ -1965,9 +1965,39 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
     const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
-    const validated = validateWiringEvidence(parsed, currentHead);
-    if (!validated.ok) {
-      return { done: false, reason: validated.reason };
+
+    if (raw !== null) {
+      // Existing evidence file: first check shape/schema only (no head
+      // comparison) so malformed evidence is never "repaired" by recompute.
+      const shapeValidated = validateWiringEvidence(parsed);
+      if (!shapeValidated.ok) {
+        return { done: false, reason: shapeValidated.reason };
+      }
+      const recordedHead = (parsed as WiringEvidence).head;
+      if (currentHead != null && recordedHead !== currentHead && ctx.wiringProbe) {
+        // Stale evidence (HEAD moved) but we can re-derive at the current
+        // HEAD instead of rejecting outright — at most one re-derivation
+        // per completion check.
+        const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
+        if ('reason' in derived) {
+          return { done: false, reason: `wiring probe failed: ${derived.reason}` };
+        }
+        parsed = derived;
+        const revalidated = validateWiringEvidence(parsed, currentHead);
+        if (!revalidated.ok) {
+          return { done: false, reason: revalidated.reason };
+        }
+      } else {
+        const validated = validateWiringEvidence(parsed, currentHead);
+        if (!validated.ok) {
+          return { done: false, reason: validated.reason };
+        }
+      }
+    } else {
+      const validated = validateWiringEvidence(parsed, currentHead);
+      if (!validated.ok) {
+        return { done: false, reason: validated.reason };
+      }
     }
     const evidence = parsed as WiringEvidence;
     const gapMessages: string[] = [];
