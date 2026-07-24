@@ -499,3 +499,124 @@ describe('budget exhaustion with real, unattributed commits every attempt (RED �
     expect(combined).toMatch(/\b3\b/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C1 identity test (plan Task 9): the routed exit added in Task 8 MUST reuse
+// the exact same advance seam `completion.done` uses — no second, divergent
+// "success" code path. Runs one fixture to a normal `completion.done` advance
+// (all plan tasks trailer-stamped, gate satisfied on attempt 1) and one to a
+// routed advance (Task 7/8's shape — zero resolved rows, every attempt moves
+// HEAD, budget exhausts), then asserts the persisted `build` step state and
+// the build → build_review transition shape are identical between the two.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'conductor-advance-identity-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initGitRepo(dir);
+    await seedAllArtifactsExceptTaskStatus(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('gate advance (completion.done on attempt 1) and routed advance (budget exhausted, commit movement) persist identical build-step state and transition shape', async () => {
+    // ── Fixture A: gate advance — every plan task trailer-stamped, so
+    // `completion.done` is true on the very first attempt. ──────────────────
+    await writePlanAndStatus(dir, 3, []);
+    const stepStartsGate: StepName[] = [];
+    events.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStartsGate.push(e.step);
+    });
+    const gateRunner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async (step: StepName) => {
+        // Only the `build` step needs to land the trailer commits that
+        // satisfy `completion.done` — every other step in the chain (worktree,
+        // memory, explore, ...) just needs to return success so its own
+        // (glob-satisfied-by-the-seed) completion check passes.
+        if (step === 'build') {
+          await commitWithTaskTrailer(dir, '1', 1);
+          await commitWithTaskTrailer(dir, '2', 2);
+          await commitWithTaskTrailer(dir, '3', 3);
+        }
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const gateConductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: gateRunner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+    await gateConductor.run();
+
+    const gateStateRaw = await readFile(statePath, 'utf-8');
+    const gateState = JSON.parse(gateStateRaw) as Record<string, unknown>;
+
+    // ── Fixture B: routed advance — same 3-task plan, zero resolved rows,
+    // every attempt lands real unattributed commits, budget exhausts. ───────
+    const dir2 = await mkdtemp(join(tmpdir(), 'conductor-advance-identity-'));
+    const statePath2 = join(dir2, 'conduct-state.json');
+    const events2 = new ConductorEventEmitter();
+    await initGitRepo(dir2);
+    await seedAllArtifactsExceptTaskStatus(dir2);
+    await writePlanAndStatus(dir2, 3, []);
+    const stepStartsRouted: StepName[] = [];
+    events2.on('step_started', (e) => {
+      if (e.type === 'step_started') stepStartsRouted.push(e.step);
+    });
+    let seq = 0;
+    const routedRunner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
+      run: vi.fn().mockImplementation(async () => {
+        seq++;
+        await commitPlainWork(dir2, seq);
+        return { success: true };
+      }),
+      runInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const routedConductor = new Conductor({
+      stateFilePath: statePath2,
+      stepRunner: routedRunner,
+      events: events2,
+      projectRoot: dir2,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 3,
+    });
+    await routedConductor.run();
+
+    const routedStateRaw = await readFile(statePath2, 'utf-8');
+    const routedState = JSON.parse(routedStateRaw) as Record<string, unknown>;
+
+    await rm(dir2, { recursive: true, force: true });
+
+    // Same advance seam → same persisted `build` step status in both cases.
+    expect(gateState.build).toBe('done');
+    expect(routedState.build).toBe('done');
+    expect(gateState.build).toBe(routedState.build);
+
+    // Same next-step scheduling shape: from `build` onward, both runs pick
+    // the identical sequence of steps (the SAME advanceTail selection code
+    // path — a divergent second advance path could plausibly pick a
+    // different next step, insert/skip a transition, or otherwise diverge).
+    const gateBuildIdx = stepStartsGate.indexOf('build');
+    const routedBuildIdx = stepStartsRouted.indexOf('build');
+    expect(gateBuildIdx).toBeGreaterThanOrEqual(0);
+    expect(routedBuildIdx).toBeGreaterThanOrEqual(0);
+    expect(stepStartsGate.slice(gateBuildIdx)).toEqual(stepStartsRouted.slice(routedBuildIdx));
+    expect(stepStartsGate).toContain('build_review');
+    expect(stepStartsRouted).toContain('build_review');
+  });
+});
