@@ -1154,6 +1154,10 @@ describe('engine/conductor', () => {
       // No self-heal: never kicked back to build, never rebuilt.
       expect(kickbacks).toHaveLength(0);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      // This is an operator-only DECIDE-phase gap — the re-kick sweep must
+      // never auto-resume it, so the HALT is classified needs-human.
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('/remediate: routes an autonomous gap to its target step with the gap in the hint', async () => {
@@ -1236,6 +1240,10 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/needs human DECIDE/);
       expect(halt).toMatch(/FR-3 \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      // An architectural-clarity gap needs a human DECIDE — the re-kick
+      // sweep must never auto-resume it.
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('/remediate: daemon HALTs on a DECIDE-phase target (architecture_review) instead of rewinding (#644)', async () => {

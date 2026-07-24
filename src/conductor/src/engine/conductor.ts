@@ -2720,16 +2720,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                    () => {},
-                  );
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -2879,16 +2870,7 @@ export class Conductor {
                   const reason =
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
-                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                    () => {},
-                  );
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -4448,7 +4430,7 @@ export class Conductor {
                     `freshBaseSha: ${scopeFailDisposition.freshBaseSha}\n` +
                     `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
                     `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
-                  await writeHaltMarker(this.projectRoot, haltBody);
+                  await writeHaltMarker(this.projectRoot, haltBody, 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const reason =
                     'build_review scope-FAIL disposition HALT: second stale-mirage ' +
@@ -4832,16 +4814,7 @@ export class Conductor {
                 }
                 if (outcome.kind === 'halt') {
                   const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
-                  await mkdir(join(this.projectRoot, '.pipeline'), {
-                    recursive: true,
-                  }).catch(() => {});
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -4903,16 +4876,11 @@ export class Conductor {
                 cls.kind === 'impl-only'
                   ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
-              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                () => {},
-              );
-              await writeFile(
-                join(this.projectRoot, LOOP_HALT_MARKER),
-                reason + '\n',
-                'utf-8',
-              ).catch(() => {
-                /* best-effort marker */
-              });
+              // Only the un-ALIGNED-FR (product/plan gap) branch is a
+              // needs-human halt — the impl-only branch is a different
+              // funnel (self-heal budget exhausted), classified elsewhere.
+              const haltClass = cls.kind === 'impl-only' ? undefined : 'needs-human';
+              await writeHaltMarker(this.projectRoot, reason + '\n', haltClass);
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
