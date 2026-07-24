@@ -21,8 +21,8 @@ cd ai-conductor
 ./bin/install
 ```
 
-This symlinks every skill into the user-scoped `~/.claude/skills/` and `~/.codex/skills/`
-directories and installs the conductor CLI(s) to `~/.local/bin/`. The installer never puts
+This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and
+`~/.codex/skills/` directories and installs the conductor CLI(s) to `~/.local/bin/`. The installer never puts
 the harness skills in a project directory; project-local skills are optional explicit overrides.
 See [Getting Started](docs/getting-started.md) for the full install
 walkthrough (Mermaid renderer setup, verify/update/uninstall, worktree-root guard) and

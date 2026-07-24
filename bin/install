@@ -8,6 +8,7 @@ set -euo pipefail
 #   ./bin/install --check  # Check installation status without changing anything
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
 CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
 CODEX_SKILLS_DIR="${HOME}/.codex/skills"
 LOCAL_BIN="${HOME}/.local/bin"
@@ -50,6 +51,10 @@ done
 unset _skill_dir
 if [ ${#SKILLS[@]} -eq 0 ]; then
   fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
+  exit 1
+fi
+if [ ! -f "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+  fail "Harness instructions missing: ${HARNESS_INSTRUCTIONS_SOURCE}"
   exit 1
 fi
 
@@ -105,7 +110,7 @@ check_installation() {
   # configuration directories.
   local missing=0
   local stale=0
-  local skills_dir client skill target
+  local skills_dir client skill target harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -138,6 +143,24 @@ check_installation() {
         missing=$((missing + 1))
       fi
     done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      local resolved_harness
+      resolved_harness=$(readlink -f "$harness_target" 2>/dev/null || echo "broken")
+      if [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ok "${client} harness instructions"
+      else
+        warn "${client} harness instructions — point to ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
+        stale=$((stale + 1))
+      fi
+    elif [ -e "$harness_target" ]; then
+      warn "${client} harness instructions — exists but is not a symlink"
+      stale=$((stale + 1))
+    else
+      fail "${client} harness instructions — not installed"
+      missing=$((missing + 1))
+    fi
   done
 
   # Check conduct script
@@ -986,7 +1009,7 @@ install() {
   # Project-local skills remain available only as explicit project overrides.
   local installed=0
   local updated=0
-  local skills_dir client skill source target current
+  local skills_dir client skill source target current harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1018,6 +1041,20 @@ install() {
         installed=$((installed + 1))
       fi
     done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+      if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+      fi
+    else
+      if [ -e "$harness_target" ]; then
+        warn "${client} harness instructions — exists but is not a symlink. Backing up to ${harness_target}.bak"
+        mv "$harness_target" "${harness_target}.bak" || { warn "${client} harness instructions — backup failed"; continue; }
+      fi
+      ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
+    fi
   done
 
   if [ "$installed" -gt 0 ] || [ "$updated" -gt 0 ]; then
@@ -1146,7 +1183,7 @@ uninstall() {
   echo ""
 
   local removed=0
-  local skills_dir client skill target points_to
+  local skills_dir client skill target points_to harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1165,6 +1202,17 @@ uninstall() {
         fi
       fi
     done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+      if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        rm "$harness_target"
+        removed=$((removed + 1))
+      else
+        warn "${client} harness instructions — symlink points elsewhere, skipping"
+      fi
+    fi
   done
   ok "Removed ${removed} skill symlinks"
 
