@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -173,5 +173,41 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.done).toBe(false);
     expect(result.reason).toBeDefined();
     expect(result.reason).toContain('wiring evidence not found');
+  });
+
+  it('missing evidence file with a wiringProbe injected computes evidence live and persists it to .pipeline/wiring-evidence.json', async () => {
+    const computed: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => computed,
+    });
+
+    expect(result.done).toBe(true);
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written).toEqual(computed);
+  });
+
+  it('wiringProbe throwing is unsatisfied with a reason naming the probe failure', async () => {
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        throw new Error('probe boom');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain('wiring probe failed: probe boom');
   });
 });
