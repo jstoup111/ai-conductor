@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -87,6 +87,18 @@ async function buildConflictRepo(): Promise<{
 }
 
 // ── Wiring tests ──────────────────────────────────────────────────────────────
+
+it('daemon rebase resolver carries the selected provider model policy', async () => {
+  const source = await readFile(
+    new URL('../../src/daemon-cli.ts', import.meta.url),
+    'utf8',
+  );
+  const marker = source.indexOf('featureDesc: `rebase-resolution-${entry.slug}`');
+  const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
+  const constructorEnd = source.indexOf('});', marker);
+
+  expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+});
 
 describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real git)', () => {
   let repo: string;

@@ -109,6 +109,17 @@ describe('CF-1: resolver dispatches via the StepRunner path, not claude --fix-se
     expect(dispatchBody).not.toMatch(/fixRunner\s*:\s*productionCiFixRunner/);
     expect(dispatchBody).toMatch(/resolveCiFailure/);
   });
+
+  it('daemon ci-fix resolver carries the selected provider model policy', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf8');
+    const marker = source.indexOf(
+      'featureDesc: `ci-fix-resolution-${ctx.entry.slug}`',
+    );
+    const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
+    const constructorEnd = source.indexOf('});', marker);
+
+    expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+  });
 });
 
 // ── CF-2 (happy): no-op fix leaves the branch untouched, no false green ──────
