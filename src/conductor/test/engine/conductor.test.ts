@@ -27,7 +27,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 import { execa } from 'execa';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepGroup, Track } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -61,7 +61,11 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from '../../src/engine/provider-model-policy.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -5993,9 +5997,68 @@ describe('engine/conductor', () => {
   });
 
   describe('validation group membership resolution (Task 15)', () => {
+    it('uses the supplied Codex policy to resolve an L-tier plan member', () => {
+      const observedPolicyValues: {
+        tierOverride?: unknown;
+      } = {};
+      const policy: ProviderModelPolicy = new Proxy(CODEX_MODEL_POLICY, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (property === 'stepTierOverrides') {
+            observedPolicyValues.tierOverride = value.plan?.L;
+          }
+          return value;
+        },
+      });
+      const tierAwareGroup: StepGroup = {
+        ...VALIDATION_GROUP,
+        members: ['plan'],
+      };
+      const state: ConductState = {
+        bootstrap: 'done',
+        worktree: 'done',
+        memory: 'done',
+        assess: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'L',
+        track: 'technical',
+        prd: 'skipped',
+        architecture_diagram: 'done',
+        architecture_review: 'done',
+        stories: 'done',
+        conflict_check: 'done',
+        plan: 'pending',
+        acceptance_specs: 'pending',
+        build: 'pending',
+        build_review: 'pending',
+        wiring_check: 'pending',
+        manual_test: 'pending',
+        prd_audit: 'pending',
+        architecture_review_as_built: 'pending',
+        retro: 'pending',
+        rebase: 'pending',
+        finish: 'pending',
+        remediate: 'pending',
+        attribution_verify: 'pending',
+      };
+      const track: Track = 'technical';
+
+      resolveGroupMembership(tierAwareGroup, state, track, policy);
+
+      expect(observedPolicyValues).toEqual({
+        tierOverride: { effort: 'xhigh', model: 'gpt-5.6-sol' },
+      });
+    });
+
     it('width 3: no skip conditions active — all three members are dispatchable', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'product',
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
@@ -6008,7 +6071,12 @@ describe('engine/conductor', () => {
 
     it('width 2: technical track skips prd_audit (no PRD to audit)', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
@@ -6024,7 +6092,12 @@ describe('engine/conductor', () => {
       // so an S-tier + technical-track feature skips all three validation-group
       // members — the group resolves to zero dispatchable members.
       const state = { complexity_tier: 'S' } as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(result.allSkipped).toBe(true);
       expect(result.dispatchable.map((m) => m.name)).toEqual([]);
@@ -6042,7 +6115,12 @@ describe('engine/conductor', () => {
         complexity_tier: 'M',
         architecture_review: 'skipped',
       } as unknown as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+      );
 
       const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
       expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
@@ -6053,8 +6131,14 @@ describe('engine/conductor', () => {
       const state = { complexity_tier: 'S' } as ConductState;
       const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
         typeof resolveGroupMembership
-      >[3];
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical', config);
+      >[4];
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+        config,
+      );
 
       expect(result.allSkipped).toBe(true);
       expect(result.dispatchable).toHaveLength(0);
@@ -6068,7 +6152,12 @@ describe('engine/conductor', () => {
 
     it('a skipped member never contributes a verdict and can never fail the group', () => {
       const state = { complexity_tier: 'L' } as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'technical');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+      );
 
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
       // Must be the dedicated SkippedOutcome variant — never a VerdictOutcome
@@ -6087,7 +6176,12 @@ describe('engine/conductor', () => {
         complexity_tier: 'L',
         prd_audit: 'done',
       } as unknown as ConductState;
-      const result = resolveGroupMembership(VALIDATION_GROUP, state, 'product');
+      const result = resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'product',
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
@@ -7654,6 +7748,47 @@ describe('engine/conductor', () => {
       // Plan should have been re-run at least once (once rejected, once approved).
       expect(runCalls.filter((s) => s === 'plan').length).toBeGreaterThanOrEqual(2);
     });
+  });
+
+  it('uses the selected Codex policy for L-tier plan dispatch', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+
+    let planDispatch: { model?: string; effort?: string } | undefined;
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        if (step === 'plan') {
+          planDispatch = {
+            model: options?.modelOverride,
+            effort: options?.effortOverride,
+          };
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'plan',
+      modelPolicy: CODEX_MODEL_POLICY,
+    });
+
+    await conductor.run();
+
+    expect(planDispatch).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
   });
 
   it.each([

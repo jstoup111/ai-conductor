@@ -2214,9 +2214,15 @@ export class Conductor {
         // Resolve per-step config (model, effort, retries, review…). Tier is
         // threaded in so `by_tier` overrides apply when the feature's complexity
         // is known (post-complexity step).
-        const resolved = resolveStepConfig(step.name, step.phase, this.config, {
-          tier: state.complexity_tier,
-        });
+        const resolved = resolveStepConfig(
+          step.name,
+          step.phase,
+          this.modelPolicy,
+          this.config,
+          {
+            tier: state.complexity_tier,
+          },
+        );
 
         // Check if step is disabled via config
         if (resolved.disabled) {
@@ -2304,7 +2310,13 @@ export class Conductor {
           // dispatches — real fan-out of the still-dispatchable members lands
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
-          const membership = resolveGroupMembership(builtinGroup, state, groupTrack, this.config);
+          const membership = resolveGroupMembership(
+            builtinGroup,
+            state,
+            groupTrack,
+            this.modelPolicy,
+            this.config,
+          );
           // Engagement is keyed to the group's first NON-SKIPPED member, not
           // blindly to members[0]. A nominal entry the serial walk already
           // skip-marked (e.g. manual_test config-disabled for self-host
@@ -6310,14 +6322,19 @@ export function resolveGroupMembership(
   group: StepGroup,
   state: ConductState,
   track: Track,
+  modelPolicy: ProviderModelPolicy,
   config?: HarnessConfig,
 ): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
   const tier = state.complexity_tier ?? 'L';
   const members: GroupMember[] = group.members.map((name) => {
     const stepDef = getStepDefinition(name);
-    const resolved = resolveStepConfig(stepDef.name, stepDef.phase, config, {
-      tier: state.complexity_tier,
-    });
+    const resolved = resolveStepConfig(
+      stepDef.name,
+      stepDef.phase,
+      modelPolicy,
+      config,
+      { tier: state.complexity_tier },
+    );
     const skip =
       stepDef.skippableForTiers.includes(tier) ||
       (stepDef.skippableForTracks ?? []).includes(track) ||
