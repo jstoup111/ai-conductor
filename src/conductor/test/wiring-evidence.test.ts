@@ -245,4 +245,43 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
     expect(written.head).toBe('H2');
   });
+
+  it('stale evidence re-derived into a fresh verdict with gaps surfaces the gap message verbatim, not as staleness', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const gapMessage = 'someExport has no non-test reference';
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [
+        {
+          id: '1',
+          contract: 'src/x.ts#someExport',
+          gaps: [{ kind: 'no-reference', message: gapMessage }],
+        },
+      ],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain(gapMessage);
+    expect(result.reason).not.toMatch(/stale/i);
+  });
 });
