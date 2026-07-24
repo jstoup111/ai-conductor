@@ -58,6 +58,7 @@ const CLAUDE_MODELS: Record<StepName, string> = {
   acceptance_specs: 'sonnet',
   build: 'sonnet',
   build_review: 'opus',
+  coherence_check: 'sonnet',
   wiring_check: 'sonnet',
   manual_test: 'sonnet',
   prd_audit: 'opus',
@@ -85,6 +86,7 @@ const CODEX_MODELS: Record<StepName, string> = {
   acceptance_specs: 'gpt-5.6-terra',
   build: 'gpt-5.6-terra',
   build_review: 'gpt-5.6-sol',
+  coherence_check: 'gpt-5.6-terra',
   wiring_check: 'gpt-5.6-terra',
   manual_test: 'gpt-5.6-terra',
   prd_audit: 'gpt-5.6-sol',
@@ -112,6 +114,7 @@ const STEP_EFFORTS: Record<StepName, EffortLevel> = {
   acceptance_specs: 'medium',
   build: 'low',
   build_review: 'high',
+  coherence_check: 'medium',
   wiring_check: 'low',
   manual_test: 'medium',
   prd_audit: 'high',
@@ -229,7 +232,7 @@ describe('#902 built-in provider policy matrix', () => {
     const codexResolved = (Object.keys(CODEX_MODELS) as StepName[]).map(
       (step) => resolveWithPolicy(CODEX_POLICY, step).model,
     );
-    expect(codexResolved).toHaveLength(24);
+    expect(codexResolved).toHaveLength(25);
     expect(codexResolved.every((model) => /^gpt-5\.6-(luna|terra|sol)$/.test(model))).toBe(true);
   });
 
@@ -506,7 +509,7 @@ describe('#902 generated provider documentation', () => {
       /\| plan \| autonomous engine \| sonnet \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-terra \(S\/M\), gpt-5\.6-sol \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
     expect(table).toContain('| code-review | Claude interactive |');
-    expect(table.match(/\| autonomous engine \|/g)).toHaveLength(24);
+    expect(table.match(/\| autonomous engine \|/g)).toHaveLength(25);
 
     const pins = buildPinsJson();
     expect(pins.rebase).toEqual({ expected: 'fable' });
