@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir } from 'fs/promises';
+import { mkdtemp, rm, readdir, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -281,6 +281,11 @@ describe('engine/conductor', () => {
 
     it('fails closed instead of reusing a delivery marker from an earlier run', async () => {
       await writeDocumentationDelivery(delivery);
+      await utimes(
+        join(dir, '.pipeline', 'documentation-delivery.json'),
+        new Date(0),
+        new Date(0),
+      );
       const stepsRun: StepName[] = [];
       const runner: StepRunner = {
         run: async (step) => {

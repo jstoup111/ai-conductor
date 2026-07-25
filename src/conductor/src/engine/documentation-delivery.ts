@@ -48,7 +48,9 @@ export async function readDocumentationDelivery(
 ): Promise<DocumentationDelivery> {
   const path = join(options.projectRoot, DELIVERY_FILE);
   const metadata = await stat(path);
-  if (options.notBeforeMs !== undefined && metadata.mtimeMs < options.notBeforeMs) {
+  // Some filesystems round mtimes to whole seconds. Allow that precision loss
+  // so a marker written during explore is not misclassified as stale.
+  if (options.notBeforeMs !== undefined && metadata.mtimeMs + 1_000 < options.notBeforeMs) {
     throw new Error(`Documentation delivery result is stale: ${DELIVERY_FILE}`);
   }
   const raw = await readFile(path, 'utf8');
