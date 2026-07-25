@@ -182,4 +182,151 @@ describe('evaluateShipmentEvidence', () => {
     expect(await evaluateShipmentEvidence(input)).toEqual(verdict);
     expect(record === undefined ? null : await readFile(recordPath)).toEqual(recordBytes);
   });
+
+  it.each([
+    {
+      name: 'a working-tree-only record',
+      prepare: async (repoDir: string, recordPath: string, record: string) => {
+        await writeFile(recordPath, record);
+      },
+      expected: (candidateCommit: string) => ({
+        kind: 'refusal',
+        code: 'shipped-record-not-in-candidate',
+        expected: candidateCommit,
+        observed: 'working-tree-only',
+      }),
+    },
+    {
+      name: 'a committed candidate not pushed to the implementation head',
+      prepare: async (repoDir: string, recordPath: string, record: string) => {
+        await writeFile(recordPath, record);
+        await execFile('git', ['add', '.'], { cwd: repoDir });
+        await execFile('git', ['commit', '-m', 'test: add local shipment record'], { cwd: repoDir });
+      },
+      expected: (candidateCommit: string) => ({
+        kind: 'refusal',
+        code: 'shipment-candidate-not-on-implementation-head',
+        expected: 'origin/main',
+        observed: candidateCommit,
+      }),
+    },
+    {
+      name: 'a stale candidate behind the implementation head',
+      prepare: async (repoDir: string, recordPath: string, record: string) => {
+        await writeFile(recordPath, record);
+        await execFile('git', ['add', '.'], { cwd: repoDir });
+        await execFile('git', ['commit', '-m', 'test: add shipment record'], { cwd: repoDir });
+        await execFile('git', ['push', 'origin', 'main'], { cwd: repoDir });
+      },
+      afterCandidate: async (repoDir: string) => {
+        await writeFile(join(repoDir, 'implementation.ts'), 'export const current = true;\n');
+        await execFile('git', ['add', '.'], { cwd: repoDir });
+        await execFile('git', ['commit', '-m', 'feat: advance implementation'], { cwd: repoDir });
+        await execFile('git', ['push', 'origin', 'main'], { cwd: repoDir });
+      },
+      expected: (candidateCommit: string) => ({
+        kind: 'refusal',
+        code: 'shipment-candidate-stale',
+        expected: 'origin/main',
+        observed: candidateCommit,
+      }),
+    },
+    {
+      name: 'a file dependency failure',
+      dependencies: {
+        readFile: async () => {
+          throw new Error('EIO: durable record unavailable');
+        },
+      },
+      expected: () => ({
+        kind: 'refusal',
+        code: 'shipment-evidence-file-unavailable',
+        expected: '.docs/shipped/durable-evidence.md',
+        observed: 'EIO: durable record unavailable',
+      }),
+    },
+    {
+      name: 'a Git runner failure',
+      dependencies: {
+        gitRunner: async () => {
+          throw new Error('git transport unavailable');
+        },
+      },
+      expected: () => ({
+        kind: 'refusal',
+        code: 'shipment-evidence-git-unavailable',
+        expected: 'candidate-tree/head reachability',
+        observed: 'git transport unavailable',
+      }),
+    },
+    {
+      name: 'a GitHub runner failure',
+      dependencies: {
+        githubRunner: async () => {
+          throw new Error('GitHub API unavailable');
+        },
+      },
+      expected: () => ({
+        kind: 'refusal',
+        code: 'shipment-evidence-github-unavailable',
+        expected: 'https://github.com/acme/conductor/pull/916',
+        observed: 'GitHub API unavailable',
+      }),
+    },
+  ])('refuses $name read-only and deterministically', async ({ prepare, afterCandidate, dependencies, expected }) => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-reachability-'));
+    scratchDirs.push(repoDir);
+    const slug = 'durable-evidence';
+    const pr = 'https://github.com/acme/conductor/pull/916';
+    const recordPath = join(repoDir, `.docs/shipped/${slug}.md`);
+    const record = renderShippedRecord({ slug, specHash: refusalHash, pr, shipped: '2026-07-25' });
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), refusalPlan);
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'test: add shipment plan'], { cwd: repoDir });
+
+    const remote = join(repoDir, 'origin.git');
+    await execFile('git', ['init', '--bare', '--initial-branch=main', remote], { cwd: repoDir });
+    await execFile('git', ['remote', 'add', 'origin', remote], { cwd: repoDir });
+    await execFile('git', ['push', '-u', 'origin', 'main'], { cwd: repoDir });
+
+    if (prepare) {
+      await prepare(repoDir, recordPath, record);
+    } else {
+      await writeFile(recordPath, record);
+      await execFile('git', ['add', '.'], { cwd: repoDir });
+      await execFile('git', ['commit', '-m', 'test: add shipment record'], { cwd: repoDir });
+      await execFile('git', ['push', 'origin', 'main'], { cwd: repoDir });
+    }
+    const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const candidateCommit = stdout.trim();
+    await afterCandidate?.(repoDir);
+
+    const recordBytes = await readFile(recordPath);
+    const repositoryState = await gitSnapshot(repoDir);
+    const input = {
+      repoDir,
+      slug,
+      implementationPr: pr,
+      candidateCommit,
+      implementationHead: 'origin/main',
+    };
+
+    const verdict = await evaluateShipmentEvidence(input, dependencies);
+    expect(verdict).toEqual(expected(candidateCommit));
+    expect(await evaluateShipmentEvidence(input, dependencies)).toEqual(verdict);
+    expect(await readFile(recordPath)).toEqual(recordBytes);
+    expect(await gitSnapshot(repoDir)).toEqual(repositoryState);
+  });
 });
+
+async function gitSnapshot(repoDir: string): Promise<string> {
+  const [{ stdout: status }, { stdout: refs }] = await Promise.all([
+    execFile('git', ['status', '--porcelain'], { cwd: repoDir }),
+    execFile('git', ['rev-parse', 'HEAD', 'origin/main'], { cwd: repoDir }),
+  ]);
+  return `${status}\n${refs}`;
+}

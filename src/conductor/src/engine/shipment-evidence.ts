@@ -1,4 +1,5 @@
-import { isAbsolute } from 'node:path';
+import { access } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
 import { parseShippedRecord, specHash } from './shipped-record.js';
 
@@ -24,7 +25,13 @@ export type ShipmentEvidenceRefusal = {
     | 'shipped-record-slug-mismatch'
     | 'shipped-record-pr-mismatch'
     | 'shipped-record-hash-mismatch'
-    | 'shipment-plan-missing';
+    | 'shipment-plan-missing'
+    | 'shipped-record-not-in-candidate'
+    | 'shipment-candidate-not-on-implementation-head'
+    | 'shipment-candidate-stale'
+    | 'shipment-evidence-file-unavailable'
+    | 'shipment-evidence-git-unavailable'
+    | 'shipment-evidence-github-unavailable';
   expected: string;
   observed: string | null;
 };
@@ -37,12 +44,19 @@ export interface ShipmentEvidenceInput {
   implementationHead: string;
 }
 
+export interface ShipmentEvidenceDependencies {
+  readFile?: (path: string) => Promise<Buffer | null>;
+  gitRunner?: (args: string[]) => Promise<string>;
+  githubRunner?: (pr: string) => Promise<void>;
+}
+
 /**
  * Validate the durable shipment record and the spec bytes it attests to from
  * one committed tree. Working-tree files are deliberately never considered.
  */
 export async function evaluateShipmentEvidence(
   input: ShipmentEvidenceInput,
+  dependencies: ShipmentEvidenceDependencies = {},
 ): Promise<ShipmentEvidenceResult> {
   const { repoDir, slug, implementationPr, candidateCommit, implementationHead } = input;
   if (!repoDir || !slug || !implementationPr || !candidateCommit || !implementationHead) {
@@ -54,8 +68,20 @@ export async function evaluateShipmentEvidence(
   }
 
   const recordPath = `.docs/shipped/${slug}.md`;
-  const recordContent = await showAtCommit(repoDir, candidateCommit, recordPath);
+  const readFile = dependencies.readFile ?? ((path: string) => showAtCommit(repoDir, candidateCommit, path));
+  const gitRunner = dependencies.gitRunner ?? ((args: string[]) => runGit(repoDir, args));
+  const recordContent = await readEvidenceFile(readFile, recordPath);
+  if (isRefusal(recordContent)) return recordContent;
   if (recordContent === null) {
+    const workingTreeRecord = await existsInWorkingTree(repoDir, recordPath);
+    if (isRefusal(workingTreeRecord)) return workingTreeRecord;
+    if (workingTreeRecord) {
+      return refusal(
+        'shipped-record-not-in-candidate',
+        candidateCommit,
+        'working-tree-only',
+      );
+    }
     return refusal(
       'shipped-record-missing',
       recordPath,
@@ -106,7 +132,8 @@ export async function evaluateShipmentEvidence(
   }
 
   const planPath = `.docs/plans/${slug}.md`;
-  const planBytes = await showAtCommit(repoDir, candidateCommit, planPath);
+  const planBytes = await readEvidenceFile(readFile, planPath);
+  if (isRefusal(planBytes)) return planBytes;
   if (planBytes === null) {
     return refusal(
       'shipment-plan-missing',
@@ -115,7 +142,8 @@ export async function evaluateShipmentEvidence(
     );
   }
 
-  const storiesBytes = await readStoriesBytes(repoDir, candidateCommit, slug, planBytes);
+  const storiesBytes = await readStoriesBytes(readFile, slug, planBytes);
+  if (isRefusal(storiesBytes)) return storiesBytes;
   const hash = specHash(planBytes, storiesBytes).digest;
   if (record.specHash !== hash) {
     return refusal(
@@ -123,6 +151,41 @@ export async function evaluateShipmentEvidence(
       hash,
       record.specHash,
     );
+  }
+
+  let candidateOnHead: string;
+  try {
+    candidateOnHead = await gitRunner([
+      'merge-base',
+      '--is-ancestor',
+      candidateCommit,
+      implementationHead,
+    ]);
+  } catch (error) {
+    return unavailable('shipment-evidence-git-unavailable', 'candidate-tree/head reachability', error);
+  }
+  if (candidateOnHead.trim() !== 'true') {
+    return refusal(
+      'shipment-candidate-not-on-implementation-head',
+      implementationHead,
+      candidateCommit,
+    );
+  }
+
+  let resolvedHead: string;
+  try {
+    resolvedHead = await gitRunner(['rev-parse', '--verify', implementationHead]);
+  } catch (error) {
+    return unavailable('shipment-evidence-git-unavailable', implementationHead, error);
+  }
+  if (resolvedHead.trim() !== candidateCommit) {
+    return refusal('shipment-candidate-stale', implementationHead, candidateCommit);
+  }
+
+  try {
+    await dependencies.githubRunner?.(implementationPr);
+  } catch (error) {
+    return unavailable('shipment-evidence-github-unavailable', implementationPr, error);
   }
 
   return {
@@ -143,6 +206,20 @@ function refusal(
   return { kind: 'refusal', code, expected, observed };
 }
 
+function unavailable(
+  code: ShipmentEvidenceRefusal['code'],
+  expected: string,
+  error: unknown,
+): ShipmentEvidenceRefusal {
+  return refusal(code, expected, error instanceof Error ? error.message : String(error));
+}
+
+function isRefusal(
+  value: Buffer | null | boolean | ShipmentEvidenceRefusal,
+): value is ShipmentEvidenceRefusal {
+  return value !== null && typeof value !== 'boolean' && 'kind' in value;
+}
+
 function readFrontmatterFields(content: string): Record<string, string> | null {
   const lines = content.split('\n');
   if (lines[0]?.trim() !== '---') return null;
@@ -158,18 +235,42 @@ function readFrontmatterFields(content: string): Record<string, string> | null {
 }
 
 async function readStoriesBytes(
-  repoDir: string,
-  commit: string,
+  readFile: (path: string) => Promise<Buffer | null>,
   slug: string,
   planBytes: Buffer,
-): Promise<Buffer | null> {
+): Promise<Buffer | null | ShipmentEvidenceRefusal> {
   const planContent = planBytes.toString('utf8');
   const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
   if (reference && !isAbsolute(reference)) {
-    const stories = await showAtCommit(repoDir, commit, reference);
+    const stories = await readEvidenceFile(readFile, reference);
+    if (isRefusal(stories)) return stories;
     if (stories !== null) return stories;
   }
-  return showAtCommit(repoDir, commit, `.docs/stories/${slug}.md`);
+  return readEvidenceFile(readFile, `.docs/stories/${slug}.md`);
+}
+
+async function readEvidenceFile(
+  readFile: (path: string) => Promise<Buffer | null>,
+  path: string,
+): Promise<Buffer | null | ShipmentEvidenceRefusal> {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    return unavailable('shipment-evidence-file-unavailable', path, error);
+  }
+}
+
+async function existsInWorkingTree(
+  repoDir: string,
+  path: string,
+): Promise<boolean | ShipmentEvidenceRefusal> {
+  try {
+    await access(join(repoDir, path));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    return refusal('shipment-evidence-file-unavailable', path, null);
+  }
 }
 
 async function showAtCommit(
@@ -187,4 +288,15 @@ async function showAtCommit(
   } catch {
     return null;
   }
+}
+
+async function runGit(repoDir: string, args: string[]): Promise<string> {
+  const result = await execa('git', args, { cwd: repoDir, reject: false });
+  if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+    return result.exitCode === 0 ? 'true' : 'false';
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr || `git ${args.join(' ')} failed`);
+  }
+  return result.stdout;
 }
