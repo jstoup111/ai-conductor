@@ -12,6 +12,12 @@ condition is covered by at least one story (smoke gate → TR-5 story; no-silent
 TR-3 story; Migration block → TR-6 story; negative-path specs → per-criterion negatives
 throughout).
 
+> **Provider-neutral recovery amendment (#905, approved 2026-07-25):** the daemon-token
+> and `ANTHROPIC_API_KEY` source checks below remain Claude-specific. Authentication
+> failures from every built-in provider use the same bounded park lifecycle, while
+> source refresh and remediation stay provider-specific. A startup-inherited API key
+> is restart-required and is never treated as hot-reloadable.
+
 ---
 
 ## Story: Build-auth config resolves modes fail-closed
@@ -163,8 +169,10 @@ and a timeout HALTs with daemon-token remediation.
   inspected, then both are byte-identical to their pre-park state (auth never leaks
   into retry/escalation semantics).
 - Given api-key mode, when an auth failure occurs, then the park does NOT poll the
-  daemon token path; the HALT names `ANTHROPIC_API_KEY` as the credential to fix
-  (mode-appropriate remediation, no cross-mode message).
+  daemon token path; it reports a restart-required `ANTHROPIC_API_KEY` disposition,
+  and if no restart occurs before timeout, the HALT names that environment source as
+  the credential to fix (mode-appropriate remediation, no cross-mode message or fake
+  hot reload).
 - Given concurrent operator activity in `~/.claude` (interactive refreshes rewriting
   `.credentials.json`), when a daemon build runs or parks, then those rewrites are
   never observed by the daemon (no watcher, no reads on that path) — asserted via
@@ -173,7 +181,8 @@ and a timeout HALTs with daemon-token remediation.
 ### Done When
 - [ ] Park tests: refresh-resume (budget intact, new token in env), timeout-HALT (daemon-token reason), empty-touch keeps parking.
 - [ ] Success-with-signature-text test proves no false park.
-- [ ] api-key-mode auth failure produces mode-appropriate messaging.
+- [ ] api-key-mode auth failure produces restart-required, mode-appropriate park and
+      timeout messaging without polling another credential source.
 - [ ] `waitForCredentialsChange`/pre-flight readers take the daemon token source; no call site passes the operator credentials path for build auth anymore (grep gate).
 
 ---
