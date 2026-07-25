@@ -2,11 +2,13 @@
 
 **Date:** 2026-07-25
 
-**Mode:** Pre-implementation DECIDE review, lightweight (Tier M, technical track)
+**Mode:** Pre-implementation DECIDE review plus post-plan conformance pass, lightweight (Tier M,
+technical track)
 
-**Inputs reviewed:** approved component and sequence diagrams; issues #916/#936; merged spec PR
-#877 and implementation/repair evidence #893/#911; existing shipped-record, finish, daemon, guard,
-rekick, and mergeable-watch code; approved ADRs listed below
+**Inputs reviewed:** approved component and sequence diagrams; committed 40-task implementation
+plan; accepted stories and clean conflict report; issues #916/#936; merged spec PR #877 and
+implementation/repair evidence #893/#911; existing shipped-record, finish, daemon, guard, rekick,
+and mergeable-watch code; approved ADRs listed below
 
 **Verdict:** APPROVED
 
@@ -85,6 +87,36 @@ The operator approved
 `.docs/decisions/adr-2026-07-25-fail-closed-durable-shipment-evidence.md` on 2026-07-25, including
 the narrow repository setting that lets the reconciliation Action create (but never approve or
 merge) a repair PR. The architecture gate is clear for stories.
+
+## Post-Plan Conformance Pass
+
+**Verdict:** APPROVED — no new ADR, condition, or structural gap.
+
+- **Coverage and dependency shape:** all six accepted stories and all 29 negative paths map to the
+  40 sequential tasks. Every task declares files, design-time wiring, and an acyclic dependency;
+  the task-count warning is acknowledged but remains below the 41-task split gate.
+- **Boundary fidelity:** new policy stays in sibling `shipment-evidence`, `shipment-association`,
+  reconciliation, audit, and protection modules. Existing hot files receive only compatible parser
+  exports or production wiring, matching the overlap-risk mitigation.
+- **Terminal convergence:** Tasks 5–6 and 16–20 cover every architecture-review consumer: finish
+  recorder/predicate, complete verifier, daemon outcome, merged guard, conductor shortcuts, and
+  rekick. Discovery's permissive boolean remains type- and authority-separated from the strict
+  terminal verdict.
+- **GitHub boundary:** premerge is read-only and exact-head; reconciliation has job-scoped writes,
+  a record-only allowlist, deterministic identity, and explicit API denylists. The creator-posted
+  repair status remains required even though current GitHub documentation now describes
+  `GITHUB_TOKEN`-created PR workflow runs as approval-required rather than categorically absent;
+  that factual clarification strengthens rather than changes the approved unattended-repair design.
+- **Protection sequencing:** the implementation supplies a dry-run/apply adapter, but the live
+  ruleset mutation is deliberately deferred until the bootstrap check context is observed. Delivery
+  is not complete until the post-merge cutover re-reads ruleset `15933604` and the Actions setting
+  and proves the exact additive result.
+- **Repository release gates:** ordinary documentation, changelog, and VERSION approval remain
+  ship-time repository obligations outside `/plan`'s functional-task boundary. The new CLI/check
+  must not reach PR creation without satisfying `CLAUDE.md`'s documentation and release rules.
+- **Validation:** all three planned Mermaid diagrams render; plan structure is mechanically valid;
+  `test/test_harness_integrity.sh` reports 195 passed, 0 failed, and 5 known environment/catalog
+  warnings.
 
 ## ADRs Created
 
