@@ -13,6 +13,11 @@ import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveTaskIds } from './task-progress.js';
+import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
+import {
+  FullSuiteVerifier,
+  type FullSuiteInspectionResult,
+} from './full-suite-verifier.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -80,10 +85,9 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed, same convention as build_review/manual_test above.
   wiring_check: ['.pipeline/wiring-evidence.json'],
-  // Engine-native completion is wired to FullSuiteVerifier in Task 16. Keep
-  // this exhaustive sentinel empty until the verifier predicate exists; mere
-  // evidence-file presence must never satisfy the gate.
-  test_suite: [],
+  // Dashboard/artifact visibility only. The custom predicate below always
+  // re-inspects the content fingerprint; file presence cannot satisfy the gate.
+  test_suite: [FULL_SUITE_EVIDENCE_PATH],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -566,6 +570,12 @@ export interface CompletionContext {
    * (fail-closed "evidence not found" when no fixture exists).
    */
   wiringProbe?: () => Promise<WiringEvidence>;
+  /**
+   * Process-free current-PASS inspection for the native test_suite gate.
+   * Conductor injects its shared verifier; standalone completion checks use a
+   * verifier rooted at `dir`. This must never call ensure()/launch the suite.
+   */
+  fullSuiteInspect?: () => Promise<FullSuiteInspectionResult>;
   /**
    * Injectable git runner for the gate-code-validity-on-redispatch decision
    * (`gateVerdictStillValid`, #817): a judged gate's stamped PASS verdict can
@@ -1971,6 +1981,31 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     }
     return { done: true };
+  },
+
+  test_suite: async (dir, ctx): Promise<CompletionResult> => {
+    let inspection: FullSuiteInspectionResult;
+    try {
+      inspection = await (
+        ctx.fullSuiteInspect?.() ?? new FullSuiteVerifier({ projectRoot: dir }).inspect()
+      );
+    } catch (error) {
+      return {
+        done: false,
+        reason: `full-suite completion inspection failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (inspection.status === 'CURRENT') return { done: true };
+    if (inspection.status === 'STALE') {
+      return {
+        done: false,
+        reason: `full-suite PASS evidence is stale: ${inspection.reason}`,
+      };
+    }
+    return {
+      done: false,
+      reason: `full-suite completion inspection failed (${inspection.reason}): ${inspection.message}`,
+    };
   },
 
   // Retro passes when a fresh retro file exists for THIS feature. Filename

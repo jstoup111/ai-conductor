@@ -88,6 +88,25 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('checkStepCompletion: test_suite current-PASS predicate', () => {
+    it('rejects stale evidence through inspection without launching verification', async () => {
+      await createFile('.pipeline/test-suite-evidence.json', JSON.stringify({ outcome: 'PASS' }));
+      const inspect = vi.fn(async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' } as const));
+
+      const result = await checkStepCompletion(dir, 'test_suite', {
+        fullSuiteInspect: inspect,
+      });
+
+      expect({ result, inspectCalls: inspect.mock.calls.length }).toEqual({
+        result: {
+          done: false,
+          reason: 'full-suite PASS evidence is stale: fingerprint_mismatch',
+        },
+        inspectCalls: 1,
+      });
+    });
+  });
+
   describe('findArtifactFiles', () => {
     it('returns [] when the step produces no artifacts', async () => {
       expect(await findArtifactFiles(dir, 'complexity')).toEqual([]);

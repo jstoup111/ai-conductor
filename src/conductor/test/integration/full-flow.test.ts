@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -69,12 +69,16 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Every step EXCEPT `complexity`, `worktree`, and `rebase` (all
+    // Every step EXCEPT `complexity`, `worktree`, `test_suite`, and `rebase` (all
     // engine-managed) should have been dispatched to runner.run, in ALL_STEPS
     // order.
     const allStepNames = ALL_STEPS.map((s) => s.name);
     const dispatchedStepNames = allStepNames.filter(
-      (n) => n !== 'complexity' && n !== 'worktree' && n !== 'rebase',
+      (n) =>
+        n !== 'complexity' &&
+        n !== 'worktree' &&
+        n !== 'test_suite' &&
+        n !== 'rebase',
     );
     expect(runner.calls).toEqual(dispatchedStepNames);
     expect(runner.calls).toHaveLength(dispatchedStepNames.length);
@@ -127,7 +131,7 @@ describe('Integration: full conductor flow', () => {
     ];
 
     // Steps that should run: ALL_STEPS minus skipped-for-S-tier minus the
-    // engine-managed steps (complexity / worktree / rebase).
+    // engine-managed steps (complexity / worktree / test_suite / rebase).
     const expectedRun = ALL_STEPS
       .map((s) => s.name)
       .filter(
@@ -135,6 +139,7 @@ describe('Integration: full conductor flow', () => {
           !expectedSkipped.includes(n) &&
           n !== 'complexity' &&
           n !== 'worktree' &&
+          n !== 'test_suite' &&
           n !== 'rebase',
       );
 
@@ -237,11 +242,13 @@ describe('Integration: full conductor flow', () => {
 
     await conductor.run();
 
-    // Only remaining steps should have been run. `rebase` is engine-managed
+    // Only remaining steps should have been run. `test_suite` and `rebase` are engine-managed
     // (not dispatched to runner.run); the first `doneCount` steps include the
     // other engine-managed steps (complexity/worktree), so the remaining
-    // runner-dispatched steps are slice(doneCount) minus `rebase`.
-    const expectedRun = allStepNames.slice(doneCount).filter((n) => n !== 'rebase');
+    // runner-dispatched steps are slice(doneCount) minus native steps.
+    const expectedRun = allStepNames
+      .slice(doneCount)
+      .filter((n) => n !== 'test_suite' && n !== 'rebase');
     expect(runner.calls).toEqual(expectedRun);
     expect(runner.calls).toHaveLength(expectedRun.length);
 

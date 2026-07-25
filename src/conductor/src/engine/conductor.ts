@@ -119,6 +119,10 @@ import {
 } from './artifacts.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
+  FullSuiteVerifier,
+  type FullSuiteVerifierResult,
+} from './full-suite-verifier.js';
+import {
   extractFlaggedPaths,
   runScopeFailDisposition,
   readRegradeCount,
@@ -307,6 +311,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
+  fullSuiteVerification?: FullSuiteVerifierResult;
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -547,6 +553,8 @@ export interface ConductorOptions {
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
   projectRoot: string;
+  /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
+  fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -879,6 +887,7 @@ export class Conductor {
   private readonly providerExecution?: ProviderExecutionContext;
   private validationConcurrency: number;
   private projectRoot: string;
+  private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   private featureDesc?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
@@ -1097,6 +1106,7 @@ export class Conductor {
           gh: this.gh,
           anchor: '',
         }),
+      fullSuiteInspect: () => this.fullSuiteVerifier.inspect(),
     };
   }
 
@@ -1112,6 +1122,8 @@ export class Conductor {
     this.providerExecution = opts.providerExecution;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
+    this.fullSuiteVerifier =
+      opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.featureDesc = opts.featureDesc;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.daemon = opts.daemon ?? false;
@@ -3382,6 +3394,7 @@ export class Conductor {
             if (
               step.name !== 'complexity' &&
               step.name !== 'worktree' &&
+              step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
               !(this.isSelfBuild() && step.name === 'build')
             ) {
@@ -3397,15 +3410,17 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                     ? await this.runRebaseStep(state)
-                    : this.isSelfBuild() && step.name === 'build'
-                      ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                      : await this.stepRunner.run(step.name, state, {
-                          retryReason: retryHint,
-                          attempt,
-                          escalate: resolved.escalate,
-                          modelOverride: esc.model,
-                          effortOverride: esc.effort,
-                        });
+                    : step.name === 'test_suite'
+                      ? await this.runTestSuiteStep()
+                      : this.isSelfBuild() && step.name === 'build'
+                        ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                        : await this.stepRunner.run(step.name, state, {
+                            retryReason: retryHint,
+                            attempt,
+                            escalate: resolved.escalate,
+                            modelOverride: esc.model,
+                            effortOverride: esc.effort,
+                          });
           } finally {
             buildWatcher?.stop();
             if (markerActive) {
@@ -5581,6 +5596,22 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason, prUrl });
       }
     }
+  }
+
+  private async runTestSuiteStep(): Promise<StepRunResult> {
+    const verification = await this.fullSuiteVerifier.ensure();
+    if (verification.status === 'FAILED') {
+      return {
+        success: false,
+        output: verification.message,
+        fullSuiteVerification: verification,
+      };
+    }
+    return {
+      success: true,
+      output: `Full test suite ${verification.status}`,
+      fullSuiteVerification: verification,
+    };
   }
 
   /**
