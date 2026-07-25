@@ -498,6 +498,24 @@ describe('ClaudeProvider', () => {
       expect(result.authFailure).toBeUndefined();
     });
 
+    it('preserves model-unavailable classification over incidental auth-shaped output', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: 'Invalid API key supplied while resolving Invalid model name: claude-bogus',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({
+        authFailure: result.authFailure,
+        modelUnavailable: result.modelUnavailable,
+      }).toEqual({
+        authFailure: undefined,
+        modelUnavailable: true,
+      });
+    });
+
     // Regression test for acceptance test: verify the EXACT observed message is classified
     it('acceptance regression: EXACT observed message yields rateLimited and proper waitSeconds', async () => {
       const observedMessage = "You've hit your session limit · resets 3:20pm (America/New_York)";

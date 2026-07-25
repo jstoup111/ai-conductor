@@ -593,8 +593,10 @@ export class ClaudeProvider implements LLMProvider {
     const modelUnavailable =
       outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
     const rateLimited = sessionLimit || (exitCode !== 0 && RATE_LIMIT_RE.test(output));
-    // Auth failure only if NOT a session-limit or rate-limit case (per precedence above)
-    const authFailure = !rateLimited && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
+    // Auth failure is lowest precedence: rate and model classifications own a
+    // response even when its diagnostic happens to contain auth-shaped prose.
+    const authFailure =
+      !rateLimited && !modelUnavailable && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
     let deadline: number | undefined;

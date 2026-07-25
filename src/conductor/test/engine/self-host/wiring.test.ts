@@ -128,6 +128,25 @@ describe('self-host wiring — default bundle members forward to the real primit
     const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
     expect(defaultSelfHostGuardrails.releaseGate).toBe(runReleaseArtifactGate);
   });
+
+  it('keeps Codex self-host setup out of the #904 skill and AGENTS.md surface', async () => {
+    const conductorSrc = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      'src',
+      'engine',
+      'conductor.ts',
+    );
+    const text = await readFile(conductorSrc, 'utf-8');
+    const start = text.indexOf('runSelfBuildDispatch');
+    const end = text.indexOf('async run(): Promise<void>');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(text.slice(start, end)).not.toMatch(/\.agents\/skills|AGENTS\.md|discover(?:ed)?Skills/i);
+  });
 });
 
 describe('self-host Phase 6 — daemon-loop wiring', () => {
