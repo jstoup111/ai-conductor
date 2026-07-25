@@ -1,4 +1,7 @@
-import type { LLMProvider } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  LLMProvider,
+} from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
   hasBuiltInProviderModelPolicy,
@@ -35,6 +38,26 @@ export class ProviderRuntimeSet {
       throw new Error(`Provider runtime not found: ${key}`);
     }
     return runtime;
+  }
+
+  /**
+   * Return only the failed built-in provider's narrow readiness capability.
+   * Custom providers remain compatible without participating in auth recovery.
+   */
+  readinessFor(
+    key: string,
+    authentication: AuthenticationReadiness,
+  ): (() => Promise<AuthenticationReadiness>) | undefined {
+    const runtime = this.runtimes.get(key);
+    if (
+      !runtime ||
+      !runtime.builtIn ||
+      runtime.key !== authentication.provider ||
+      !runtime.provider.readiness
+    ) {
+      return undefined;
+    }
+    return () => runtime.provider.readiness!();
   }
 }
 

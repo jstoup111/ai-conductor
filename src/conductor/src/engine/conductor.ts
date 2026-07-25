@@ -1222,8 +1222,56 @@ export class Conductor {
    * outcome; the caller decides what "resume" or "halt" means for its own
    * loop shape.
    */
-  private async parkOnAuthFailure(): Promise<{ timedOut: boolean; haltReason: string }> {
+  private async parkOnAuthFailure(
+    failed?: Pick<StepRunResult, 'actualProvider' | 'authentication'>,
+  ): Promise<{ timedOut: boolean; haltReason: string }> {
     const shPark = resolveSelfHostConfig(this.config);
+
+    const authentication = failed?.authentication;
+    const actualProvider = failed?.actualProvider;
+    if (authentication?.provider === 'codex' && actualProvider) {
+      if (authentication.source === 'api-key') {
+        return {
+          timedOut: true,
+          haltReason:
+            'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+            'Restart the daemon after updating CODEX_API_KEY, then re-queue this feature.',
+        };
+      }
+
+      const readiness = this.providerExecution?.runtimes.readinessFor(
+        actualProvider,
+        authentication,
+      );
+      if (readiness) {
+        const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
+        const startedAt = Date.now();
+        await this.events.emit({
+          type: 'credentials_park',
+          reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
+        });
+
+        for (;;) {
+          const current = await readiness();
+          if (
+            current.provider === authentication.provider &&
+            current.source === authentication.source &&
+            current.state === 'ready'
+          ) {
+            return { timedOut: false, haltReason: '' };
+          }
+          if (timeoutMs <= 0 || Date.now() - startedAt >= timeoutMs) {
+            return {
+              timedOut: true,
+              haltReason:
+                'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+                'Refresh the Codex login, then re-queue this feature.',
+            };
+          }
+          await this.sleep(1_000);
+        }
+      }
+    }
 
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
       return {

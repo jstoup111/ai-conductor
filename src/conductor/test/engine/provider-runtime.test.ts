@@ -10,6 +10,7 @@ import {
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
@@ -74,6 +75,34 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('exposes readiness only for the matching built-in provider', async () => {
+    const ready: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+    };
+    const codex = {
+      ...provider(),
+      readiness: vi.fn(async () => ready),
+    };
+    const custom = {
+      ...provider(),
+      readiness: vi.fn(async () => ready),
+    };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'codex', codex);
+    registry.register('llm_provider', 'custom', custom);
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+    const codexReadiness = runtimes?.readinessFor('codex', ready);
+    const customReadiness = runtimes?.readinessFor('custom', ready);
+
+    expect(await codexReadiness?.()).toEqual(ready);
+    expect(customReadiness).toBeUndefined();
+    expect(custom.readiness).not.toHaveBeenCalled();
+  });
+
   it('constructs every frozen-registry provider with isolated per-run state', async () => {
     const claude = provider();
     const codex = provider();
