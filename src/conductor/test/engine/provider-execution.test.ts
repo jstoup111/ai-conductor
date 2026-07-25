@@ -103,6 +103,11 @@ describe('executeProviderCandidates', () => {
         output: 'review complete',
         exitCode: 0,
         tokenUsage: { input: 13, output: 8 },
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
       }),
     );
     const legacyInteractive = vi.fn(async (): Promise<void> => {});
@@ -196,6 +201,11 @@ describe('executeProviderCandidates', () => {
         output: 'review complete',
         exitCode: 0,
         tokenUsage: { input: 13, output: 8 },
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
         preferredProvider: 'codex',
         actualProvider: 'codex',
         resolvedModel: 'gpt-step/verbatim',
@@ -770,7 +780,7 @@ describe('executeProviderCandidates', () => {
         name: 'rate-limit precedence',
         failure: {
           success: false,
-          output: '429 retry later',
+          output: 'not logged in, but 429 retry later',
           exitCode: 1,
           rateLimited: true,
           waitSeconds: 45,

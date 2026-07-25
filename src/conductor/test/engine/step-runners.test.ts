@@ -1555,13 +1555,18 @@ TIER: M`,
       await rm(pipeDir, { recursive: true, force: true });
     });
 
-    it('surfaces authFailure=true when provider reports it', async () => {
+    it('surfaces preflight non-ready authentication metadata when provider reports authFailure', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
         success: false,
         output: 'Not logged in — operator OAuth token is expired',
         exitCode: 1,
         authFailure: true,
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'missing',
+        },
       });
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -1570,6 +1575,11 @@ TIER: M`,
       const result = await runner.run('worktree', emptyState);
 
       expect(result.authFailure).toBe(true);
+      expect(result.authentication).toEqual({
+        provider: 'codex',
+        source: 'api-key',
+        state: 'missing',
+      });
     });
   });
 

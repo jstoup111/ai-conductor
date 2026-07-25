@@ -23,6 +23,7 @@ import { sweepStaleReviewArtifacts } from "./artifacts.js";
 import type { ConductorEvent } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";
 import type { ProviderSessionScope } from "./provider-session.js";
+import type { AuthenticationReadiness } from "../execution/llm-provider.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -34,6 +35,7 @@ export type Verdict = "pass" | "fail" | "blocked";
 export interface VerdictOutcome {
   kind: "verdict";
   verdict: Verdict;
+  authentication?: AuthenticationReadiness;
 }
 
 /**
@@ -46,6 +48,7 @@ export interface VerdictOutcome {
 export interface NoVerdictOutcome {
   kind: "no-verdict";
   reason: string;
+  authentication?: AuthenticationReadiness;
 }
 
 /**
@@ -64,12 +67,18 @@ export interface SkippedOutcome {
  */
 export type BranchOutcome = VerdictOutcome | NoVerdictOutcome | SkippedOutcome;
 
-export function makeVerdictOutcome(verdict: Verdict): VerdictOutcome {
-  return { kind: "verdict", verdict };
+export function makeVerdictOutcome(
+  verdict: Verdict,
+  authentication?: AuthenticationReadiness,
+): VerdictOutcome {
+  return { kind: "verdict", verdict, ...(authentication ? { authentication } : {}) };
 }
 
-export function makeNoVerdictOutcome(reason: string): NoVerdictOutcome {
-  return { kind: "no-verdict", reason };
+export function makeNoVerdictOutcome(
+  reason: string,
+  authentication?: AuthenticationReadiness,
+): NoVerdictOutcome {
+  return { kind: "no-verdict", reason, ...(authentication ? { authentication } : {}) };
 }
 
 export function makeSkippedOutcome(): SkippedOutcome {
@@ -468,7 +477,7 @@ async function runGroupBranchInner(
     hasRun = true;
 
     if (result.success) {
-      return makeVerdictOutcome("pass");
+      return makeVerdictOutcome("pass", result.authentication);
     }
 
     // Rate limit: enter the shared episode with the parsed deadline (or a
@@ -515,7 +524,7 @@ async function runGroupBranchInner(
     // no-verdict outcome carrying the "authFailure" reason so the core can
     // route it to halt/park handling instead of silently retrying it.
     if (result.authFailure) {
-      return makeNoVerdictOutcome("authFailure");
+      return makeNoVerdictOutcome("authFailure", result.authentication);
     }
 
     lastOutput = result.output ?? lastOutput;

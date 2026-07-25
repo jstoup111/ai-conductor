@@ -719,6 +719,9 @@ export class DefaultStepRunner implements StepRunner {
         ? { actualProvider: result.actualProvider }
         : {}),
       attempts: result.attempts,
+      ...(result.authentication
+        ? { authentication: result.authentication }
+        : {}),
     };
   }
 
@@ -793,6 +796,9 @@ export class DefaultStepRunner implements StepRunner {
           }
         : {}),
       ...(result.sessionExpired ? { sessionExpired: true } : {}),
+      ...(result.authentication
+        ? { authentication: result.authentication }
+        : {}),
       ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
       preferredProvider: result.preferredProvider,
@@ -851,7 +857,14 @@ export class DefaultStepRunner implements StepRunner {
     // Auth failure: operator's OAuth token is expired or invalid.
     // Report it — the conductor will halt and report the auth failure.
     if (result.authFailure) {
-      return { success: false, output: result.output, authFailure: true };
+      return {
+        success: false,
+        output: result.output,
+        authFailure: true,
+        ...(result.authentication
+          ? { authentication: result.authentication }
+          : {}),
+      };
     }
 
     // Rate limit: surface wait seconds (from provider result, else fallback 300s).
@@ -864,13 +877,23 @@ export class DefaultStepRunner implements StepRunner {
         rateLimited: true,
         waitSeconds,
         deadline: result.deadline,
+        ...(result.authentication
+          ? { authentication: result.authentication }
+          : {}),
       };
     }
 
     // Stale session detected. Report it — the conductor will call resetSession()
     // and retry without burning the retry budget.
     if (result.sessionExpired) {
-      return { success: false, output: result.output, sessionExpired: true };
+      return {
+        success: false,
+        output: result.output,
+        sessionExpired: true,
+        ...(result.authentication
+          ? { authentication: result.authentication }
+          : {}),
+      };
     }
 
     if (result.success) {
@@ -893,6 +916,9 @@ export class DefaultStepRunner implements StepRunner {
         output: result.output,
         tokenUsage: result.tokenUsage,
         model: effectiveModel,
+        ...(result.authentication
+          ? { authentication: result.authentication }
+          : {}),
       };
     }
 
@@ -907,7 +933,14 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
-    return { success: false, output: result.output, model: effectiveModel };
+    return {
+      success: false,
+      output: result.output,
+      model: effectiveModel,
+      ...(result.authentication
+        ? { authentication: result.authentication }
+        : {}),
+    };
   }
 
   async resetSession(step?: StepName, providerKey = this.providerKey): Promise<void> {

@@ -13,7 +13,10 @@ import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
-import type { TokenUsage } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  TokenUsage,
+} from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -344,6 +347,8 @@ export interface StepRunResult {
    * The conductor halts and reports the auth failure.
    */
   authFailure?: boolean;
+  /** Provider-owned, sanitized authentication readiness for this dispatch. */
+  authentication?: AuthenticationReadiness;
   /**
    * #814: set when a judged-gate grader (today: build_review) could not be
    * DISPATCHED — the grader subprocess/session failed to run or exited without
