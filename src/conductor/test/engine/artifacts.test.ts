@@ -48,6 +48,8 @@ import {
   removeBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
+import type { StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -178,6 +180,64 @@ describe('engine/artifacts', () => {
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
       await createFile('App.test.tsx');
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: configured custom completion artifact', () => {
+    it('accepts the exact marker using the attempt floor or session fallback', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const markerPath = join(dir, marker);
+      const markerMtime = Date.now() - 10_000;
+      await createFile(marker);
+      await utimes(markerPath, new Date(markerMtime), new Date(markerMtime));
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+      const step = 'maintain-documentation' as StepName;
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config,
+          attemptStartedAt: markerMtime + 1_000,
+          sessionStartedAt: markerMtime + 60_000,
+        }),
+        checkStepCompletion(dir, step, {
+          config,
+          sessionStartedAt: markerMtime - 1_000,
+        }),
+      ]);
+
+      expect(
+        results.map((result) => ({
+          done: result.done,
+          artifact: result.verdictFreshness?.artifact,
+          floorMs: result.verdictFreshness?.floorMs,
+          floorSource: result.verdictFreshness?.floorSource,
+          fresh: result.verdictFreshness?.fresh,
+        })),
+      ).toEqual([
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime + 1_000,
+          floorSource: 'attempt',
+          fresh: true,
+        },
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime - 1_000,
+          floorSource: 'session',
+          fresh: true,
+        },
+      ]);
     });
   });
 

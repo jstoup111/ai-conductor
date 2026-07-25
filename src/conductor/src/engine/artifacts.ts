@@ -2938,6 +2938,26 @@ export async function checkStepCompletion(
   const predicate = CUSTOM_COMPLETION_PREDICATES[step];
   if (predicate) return predicate(dir, ctx);
 
+  const completionArtifact = ctx.config?.steps?.[step]?.completion_artifact;
+  if (completionArtifact) {
+    const artifact = join(dir, completionArtifact);
+    const floor = verdictFreshnessFloor(ctx);
+    const comparand = verdictFreshnessComparand(ctx);
+    if (await fileIsFreshSinceSession(artifact, comparand)) {
+      const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
+      return {
+        done: true,
+        verdictFreshness: {
+          artifact,
+          mtimeMs,
+          floorMs: floor,
+          floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+          fresh: true,
+        },
+      };
+    }
+  }
+
   const extra = extraArtifactGlobs(step, ctx.config);
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];
   if (patterns.length === 0) return { done: true };
