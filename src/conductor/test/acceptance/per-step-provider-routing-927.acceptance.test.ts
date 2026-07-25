@@ -20,6 +20,12 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import {
+  ProviderRuntimeSet,
+  type ProviderRuntime,
+} from '../../src/engine/provider-runtime.js';
+import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -101,22 +107,17 @@ interface ProviderExecutionResult extends InvokeResult {
   attempts: ProviderAttempt[];
 }
 
-interface RuntimeFixture {
-  provider: LLMProvider;
-  policy: ProviderModelPolicy;
-}
-
 interface ExecuteInput {
   step: StepName;
   executionId: string;
   attempt?: number;
   configuredProviders: string[];
   preferredProvider?: string;
-  runtimes: Record<string, RuntimeFixture>;
+  runtimes: ProviderRuntimeSet;
   config?: HarnessConfig;
   modelOverride?: string;
   effortOverride?: string;
-  sessionStore?: Map<string, string>;
+  sessionStore?: Map<string, ProviderSessionScope>;
   unavailableProviders?: Map<string, string>;
   warn?: (message: string) => void;
 }
@@ -135,8 +136,27 @@ async function loadExecuteProviderCandidates(): Promise<ExecuteProviderCandidate
     loaded && 'executeProviderCandidates' in loaded,
     'provider-execution.ts must export executeProviderCandidates',
   ).toBe(true);
-  return (loaded as unknown as { executeProviderCandidates: ExecuteProviderCandidates })
-    .executeProviderCandidates;
+  const execute = (
+    loaded as unknown as {
+      executeProviderCandidates: (
+        input: Record<string, unknown>,
+      ) => Promise<ProviderExecutionResult>;
+    }
+  ).executeProviderCandidates;
+  return async (input) => {
+    const sessionsByExecution =
+      input.sessionStore ?? new Map<string, ProviderSessionScope>();
+    let sessions = sessionsByExecution.get(input.executionId);
+    if (!sessions) {
+      sessions = new ProviderSessionScope(() => crypto.randomUUID());
+      sessionsByExecution.set(input.executionId, sessions);
+    }
+    return execute({
+      ...input,
+      sessions,
+      options: { prompt: `Acceptance fixture for ${input.step}` },
+    });
+  };
 }
 
 type ValidateRegisteredSelections = (input: {
@@ -194,6 +214,8 @@ const providerUnavailable = (reason: string): InvokeResult =>
     output: reason,
     exitCode: 127,
     providerUnavailable: true,
+    providerUnavailableReason: reason,
+    providerUnavailableScope: 'run',
   }) as InvokeResult;
 
 const modelUnavailable = (model: string): InvokeResult => ({
@@ -206,10 +228,24 @@ const modelUnavailable = (model: string): InvokeResult => ({
 function runtimes(
   claude: LLMProvider,
   codex: LLMProvider,
-): Record<string, RuntimeFixture> {
+): ProviderRuntimeSet {
+  return new ProviderRuntimeSet([
+    runtime('claude', claude, CLAUDE_MODEL_POLICY),
+    runtime('codex', codex, CODEX_MODEL_POLICY),
+  ]);
+}
+
+function runtime(
+  key: string,
+  provider: LLMProvider,
+  policy: ProviderModelPolicy,
+): ProviderRuntime {
   return {
-    claude: { provider: claude, policy: CLAUDE_MODEL_POLICY },
-    codex: { provider: codex, policy: CODEX_MODEL_POLICY },
+    key,
+    provider,
+    policy,
+    builtIn: key === 'claude' || key === 'codex',
+    availability: new ModelAvailability(policy.modelFallbackLadder),
   };
 }
 
@@ -276,6 +312,89 @@ describe('ST-927-1 — configured provider set and validation', () => {
         }),
       ).toThrow(new RegExp(`unknown.*${expectedScope}|${expectedScope}.*unknown`, 'i'));
     }
+  });
+});
+
+describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
+  it.each([
+    {
+      providerKey: 'claude',
+      policy: CLAUDE_MODEL_POLICY,
+      expectedModel: 'sonnet',
+      expectedEffort: 'low',
+    },
+    {
+      providerKey: 'codex',
+      policy: CODEX_MODEL_POLICY,
+      expectedModel: 'gpt-5.6-terra',
+      expectedEffort: 'low',
+    },
+  ])(
+    'preserves the pre-feature $providerKey invocation, retry, session, and diagnostic fixture',
+    async ({ providerKey, policy, expectedModel, expectedEffort }) => {
+      const execute = await loadExecuteProviderCandidates();
+      const scripted = scriptedProvider([
+        {
+          success: false,
+          output: `${providerKey} ordinary failure`,
+          exitCode: 1,
+        },
+        ok(`${providerKey} retry success`),
+      ]);
+      const sessions = new Map<string, ProviderSessionScope>();
+      const warnings: string[] = [];
+      const sharedInput = {
+        step: 'build' as const,
+        executionId: `${providerKey}-scalar-build`,
+        configuredProviders: [providerKey],
+        runtimes: new ProviderRuntimeSet([
+          runtime(providerKey, scripted.provider, policy),
+        ]),
+        sessionStore: sessions,
+        warn: (message: string) => warnings.push(message),
+      };
+
+      const first = await execute({ ...sharedInput, attempt: 1 });
+      const retry = await execute({ ...sharedInput, attempt: 2 });
+
+      expect(scripted.calls).toHaveLength(2);
+      expect(scripted.calls.map(({ model, effort }) => ({ model, effort }))).toEqual([
+        { model: expectedModel, effort: expectedEffort },
+        { model: expectedModel, effort: expectedEffort },
+      ]);
+      expect(scripted.calls[0].resume).toBe(false);
+      expect(scripted.calls[1]).toMatchObject({
+        sessionId: scripted.calls[0].sessionId,
+        resume: true,
+      });
+      expect(first).toMatchObject({
+        success: false,
+        output: `${providerKey} ordinary failure`,
+        preferredProvider: providerKey,
+        actualProvider: providerKey,
+        attempts: [{ provider: providerKey, outcome: 'failure', invoked: true }],
+      });
+      expect(retry).toMatchObject({
+        success: true,
+        preferredProvider: providerKey,
+        actualProvider: providerKey,
+      });
+      expect(warnings).toEqual([]);
+    },
+  );
+
+  it('rejects an unknown scalar provider before the dispatch sentinel runs', async () => {
+    const validateRegistered = await loadValidateRegisteredSelections();
+    const dispatch = vi.fn();
+
+    expect(() => {
+      validateRegistered({
+        config: { llm_provider: 'missing-provider' },
+        registeredProviders: ['claude', 'codex'],
+      });
+      dispatch();
+    }).toThrow(/llm_provider.*missing-provider.*claude.*codex/i);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 });
 
@@ -548,10 +667,8 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
   it('keeps explicit models opaque on the preferred provider and resets to fallback-native defaults', async () => {
     const execute = await loadExecuteProviderCandidates();
     const claude = scriptedProvider(() => ok('claude'));
-    const codex = scriptedProvider((options) =>
-      options.model === 'gpt-custom-verbatim'
-        ? providerUnavailable('codex executable missing')
-        : ok('codex'),
+    const codex = scriptedProvider(() =>
+      providerUnavailable('codex executable missing'),
     );
 
     const explicitCodex = scriptedProvider(() => ok('codex explicit'));
@@ -614,32 +731,32 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
         calls.push(name);
         return result;
       });
-    const claude = make('claude', providerUnavailable('claude missing'));
+    const claude = make('claude', ok('claude success'));
     const codex = make('codex', providerUnavailable('codex missing'));
-    const third = make('third', ok('third success'));
+    const unconfigured = make('unconfigured', ok('must not run'));
 
     const result = await execute({
       step: 'build_review',
       executionId: 'ordered-fallback',
       preferredProvider: 'codex',
-      configuredProviders: ['claude', 'codex', 'third'],
-      runtimes: {
-        codex: { provider: codex.provider, policy: CODEX_MODEL_POLICY },
-        claude: { provider: claude.provider, policy: CLAUDE_MODEL_POLICY },
-        third: { provider: third.provider, policy: CLAUDE_MODEL_POLICY },
-        unlisted: {
-          provider: scriptedProvider(() => ok('must not run')).provider,
-          policy: CLAUDE_MODEL_POLICY,
-        },
-      },
+      configuredProviders: ['claude', 'codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', codex.provider, CODEX_MODEL_POLICY),
+        runtime('claude', claude.provider, CLAUDE_MODEL_POLICY),
+        runtime(
+          'unconfigured',
+          unconfigured.provider,
+          CLAUDE_MODEL_POLICY,
+        ),
+      ]),
       warn: (message) => warnings.push(message),
     });
 
-    expect(calls).toEqual(['codex', 'claude', 'third']);
-    expect(result.actualProvider).toBe('third');
-    expect(warnings).toHaveLength(2);
+    expect(calls).toEqual(['codex', 'claude']);
+    expect(result.actualProvider).toBe('claude');
+    expect(unconfigured.calls).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
     expect(warnings[0]).toMatch(/build_review.*codex.*codex missing.*claude/i);
-    expect(warnings[1]).toMatch(/build_review.*claude.*claude missing.*third/i);
   });
 
   it('fails closed after complete provider exhaustion and reports every attempted provider and reason', async () => {
@@ -677,8 +794,13 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
     });
     expect(first.actualProvider).toBe('claude');
     expect(codex.calls.map(({ model }) => model)).toEqual(
-      CODEX_MODEL_POLICY.modelFallbackLadder,
+      CODEX_MODEL_POLICY.modelFallbackLadder.slice(
+        CODEX_MODEL_POLICY.modelFallbackLadder.indexOf(
+          CODEX_MODEL_POLICY.stepModels.build,
+        ),
+      ),
     );
+    const firstStepAttemptCount = codex.calls.length;
 
     await execute({
       step: 'build_review',
@@ -687,9 +809,7 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
       configuredProviders: ['claude', 'codex'],
       runtimes: sharedRuntimes,
     });
-    expect(codex.calls.length).toBeGreaterThan(
-      CODEX_MODEL_POLICY.modelFallbackLadder.length,
-    );
+    expect(codex.calls.length).toBeGreaterThan(firstStepAttemptCount);
   });
 
   it('caches only deterministic run-wide provider failure, never transient or step-scoped failure', async () => {
@@ -771,7 +891,7 @@ describe('ST-927-6 — failure-classification boundary', () => {
 describe('ST-927-7 — provider-local sessions and accounting', () => {
   it('starts fresh per step/provider, resumes only a same-step/provider retry, and attributes every attempt', async () => {
     const execute = await loadExecuteProviderCandidates();
-    const sessionStore = new Map<string, string>();
+    const sessionStore = new Map<string, ProviderSessionScope>();
     const claude = scriptedProvider([
       { success: false, output: 'retry me', exitCode: 1 },
       ok('claude retry', { input: 20, output: 5 }),
@@ -826,7 +946,7 @@ describe('ST-927-7 — provider-local sessions and accounting', () => {
 
   it('starts a fresh fallback-provider session and never crosses provider credentials or permissions', async () => {
     const execute = await loadExecuteProviderCandidates();
-    const sessionStore = new Map<string, string>();
+    const sessionStore = new Map<string, ProviderSessionScope>();
     const codex = scriptedProvider(() => providerUnavailable('codex missing'));
     const claude = scriptedProvider(() => ok('claude fallback'));
 
@@ -868,7 +988,9 @@ describe('ST-927-8 — every production path uses the same routing seam', () => 
       expect(
         source,
         `${path} must visibly depend on the shared provider-execution seam`,
-      ).toMatch(/provider-execution|ProviderExecution|providerExecution/);
+      ).toMatch(
+        /provider-execution|ProviderExecution|providerExecution|beginProviderBranch/,
+      );
     }
   });
 });

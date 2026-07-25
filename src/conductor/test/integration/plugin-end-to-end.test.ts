@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -11,6 +11,8 @@ import type { StepName, ConductState } from '../../src/types/index.js';
 import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
+import { createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 /**
  * Mock step runner that collects invoke outputs for assertion
@@ -120,6 +122,37 @@ export default {
     expect(result.success).toBe(true);
     expect(result.output).toMatch(/^ECHO: /);
     expect(result.output).toBe('ECHO: test message');
+  });
+
+  it('keeps a registered legacy void-interactive provider on the warned Claude-compatible policy', async () => {
+    const registry = new PluginRegistry();
+    await discoverPlugins(pluginDir, '', registry);
+    registerBuiltins(registry, events, () => {});
+    registry.markInitialized();
+    const warnings: string[] = [];
+    const runtimes = createProviderRuntimeSet(registry, (message) => {
+      warnings.push(message);
+    });
+    const echo = runtimes.get('echo');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const interactiveResult = await echo.provider.invokeInteractive({
+      prompt: 'legacy interactive prompt',
+      sessionId: 'legacy-interactive-session',
+      resume: false,
+    });
+
+    expect(interactiveResult).toBeUndefined();
+    expect(echo.builtIn).toBe(false);
+    expect(echo.policy).toBe(CLAUDE_MODEL_POLICY);
+    expect(warnings).toEqual([
+      expect.stringMatching(
+        /echo.*Claude-compatible model defaults.*add a provider model policy/i,
+      ),
+    ]);
+    expect(log).toHaveBeenCalledWith(
+      'ECHO (interactive): legacy interactive prompt',
+    );
   });
 
   it('conductor session with EchoProvider uses the loaded plugin', async () => {
