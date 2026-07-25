@@ -37,6 +37,10 @@ import { Conductor } from '../../../src/engine/conductor.js';
 import type { StepRunner } from '../../../src/engine/conductor.js';
 import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js';
 import type { SandboxBuildEnv } from '../../../src/engine/self-host/sandbox-build-env.js';
+import {
+  runReleaseArtifactGate,
+  type ReleaseGateOptions,
+} from '../../../src/engine/self-host/release-gate.js';
 
 const NOOP_ESCALATION = async () => ({});
 const SANDBOX_DIR = '/tmp/harness-selfbuild-TESTDIR';
@@ -118,6 +122,11 @@ describe('self-host wiring — default bundle members forward to the real primit
     expect(defaultSelfHostGuardrails.resolveInstalledHarnessRoot).toBe(
       resolveInstalledHarnessRoot,
     );
+  });
+
+  it('releaseGate is exposed on the production bundle and forwards to the real composed gate', async () => {
+    const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
+    expect(defaultSelfHostGuardrails.releaseGate).toBe(runReleaseArtifactGate);
   });
 });
 
@@ -209,6 +218,29 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(completed).toEqual(['feature_complete']);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
+  });
+
+  it('empty [Unreleased] passes through the real release gate and dispatches finish', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const releaseGate = vi.fn(async (opts: ReleaseGateOptions) =>
+      runReleaseArtifactGate({
+        ...opts,
+        readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
+        changedFiles: async () => [
+          { status: 'M', path: 'src/conductor/src/engine/self-host/release-gate.ts' },
+        ],
+        access: async () => {},
+        exec: async () => ({ code: 0, timedOut: false }),
+      }),
+    );
+    const { guardrails } = makeGuardrails({ releaseGate });
+    const { runner, seen } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner).run();
+
+    expect(releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((s) => s.step === 'finish')).toBeDefined();
+    expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
   });
 
   it('passes the INSTALLED root (not the detection root) to provisionSandbox (#363 / TR-4)', async () => {
