@@ -12,6 +12,10 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
+PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
+CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
+AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
+CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
 SCOPE_CONTRACT_FILES=(
   "skills/tdd/SKILL.md"
   "skills/tdd/references/green.md"
@@ -123,6 +127,37 @@ if grep -qiE 'non-?zero' <<<"$FINISH_SUITE_SECTION" \
   pass "finish blocks non-zero verifier results before completion choices"
 else
   fail "finish must block non-zero verifier results before choices/finish-choice"
+fi
+
+PR_PRE_PUSH_SECTION="$(awk '
+  /^### 5\. Pre-Push Verification/ { in_section = 1; next }
+  /^### 6\. Create or Update the PR/ { in_section = 0 }
+  in_section
+' "$PR_SKILL_FILE")"
+
+if grep -qiE 'completion verification|/finish' <<<"$PR_PRE_PUSH_SECTION" \
+  && ! grep -qiE 'npm test|conduct-ts test-suite|full (test )?suite|bundle exec rspec|pytest' <<<"$PR_PRE_PUSH_SECTION"; then
+  pass "PR preparation reuses completion verification without a local aggregate run"
+else
+  fail "PR preparation must defer local aggregate verification to finish"
+fi
+
+if grep -qE -- '- run: (npm test|npx vitest run)' "$CI_WORKFLOW_FILE" \
+  && grep -qE 'needs: .*conductor' "$CI_WORKFLOW_FILE" \
+  && grep -q 'failure|cancelled' "$CI_WORKFLOW_FILE" \
+  && ! grep -q 'test-suite-evidence.json' "$CI_WORKFLOW_FILE"; then
+  pass "CI independently runs and blocks on its authoritative conductor tests"
+else
+  fail "CI must independently run authoritative tests without local evidence"
+fi
+
+if grep -qiE 'suiteCommand|suite command' "$AUTORESOLVE_FILE" \
+  && grep -q 'runSuiteGate' "$CI_FIX_FILE" \
+  && ! grep -q 'test-suite-evidence.json' "$AUTORESOLVE_FILE" \
+  && ! grep -q 'test-suite-evidence.json' "$CI_FIX_FILE"; then
+  pass "autoresolve and CI repair retain evidence-independent mutation checks"
+else
+  fail "autoresolve and CI repair must retain evidence-independent mutation checks"
 fi
 
 for relative_path in "${SCOPE_CONTRACT_FILES[@]}"; do

@@ -443,7 +443,13 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
       readFile(join(CONDUCTOR_ROOT, 'src/engine/ci-fix.ts'), 'utf8'),
     ]);
 
-    expect(workflow).toMatch(/npm test/);
+    expect(workflow).toMatch(
+      /conductor:[\s\S]*?- run: (?:npm test|npx vitest run)[\s\S]*?working-directory: src\/conductor/i,
+    );
+    expect(workflow).toMatch(
+      /ci-gate:[\s\S]*?needs:[^\n]*conductor[\s\S]*?failure\|cancelled/i,
+    );
+    expect(workflow).not.toMatch(/test-suite-evidence\.json/);
     expect(autoresolve).toMatch(/suiteCommand|suite command/i);
     expect(ciFix).toMatch(/suite|test/i);
     expect(autoresolve).not.toMatch(/test-suite-evidence\.json/);
