@@ -4,11 +4,24 @@ import type {
 } from '../execution/llm-provider.js';
 import type { ProviderRuntime } from './provider-runtime.js';
 
-interface ClassifiedProviderResult extends InvokeResult {
-  providerUnavailable?: boolean;
-  providerUnavailableReason?: string;
-  providerUnavailableScope?: 'run';
-  providerInvocationSkipped?: boolean;
+export interface ProviderUnavailableClassification {
+  scope: 'run';
+  reason: string;
+}
+
+export function classifyProviderAttempt(
+  result: InvokeResult,
+): ProviderUnavailableClassification | undefined {
+  if (
+    result.providerUnavailable !== true ||
+    result.providerUnavailableScope !== 'run'
+  ) {
+    return undefined;
+  }
+  return {
+    scope: 'run',
+    reason: result.providerUnavailableReason ?? result.output,
+  };
 }
 
 /**
@@ -18,7 +31,7 @@ interface ClassifiedProviderResult extends InvokeResult {
 export async function invokeRuntime(
   runtime: ProviderRuntime,
   options: InvokeOptions,
-): Promise<ClassifiedProviderResult> {
+): Promise<InvokeResult> {
   if (runtime.runWideUnavailable) {
     const reason = runtime.runWideUnavailable.reason;
     return {
@@ -35,14 +48,10 @@ export async function invokeRuntime(
   const result = await runtime.availability.invokeWithLadder(
     runtime.provider,
     options,
-  ) as ClassifiedProviderResult;
-  if (
-    result.providerUnavailable === true &&
-    result.providerUnavailableScope === 'run'
-  ) {
-    runtime.runWideUnavailable = {
-      reason: result.providerUnavailableReason ?? result.output,
-    };
+  );
+  const unavailable = classifyProviderAttempt(result);
+  if (unavailable) {
+    runtime.runWideUnavailable = { reason: unavailable.reason };
   }
   return result;
 }

@@ -8,6 +8,8 @@ export interface TokenUsage {
   durationMs?: number;
 }
 
+export type ProviderUnavailableScope = 'run';
+
 export interface InvokeResult {
   success: boolean;
   output: string;
@@ -39,6 +41,16 @@ export interface InvokeResult {
    * Indicates the daemon's OAuth token may be stale or missing.
    */
   authFailure?: boolean;
+  /**
+   * Explicitly identifies deterministic provider-wide unavailability.
+   * Consumers must also require providerUnavailableScope === 'run'; output
+   * text alone never authorizes provider fallback or run-wide caching.
+   */
+  providerUnavailable?: boolean;
+  providerUnavailableScope?: ProviderUnavailableScope;
+  providerUnavailableReason?: string;
+  /** Set by the execution layer when a cached unavailable provider is skipped. */
+  providerInvocationSkipped?: boolean;
 }
 
 export interface InvokeOptions {

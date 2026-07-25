@@ -13,10 +13,6 @@ import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
-  providerUnavailable?: boolean;
-  providerUnavailableReason?: string;
-  providerUnavailableScope?: 'run';
-  providerInvocationSkipped?: boolean;
   timedOut?: boolean;
   rejected?: boolean;
 }
