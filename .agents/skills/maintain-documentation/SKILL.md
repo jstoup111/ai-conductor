@@ -148,3 +148,31 @@ Treat this README contract as a repository-local refinement of the global harnes
 Verify only affected links, paths, commands, configuration, examples, artifacts, explanations, code organization, architecture, generated help, schema, and observed behavior, as applicable.
 
 If a required claim cannot be verified, return BLOCKED. Never guess or weaken the claim.
+
+## Changelog decisions
+
+### Selection
+
+- A notable reader-visible implementation change requires a changelog entry.
+- A non-notable implementation may PASS without a changelog entry.
+- Do not add an entry for a spec-only change, documentation-only change, internal and non-notable change, or no implementation change.
+
+### Entry format
+
+- Write exactly one present-tense sentence led by the reader outcome.
+- In pre-finish mode, include exactly one required `{{IMPLEMENTATION_PR}}` token.
+- The spec PR link is optional; include it when known. The implementation reference is required.
+- Use the final implementation link shape `[implementation PR #N](URL)`.
+- Use this exact example format: `- Add ... ([spec PR #123](…); {{IMPLEMENTATION_PR}}).`
+- Preserve runnable migration blocks separate from the one-sentence entry.
+
+### Blocking validation
+
+For any condition below, return BLOCKED and keep the pass marker absent:
+
+- missing required notable entry
+- missing implementation token
+- duplicate implementation token
+- multiple sentences
+- future tense
+- internal mechanics first

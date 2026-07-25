@@ -530,4 +530,91 @@ describe('repository-local maintain-documentation contract', () => {
       },
     });
   });
+
+  it('defines notable implementation changelog selection and format', async () => {
+    const skill = await readFile(canonicalSkill, 'utf-8');
+    const changelog =
+      skill.match(/## Changelog decisions\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? '';
+    const subsection = (heading: string): string =>
+      changelog.match(new RegExp(`### ${heading}\\n([\\s\\S]*?)(?=\\n### |$)`))?.[1] ?? '';
+    const selection = subsection('Selection');
+    const format = subsection('Entry format');
+    const blocking = subsection('Blocking validation');
+
+    expect({
+      selection: {
+        notableRequired:
+          /notable reader-visible implementation change.*(?:require|add).*changelog entry/is.test(
+            selection,
+          ),
+        nonNotableMayPass: /non-notable implementation.*PASS without.*entry/i.test(selection),
+        exclusions: {
+          specOnly: /spec-only/i.test(selection),
+          documentationOnly: /documentation-only/i.test(selection),
+          internalNonNotable: /internal and non-notable/i.test(selection),
+          noImplementationChange: /no implementation change/i.test(selection),
+        },
+      },
+      entryFormat: {
+        oneSentence: /exactly one.*sentence/i.test(format),
+        presentTense: /present-tense/i.test(format),
+        readerOutcomeFirst: /led by the reader outcome/i.test(format),
+        preFinishToken:
+          /pre-finish.*exactly one required `\{\{IMPLEMENTATION_PR\}\}` token/is.test(format),
+        specOptional: /spec PR link.*optional.*when known/i.test(format),
+        implementationRequired: /implementation.*required/i.test(format),
+        finalLink: format.includes('[implementation PR #N](URL)'),
+        exactExample: format.includes(
+          '- Add ... ([spec PR #123](…); {{IMPLEMENTATION_PR}}).',
+        ),
+      },
+      blocking: {
+        outcome: /return BLOCKED.*pass marker absent/i.test(blocking),
+        missingRequiredEntry: /missing required notable entry/i.test(blocking),
+        missingToken: /missing implementation token/i.test(blocking),
+        duplicateToken: /duplicate implementation token/i.test(blocking),
+        multipleSentences: /multiple sentences/i.test(blocking),
+        futureTense: /future tense/i.test(blocking),
+        internalMechanicsFirst: /internal mechanics first/i.test(blocking),
+      },
+      migrationBlocks: {
+        runnable: /runnable migration blocks/i.test(format),
+        separate: /separate from.*one-sentence entry/i.test(format),
+      },
+    }).toEqual({
+      selection: {
+        notableRequired: true,
+        nonNotableMayPass: true,
+        exclusions: {
+          specOnly: true,
+          documentationOnly: true,
+          internalNonNotable: true,
+          noImplementationChange: true,
+        },
+      },
+      entryFormat: {
+        oneSentence: true,
+        presentTense: true,
+        readerOutcomeFirst: true,
+        preFinishToken: true,
+        specOptional: true,
+        implementationRequired: true,
+        finalLink: true,
+        exactExample: true,
+      },
+      blocking: {
+        outcome: true,
+        missingRequiredEntry: true,
+        missingToken: true,
+        duplicateToken: true,
+        multipleSentences: true,
+        futureTense: true,
+        internalMechanicsFirst: true,
+      },
+      migrationBlocks: {
+        runnable: true,
+        separate: true,
+      },
+    });
+  });
 });
