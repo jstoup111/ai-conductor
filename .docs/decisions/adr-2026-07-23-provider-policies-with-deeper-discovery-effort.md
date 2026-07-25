@@ -1,7 +1,8 @@
 # ADR: Built-in provider policies with deeper discovery effort
 
 **Date:** 2026-07-23
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** adr-2026-07-24-provider-aware-step-execution
 **Supersedes:** adr-2026-07-23-built-in-provider-model-policies
 **Deciders:** James Stoup (operator, approved 2026-07-23), architecture-review amendment for issue #902
 

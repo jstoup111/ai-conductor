@@ -4347,8 +4347,11 @@ fi
 - conduct-ts: hybrid session model — new `freshContextPerStep` option. When on,
   the conductor resets the LLM session before each new step in the looped region
   (`build`…`finish`), so each runs on fresh context (Ralph-style — context never
-  bloats across the SHIP phase) while a step's own retries still resume. The
-  front half keeps the persistent session. Default off (persistent everywhere).
+  bloats across the SHIP phase) while a step's own retries still resume.
+  **Historical intermediate behavior:** the front half remained persistent and
+  the option defaulted off. This was later superseded by
+  ai-conductor#325 / PR #365, which makes fresh-per-step unconditional across
+  all phases and retains resume only within a step's retries.
 - conduct-ts: the conductor now drives the **resolved step registry**
   (`buildStepRegistry(config)`) instead of the static `ALL_STEPS`, so **custom
   steps** defined in `.ai-conductor/config.yml` (via `after:` + `skill:`) are

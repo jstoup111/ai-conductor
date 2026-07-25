@@ -16,17 +16,22 @@ Does NOT run other skills internally — it assesses state and directs. The user
 
 ### Session Model
 
-**One Claude session per feature/worktree.** All steps — design through retro — share the same
-session. The session ID is stored in `.pipeline/conduct-session-id`.
+**Fresh LLM session per executed step.** Every step — design through retro —
+starts without prior-step conversational context and reads its inputs from the
+persisted artifacts. The session ID/marker under `.pipeline/` supports the
+current step only; it is reset at the next step boundary.
 
-- **Design phase** (bootstrap → plan): Context grows moderately. All artifacts persist to disk.
+- **Design phase** (bootstrap → plan): Each step reads the approved artifact
+  produced by its predecessor.
 - **Build phase** (pipeline): The conductor drives the task loop. Claude orchestrates each task
   by dispatching subagents. Subagent context is isolated and discarded — only a ~2-3 line summary
   returns to the orchestrator per task. No context compaction needed.
 - **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
 
-Interactive steps reuse the feature session via `--resume`. No fresh sessions are created
-mid-feature. This prevents redundant cold starts that waste API calls and hit rate limits.
+Retries within the same step resume that step's session so partial work and
+failure context are retained. A later step never resumes it. With per-step
+provider routing, session identity is additionally provider-local: another
+provider starts fresh, and only a same-step retry on the same provider resumes.
 
 ## The Flow
 
@@ -43,6 +48,7 @@ Step 7b: /architecture-review    → DECIDE (skipped for Small, lightweight for 
 Step 8:  /stories               → DECIDE (from PRD FRs on product; technical stories on technical)
 Step 9:  /conflict-check        → DECIDE (skipped for Small; root-routes kickback → prd|architecture|stories)
 Step 10: /plan                  → DECIDE (technical implementation plan, grounded in the architecture + stories)
+Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
 Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue

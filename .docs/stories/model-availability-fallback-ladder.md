@@ -12,6 +12,13 @@
 > `model_fallback_ladder` behavior remain provider-neutral. Codex uses the
 > independent `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` default specified in
 > `model-and-effort-resolution-provider-aware-902.md`.
+>
+> **Per-step routing amendment (#927, approved 2026-07-24):** The availability
+> cache is process-scoped **within a provider runtime** and keyed by exact model
+> string. An unavailable model reported by one provider never poisons another
+> provider's cache. Exhausting a provider's native ladder permits the
+> step-attempt-scoped provider fallback defined by
+> `per-step-provider-routing-927.md`; it does not globally disable that provider.
 
 ---
 
@@ -125,8 +132,9 @@ the process so that every subsequent step starts directly on the best live model
   marked dead — cache keys are exact opaque strings (no alias resolution guessing).
 
 ### Done When
-- [ ] Cache is a per-process singleton in `engine/model-availability.ts`; no disk state,
-      no cross-worktree state.
+- [ ] Cache is process-scoped per provider runtime in
+      `engine/model-availability.ts`; no disk state, cross-provider state, or
+      cross-worktree state.
 - [ ] Tests assert: no second spawn of a dead model, interactive-path substitution,
       exact-string keying, and fresh-instance behavior (constructing a new cache
       re-allows all models — the restart semantics).

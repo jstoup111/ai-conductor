@@ -10,6 +10,14 @@ These stories extend the accepted retry-escalation, model-availability, and
 generated-model-table contracts with built-in provider awareness. They do not
 supersede those contracts.
 
+> **Per-step routing amendment (#927, approved 2026-07-24):** “Selected
+> provider” below means the provider resolved for the current step and attempt,
+> not one provider captured for the whole run. Explicit model strings remain
+> opaque on the preferred provider attempt. When execution crosses to another
+> provider because of unavailability, the fallback provider receives its own
+> native defaults; the failed provider's explicit model and effort are not
+> carried across.
+
 ---
 
 ## Story: Built-in providers receive explicit per-step defaults
