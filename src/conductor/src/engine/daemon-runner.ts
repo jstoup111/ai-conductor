@@ -93,8 +93,8 @@ export interface FeatureRunnerDeps {
    * pass false — they keep writing repo `.docs/retros/` and emit nothing.
    */
   daemon: boolean;
-  /** LLM provider used to produce the `done`-feature retro narrative. */
-  provider: LLMProvider;
+  /** Legacy narrative provider when provider-aware feature execution is absent. */
+  provider?: LLMProvider;
   /** Fresh provider routing state allocated once for each feature run. */
   providerExecution?: () => ProviderExecutionContext;
   /**

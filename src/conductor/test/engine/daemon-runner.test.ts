@@ -6,6 +6,11 @@ import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '..
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -69,6 +74,64 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('allocates non-aliased provider caches and sessions for two feature invocations', async () => {
+    const configuredProviders = ['claude'] as const;
+    const provider = {
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+      invokeInteractive: async () => ({ success: true, output: '', exitCode: 0 }),
+    };
+    const contexts: ProviderExecutionContext[] = [];
+    const providerExecution = () => {
+      const context: ProviderExecutionContext = {
+        configuredProviders,
+        runtimes: new ProviderRuntimeSet([
+          {
+            key: 'claude',
+            provider,
+            policy: CLAUDE_MODEL_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability([]),
+          },
+        ]),
+        sessions: new ProviderSessionStore(),
+      };
+      contexts.push(context);
+      return context;
+    };
+    const received: Array<ProviderExecutionContext | undefined> = [];
+    const featureDeps = deps({ done: false, halted: true, reason: 'pause' });
+    featureDeps.providerExecution = providerExecution;
+    featureDeps.runConductor = async (_worktree, _item, context) => {
+      received.push(context);
+    };
+    const run = makeRunFeature(featureDeps);
+
+    await run({ slug: 'feature-a' });
+    await run({ slug: 'feature-b' });
+
+    expect({
+      contextCount: contexts.length,
+      received,
+      contextsAreIndependent: contexts[0] !== contexts[1],
+      runtimeSetsAreIndependent: contexts[0].runtimes !== contexts[1].runtimes,
+      availabilityCachesAreIndependent:
+        contexts[0].runtimes.get('claude').availability !==
+        contexts[1].runtimes.get('claude').availability,
+      sessionStoresAreIndependent: contexts[0].sessions !== contexts[1].sessions,
+      configuredOrderIsShared:
+        contexts[0].configuredProviders === configuredProviders &&
+        contexts[1].configuredProviders === configuredProviders,
+    }).toEqual({
+      contextCount: 2,
+      received: [contexts[0], contexts[1]],
+      contextsAreIndependent: true,
+      runtimeSetsAreIndependent: true,
+      availabilityCachesAreIndependent: true,
+      sessionStoresAreIndependent: true,
+      configuredOrderIsShared: true,
+    });
+  });
+
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(

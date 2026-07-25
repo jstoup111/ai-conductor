@@ -204,7 +204,96 @@ it('composes one ordered provider context across the interactive run after regis
   });
 });
 
-it('reuses one daemon provider policy for the conductor and every main or auxiliary runner', async () => {
+it('composes isolated provider execution state for every daemon feature after one registry freeze', async () => {
+  const [daemonSource, runnerSource] = await Promise.all([
+    readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8'),
+  ]);
+  const compact = daemonSource.replace(/\s+/g, ' ');
+  const featureBody = runnerSource.slice(
+    runnerSource.indexOf('return async (item: BacklogItem)'),
+    runnerSource.indexOf('async function emitDaemonSignal'),
+  );
+  const mainRunBody = daemonSource.slice(
+    daemonSource.indexOf('const runConductorInWorktree'),
+    daemonSource.indexOf('// Task 15: Production wiring of setup-failure triage'),
+  );
+  const setupBody = daemonSource.slice(
+    daemonSource.indexOf('const runSetupTriage'),
+    daemonSource.indexOf('const deps = makeFeatureRunnerDeps'),
+  );
+  const rebaseBody = daemonSource.slice(
+    daemonSource.indexOf('const resolver: RebaseResolver'),
+    daemonSource.indexOf('// Run the full resolution pipeline'),
+  );
+  const ciBody = daemonSource.slice(
+    daemonSource.indexOf('const ciFixDispatcher'),
+    daemonSource.indexOf('const outcome = await runCiFix'),
+  );
+
+  expect({
+    globalSelectedProviderBindings:
+      daemonSource.match(/\bconst selectedProviderKey\b/g)?.length ?? 0,
+    globalProviderPolicyLookups:
+      daemonSource.match(/\bresolveProviderModelPolicy\(/g)?.length ?? 0,
+    configuredOrder:
+      compact.includes(
+        'const configuredProviders = normalizeProviderSelection(config?.llm_provider);',
+      ),
+    validatesFrozenRegistryBeforeFactory:
+      daemonSource.indexOf('registry.markInitialized()') <
+        daemonSource.indexOf('validateRegisteredProviderSelections({') &&
+      daemonSource.indexOf('validateRegisteredProviderSelections({') <
+        daemonSource.indexOf('const createProviderExecution'),
+    factoryOwnsFreshRuntimeAndSessions:
+      /const createProviderExecution = \(\): ProviderExecutionContext => \(\{[\s\S]*?configuredProviders,[\s\S]*?runtimes: createProviderRuntimeSet\(registry, log\),[\s\S]*?sessions: new ProviderSessionStore\(\),[\s\S]*?config,[\s\S]*?\}\);/.test(
+        daemonSource,
+      ),
+    factoryInjectedAtFeatureBoundary:
+      /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
+      (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,
+    mainRunnerContext:
+      /featureDesc:\s*item\.slug,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
+        mainRunBody,
+      ),
+    conductorContext:
+      /const conductor = new Conductor\(\{[\s\S]*?providerExecution,[\s\S]*?\}\);/.test(
+        mainRunBody,
+      ),
+    setupRecoveryContext:
+      /featureDesc:\s*`setup-fix-\$\{item\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
+        setupBody,
+      ),
+    rebaseRecoveryContext:
+      (rebaseBody.match(
+        /const providerExecution = createProviderExecution\(\);/g,
+      )?.length ?? 0) === 1 &&
+      /featureDesc:\s*`rebase-resolution-\$\{entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
+        rebaseBody,
+      ),
+    ciRecoveryContext:
+      (ciBody.match(
+        /const providerExecution = createProviderExecution\(\);/g,
+      )?.length ?? 0) === 1 &&
+      /featureDesc:\s*`ci-fix-resolution-\$\{ctx\.entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
+        ciBody,
+      ),
+  }).toEqual({
+    globalSelectedProviderBindings: 0,
+    globalProviderPolicyLookups: 0,
+    configuredOrder: true,
+    validatesFrozenRegistryBeforeFactory: true,
+    factoryOwnsFreshRuntimeAndSessions: true,
+    factoryInjectedAtFeatureBoundary: true,
+    mainRunnerContext: true,
+    conductorContext: true,
+    setupRecoveryContext: true,
+    rebaseRecoveryContext: true,
+    ciRecoveryContext: true,
+  });
+});
+
+it('freezes one daemon registry without retaining legacy global provider authority', async () => {
   const source = await readFile(
     new URL('../../src/daemon-cli.ts', import.meta.url),
     'utf8',
@@ -502,75 +591,46 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
       registerBuiltinsCall.arguments[0] !== undefined &&
       ts.isIdentifier(registerBuiltinsCall.arguments[0]) &&
       registerBuiltinsCall.arguments[0].text === registryName,
-    discoveryPrecedesRegistrationFreezeAndPolicyResolution:
+    discoveryPrecedesRegistrationFreezeAndRuntimeFactory:
       registryBinding !== undefined &&
       pluginDiscoveryCall !== undefined &&
       registerBuiltinsCall !== undefined &&
       markInitializedCall !== undefined &&
-      providerLookup !== undefined &&
-      policyLookup !== undefined &&
+      runtimeSetCall !== undefined &&
       registryBinding.getStart(sourceFile) <
         pluginDiscoveryCall.getStart(sourceFile) &&
       pluginDiscoveryCall.getStart(sourceFile) <
         registerBuiltinsCall.getStart(sourceFile) &&
-      pluginDiscoveryCall.getStart(sourceFile) <
+      registerBuiltinsCall.getStart(sourceFile) <
         markInitializedCall.getStart(sourceFile) &&
-      pluginDiscoveryCall.getStart(sourceFile) <
-        providerLookup.getStart(sourceFile) &&
-      pluginDiscoveryCall.getStart(sourceFile) <
-        policyLookup.getStart(sourceFile),
-    selectedKeyDeclaredOnce:
-      selectedKeyBindings.length === 1 &&
-      bindingNames.filter((name) => name === selectedKey).length === 1 &&
-      isConstBinding(selectedKeyBindings[0]),
-    providerLookupCount: providerLookups.length,
-    providerLookupUsesSelectedKey,
-    providerBoundOnceWithoutShadowing:
-      isConstBinding(providerBinding) &&
-      providerName !== undefined &&
-      providerNameBindings.length === 1,
-    immutablePolicyLookupCount: policyLookups.length,
-    policyLookupUsesSelectedKeyAndLog,
-    immutablePolicyBound:
-      isConstBinding(policyBinding) &&
-      policyName !== undefined &&
-      policyNameBindings.length === 1,
-    bindingsLexicallyPrecedeEveryConsumer:
-      providerBinding !== undefined &&
-      policyBinding !== undefined &&
-      allConstructions.every(
-        (construction) =>
-          providerBinding.getStart(sourceFile) <
-          construction.getStart(sourceFile) &&
-          policyBinding.getStart(sourceFile) <
-          construction.getStart(sourceFile),
-      ),
+      markInitializedCall.getStart(sourceFile) <
+        runtimeSetCall.getStart(sourceFile),
+    selectedKeyAuthorityAbsent: selectedKeyBindings.length === 0,
+    globalProviderLookupAuthorityAbsent: providerLookups.length === 0,
+    globalPolicyLookupAuthorityAbsent: policyLookups.length === 0,
+    globalProviderAndPolicyBindingsAbsent:
+      providerBinding === undefined &&
+      policyBinding === undefined &&
+      providerNameBindings.length === 0 &&
+      policyNameBindings.length === 0,
     runnerConstructionCount: runnerConstructions.length,
-    auxiliaryRunnersRetainLegacyProviderAndPolicy:
+    auxiliaryRunnersAvoidLegacyProviderAndPolicy:
       auxiliaryRunners.length === 3 &&
       auxiliaryRunners.every(
         (construction) =>
-          providerName !== undefined &&
-          construction.arguments[0] !== undefined &&
-          ts.isIdentifier(construction.arguments[0]) &&
-          construction.arguments[0].text === providerName &&
-          objectBindsPolicy(construction.arguments[3], policyName),
+          providerName === undefined ||
+          construction.arguments[0] === undefined ||
+          !ts.isIdentifier(construction.arguments[0]) ||
+          construction.arguments[0].text !== providerName ||
+          !objectBindsPolicy(construction.arguments[3], policyName),
       ),
-    mainRunnerReceivesFreshRuntime:
-      runtimeSetCalls.length === 1 &&
-      runtimeSetCall !== undefined &&
-      isConstBinding(runProviderBinding) &&
-      isConstBinding(runPolicyBinding) &&
-      mainRunner !== undefined &&
-      runtimeSetCall.getStart(sourceFile) < mainRunner.getStart(sourceFile) &&
-      ts.isIdentifier(mainRunner.arguments[0]) &&
-      mainRunner.arguments[0].text === 'runProvider' &&
-      objectBindsPolicy(mainRunner.arguments[3], 'runModelPolicy'),
+    legacyMainRuntimeBindingsAbsent:
+      runProviderBinding === undefined && runPolicyBinding === undefined,
     runnerKinds: runnerKinds.sort(),
     conductorConstructionCount: conductorConstructions.length,
-    conductorReceivesFreshRuntimePolicy:
+    conductorAvoidsLegacyRuntimePolicyBinding:
       conductorConstructions.length === 1 &&
-      objectBindsPolicy(
+      !objectBindsPolicy(
         conductorConstructions[0].arguments[0],
         'runModelPolicy',
       ),
@@ -585,18 +645,14 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
       markInitialized: 1,
     },
     registrationUsesExactRegistry: true,
-    discoveryPrecedesRegistrationFreezeAndPolicyResolution: true,
-    selectedKeyDeclaredOnce: true,
-    providerLookupCount: 1,
-    providerLookupUsesSelectedKey: true,
-    providerBoundOnceWithoutShadowing: true,
-    immutablePolicyLookupCount: 1,
-    policyLookupUsesSelectedKeyAndLog: true,
-    immutablePolicyBound: true,
-    bindingsLexicallyPrecedeEveryConsumer: true,
+    discoveryPrecedesRegistrationFreezeAndRuntimeFactory: true,
+    selectedKeyAuthorityAbsent: true,
+    globalProviderLookupAuthorityAbsent: true,
+    globalPolicyLookupAuthorityAbsent: true,
+    globalProviderAndPolicyBindingsAbsent: true,
     runnerConstructionCount: 4,
-    auxiliaryRunnersRetainLegacyProviderAndPolicy: true,
-    mainRunnerReceivesFreshRuntime: true,
+    auxiliaryRunnersAvoidLegacyProviderAndPolicy: true,
+    legacyMainRuntimeBindingsAbsent: true,
     runnerKinds: [
       'ci-fix-resolution',
       'main',
@@ -604,7 +660,7 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
       'setup-fix',
     ],
     conductorConstructionCount: 1,
-    conductorReceivesFreshRuntimePolicy: true,
+    conductorAvoidsLegacyRuntimePolicyBinding: true,
   });
 });
 

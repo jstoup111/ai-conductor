@@ -94,11 +94,16 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       const options = node.arguments[3];
       const properties = new Map(
         options.properties
-          .filter(ts.isPropertyAssignment)
-          .map((property) => [
-            property.name.getText(sourceFile),
-            property.initializer.getText(sourceFile),
-          ]),
+          .flatMap((property) =>
+            ts.isPropertyAssignment(property)
+              ? [[
+                  property.name.getText(sourceFile),
+                  property.initializer.getText(sourceFile),
+                ] as const]
+              : ts.isShorthandPropertyAssignment(property)
+                ? [[property.name.text, property.name.text] as const]
+                : [],
+          ),
       );
       const featureDesc = properties.get('featureDesc');
       const label =
@@ -112,9 +117,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       if (label) {
         runners[label] = {
           provider: node.arguments[0].getText(sourceFile),
-          providerRuntimes: properties.get('providerRuntimes'),
-          sessionStore: properties.get('sessionStore'),
-          configuredProviders: properties.get('configuredProviders'),
+          providerExecution: properties.get('providerExecution'),
         };
       }
     }
@@ -143,11 +146,16 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       if (ts.isObjectLiteralExpression(body)) {
         factoryState = Object.fromEntries(
           body.properties
-            .filter(ts.isPropertyAssignment)
-            .map((property) => [
-              property.name.getText(sourceFile),
-              property.initializer.getText(sourceFile),
-            ]),
+            .flatMap((property) =>
+              ts.isPropertyAssignment(property)
+                ? [[
+                    property.name.getText(sourceFile),
+                    property.initializer.getText(sourceFile),
+                  ] as const]
+                : ts.isShorthandPropertyAssignment(property)
+                  ? [[property.name.text, property.name.text] as const]
+                  : [],
+            ),
         );
       }
     }
@@ -200,25 +208,16 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
   }).toEqual({
     runners: {
       feature: {
-        provider:
-          'providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider',
-        providerRuntimes: 'providerExecution.runtimes',
-        sessionStore: 'providerExecution.sessions',
-        configuredProviders: 'providerExecution.configuredProviders',
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
       },
       setup: {
-        provider:
-          'providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider',
-        providerRuntimes: 'providerExecution.runtimes',
-        sessionStore: 'providerExecution.sessions',
-        configuredProviders: 'providerExecution.configuredProviders',
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
       },
       ci: {
-        provider:
-          'providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider',
-        providerRuntimes: 'providerExecution.runtimes',
-        sessionStore: 'providerExecution.sessions',
-        configuredProviders: 'providerExecution.configuredProviders',
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
       },
     },
     depsFactory: 'createProviderExecution',
@@ -227,6 +226,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       runtimes: 'createProviderRuntimeSet(registry, log)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
+      warn: 'log',
     },
     contextOwner: 'deps.providerExecution?.()',
     contextFlow: [

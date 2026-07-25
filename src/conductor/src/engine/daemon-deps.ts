@@ -35,8 +35,8 @@ export interface RealDepsConfig {
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
   ) => Promise<void>;
-  /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
-  provider: LLMProvider;
+  /** Legacy narrative provider when provider-aware feature execution is absent. */
+  provider?: LLMProvider;
   providerExecution?: () => ProviderExecutionContext;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
