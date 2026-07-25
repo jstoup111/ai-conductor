@@ -186,6 +186,90 @@ else
   exit 1
 fi
 
+# Normal installation evaluates only the selected provider readiness set. Use
+# fresh homes so installed state from another selection cannot affect the log.
+MISSING_CLAUDE_STUBS="$TMP_ROOT/stubs-without-claude"
+mkdir -p "$MISSING_CLAUDE_STUBS"
+for tool in rtk npm node codex uv python3; do
+  ln -s "$STUBS/$tool" "$MISSING_CLAUDE_STUBS/$tool"
+done
+
+NORMAL_READINESS_MATRIX_FAILURE=''
+for NORMAL_READINESS_SELECTION in claude codex claude,codex omitted; do
+  NORMAL_READINESS_HOME="$TMP_ROOT/normal-readiness-$NORMAL_READINESS_SELECTION"
+  mkdir -p "$NORMAL_READINESS_HOME"
+
+  case "$NORMAL_READINESS_SELECTION" in
+    claude)
+      NORMAL_READINESS_ARGS=(--providers claude --allow-worktree-root)
+      NORMAL_READINESS_PATH="$STUBS:$PATH"
+      ;;
+    codex)
+      NORMAL_READINESS_ARGS=(--providers codex --allow-worktree-root)
+      NORMAL_READINESS_PATH="$STUBS:$PATH"
+      ;;
+    claude,codex)
+      NORMAL_READINESS_ARGS=(--providers claude,codex --allow-worktree-root)
+      NORMAL_READINESS_PATH="$MISSING_CODEX_STUBS:/usr/bin:/bin"
+      ;;
+    omitted)
+      NORMAL_READINESS_ARGS=(--allow-worktree-root)
+      NORMAL_READINESS_PATH="$MISSING_CLAUDE_STUBS:/usr/bin:/bin"
+      ;;
+  esac
+
+  set +e
+  NORMAL_READINESS_OUT=$(cd "$CHECKOUT" && HOME="$NORMAL_READINESS_HOME" PATH="$NORMAL_READINESS_PATH" timeout 8s "$CHECKOUT/bin/install" "${NORMAL_READINESS_ARGS[@]}" </dev/null 2>&1)
+  NORMAL_READINESS_CODE=$?
+  set -e
+
+  case "$NORMAL_READINESS_SELECTION" in
+    claude)
+      printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Claude Code CLI found' \
+        && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Codex CLI (found|not found)' \
+        && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
+      ;;
+    codex)
+      printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Codex CLI found' \
+        && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Claude Code CLI (found|not found)' \
+        && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
+      ;;
+    claude,codex)
+      printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Claude Code CLI found' \
+        && printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Codex CLI not found' \
+        && printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'codex.*install|install.*codex' \
+        && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
+      ;;
+    omitted)
+      printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Claude Code CLI not found' \
+        && printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'claude.*install|install.*claude' \
+        && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Codex CLI (found|not found)' \
+        && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
+      ;;
+  esac
+
+  case "$NORMAL_READINESS_CODE:$NORMAL_READINESS_CASE_OK" in
+    0:true) ;;
+    *)
+      NORMAL_READINESS_MATRIX_FAILURE="$NORMAL_READINESS_SELECTION (exit $NORMAL_READINESS_CODE)"
+      NORMAL_READINESS_MATRIX_OUT="$NORMAL_READINESS_OUT"
+      break
+      ;;
+  esac
+done
+
+# One behavior, one assertion: selected providers alone emit their own
+# readiness result; a missing selected provider remains actionable, and the
+# omitted selection remains Claude-only.
+if [ -z "$NORMAL_READINESS_MATRIX_FAILURE" ]; then
+  echo 'PASS normal install reports readiness only for selected providers, with omission as Claude-only'
+else
+  echo 'FAIL normal install reports readiness only for selected providers, with omission as Claude-only'
+  printf 'selection: %s\n' "$NORMAL_READINESS_MATRIX_FAILURE"
+  printf '%s\n' "$NORMAL_READINESS_MATRIX_OUT"
+  exit 1
+fi
+
 # A trailing comma denotes an empty provider token and must be rejected before
 # the installer reaches any setup action.
 set +e
