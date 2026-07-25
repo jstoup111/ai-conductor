@@ -361,6 +361,13 @@ async function updatePathIdentity(
     return;
   }
   if (stats.isSymbolicLink()) {
+    if (required) {
+      return fail(
+        'invalid_input',
+        'Declared input must not resolve to a symbolic link',
+        relativePath,
+      );
+    }
     updateField(hash, 'mode', '120000');
     try {
       updateField(hash, 'content', await readlink(absolutePath));

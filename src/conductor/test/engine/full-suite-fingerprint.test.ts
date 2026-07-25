@@ -382,6 +382,53 @@ describe('fingerprintFullSuiteInputs', () => {
     });
   });
 
+  it('returns typed indeterminate for a required symlink discovered by a glob', async () => {
+    const repo = await makeRepo({
+      '.gitignore': 'required/\n',
+      'src/main.ts': 'main\n',
+    });
+    const outside = await mkdtemp(join(tmpdir(), 'full-suite-glob-leaf-outside-'));
+    scratches.push(outside);
+    await writeProjectFile(outside, 'secret.bin', 'outside\n');
+    await mkdir(join(repo, 'required'), { recursive: true });
+    await symlink(join(outside, 'secret.bin'), join(repo, 'required/external.bin'));
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['required/*.bin'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'required/external.bin' },
+    });
+  });
+
+  it('returns typed indeterminate for a required symlink nested under a declared directory', async () => {
+    const repo = await makeRepo({
+      '.gitignore': 'required/\n',
+      'src/main.ts': 'main\n',
+    });
+    const outside = await mkdtemp(join(tmpdir(), 'full-suite-directory-leaf-outside-'));
+    scratches.push(outside);
+    await writeProjectFile(outside, 'secret.bin', 'outside\n');
+    await mkdir(join(repo, 'required/nested'), { recursive: true });
+    await symlink(
+      join(outside, 'secret.bin'),
+      join(repo, 'required/nested/external.bin'),
+    );
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['required'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'required/nested/external.bin' },
+    });
+  });
+
   it('returns typed indeterminate for an escaping working_directory symlink', async () => {
     const repo = await makeRepo({ 'src/main.ts': 'main\n' });
     const outside = await mkdtemp(join(tmpdir(), 'full-suite-workdir-outside-'));
