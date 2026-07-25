@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { loadConfig } from './config.js';
 import {
-  discardIncompleteFullSuiteEvidenceWrites,
   FULL_SUITE_EVIDENCE_VERSION,
   readFullSuiteEvidence,
   sanitizeFullSuiteDiagnosticOutput,
@@ -125,6 +124,13 @@ interface FullSuiteLockOwner {
   acquiredAt: string;
 }
 
+interface FullSuiteLockRecoveryClaim {
+  version: 1;
+  pid: number;
+  token: string;
+  claimedAt: string;
+}
+
 interface FullSuiteLockHandle {
   release: () => Promise<{ ok: true } | { ok: false; message: string }>;
 }
@@ -135,6 +141,7 @@ type FullSuiteLockAcquireResult =
 
 const FULL_SUITE_LOCK_DIRECTORY = 'test-suite.lock';
 const FULL_SUITE_LOCK_OWNER = 'owner.json';
+const FULL_SUITE_LOCK_RECOVERY_CLAIM = 'recovery.json';
 const DEFAULT_LOCK_WAIT_MS = 30_000;
 const DEFAULT_LOCK_RETRY_MS = 25;
 const DEFAULT_LOCK_MAXIMUM_RETRY_MS = 250;
@@ -186,34 +193,127 @@ async function readLockOwner(lockPath: string): Promise<string | null> {
   }
 }
 
-async function quarantineStaleLock(
+async function removeOwnedRecoveryClaim(
+  lockPath: string,
+  expectedClaim: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
+  let currentClaim: string;
+  try {
+    currentClaim = await readFile(claimPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true };
+    return {
+      ok: false,
+      message: `Unable to verify full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+  if (currentClaim !== expectedClaim) {
+    return {
+      ok: false,
+      message: 'Full-suite recovery claim ownership changed',
+    };
+  }
+  try {
+    await rm(claimPath);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Unable to release full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+}
+
+async function quarantineClaimedStaleLock(
   lockPath: string,
   expectedOwner: string | null,
-): Promise<{ recovered: true } | { recovered: false; message: string }> {
+  clock: () => number,
+): Promise<
+  | { status: 'RECOVERED' }
+  | { status: 'OCCUPIED' }
+  | { status: 'FAILED'; message: string }
+> {
+  const claim: FullSuiteLockRecoveryClaim = {
+    version: 1,
+    pid: process.pid,
+    token: randomUUID(),
+    claimedAt: new Date(clock()).toISOString(),
+  };
+  const serializedClaim = `${JSON.stringify(claim)}\n`;
+  try {
+    await writeFile(
+      join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM),
+      serializedClaim,
+      { encoding: 'utf8', flag: 'wx' },
+    );
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { status: 'RECOVERED' };
+    if (code === 'EEXIST') return { status: 'OCCUPIED' };
+    return {
+      status: 'FAILED',
+      message: `Unable to claim stale full-suite lock recovery: ${lockErrorMessage(error)}`,
+    };
+  }
+
+  let currentOwner: string | null;
+  let currentClaim: string;
+  try {
+    [currentOwner, currentClaim] = await Promise.all([
+      readLockOwner(lockPath),
+      readFile(join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM), 'utf8'),
+    ]);
+  } catch (error) {
+    const released = await removeOwnedRecoveryClaim(lockPath, serializedClaim);
+    const detail =
+      `Unable to revalidate stale full-suite lock ownership: ${lockErrorMessage(error)}`;
+    return {
+      status: 'FAILED',
+      message: released.ok ? detail : `${detail}; ${released.message}`,
+    };
+  }
+  if (currentOwner !== expectedOwner || currentClaim !== serializedClaim) {
+    const released = await removeOwnedRecoveryClaim(lockPath, serializedClaim);
+    return {
+      status: 'FAILED',
+      message: released.ok
+        ? 'Full-suite lock ownership changed during stale recovery'
+        : released.message,
+    };
+  }
+
   const quarantine = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
   try {
     await rename(lockPath, quarantine);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { recovered: true };
-    }
+    const released = await removeOwnedRecoveryClaim(lockPath, serializedClaim);
+    const detail =
+      `Unable to quarantine stale full-suite lock: ${lockErrorMessage(error)}`;
     return {
-      recovered: false,
-      message: `Unable to quarantine stale full-suite lock: ${lockErrorMessage(error)}`,
+      status: 'FAILED',
+      message: released.ok ? detail : `${detail}; ${released.message}`,
     };
   }
   let quarantinedOwner: string | null;
+  let quarantinedClaim: string;
   try {
-    quarantinedOwner = await readLockOwner(quarantine);
+    [quarantinedOwner, quarantinedClaim] = await Promise.all([
+      readLockOwner(quarantine),
+      readFile(join(quarantine, FULL_SUITE_LOCK_RECOVERY_CLAIM), 'utf8'),
+    ]);
   } catch (error) {
     return {
-      recovered: false,
+      status: 'FAILED',
       message: `Unable to verify stale full-suite lock ownership: ${lockErrorMessage(error)}`,
     };
   }
-  if (quarantinedOwner !== expectedOwner) {
+  if (
+    quarantinedOwner !== expectedOwner ||
+    quarantinedClaim !== serializedClaim
+  ) {
     return {
-      recovered: false,
+      status: 'FAILED',
       message: 'Full-suite lock ownership changed during stale recovery',
     };
   }
@@ -221,11 +321,11 @@ async function quarantineStaleLock(
     await rm(quarantine, { recursive: true });
   } catch (error) {
     return {
-      recovered: false,
+      status: 'FAILED',
       message: `Unable to remove stale full-suite lock: ${lockErrorMessage(error)}`,
     };
   }
-  return { recovered: true };
+  return { status: 'RECOVERED' };
 }
 
 async function recoverLockIfProvablyStale(
@@ -274,10 +374,7 @@ async function recoverLockIfProvablyStale(
     }
     if (ageMs < options.unownedStaleMs) return { status: 'OCCUPIED' };
   }
-  const recovery = await quarantineStaleLock(lockPath, serialized);
-  return recovery.recovered
-    ? { status: 'RECOVERED' }
-    : { status: 'FAILED', message: recovery.message };
+  return quarantineClaimedStaleLock(lockPath, serialized, options.clock);
 }
 
 async function releaseFullSuiteLock(
@@ -493,18 +590,6 @@ export class FullSuiteVerifier {
 
       const { testSuite, fingerprint } = resolved.context;
       const freshness = resolved.inspection;
-      if (freshness.reason === 'incomplete_write') {
-        try {
-          await discardIncompleteFullSuiteEvidenceWrites(projectRoot);
-        } catch {
-          return {
-            status: 'FAILED',
-            reason: 'internal_error',
-            message: 'Unable to discard incomplete full-suite evidence writes',
-            freshness,
-          };
-        }
-      }
       const secretValues = declaredEnvironmentValues(testSuite, environment);
       const execution = await execute({ projectRoot, testSuite, environment });
       if (!execution.ok) {

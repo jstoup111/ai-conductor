@@ -92,24 +92,6 @@ function isIncompleteEvidenceWrite(entry: string): boolean {
   return entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp');
 }
 
-export async function discardIncompleteFullSuiteEvidenceWrites(
-  projectRoot: string,
-): Promise<void> {
-  const directory = join(projectRoot, '.pipeline');
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
-  }
-  await Promise.all(
-    entries
-      .filter(isIncompleteEvidenceWrite)
-      .map((entry) => rm(join(directory, entry), { force: true })),
-  );
-}
-
 const FAILURE_REASONS = new Set<FullSuiteFailureReason>([
   'missing_config',
   'invalid_config',
@@ -282,21 +264,6 @@ export async function writeFullSuiteEvidence(
 export async function readFullSuiteEvidence(
   projectRoot: string,
 ): Promise<FullSuiteEvidenceReadResult> {
-  const directory = join(projectRoot, '.pipeline');
-  let entries: string[];
-  try {
-    entries = await readdir(directory);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { usable: false, reason: 'missing' }
-      : { usable: false, reason: 'io_error' };
-  }
-  if (
-    entries.some(isIncompleteEvidenceWrite)
-  ) {
-    return { usable: false, reason: 'incomplete_write' };
-  }
-
   let parsed: unknown;
   try {
     const serialized = await readFile(
@@ -306,7 +273,22 @@ export async function readFullSuiteEvidence(
     parsed = JSON.parse(serialized);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return { usable: false, reason: 'missing' };
+    if (code === 'ENOENT') {
+      let entries: string[];
+      try {
+        entries = await readdir(join(projectRoot, '.pipeline'));
+      } catch (directoryError) {
+        return (directoryError as NodeJS.ErrnoException).code === 'ENOENT'
+          ? { usable: false, reason: 'missing' }
+          : { usable: false, reason: 'io_error' };
+      }
+      return {
+        usable: false,
+        reason: entries.some(isIncompleteEvidenceWrite)
+          ? 'incomplete_write'
+          : 'missing',
+      };
+    }
     if (error instanceof SyntaxError) return { usable: false, reason: 'corrupt' };
     return { usable: false, reason: 'io_error' };
   }

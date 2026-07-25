@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -618,6 +619,59 @@ describe('FullSuiteVerifier', () => {
     })));
   });
 
+  it('preserves an active foreign evidence temp while replacing incomplete evidence', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-foreign-temp-');
+    const foreignTemporary = join(
+      projectRoot,
+      '.pipeline/.test-suite-evidence.foreign-writer.tmp',
+    );
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/.test-suite-evidence.foreign-writer.tmp',
+      'active foreign writer',
+    );
+    let launches = 0;
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T17:00:00.000Z',
+          endedAt: '2026-07-25T17:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+    }).ensure();
+
+    expect({
+      result: result.status,
+      freshness: 'freshness' in result ? result.freshness : undefined,
+      foreignTemporary: await readFile(foreignTemporary, 'utf8').catch(() => null),
+      persisted: await readFullSuiteEvidence(projectRoot),
+      launches,
+    }).toMatchObject({
+      result: 'EXECUTED',
+      freshness: { status: 'STALE', reason: 'incomplete_write' },
+      foreignTemporary: 'active foreign writer',
+      persisted: { usable: true, evidence: { outcome: 'PASS' } },
+      launches: 1,
+    });
+  });
+
   it('fails closed with actionable reasons when freshness or persistence is indeterminate', async () => {
     const projectRoot = await makeConfiguredProject('full-suite-verifier-indeterminate-');
     let launches = 0;
@@ -1033,6 +1087,92 @@ describe('FullSuiteVerifier', () => {
       persisted: { usable: true, evidence: { outcome: 'PASS' } },
     });
   }, 20_000);
+
+  it('never displaces a replacement canonical lock during stale recovery', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-lock-replacement-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const staleOwner = {
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'stale-owner',
+      acquiredAt: '2026-07-25T12:00:00.000Z',
+    };
+    const replacementOwner = {
+      version: 1,
+      pid: process.pid,
+      token: 'replacement-live-owner',
+      acquiredAt: '2026-07-25T19:00:00.000Z',
+    };
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite.lock/owner.json',
+      JSON.stringify(staleOwner),
+    );
+    let executions = 0;
+    const verificationOptions = {
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true as const,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true as const,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T19:00:00.000Z',
+          endedAt: '2026-07-25T19:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0 as const,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+    };
+    const racingResult = await new FullSuiteVerifier({
+      ...verificationOptions,
+      lock: {
+        waitTimeoutMs: 0,
+        processIsLive: () => {
+          rmSync(lockPath, { recursive: true });
+          mkdirSync(lockPath, { recursive: true });
+          writeFileSync(
+            join(lockPath, 'owner.json'),
+            `${JSON.stringify(replacementOwner)}\n`,
+            'utf8',
+          );
+          return false;
+        },
+      },
+    }).ensure();
+    const canonicalOwner = await readFile(join(lockPath, 'owner.json'), 'utf8')
+      .then((serialized) => JSON.parse(serialized))
+      .catch(() => null);
+    const blockedResult = await new FullSuiteVerifier({
+      ...verificationOptions,
+      lock: { waitTimeoutMs: 0 },
+    }).ensure();
+
+    expect({ racingResult, canonicalOwner, blockedResult, executions }).toEqual({
+      racingResult: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Full-suite lock ownership changed during stale recovery',
+      },
+      canonicalOwner: replacementOwner,
+      blockedResult: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+    });
+  });
 
   it('recovers a provably dead owner but refuses a live verification lock', async () => {
     const makeLockedProject = async (pid: number, token: string) => {

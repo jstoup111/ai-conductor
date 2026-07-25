@@ -137,7 +137,13 @@ describe('full-suite evidence', () => {
 
     await writeFullSuiteEvidence(projectRoot, PASS_EVIDENCE);
 
-    await expect(readFile(activeTemporary, 'utf8')).resolves.toBe('active writer');
+    await expect(Promise.all([
+      readFile(activeTemporary, 'utf8'),
+      readFullSuiteEvidence(projectRoot),
+    ])).resolves.toEqual([
+      'active writer',
+      { usable: true, evidence: PASS_EVIDENCE },
+    ]);
   });
 
   it.each([
