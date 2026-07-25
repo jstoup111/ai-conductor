@@ -128,28 +128,38 @@ export async function invokeRuntime(
   runtime: ProviderRuntime,
   options: InvokeOptions,
 ): Promise<InvokeResult> {
+  return (await invokeRuntimeResolved(runtime, options)).result;
+}
+
+async function invokeRuntimeResolved(
+  runtime: ProviderRuntime,
+  options: InvokeOptions,
+): Promise<{ result: InvokeResult; model?: string }> {
   if (runtime.runWideUnavailable) {
     const reason = runtime.runWideUnavailable.reason;
     return {
-      success: false,
-      output: reason,
-      exitCode: 127,
-      providerUnavailable: true,
-      providerUnavailableReason: reason,
-      providerUnavailableScope: 'run',
-      providerInvocationSkipped: true,
+      result: {
+        success: false,
+        output: reason,
+        exitCode: 127,
+        providerUnavailable: true,
+        providerUnavailableReason: reason,
+        providerUnavailableScope: 'run',
+        providerInvocationSkipped: true,
+      },
     };
   }
 
-  const result = await runtime.availability.invokeWithLadder(
+  const invocation = await runtime.availability.invokeWithLadderResolved(
     runtime.provider,
     options,
   );
+  const { result } = invocation;
   const unavailable = classifyProviderAttempt(result);
   if (unavailable) {
     runtime.runWideUnavailable = { reason: unavailable.reason };
   }
-  return result;
+  return invocation;
 }
 
 /**
@@ -205,14 +215,17 @@ export async function executeProviderCandidates({
           });
     const session = await sessions.prepare(providerKey);
     let result: InvokeResult;
+    let invokedModel: string | undefined;
     try {
-      result = await invokeRuntime(runtime, {
+      const invocation = await invokeRuntimeResolved(runtime, {
         ...options,
         sessionId: session.id,
         resume: session.resume,
         model: resolved.model,
         effort: resolved.effort,
       });
+      result = invocation.result;
+      invokedModel = invocation.model;
     } catch (error) {
       // A runtime rejection occurs only after a live dispatch was attempted.
       // Preserve same-step retry continuity without marking cached skips.
@@ -228,7 +241,7 @@ export async function executeProviderCandidates({
     const invoked = result.providerInvocationSkipped !== true;
     attempts.push({
       provider: providerKey,
-      ...(invoked ? { model: resolved.model } : {}),
+      ...(invoked ? { model: invokedModel ?? resolved.model } : {}),
       ...(invoked && result.tokenUsage
         ? { tokenUsage: result.tokenUsage }
         : {}),
@@ -250,7 +263,7 @@ export async function executeProviderCandidates({
         ...result,
         preferredProvider,
         actualProvider: providerKey,
-        resolvedModel: resolved.model,
+        resolvedModel: invokedModel ?? resolved.model,
         resolvedEffort: resolved.effort,
         attempts,
       };

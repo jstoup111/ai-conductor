@@ -464,6 +464,11 @@ describe('executeProviderCandidates', () => {
       output: `model unavailable: ${model}`,
       exitCode: 1,
       modelUnavailable: true,
+      tokenUsage: {
+        input:
+          CODEX_MODEL_POLICY.modelFallbackLadder.indexOf(model) + 1,
+        output: 0,
+      },
     });
     const makeProvider = (
       invoke: (options: InvokeOptions, call: number) => InvokeResult,
@@ -490,6 +495,7 @@ describe('executeProviderCandidates', () => {
             success: true,
             output: 'native ladder recovered',
             exitCode: 0,
+            tokenUsage: { input: 22, output: 11 },
           },
     );
     const partialClaude = makeProvider(() => ({
@@ -621,14 +627,16 @@ describe('executeProviderCandidates', () => {
           success: true,
           output: 'native ladder recovered',
           exitCode: 0,
+          tokenUsage: { input: 22, output: 11 },
           preferredProvider: 'codex',
           actualProvider: 'codex',
-          resolvedModel: 'gpt-5.6-sol',
+          resolvedModel: 'gpt-5.6-terra',
           resolvedEffort: 'medium',
           attempts: [
             {
               provider: 'codex',
-              model: 'gpt-5.6-sol',
+              model: 'gpt-5.6-terra',
+              tokenUsage: { input: 22, output: 11 },
               outcome: 'success',
               invoked: true,
             },
@@ -662,7 +670,8 @@ describe('executeProviderCandidates', () => {
           attempts: [
             {
               provider: 'codex',
-              model: 'gpt-5.6-sol',
+              model: 'gpt-5.6-luna',
+              tokenUsage: { input: 3, output: 0 },
               outcome: 'unavailable',
               reason: 'model unavailable: gpt-5.6-luna',
               fallbackReason: 'model unavailable: gpt-5.6-luna',
