@@ -363,6 +363,16 @@ describe('publishShipmentRepair', () => {
     })).rejects.toThrow('repair 916/durable-shipped-records branch failed: 403 Resource not accessible by integration');
   });
 
+  it('surfaces a competing repair-branch update at the record-commit stage', async () => {
+    await expect(publishShipmentRepair(repairPlan, {
+      ensureRepairBranch: async () => {},
+      commitRecordOnly: async () => { throw new Error('non-fast-forward update rejected'); },
+      findOrCreateRepairPullRequest: async () => { throw new Error('must not create a PR after competing update'); },
+      verifyRepairHead: async () => { throw new Error('must not verify after competing update'); },
+      postStatus: async () => { throw new Error('must not post after competing update'); },
+    })).rejects.toThrow('repair 916/durable-shipped-records record-commit failed: non-fast-forward update rejected');
+  });
+
   it('does not publish a branch, commit, PR, or status for aligned or unresolved plans', async () => {
     const publisher = {
       ensureRepairBranch: async () => { throw new Error('must not create a branch'); },

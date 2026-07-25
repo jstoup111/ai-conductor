@@ -144,7 +144,12 @@ export async function publishShipmentRepair(
   } catch (error) {
     throw new Error(`repair ${plan.identity} branch failed: ${errorMessage(error)}`);
   }
-  const { headSha: expectedHeadSha } = await publisher.commitRecordOnly({ branch, writes: plan.writes });
+  let expectedHeadSha: string;
+  try {
+    ({ headSha: expectedHeadSha } = await publisher.commitRecordOnly({ branch, writes: plan.writes }));
+  } catch (error) {
+    throw new Error(`repair ${plan.identity} record-commit failed: ${errorMessage(error)}`);
+  }
   const { url: pullRequestUrl, headSha } = await publisher.findOrCreateRepairPullRequest({
     branch,
     base: 'main',
