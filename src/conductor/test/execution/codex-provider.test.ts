@@ -30,12 +30,27 @@ function jsonlMessage(text: string): string {
   ].join('\n');
 }
 
+function readyDoctorResult(source: 'api-key' | 'cached-login' = 'cached-login') {
+  return {
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      auth: { selectedMode: source, configured: true },
+      transport: { authenticated: true },
+    }),
+    exitCode: 0,
+  };
+}
+
 describe('CodexProvider', () => {
   let provider: CodexProvider;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    provider = new CodexProvider();
+    vi.resetAllMocks();
+    provider = new CodexProvider(
+      vi.fn(async (_command, _args, options) =>
+        readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+      ),
+    );
   });
 
   it('runs a fresh Codex exec with JSONL, model, cwd, and stdin prompt delivery', async () => {
@@ -178,7 +193,8 @@ describe('CodexProvider', () => {
     } as any);
 
     try {
-      await expect(provider.readiness()).resolves.toEqual({
+      const defaultProvider = new CodexProvider();
+      await expect(defaultProvider.readiness()).resolves.toEqual({
         provider: 'codex',
         source: 'api-key',
         state: 'ready',
@@ -216,6 +232,67 @@ describe('CodexProvider', () => {
     });
     expect(runDoctor).toHaveBeenCalledOnce();
     expect(mockExeca).not.toHaveBeenCalled();
+  });
+
+  it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      exitCode: 0,
+    });
+    const gatedProvider = new CodexProvider(runDoctor);
+
+    const result = await gatedProvider.invoke(baseOptions);
+
+    expect({ readiness: result.authentication, execCalls: mockExeca.mock.calls.length }).toEqual({
+      readiness: expect.objectContaining({ state: 'missing' }),
+      execCalls: 0,
+    });
+  });
+
+  it('checks readiness again before a resumed unattended dispatch', async () => {
+    const runDoctor = vi.fn().mockResolvedValue(readyDoctorResult());
+    const gatedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
+
+    await gatedProvider.invoke(baseOptions);
+    await gatedProvider.invoke({ ...baseOptions, resume: true });
+
+    expect({ readinessChecks: runDoctor.mock.calls.length, executions: mockExeca.mock.calls.length }).toEqual({
+      readinessChecks: 2,
+      executions: 2,
+    });
+  });
+
+  it('gates automatic streaming but preserves an operator interactive session', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      exitCode: 0,
+    });
+    const gatedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: 'interactive output', exitCode: 0 } as any);
+
+    const automatic = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false });
+    const interactive = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    expect({
+      automaticState: automatic.authentication?.state,
+      operatorExecutionCount: mockExeca.mock.calls.length,
+      readinessChecks: runDoctor.mock.calls.length,
+      interactiveSuccess: interactive.success,
+    }).toEqual({
+      automaticState: 'missing',
+      operatorExecutionCount: 1,
+      readinessChecks: 1,
+      interactiveSuccess: true,
+    });
   });
 
   it.each([
@@ -264,7 +341,7 @@ describe('CodexProvider', () => {
         ...result,
       } as any);
 
-      const readiness = await provider.readiness();
+      const readiness = await new CodexProvider().readiness();
 
       expect(readiness).toMatchObject({
         provider: 'codex',
@@ -286,10 +363,11 @@ describe('CodexProvider', () => {
       exitCode: 1,
     } as any);
 
-    await expect(provider.readiness()).resolves.toMatchObject({
+    const defaultProvider = new CodexProvider();
+    await expect(defaultProvider.readiness()).resolves.toMatchObject({
       provider: 'codex', source: 'cached-login', state: 'unverifiable',
     });
-    await expect(provider.readiness()).resolves.toMatchObject({
+    await expect(defaultProvider.readiness()).resolves.toMatchObject({
       provider: 'codex', source: 'cached-login', state: 'unverifiable',
     });
     expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual([

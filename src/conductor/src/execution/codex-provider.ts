@@ -118,6 +118,9 @@ export class CodexProvider implements LLMProvider {
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    const readiness = await this.readiness();
+    if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+
     const authentication = this.selectAuthentication();
     const args = this.buildArgs(options, true);
     const prompt = this.composePrompt(options);
@@ -141,6 +144,14 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    // A real interactive session leaves authorization to the operator. Auto
+    // streaming still uses this method, but is explicitly marked noninteractive
+    // by the runner and must prove readiness for every dispatch.
+    if (!options.interactive) {
+      const readiness = await this.readiness();
+      if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+    }
+
     const authentication = this.selectAuthentication();
     const result = await execa('codex', this.buildArgs(options, false), {
       reject: false,
@@ -220,6 +231,16 @@ export class CodexProvider implements LLMProvider {
       sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
       authentication,
+    };
+  }
+
+  private readinessFailure(readiness: AuthenticationReadiness): InvokeResult {
+    return {
+      success: false,
+      output: readiness.remediation ?? 'Codex authentication is not ready.',
+      exitCode: 1,
+      authFailure: true,
+      authentication: readiness,
     };
   }
 
