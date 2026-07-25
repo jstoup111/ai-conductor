@@ -110,6 +110,30 @@ mkdir -p "$FAKE_HOME/.local/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_HOME/.local/bin/conduct-ts"
 chmod +x "$FAKE_HOME/.local/bin/conduct-ts"
 
+# With all installed surfaces, both provider CLIs, and the common check
+# available, strict readiness accepts every supported required-provider set.
+STRICT_READY_MATRIX_OK=true
+for REQUIRED_PROVIDERS in claude codex claude,codex; do
+  set +e
+  STRICT_READY_MATRIX_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers "$REQUIRED_PROVIDERS" --allow-worktree-root 2>&1)
+  STRICT_READY_MATRIX_CODE=$?
+  set -e
+
+  if [ "$STRICT_READY_MATRIX_CODE" -ne 0 ]; then
+    STRICT_READY_MATRIX_OK=false
+    break
+  fi
+done
+
+if [ "$STRICT_READY_MATRIX_OK" = true ]; then
+  echo 'PASS strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
+else
+  echo 'FAIL strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
+  printf 'providers: %s; exit code: %s\n' "$REQUIRED_PROVIDERS" "$STRICT_READY_MATRIX_CODE"
+  printf '%s\n' "$STRICT_READY_MATRIX_OUT"
+  exit 1
+fi
+
 set +e
 MISSING_CODEX_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_CODEX_STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root 2>&1)
 MISSING_CODEX_CHECK_CODE=$?
