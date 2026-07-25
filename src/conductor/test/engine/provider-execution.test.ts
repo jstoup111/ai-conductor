@@ -638,4 +638,153 @@ describe('executeProviderCandidates', () => {
       ],
     });
   });
+
+  it('returns recovery and ordinary failures unchanged without provider advancement or cache mutation', async () => {
+    const conflictingAvailability = {
+      providerUnavailable: true,
+      providerUnavailableScope: 'run' as const,
+      providerUnavailableReason: 'conflicting unavailable signal',
+    };
+    const cases: Array<{ name: string; failure: InvokeResult }> = [
+      {
+        name: 'authentication precedence',
+        failure: {
+          success: false,
+          output: 'not logged in',
+          exitCode: 1,
+          authFailure: true,
+          modelUnavailable: true,
+          ...conflictingAvailability,
+        },
+      },
+      {
+        name: 'rate-limit precedence',
+        failure: {
+          success: false,
+          output: '429 retry later',
+          exitCode: 1,
+          rateLimited: true,
+          waitSeconds: 45,
+          modelUnavailable: true,
+          ...conflictingAvailability,
+        },
+      },
+      {
+        name: 'session-expiry precedence',
+        failure: {
+          success: false,
+          output: 'session expired',
+          exitCode: 1,
+          sessionExpired: true,
+          modelUnavailable: true,
+          ...conflictingAvailability,
+        },
+      },
+      {
+        name: 'timeout',
+        failure: {
+          success: false,
+          output: 'provider request timed out',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'rejection',
+        failure: {
+          success: false,
+          output: 'provider request rejected',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'ordinary exit',
+        failure: {
+          success: false,
+          output: 'command exited for an ordinary reason',
+          exitCode: 1,
+        },
+      },
+      {
+        name: 'ambiguous prose',
+        failure: {
+          success: false,
+          output:
+            'documentation mentions provider unavailable and model unavailable',
+          exitCode: 1,
+        },
+      },
+    ];
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+    const observed = [];
+
+    for (const fixture of cases) {
+      const preferredInvoke = vi.fn(
+        async (): Promise<InvokeResult> => fixture.failure,
+      );
+      const nextInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: 'must not run',
+        exitCode: 0,
+      }));
+      const provider = (invoke: typeof preferredInvoke): LLMProvider => ({
+        invoke,
+        invokeInteractive: vi.fn(async (): Promise<void> => {}),
+      });
+      const runtimes = new ProviderRuntimeSet([
+        runtime('codex', provider(preferredInvoke)),
+        runtime('claude', provider(nextInvoke)),
+      ]);
+      const warnings: ProviderTransitionWarning[] = [];
+      const result = await execute?.({
+        step: 'build',
+        configuredProviders: ['codex', 'claude'],
+        preferredProvider: 'codex',
+        runtimes,
+        sessions: new ProviderSessionScope(
+          vi.fn().mockReturnValue(`${fixture.name}-session`),
+        ),
+        config: {
+          llm_provider: ['codex', 'claude'],
+          steps: { build: { llm_provider: 'codex' } },
+        },
+        warn: (_message, transition) => warnings.push(transition),
+        options: {
+          prompt: 'Execute the step.',
+          cwd: '/workspace/feature',
+        },
+      });
+      observed.push({
+        name: fixture.name,
+        preferredCalls: preferredInvoke.mock.calls.length,
+        nextCalls: nextInvoke.mock.calls.length,
+        warnings,
+        runWideUnavailable: runtimes.get('codex').runWideUnavailable,
+        preferredDead: [...runtimes.get('codex').availability.dead],
+        nextDead: [...runtimes.get('claude').availability.dead],
+        result,
+      });
+    }
+
+    expect(observed).toEqual(
+      cases.map(({ name, failure }) => ({
+        name,
+        preferredCalls: 1,
+        nextCalls: 0,
+        warnings: [],
+        runWideUnavailable: undefined,
+        preferredDead: [],
+        nextDead: [],
+        result: {
+          ...failure,
+          preferredProvider: 'codex',
+          actualProvider: 'codex',
+          resolvedModel: 'gpt-5.6-terra',
+          resolvedEffort: 'low',
+        },
+      })),
+    );
+  });
 });

@@ -60,10 +60,19 @@ export interface ExecuteProviderCandidatesInput {
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
 }
 
+function hasRecoveryPrecedence(result: InvokeResult): boolean {
+  return (
+    result.authFailure === true ||
+    result.rateLimited === true ||
+    result.sessionExpired === true
+  );
+}
+
 export function classifyProviderAttempt(
   result: InvokeResult,
 ): ProviderUnavailableClassification | undefined {
   if (
+    hasRecoveryPrecedence(result) ||
     result.providerUnavailable !== true ||
     result.providerUnavailableScope !== 'run'
   ) {
@@ -83,6 +92,10 @@ export function classifyProviderAttempt(
 export function classifyProviderCandidateFailure(
   result: InvokeResult,
 ): ProviderCandidateFailureClassification | undefined {
+  if (hasRecoveryPrecedence(result)) {
+    return undefined;
+  }
+
   return (
     classifyProviderAttempt(result) ??
     (result.modelUnavailable
