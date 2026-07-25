@@ -323,6 +323,7 @@ export async function produceNarrative(
         runtimes: args.providerExecution.runtimes,
         sessions: args.providerExecution.sessions.beginBranch('retro'),
         config: args.providerExecution.config,
+        onAttempt: args.providerExecution.onAttempt,
         warn: args.providerExecution.warn,
         options: {
           prompt,

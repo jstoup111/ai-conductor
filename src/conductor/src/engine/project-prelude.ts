@@ -165,6 +165,7 @@ async function invokePreludeSkill(
     sessions: execution.sessions.beginBranch(step),
     config,
     modelOverride: execution.modelOverride,
+    onAttempt: execution.onAttempt,
     warn: execution.warn,
     options: {
       prompt,

@@ -154,6 +154,14 @@ export class TerminalRenderer implements UIRenderer {
         break;
       }
 
+      case 'provider_fallback':
+        this.region.log(
+          chalk.bold.yellow(
+            `  ⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+          ),
+        );
+        break;
+
       case 'rate_limit': {
         const mins = Math.ceil(event.waitSeconds / 60);
         this.stopSpinner();
@@ -250,4 +258,3 @@ export class TerminalRenderer implements UIRenderer {
     this.region.clear();
   }
 }
-

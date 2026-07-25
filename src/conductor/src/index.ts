@@ -966,7 +966,9 @@ async function main(): Promise<void> {
     sessions: new ProviderSessionStore(),
     config: config,
     modelOverride: opts.model,
-    warn: console.warn,
+    onAttempt: (step, attempt) =>
+      events.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => events.emit(transition),
   };
   const compatibilityRuntime = providerExecution.runtimes.get(
     providerExecution.configuredProviders[0],

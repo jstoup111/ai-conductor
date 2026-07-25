@@ -5375,6 +5375,8 @@ export class Conductor {
             tokenUsage: stepResult?.tokenUsage,
             model: stepResult?.model,
             unmetered: stepResult?.tokenUsage ? undefined : true,
+            preferredProvider: stepResult?.preferredProvider,
+            actualProvider: stepResult?.actualProvider,
           });
 
           // Store PR URL from finish step output. Prefer state-file write

@@ -77,10 +77,14 @@ export interface ExecuteProviderCandidatesInput {
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  onAttempt?: (
+    step: StepName,
+    attempt: ProviderAttemptMetadata,
+  ) => void | Promise<void>;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
-  ) => void;
+  ) => void | Promise<void>;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
 }
 
@@ -93,6 +97,7 @@ export interface ProviderExecutionContext {
   modelOverride?: string;
   effortOverride?: EffortLevel;
   executor?: typeof executeProviderCandidates;
+  onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
 }
 
@@ -199,6 +204,7 @@ export async function executeProviderCandidates({
   escalate = true,
   modelOverride,
   effortOverride,
+  onAttempt,
   warn,
   options,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
@@ -259,7 +265,7 @@ export async function executeProviderCandidates({
     const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];
     const invoked = result.providerInvocationSkipped !== true;
-    attempts.push({
+    const attemptMetadata: ProviderAttemptMetadata = {
       provider: providerKey,
       ...(invoked ? { model: invokedModel ?? resolved.model } : {}),
       ...(invoked && result.tokenUsage
@@ -277,7 +283,9 @@ export async function executeProviderCandidates({
         ? { fallbackReason: unavailable.reason }
         : {}),
       invoked,
-    });
+    };
+    attempts.push(attemptMetadata);
+    await onAttempt?.(step, attemptMetadata);
     if (!unavailable) {
       return {
         ...result,
@@ -311,7 +319,7 @@ export async function executeProviderCandidates({
       reason: unavailable.reason,
       nextProvider,
     };
-    warn?.(
+    await warn?.(
       `Step ${step}: provider ${providerKey} unavailable (${unavailable.reason}); falling back to ${nextProvider}.`,
       transition,
     );

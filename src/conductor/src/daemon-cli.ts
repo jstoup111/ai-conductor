@@ -808,7 +808,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     runtimes: createProviderRuntimeSet(registry, log),
     sessions: new ProviderSessionStore(),
     config,
-    warn: log,
+    onAttempt: (step, attempt) =>
+      events.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => events.emit(transition),
   });
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
@@ -1862,6 +1864,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${event.attempt}/${event.maxAttempts}: ${formatRetryReason(event.reason)})${deltaFragment}`);
       break;
     }
+    case 'provider_fallback':
+      log(
+        chalk.bold.yellow(
+          `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+        ),
+      );
+      break;
     case 'gate_verdict':
       if (!event.satisfied) {
         log(

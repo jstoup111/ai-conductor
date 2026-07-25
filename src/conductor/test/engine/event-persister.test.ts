@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ConductorEvent } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -98,6 +99,58 @@ describe('EventPersister', () => {
     const line = JSON.parse(content.trim());
     expect(line.type).toBe('step_completed');
     expect(line.tokenUsage).toBeUndefined();
+  });
+
+  it('persists provider attempts, fallback diagnostics, and completed-step attribution', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    const providerEvents = [
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        reason: 'executable not found',
+        model: 'gpt-5.6-sol',
+        invoked: true,
+      },
+      {
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'executable not found',
+        nextProvider: 'claude',
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        model: 'sonnet',
+        tokenUsage: { input: 120, output: 30 },
+        invoked: true,
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+      },
+    ] satisfies ConductorEvent[];
+
+    for (const event of providerEvents) await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const { ts: _ts, ...event } = JSON.parse(line);
+        return event;
+      });
+    expect(records).toEqual(providerEvents);
   });
 
   // ─── Task 6: creates parent directories ───────────────────────────────────

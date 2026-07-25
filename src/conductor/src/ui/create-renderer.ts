@@ -154,6 +154,14 @@ export function createRenderer(
         region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
         break;
 
+      case 'provider_fallback':
+        region.log(
+          chalk.bold.yellow(
+            `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+          ),
+        );
+        break;
+
       case 'when_skip': {
         currentStep = undefined;
         const undefinedNote = event.undefinedKey

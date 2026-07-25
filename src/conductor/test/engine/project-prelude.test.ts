@@ -296,6 +296,7 @@ describe('runProjectPrelude (happy paths)', () => {
       createSessionId: () => ids.next().value ?? 'unexpected-session',
     });
     const beginBranch = vi.spyOn(sessions, 'beginBranch');
+    const onAttempt = vi.fn();
     const result = await runProjectPrelude(
       dir,
       provider(capturedInvoke, capturedInteractive),
@@ -313,6 +314,7 @@ describe('runProjectPrelude (happy paths)', () => {
           configuredProviders: ['claude', 'codex'],
           runtimes,
           sessions,
+          onAttempt,
         },
       },
     );
@@ -345,6 +347,11 @@ describe('runProjectPrelude (happy paths)', () => {
         codex: codexInteractive.mock.calls,
         claude: claudeInteractive.mock.calls,
       },
+      attempts: onAttempt.mock.calls.map(([step, attempt]) => ({
+        step,
+        provider: attempt.provider,
+        outcome: attempt.outcome,
+      })),
       result,
       bootstrapMarker: await readBootstrapMarker(dir),
       assessMarker: await readAssessMarker(dir),
@@ -377,6 +384,10 @@ describe('runProjectPrelude (happy paths)', () => {
         },
       ],
       interactiveCalls: { codex: [], claude: [] },
+      attempts: [
+        { step: 'bootstrap', provider: 'codex', outcome: 'success' },
+        { step: 'assess', provider: 'claude', outcome: 'success' },
+      ],
       result: {
         bootstrapExecuted: true,
         bootstrapReason: 'never_run',

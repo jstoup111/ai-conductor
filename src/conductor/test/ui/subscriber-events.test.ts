@@ -44,4 +44,16 @@ describe('TerminalSubscriber event forwarding', () => {
     emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
+
+  it('forwards provider_fallback events', () => {
+    const event: ConductorEvent = {
+      type: 'provider_fallback',
+      step: 'plan',
+      failedProvider: 'codex',
+      reason: 'executable not found',
+      nextProvider: 'claude',
+    };
+    emitter.emit(event);
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
 });

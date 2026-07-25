@@ -27,7 +27,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 import { execa } from 'execa';
-import type { ConductState, StepGroup, Track } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -7864,6 +7864,158 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     expect(planDispatch).toEqual({ model: 'gpt-cli', effort: 'max' });
+  });
+
+  it('emits provider transition, attempt identities, and actual-provider completion', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+
+    const provider = (key: 'codex' | 'claude'): LLMProvider => {
+      const invoke = vi.fn(async () =>
+        key === 'codex'
+          ? {
+              success: false,
+              output: 'codex executable not found',
+              exitCode: 127,
+              providerUnavailable: true,
+              providerUnavailableReason: 'codex executable not found',
+              providerUnavailableScope: 'run' as const,
+            }
+          : {
+              success: true,
+              output: 'completed by claude',
+              exitCode: 0,
+              tokenUsage: { input: 120, output: 30 },
+            });
+      return { invoke, invokeInteractive: invoke };
+    };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: provider('codex'),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+      {
+        key: 'claude',
+        provider: provider('claude'),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const providerExecution = {
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionStore(),
+      config: { llm_provider: ['codex', 'claude'] },
+      onAttempt: (
+        step: StepName,
+        attempt: Omit<Extract<ConductorEvent, { type: 'provider_attempt' }>, 'type' | 'step'>,
+      ) => events.emit({ type: 'provider_attempt', step, ...attempt }),
+      warn: (_message: string, transition: Extract<ConductorEvent, { type: 'provider_fallback' }>) =>
+        events.emit(transition),
+    };
+    const runner = new DefaultStepRunner(
+      runtimes.get('codex').provider,
+      'legacy-session',
+      dir,
+      {
+        config: providerExecution.config,
+        modelPolicy: CODEX_MODEL_POLICY,
+        mode: 'auto',
+        providerExecution,
+      },
+    );
+    const observed: ConductorEvent[] = [];
+    for (const type of ['provider_fallback', 'provider_attempt', 'step_completed'] as const) {
+      events.on(type, (event) => {
+        if ('step' in event && event.step === 'plan') observed.push(event);
+      });
+    }
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'plan',
+      mode: 'auto',
+      config: providerExecution.config,
+      modelPolicy: CODEX_MODEL_POLICY,
+      providerExecution,
+    });
+
+    await conductor.run();
+
+    expect(observed.map((event) => {
+      if (event.type === 'provider_fallback') return event;
+      if (event.type === 'provider_attempt') {
+        return {
+          type: event.type,
+          step: event.step,
+          provider: event.provider,
+          outcome: event.outcome,
+          invoked: event.invoked,
+          model: event.model,
+          reason: event.reason,
+          tokenUsage: event.tokenUsage,
+        };
+      }
+      return {
+        type: event.type,
+        step: event.step,
+        preferredProvider: event.preferredProvider,
+        actualProvider: event.actualProvider,
+        tokenUsage: event.tokenUsage,
+      };
+    })).toEqual([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: true,
+        model: 'gpt-5.6-sol',
+        reason: 'codex executable not found',
+        tokenUsage: undefined,
+      },
+      {
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'codex executable not found',
+        nextProvider: 'claude',
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        model: 'fable',
+        reason: undefined,
+        tokenUsage: { input: 120, output: 30 },
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        tokenUsage: { input: 120, output: 30 },
+      },
+    ]);
   });
 
   it.each([

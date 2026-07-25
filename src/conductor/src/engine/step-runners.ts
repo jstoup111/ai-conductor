@@ -322,6 +322,8 @@ export interface StepRunnerOptions {
   configuredProviders?: readonly string[];
   /** Injectable candidate executor; production uses executeProviderCandidates. */
   providerExecutor?: typeof executeProviderCandidates;
+  /** Per-candidate attempt event sink. */
+  providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   /** Visible provider-transition warning sink. */
   providerWarn?: ExecuteProviderCandidatesInput['warn'];
   /** Shared provider routing state owned by this conductor run. */
@@ -356,6 +358,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerRuntimes?: ProviderRuntimeSet;
   private configuredProviders: readonly string[];
   private providerExecutor: typeof executeProviderCandidates;
+  private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   callCount = 0;
 
@@ -396,6 +399,8 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerExecutor ??
       options?.providerExecution?.executor ??
       executeProviderCandidates;
+    this.providerAttempt =
+      options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -651,6 +656,7 @@ export class DefaultStepRunner implements StepRunner {
         escalate: opts?.escalate ?? true,
         modelOverride: opts?.modelOverride ?? this.modelOverride,
         effortOverride: opts?.effortOverride ?? this.effortOverride,
+        onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: {
           prompt,
@@ -693,6 +699,7 @@ export class DefaultStepRunner implements StepRunner {
       escalate: dispatch?.escalate ?? true,
       modelOverride: dispatch?.modelOverride ?? this.modelOverride,
       effortOverride: dispatch?.effortOverride ?? this.effortOverride,
+      onAttempt: this.providerAttempt,
       warn: this.providerWarn,
       options,
     });

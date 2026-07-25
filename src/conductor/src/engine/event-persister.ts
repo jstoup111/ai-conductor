@@ -25,6 +25,8 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'step_started',
   'step_completed',
   'step_failed',
+  'provider_attempt',
+  'provider_fallback',
   'step_retry',
   'checkpoint_reached',
   'recovery_needed',

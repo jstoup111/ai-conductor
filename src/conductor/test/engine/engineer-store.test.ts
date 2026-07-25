@@ -356,6 +356,7 @@ describe('engine/engineer-store', () => {
       });
       const beginBranch = vi.spyOn(sessions, 'beginBranch');
       const providerExecutor = vi.fn(executeProviderCandidates);
+      const onAttempt = vi.fn();
 
       const text = await produceNarrative({
         outcome: { slug: 'feat-x', status: 'done' },
@@ -388,6 +389,7 @@ describe('engine/engineer-store', () => {
           ]),
           sessions,
           executor: providerExecutor,
+          onAttempt,
           config: {
             llm_provider: ['claude', 'codex'],
             steps: {
@@ -411,6 +413,8 @@ describe('engine/engineer-store', () => {
         })),
         beginBranchCalls: beginBranch.mock.calls,
         executorSteps: providerExecutor.mock.calls.map(([input]) => input.step),
+        attemptSinkForwarded:
+          providerExecutor.mock.calls[0]?.[0].onAttempt === onAttempt,
         codexSession: sessions.current('codex'),
       }).toEqual({
         text: 'codex retro narrative',
@@ -427,6 +431,7 @@ describe('engine/engineer-store', () => {
         ],
         beginBranchCalls: [['retro']],
         executorSteps: ['retro'],
+        attemptSinkForwarded: true,
         codexSession: undefined,
       });
     });
