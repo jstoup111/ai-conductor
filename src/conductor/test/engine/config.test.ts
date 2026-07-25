@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -625,6 +625,22 @@ complexity:
       const result = validateConfig({ test_suite: testSuite }, tmpDir);
 
       expect(result.ok ? '' : result.error.message).toMatch(expectedMessage);
+    });
+
+    it('rejects an existing working_directory symlink that escapes the project root', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'config-outside-'));
+      try {
+        await symlink(outside, join(tmpDir, 'linked-workdir'));
+
+        const result = validateConfig(
+          { test_suite: { command: 'npm test', working_directory: 'linked-workdir' } },
+          tmpDir,
+        );
+
+        expect(result.ok ? '' : result.error.message).toMatch(/test_suite\.working_directory/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
     });
 
     it('keeps the entire test_suite block optional at global config validation', () => {

@@ -1,5 +1,5 @@
 import { readFile, rename, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { join, isAbsolute, resolve as resolvePath, dirname, relative, sep } from 'path';
 import { load as loadYaml } from 'js-yaml';
 import type {
@@ -1134,7 +1134,9 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
       isAbsolute(raw.working_directory) ||
       relativeDirectory === '..' ||
       relativeDirectory.startsWith(`..${sep}`) ||
-      isAbsolute(relativeDirectory)
+      isAbsolute(relativeDirectory) ||
+      (projectRoot !== undefined &&
+        existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
     ) {
       return {
         type: 'validation_error',
@@ -1169,6 +1171,32 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
   }
 
   return null;
+}
+
+function existingRealPathEscapesRoot(projectRoot: string, candidate: string): boolean {
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(projectRoot);
+  } catch {
+    return true;
+  }
+
+  let realCandidate: string;
+  try {
+    realCandidate = realpathSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Existence is an executor/verifier concern. Other resolution failures
+    // (permissions, loops, I/O) fail closed at config validation.
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+
+  const relativeCandidate = relative(realRoot, realCandidate);
+  return (
+    relativeCandidate === '..' ||
+    relativeCandidate.startsWith(`..${sep}`) ||
+    isAbsolute(relativeCandidate)
+  );
 }
 
 /**

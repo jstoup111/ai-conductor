@@ -231,6 +231,7 @@ describe('fingerprintFullSuiteInputs', () => {
 
   it.each([
     ['package-lock.json', '{"lockfileVersion": 3}\n', '{"lockfileVersion": 4}\n'],
+    ['requirements.txt', 'pytest==8.0.0\n', 'pytest==8.1.0\n'],
     ['db/migrations/001.sql', 'CREATE TABLE one;\n', 'CREATE TABLE two;\n'],
     ['test/setup.ts', 'export const setup = 1;\n', 'export const setup = 2;\n'],
   ])('invalidates when broad tracked input %s changes', async (path, before, after) => {
@@ -360,6 +361,41 @@ describe('fingerprintFullSuiteInputs', () => {
     expect(result).toMatchObject({
       ok: false,
       reason: { code: 'invalid_input', path: 'linked/nested/*.bin' },
+    });
+  });
+
+  it('returns typed indeterminate for an exact declared leaf symlink', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const outside = await mkdtemp(join(tmpdir(), 'full-suite-fingerprint-leaf-outside-'));
+    scratches.push(outside);
+    await writeProjectFile(outside, 'secret.bin', 'outside\n');
+    await symlink(join(outside, 'secret.bin'), join(repo, 'external-input.bin'));
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['external-input.bin'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'external-input.bin' },
+    });
+  });
+
+  it('returns typed indeterminate for an escaping working_directory symlink', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const outside = await mkdtemp(join(tmpdir(), 'full-suite-workdir-outside-'));
+    scratches.push(outside);
+    await symlink(outside, join(repo, 'linked-workdir'));
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      working_directory: 'linked-workdir',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'linked-workdir' },
     });
   });
 

@@ -1,6 +1,6 @@
 import { createHash, type Hash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, readdir, readlink } from 'node:fs/promises';
+import { lstat, readdir, readlink, realpath } from 'node:fs/promises';
 import {
   isAbsolute,
   join,
@@ -11,7 +11,6 @@ import {
 } from 'node:path';
 import { execa } from 'execa';
 import type { TestSuiteConfig } from '../types/config.js';
-import { isCodeOrTestPath } from './rebase.js';
 
 export type FullSuiteFingerprintIndeterminateCode =
   | 'git_enumeration_failed'
@@ -78,6 +77,23 @@ function comparePaths(left: string, right: string): number {
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort(comparePaths);
+}
+
+function isFullSuiteProjectInput(path: string): boolean {
+  const normalized = path.trim();
+  if (!normalized) return false;
+  if (normalized === 'CHANGELOG.md') return false;
+  if (normalized.startsWith('.docs/') || normalized.startsWith('docs/')) return false;
+  if (/(^|\/)README(\.[A-Za-z0-9]+)?$/i.test(normalized)) return false;
+  if (
+    /(^|\/)(AUTHORS|CODE_OF_CONDUCT|CONTRIBUTING|LICENSE|NOTICE|SECURITY|SUPPORT)(\.[A-Za-z0-9]+)?$/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (/\.(md|mdx|rst)$/i.test(normalized)) return false;
+  return true;
 }
 
 function updateField(hash: Hash, name: string, value: string | Buffer): void {
@@ -207,6 +223,13 @@ async function expandDeclaredInput(projectRoot: string, declaration: string): Pr
     if (!hasGlob(normalized)) {
       await rejectSymlinkTraversal(projectRoot, normalized, declaration, false);
       const stats = await lstat(resolve(projectRoot, normalized));
+      if (stats.isSymbolicLink()) {
+        return fail(
+          'invalid_input',
+          'Declared input must not be a symbolic link',
+          declaration,
+        );
+      }
       if (!stats.isDirectory()) return [normalized];
       return [normalized, ...(await walkDeclaredPaths(projectRoot, normalized))];
     }
@@ -241,14 +264,17 @@ async function expandDeclaredInput(projectRoot: string, declaration: string): Pr
   }
 }
 
-function normalizedWorkingDirectory(projectRoot: string, workingDirectory?: string): string {
+async function normalizedWorkingDirectory(
+  projectRoot: string,
+  workingDirectory?: string,
+): Promise<string> {
   const root = resolve(projectRoot);
   const resolvedDirectory = resolve(root, workingDirectory ?? '.');
-  const relativeDirectory = relative(root, resolvedDirectory);
+  const lexicalRelativeDirectory = relative(root, resolvedDirectory);
   if (
-    relativeDirectory === '..' ||
-    relativeDirectory.startsWith(`..${sep}`) ||
-    isAbsolute(relativeDirectory)
+    lexicalRelativeDirectory === '..' ||
+    lexicalRelativeDirectory.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalRelativeDirectory)
   ) {
     return fail(
       'invalid_input',
@@ -256,17 +282,52 @@ function normalizedWorkingDirectory(projectRoot: string, workingDirectory?: stri
       workingDirectory,
     );
   }
+
+  let realRoot: string;
+  let realDirectory: string;
+  try {
+    [realRoot, realDirectory] = await Promise.all([
+      realpath(root),
+      realpath(resolvedDirectory),
+    ]);
+  } catch {
+    return fail(
+      'input_enumeration_failed',
+      'Unable to resolve suite working directory',
+      workingDirectory ?? '.',
+    );
+  }
+
+  const relativeDirectory = relative(realRoot, realDirectory);
+  if (
+    relativeDirectory === '..' ||
+    relativeDirectory.startsWith(`..${sep}`) ||
+    isAbsolute(relativeDirectory)
+  ) {
+    return fail(
+      'invalid_input',
+      'Suite working directory must resolve within the project root',
+      workingDirectory ?? '.',
+    );
+  }
+  if (!(await lstat(realDirectory)).isDirectory()) {
+    return fail(
+      'invalid_input',
+      'Suite working directory must resolve to a directory',
+      workingDirectory ?? '.',
+    );
+  }
   return relativeDirectory === '' ? '.' : relativeDirectory.split(sep).join('/');
 }
 
 function normalizeSuiteConfig(
-  projectRoot: string,
   testSuite: TestSuiteConfig,
   normalizedInputs: string[],
+  workingDirectory: string,
 ): string {
   return JSON.stringify({
     command: testSuite.command,
-    working_directory: normalizedWorkingDirectory(projectRoot, testSuite.working_directory),
+    working_directory: workingDirectory,
     timeout_seconds: testSuite.timeout_seconds ?? null,
     inputs: sortedUnique(normalizedInputs),
     environment: sortedUnique(testSuite.environment ?? []),
@@ -330,6 +391,10 @@ async function calculateFingerprint(
     fileHasher = streamedFileDigest,
   } = options;
   const normalizedInputs = (testSuite.inputs ?? []).map(normalizeRelativeInput);
+  const workingDirectory = await normalizedWorkingDirectory(
+    projectRoot,
+    testSuite.working_directory,
+  );
 
   const [headSha, trackedOutput, untrackedOutput, expandedInputs] = await Promise.all([
     gitOutput(projectRoot, ['rev-parse', 'HEAD']),
@@ -341,13 +406,17 @@ async function calculateFingerprint(
   const broadPaths = [
     ...nulSeparatedPaths(trackedOutput),
     ...nulSeparatedPaths(untrackedOutput),
-  ].filter(isCodeOrTestPath);
+  ].filter(isFullSuiteProjectInput);
   const requiredPaths = new Set(expandedInputs.flat());
   const paths = sortedUnique([...broadPaths, ...requiredPaths]);
 
   const hash = createHash('sha256');
   updateField(hash, 'schema', 'full-suite-working-tree-v2');
-  updateField(hash, 'test_suite', normalizeSuiteConfig(projectRoot, testSuite, normalizedInputs));
+  updateField(
+    hash,
+    'test_suite',
+    normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory),
+  );
 
   for (const name of sortedUnique(testSuite.environment ?? [])) {
     updateField(hash, 'environment_name', name);
