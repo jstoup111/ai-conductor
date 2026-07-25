@@ -487,6 +487,12 @@ export function buildProgressReKickDeps(
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot, showCompleted } = opts;
+  const configResult = await loadConfig(projectRoot);
+  if (!configResult.ok && configResult.error.type !== 'missing') {
+    throw new Error(`Config error: ${configResult.error.message}`);
+  }
+  const config = configResult.ok ? configResult.config : undefined;
+
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
   // actionable error rather than silently dispatching unregistered skills (which
@@ -731,9 +737,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       : '';
     log(`restart marker consumed${blockingSlug}${requestedBy} at boot.`);
   }
-
-  const configResult = await loadConfig(projectRoot);
-  const config = configResult.ok ? configResult.config : undefined;
 
   // Self-host classification (Phase 6). Decided ONCE per daemon against the MAIN
   // repo root (`projectRoot`) — "is this daemon building the harness itself?" — not
