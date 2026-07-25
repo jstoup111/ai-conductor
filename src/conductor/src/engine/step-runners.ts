@@ -295,6 +295,29 @@ export interface StepRunnerOptions {
   providerExecution?: ProviderExecutionContext;
 }
 
+type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
+type ProviderAwareFreeFormOneShotStep =
+  | 'worktree'
+  | 'build'
+  | 'attribution_verify'
+  | 'build_review';
+
+interface ProviderAwareOneShotRequestBase {
+  options: ExecuteProviderCandidatesInput['options'];
+  tier?: ComplexityTier;
+  dispatch?: StepRunOptions;
+}
+
+type ProviderAwareOneShotRequest =
+  | (ProviderAwareOneShotRequestBase & {
+      kind: 'skill';
+      step: ProviderAwareSkillOneShotStep;
+    })
+  | (ProviderAwareOneShotRequestBase & {
+      kind: 'free-form';
+      step: ProviderAwareFreeFormOneShotStep;
+    });
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -478,7 +501,7 @@ export class DefaultStepRunner implements StepRunner {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
           try {
-            const result = await this.executeProviderAwareOneShot(
+            const result = await this.executeProviderAwareSkillOneShot(
               step,
               {
                 prompt,
@@ -657,28 +680,66 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private async executeProviderAwareOneShot(
-    step: StepName,
+    step: ProviderAwareFreeFormOneShotStep,
     options: ExecuteProviderCandidatesInput['options'],
     tier?: ComplexityTier,
     dispatch?: StepRunOptions,
   ): Promise<ProviderExecutionResult | undefined> {
+    return this.executeProviderAwareOneShotCore({
+      kind: 'free-form',
+      step,
+      options,
+      tier,
+      dispatch,
+    });
+  }
+
+  private async executeProviderAwareSkillOneShot(
+    step: ProviderAwareSkillOneShotStep,
+    options: ExecuteProviderCandidatesInput['options'],
+    tier?: ComplexityTier,
+    dispatch?: StepRunOptions,
+  ): Promise<ProviderExecutionResult | undefined> {
+    return this.executeProviderAwareOneShotCore({
+      kind: 'skill',
+      step,
+      options,
+      tier,
+      dispatch,
+    });
+  }
+
+  private async executeProviderAwareOneShotCore(
+    request: ProviderAwareOneShotRequest,
+  ): Promise<ProviderExecutionResult | undefined> {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
     return this.providerExecutor({
-      step,
+      step: request.step,
       configuredProviders: this.configuredProviders,
-      preferredProvider: this.config?.steps?.[step]?.llm_provider,
+      preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
       runtimes: this.providerRuntimes,
-      sessions: this.sessionStore.beginBranch(step),
+      sessions: this.sessionStore.beginBranch(request.step),
       config: this.config,
-      tier,
-      attempt: dispatch?.attempt ?? 1,
-      escalate: dispatch?.escalate ?? true,
-      modelOverride: dispatch?.modelOverride ?? this.modelOverride,
-      effortOverride: dispatch?.effortOverride ?? this.effortOverride,
+      tier: request.tier,
+      attempt: request.dispatch?.attempt ?? 1,
+      escalate: request.dispatch?.escalate ?? true,
+      modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
+      effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
-      options,
+      options: request.options,
+      ...(request.kind === 'skill'
+        ? {
+            optionsForCandidate: (candidateKey: string) => ({
+              ...request.options,
+              prompt: renderSkillInvocation(
+                STEP_SKILL_INVOCATIONS[request.step],
+                candidateKey,
+              ),
+            }),
+          }
+        : {}),
     });
   }
 
@@ -1009,7 +1070,7 @@ export class DefaultStepRunner implements StepRunner {
       'STORIES: <integer estimate>\n' +
       'TIER: <S|M|L>   # your best letter judgement, used only as a fallback';
 
-    const providerResult = await this.executeProviderAwareOneShot(
+    const providerResult = await this.executeProviderAwareSkillOneShot(
       'complexity',
       {
         prompt: '/conduct complexity',
@@ -1084,12 +1145,15 @@ export class DefaultStepRunner implements StepRunner {
       '{"resolved": true}\n' +
       '{"resolved": false, "reason": "<explanation>"}';
 
-    const providerResult = await this.executeProviderAwareOneShot('rebase', {
-      prompt: '/rebase',
-      dangerouslySkipPermissions: true,
-      systemPrompt,
-      cwd: ctx.projectRoot,
-    });
+    const providerResult = await this.executeProviderAwareSkillOneShot(
+      'rebase',
+      {
+        prompt: '/rebase',
+        dangerouslySkipPermissions: true,
+        systemPrompt,
+        cwd: ctx.projectRoot,
+      },
+    );
     if (providerResult) {
       return {
         ...parseRebaseResolutionOutput(providerResult.output),

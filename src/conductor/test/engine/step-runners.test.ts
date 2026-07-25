@@ -74,7 +74,7 @@ describe('DefaultStepRunner', () => {
     const codexInvoke = vi.fn(
       async (options: InvokeOptions): Promise<InvokeResult> => ({
         success: true,
-        output: options.prompt === '/conduct complexity'
+        output: options.prompt.endsWith('conduct complexity')
           ? [
               'MODELS: 6',
               'INTEGRATIONS: 1',
@@ -83,7 +83,7 @@ describe('DefaultStepRunner', () => {
               'STORIES: 8',
               'TIER: M',
             ].join('\n')
-          : options.prompt === '/rebase'
+          : options.prompt.endsWith('rebase')
             ? '{"resolved": true}'
             : 'done',
         exitCode: 0,
@@ -119,6 +119,8 @@ describe('DefaultStepRunner', () => {
       'rebase-codex-session',
       'setup-codex-session',
       'ci-codex-session',
+      'attribution-codex-session',
+      'build-review-codex-session',
     ][Symbol.iterator]();
     const sessions = new ProviderSessionStore({
       createSessionId: () => ids.next().value ?? 'unexpected-session',
@@ -138,6 +140,8 @@ describe('DefaultStepRunner', () => {
             rebase: { llm_provider: 'codex' },
             worktree: { llm_provider: 'codex' },
             build: { llm_provider: 'codex' },
+            attribution_verify: { llm_provider: 'codex' },
+            build_review: { llm_provider: 'codex' },
           },
         },
         sessionStore: sessions,
@@ -170,6 +174,74 @@ describe('DefaultStepRunner', () => {
       hint: 'typecheck failed',
       slug: 'ci-feature',
     });
+    const executeOneShot = (runner as unknown as {
+      executeProviderAwareOneShot: (
+        step: StepName,
+        options: InvokeOptions,
+      ) => Promise<InvokeResult>;
+    }).executeProviderAwareOneShot.bind(runner);
+    await executeOneShot('attribution_verify', {
+      prompt: 'Judge attribution exactly as supplied.\nTask: runtime-07',
+      cwd: '/wt/attribution',
+    });
+    await executeOneShot('build_review', {
+      prompt: 'Grade this assembled plan and diff exactly as supplied.',
+      cwd: '/wt/build-review',
+    });
+
+    const executionInputs = providerExecutor.mock.calls.map(([input]) => input);
+    const transportedOptions = codexInvoke.mock.calls.map(([options]) => options);
+    const freeFormDispatches = [3, 4, 5, 6].map((index) => ({
+      step: executionInputs[index]?.step,
+      byteIdentical:
+        executionInputs[index]?.options.prompt === transportedOptions[index]?.prompt,
+      hasCandidateFactory: executionInputs[index]?.optionsForCandidate !== undefined,
+    }));
+    const claudeSkillInvoke = vi.fn(
+      async (options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: options.prompt.endsWith('conduct complexity')
+          ? 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S'
+          : options.prompt.endsWith('rebase')
+            ? '{"resolved": true}'
+            : 'done',
+        exitCode: 0,
+      }),
+    );
+    const claudeSkillRunner = new DefaultStepRunner(
+      provider(claudeSkillInvoke),
+      'claude-session',
+      '/tmp/project',
+      {
+        config: {
+          llm_provider: 'claude',
+          steps: {
+            complexity: { llm_provider: 'claude' },
+            remediate: { llm_provider: 'claude' },
+            rebase: { llm_provider: 'claude' },
+          },
+        },
+        providerRuntimes: new ProviderRuntimeSet([{
+          key: 'claude',
+          provider: provider(claudeSkillInvoke),
+          policy: CLAUDE_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        }]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['claude'],
+      },
+    );
+    await claudeSkillRunner.assessComplexity();
+    await claudeSkillRunner.run('remediate', emptyState);
+    await claudeSkillRunner.resolveRebaseConflict({
+      conflicts: ['src/example.ts'],
+      projectRoot: '/wt/rebase',
+      baseRef: 'origin/main',
+    });
+    const claudeSkillPrompts = claudeSkillInvoke.mock.calls.map(
+      ([options]) => options.prompt,
+    );
 
     expect({
       capturedCalls: {
@@ -197,15 +269,20 @@ describe('DefaultStepRunner', () => {
       rebase,
       setup,
       ci,
+      freeFormDispatches,
+      claudeSkillPrompts,
     }).toEqual({
       capturedCalls: { invoke: [], interactive: [] },
       claudeRuntimeCalls: { invoke: [], interactive: [] },
+      claudeSkillPrompts: ['/conduct complexity', '/remediate', '/rebase'],
       beginBranchCalls: [
         ['complexity'],
         ['remediate'],
         ['rebase'],
         ['worktree'],
         ['build'],
+        ['attribution_verify'],
+        ['build_review'],
       ],
       remediateRetryInput: expect.objectContaining({
         attempt: 3,
@@ -215,7 +292,7 @@ describe('DefaultStepRunner', () => {
       }),
       codexCalls: [
         {
-          prompt: '/conduct complexity',
+          prompt: '$conduct complexity',
           sessionId: 'complexity-codex-session',
           resume: false,
           cwd: '/tmp/project',
@@ -223,7 +300,7 @@ describe('DefaultStepRunner', () => {
           effort: 'low',
         },
         {
-          prompt: '/remediate',
+          prompt: '$remediate',
           sessionId: 'remediate-codex-session',
           resume: false,
           cwd: '/tmp/project',
@@ -231,7 +308,7 @@ describe('DefaultStepRunner', () => {
           effort: 'max',
         },
         {
-          prompt: '/rebase',
+          prompt: '$rebase',
           sessionId: 'rebase-codex-session',
           resume: false,
           cwd: '/wt/rebase',
@@ -253,6 +330,44 @@ describe('DefaultStepRunner', () => {
           cwd: '/wt/ci',
           model: 'gpt-5.6-terra',
           effort: 'low',
+        },
+        {
+          prompt: 'Judge attribution exactly as supplied.\nTask: runtime-07',
+          sessionId: 'attribution-codex-session',
+          resume: false,
+          cwd: '/wt/attribution',
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        {
+          prompt: 'Grade this assembled plan and diff exactly as supplied.',
+          sessionId: 'build-review-codex-session',
+          resume: false,
+          cwd: '/wt/build-review',
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+      ],
+      freeFormDispatches: [
+        {
+          step: 'worktree',
+          byteIdentical: true,
+          hasCandidateFactory: false,
+        },
+        {
+          step: 'build',
+          byteIdentical: true,
+          hasCandidateFactory: false,
+        },
+        {
+          step: 'attribution_verify',
+          byteIdentical: true,
+          hasCandidateFactory: false,
+        },
+        {
+          step: 'build_review',
+          byteIdentical: true,
+          hasCandidateFactory: false,
         },
       ],
       complexity: expect.objectContaining({
