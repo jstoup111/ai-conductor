@@ -6,8 +6,10 @@ Technical track (no PRD) — acceptance criteria derive from intake
 jstoup111/ai-conductor#713 and `adr-2026-07-05-retry-as-escalation-ladder.md`.
 The implementation (`src/conductor/src/engine/escalation.ts`, `escalateAttempt`)
 is the source of truth: attempt ≥ 3 targets `bumpModel(base, attempt − 2)` —
-cumulative, monotonic, capped at `fable`. No runtime behavior changes in this
-feature; documentation only.
+cumulative, monotonic, and capped at the selected provider policy's top model.
+For Claude that cap is `fable`; for Codex it is `gpt-5.6-sol`. No runtime
+behavior changes originated in this documentation feature; provider-aware
+runtime behavior is specified separately by #902.
 
 ## Story: HARNESS.md ladder prose states the cumulative model-bump formula
 
@@ -21,7 +23,9 @@ cost) of every retry attempt, including budgets deeper than the default 3.
 - Given the retry-as-escalation paragraph in `HARNESS.md` (currently ~line 191), when an
   operator reads the attempt-3+ rule, then it states the model is bumped **(attempt − 2)
   tiers up from base** — cumulative per attempt (attempt 3 = one tier, attempt 4 = two
-  tiers), capped at `fable` — instead of the current "bumps the model one tier".
+  tiers), capped at the selected provider policy's top model — instead of the
+  current "bumps the model one tier". Claude's `fable` and Codex's
+  `gpt-5.6-sol` are named as concrete caps.
 - Given the corrected paragraph, when an operator considers raising a step's retry budget
   beyond 3, then the paragraph explicitly warns that each attempt past 3 escalates a
   further tier, so deeper budgets authorize multi-tier (premium-model) escalation.
@@ -36,7 +40,8 @@ cost) of every retry attempt, including budgets deeper than the default 3.
 
 ### Done When
 - [ ] `HARNESS.md` retry-ladder paragraph contains the formula "(attempt − 2)" (or the
-  literal equivalent "attempt − 2 tiers") and an example naming attempt 4 as two tiers up.
+  literal equivalent "attempt − 2 tiers"), an example naming attempt 4 as two tiers up,
+  and provider-labelled Claude `fable` / Codex `gpt-5.6-sol` caps.
 - [ ] `HARNESS.md` contains an explicit cost sentence tying retry budgets > 3 to
   multi-tier escalation.
 - [ ] `grep -c "bumps the model one" HARNESS.md` outputs `0`.
@@ -53,8 +58,9 @@ contradicts the engine.
 #### Happy Path
 - Given the retry-as-escalation bullet in `src/conductor/README.md` (currently ~line 165),
   when a developer reads the attempt-3+ rule, then it states the model is bumped
-  **(attempt − 2) tiers from base**, cumulative and capped at `fable`, matching
-  `escalation.ts` and the ADR verbatim in meaning.
+  **(attempt − 2) tiers from base**, cumulative and capped at the selected
+  provider policy's top model, naming Claude `fable` and Codex `gpt-5.6-sol`,
+  matching the runtime contract and the ADR in meaning.
 
 #### Negative Paths
 - Given the corrected README, when `grep -n "bumps the model one\b" src/conductor/README.md`
@@ -62,7 +68,8 @@ contradicts the engine.
 
 ### Done When
 - [ ] `src/conductor/README.md` ladder bullet states the cumulative "(attempt − 2) tiers"
-  rule (attempt 3 = one tier, attempt 4 = two) with the `fable` cap.
+  rule (attempt 3 = one tier, attempt 4 = two) with provider-labelled Claude
+  `fable` and Codex `gpt-5.6-sol` caps.
 - [ ] `grep -c "bumps the model one" src/conductor/README.md` outputs `0`.
 
 ## Story: CHANGELOG records the docs fix without rewriting history

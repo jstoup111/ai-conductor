@@ -80,9 +80,11 @@ steps:
 
 # ── Model availability fallback ladder ────────────────────────────────────────
 # When a configured/pinned model is detected unavailable, the daemon automatically
-# retries the next model in this list instead of failing the step. Omit to use the
-# default; set to `[]` to disable fallback entirely.
-model_fallback_ladder: ["fable", "opus", "sonnet"]   # default shown
+# retries down this provider-native list instead of failing the step. Omit to use
+# the selected built-in provider policy; set to `[]` to disable fallback entirely.
+# Claude default: ["fable", "opus", "sonnet"]
+# Codex default:  ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+# model_fallback_ladder: ["my-strong-model", "my-smaller-model"]
 
 # ── SHIP validation fan-out (#469, auto mode only) ────────────────────────────
 # Concurrency cap for the parallel validation group (manual_test, prd_audit,
@@ -149,25 +151,56 @@ conductor:
   auto_check: true             # Check for updates on startup
 ```
 
+### Provider-aware autonomous model policy (`conduct-ts` only)
+
+The selected `llm_provider` determines two separate things at each composition root: the
+installed provider instance that executes requests and the built-in provider policy that
+supplies autonomous model defaults, effort defaults, retry escalation order, and availability
+fallback order. The built-in Claude and Codex policies are independent tables of provider-native
+strings; the engine does not translate aliases between providers and does not add provider
+identity to the `LLMProvider` interface.
+
+See [Model Selection](../HARNESS.md#model-selection) for the complete per-step tables. Both
+built-in policies deliberately use `high` effort for normal M/L/no-tier `explore` and for
+`prd` at every tier. Only `explore.S` drops to `low`. With retry escalation enabled, attempt
+2 therefore raises normal `explore` and every `prd` from `high` to `xhigh`. Later model
+escalation consults the selected provider's native order but is capped, so these
+already-deepest defaults remain on their selected model.
+
+Explicit model and effort settings remain opaque provider-native strings and keep the normal
+precedence: CLI override, step tier, step, phase tier, phase, global defaults, then provider
+policy. They are never rewritten from Claude names to Codex names or vice versa.
+
+An installed provider under an unknown/plugin key remains the executing provider instance.
+Until plugins can register their own model-policy contract, its autonomous defaults use the
+Claude compatibility policy and the composition root emits one warning. Plugin-defined policies
+are intentionally deferred.
+
 ### Model fallback ladder (`conduct-ts` only)
 
-Skills and daemon steps are pinned to a preferred model (e.g. Fable for `rebase`,
-`remediate`, `debugging` — see [Model Selection](../HARNESS.md#model-selection)). If that
-model is ever detected unavailable, the daemon no longer fails the step — it walks the
-`model_fallback_ladder` and retries with the next model down until one succeeds.
+If a configured or policy-selected model is detected unavailable, the daemon walks the selected
+provider's native fallback order: Claude uses `fable → opus → sonnet`; Codex uses
+`gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna`.
 
 - **Config key:** `model_fallback_ladder` — an optional top-level array of model names
   in `.ai-conductor/config.yml`.
-- **Default:** `["fable", "opus", "sonnet"]`.
+- **Default:** omitted selects the current provider policy's ladder. A configured array is
+  opaque and replaces that ladder exactly.
 - **Disabling:** set `model_fallback_ladder: []` to turn off fallback (an unavailable
   model then fails the step as before).
 - **Matching:** exact-string match against the configured/pinned model name.
-- **Restart semantics:** "known unavailable" models are cached per-process only.
-  Restarting the daemon clears the cache, so the next run retries from the top of the
-  ladder in case the model has recovered.
+- **Traversal:** an unavailable on-ladder model continues only through later, lower rungs;
+  an unavailable off-ladder override enters at the configured/provider ladder head. A
+  successful off-ladder model is invoked exactly once.
+- **Cache / restart semantics:** "known unavailable" models are held in memory for the
+  lifetime of each `ModelAvailability` instance/runner; multiple independent caches can
+  coexist in one process. Constructing a new runner or restarting makes the next run try
+  the requested model again.
 - **Override:** the `--model` CLI flag and `steps.<step>.model` config still take
   precedence as an explicit override — but the override is itself checked for
-  availability, and falls back down the ladder if it's unavailable too.
+  availability and enters the selected ladder if it is unavailable.
+- **Failure classification:** ordinary failures, rate limits, and authentication failures
+  neither advance nor poison the availability ladder.
 - **Logging:** every downgrade is written to the conductor logs as
   `Downgraded from <configured> to <fallback>: <reason>` — check there if a step ran on
   an unexpected model.
@@ -637,6 +670,9 @@ echo "llm_provider: my-provider" >> .ai-conductor/config.yml
 - Version incompatibility (`harness_version` range excludes current version) → startup aborted with `PluginVersionError`.
 - Missing entrypoint file → startup aborted with `PluginLoadError` naming the missing path.
 - Project-local plugin with the same `kind:name` as a global plugin → project-local wins; a debug log line records the shadowing.
+- A selected third-party LLM provider keeps its installed provider instance. Because
+  plugin-defined model policies are not yet part of the plugin contract, autonomous dispatch
+  uses the Claude compatibility policy and warns once per composition root.
 
 ### Tracker backend (reserved — not yet implemented)
 

@@ -22,9 +22,10 @@ import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import { registerBuiltins } from './engine/plugin-loader.js';
+import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -776,6 +777,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // (runDaemon's active→inactive transition hook) can recover exactly those.
   const episodeHaltTracker = createEpisodeHaltTracker();
   const registry = new PluginRegistry();
+  const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
+  const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
+  await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
   // Surface per-step loop progress on the console. Without this the daemon was
   // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
   // step_started/gate_verdict/kickback away). Events don't carry a feature slug,
@@ -786,7 +790,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
   registry.markInitialized();
   subscriber.start();
-  const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
+  const selectedProviderKey = config?.llm_provider ?? 'claude';
+  const provider = registry.get<LLMProvider>('llm_provider', selectedProviderKey);
+  const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, log);
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -851,6 +857,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       featureDesc: item.slug,
       pipelineDir,
       config,
+      modelPolicy,
       mode: 'auto',
     });
 
@@ -869,6 +876,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       events,
       mode: 'auto',
       config,
+      modelPolicy,
       projectRoot: wt.path,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
@@ -1020,6 +1028,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
         featureDesc: `setup-fix-${item.slug}`,
         config,
+        modelPolicy,
         mode: 'auto',
       });
       log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
@@ -1570,6 +1579,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                     const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.projectRoot, {
                       featureDesc: `rebase-resolution-${entry.slug}`,
                       config,
+                      modelPolicy,
                       mode: 'auto',
                     });
                     return await stepRunner.resolveRebaseConflict(ctx);
@@ -1645,6 +1655,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                     const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.worktreePath, {
                       featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
                       config,
+                      modelPolicy,
                       mode: 'auto',
                     });
                     await stepRunner.resolveCiFailure({

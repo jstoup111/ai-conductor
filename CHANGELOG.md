@@ -25,6 +25,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Autonomous model and effort resolution is now provider-aware (#902). The built-in Claude
+  and Codex providers use independent provider-native step defaults, retry-escalation orders,
+  and unavailable-model fallback ladders; explicit overrides remain opaque and keep their
+  precedence. Normal `explore` and all `prd` dispatches now start at `high` effort
+  (`explore.S` remains `low`), so retry attempt 2 advances them to `xhigh`. Installed
+  third-party providers retain their provider instance while temporarily using the Claude
+  compatibility policy with one warning per composition root; plugin-defined policy
+  registration remains deferred.
 - Bootstrap-generated Claude settings now use portable project-relative permission patterns
   (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
   Generated `CLAUDE.md` and `AGENTS.md` now reference the user-scoped installed copy of

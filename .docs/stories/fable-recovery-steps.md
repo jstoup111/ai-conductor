@@ -6,6 +6,11 @@ Source: jstoup111/ai-conductor#189 (approved Fable rollout plan #186–#194), Ap
 (declarative pin flip mirroring the merged front-of-funnel spec #188 / PR #196). Track:
 technical (no PRD). Tier: S.
 
+> **Provider-aware amendment (#902, approved 2026-07-23):** The engine model
+> assertions in this historical Fable rollout describe the built-in **Claude**
+> policy. Codex uses its independent per-step policy. The `SKILL.md` pins and
+> standalone `debugging` row remain explicitly Claude-interactive behavior.
+
 Out of scope (deliberate): fable-unavailability degradation logic is #186's fallback ladder —
 this spec only documents the manual `--model` override as the interim fallback (#186 is still
 OPEN). All other steps' models/efforts are untouched.

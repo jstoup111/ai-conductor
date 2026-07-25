@@ -6,9 +6,9 @@
  * each attempt from the 1-based `attempt` number, so non-budget-consuming retry
  * paths (`attempt--; continue`) neither advance nor stall the ladder.
  *
- * Two orthogonal ladders:
- *   - EFFORT_ORDER  — ascending reasoning effort; bumped first (attempt 2).
- *   - MODEL_TIER_ORDER — ascending capability; bumped after (attempt 3+).
+ * Two orthogonal, policy-owned ladders:
+ *   - effortOrder — ascending reasoning effort; bumped first (attempt 2).
+ *   - modelEscalationOrder — ascending capability; bumped after (attempt 3+).
  *
  * The model bump expresses *intent* only. Liveness is guaranteed elsewhere: the
  * StepRunner routes the chosen model through `ModelAvailability.effectiveModel`
@@ -17,16 +17,18 @@
  */
 
 import type { EffortLevel } from '../types/config.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
 
-/** Ascending reasoning-effort ladder. Escalation bumps up, capped at `max`. */
-export const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** @deprecated Use a provider policy's `effortOrder`. */
+export const EFFORT_ORDER = CLAUDE_MODEL_POLICY.effortOrder;
 
 /**
- * Ascending model-capability ladder used for *upgrade-on-retry*. Deliberately
- * distinct from `model-availability.ts`'s DEFAULT_MODEL_FALLBACK_LADDER, which
- * descends for *substitute-on-dead*. Opposite direction, different purpose.
+ * @deprecated Use a provider policy's `modelEscalationOrder`.
  */
-export const MODEL_TIER_ORDER = ['haiku', 'sonnet', 'opus', 'fable'] as const;
+export const MODEL_TIER_ORDER = CLAUDE_MODEL_POLICY.modelEscalationOrder;
 
 /** The (model, effort) an attempt will dispatch at. */
 export interface EscalatedAttempt {
@@ -35,30 +37,38 @@ export interface EscalatedAttempt {
 }
 
 /**
- * Bump an effort level `steps` rungs up EFFORT_ORDER, clamped to the top
- * (`max`). An effort already at the top is a no-op (S6). An effort not present
- * in EFFORT_ORDER is returned unchanged (defensive). `steps <= 0` is a no-op.
+ * Bump an effort level `steps` rungs up the selected policy order, clamped to
+ * its top. An effort already at the top is a no-op (S6). An effort not present
+ * in the order is returned unchanged (defensive). `steps <= 0` is a no-op.
  */
-export function bumpEffort(effort: EffortLevel, steps: number): EffortLevel {
-  const idx = EFFORT_ORDER.indexOf(effort);
+export function bumpEffort(
+  effort: EffortLevel,
+  steps: number,
+  effortOrder: readonly EffortLevel[],
+): EffortLevel {
+  const idx = effortOrder.indexOf(effort);
   if (idx === -1) return effort;
   const advance = steps > 0 ? steps : 0;
-  const next = Math.min(idx + advance, EFFORT_ORDER.length - 1);
-  return EFFORT_ORDER[next];
+  const next = Math.min(idx + advance, effortOrder.length - 1);
+  return effortOrder[next];
 }
 
 /**
- * Bump a model `steps` tiers up MODEL_TIER_ORDER, clamped to the top (`fable`).
+ * Bump a model `steps` tiers up the selected policy order, clamped to its top.
  * A model already at the top tier is a no-op (S7). A base model not present in
- * MODEL_TIER_ORDER (e.g. a full model id) is returned unchanged (defensive).
+ * the order (e.g. a full model id) is returned unchanged (defensive).
  * `steps <= 0` is a no-op.
  */
-export function bumpModel(model: string, steps: number): string {
-  const idx = (MODEL_TIER_ORDER as readonly string[]).indexOf(model);
+export function bumpModel(
+  model: string,
+  steps: number,
+  modelTierOrder: readonly string[],
+): string {
+  const idx = modelTierOrder.indexOf(model);
   if (idx === -1) return model;
   const advance = steps > 0 ? steps : 0;
-  const next = Math.min(idx + advance, MODEL_TIER_ORDER.length - 1);
-  return MODEL_TIER_ORDER[next];
+  const next = Math.min(idx + advance, modelTierOrder.length - 1);
+  return modelTierOrder[next];
 }
 
 /**
@@ -78,16 +88,34 @@ export function escalateAttempt(
   baseEffort: EffortLevel,
   attempt: number,
   escalate: boolean,
+  policy: ProviderModelPolicy,
+): EscalatedAttempt;
+/** @deprecated Pass an explicit provider model policy. */
+export function escalateAttempt(
+  baseModel: string,
+  baseEffort: EffortLevel,
+  attempt: number,
+  escalate: boolean,
+): EscalatedAttempt;
+export function escalateAttempt(
+  baseModel: string,
+  baseEffort: EffortLevel,
+  attempt: number,
+  escalate: boolean,
+  policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
 ): EscalatedAttempt {
   if (escalate === false || attempt <= 1) {
     return { model: baseModel, effort: baseEffort };
   }
   if (attempt === 2) {
-    return { model: baseModel, effort: bumpEffort(baseEffort, 1) };
+    return {
+      model: baseModel,
+      effort: bumpEffort(baseEffort, 1, policy.effortOrder),
+    };
   }
   // attempt >= 3: effort stays at the attempt-2 rung; model climbs.
   return {
-    model: bumpModel(baseModel, attempt - 2),
-    effort: bumpEffort(baseEffort, 1),
+    model: bumpModel(baseModel, attempt - 2, policy.modelEscalationOrder),
+    effort: bumpEffort(baseEffort, 1, policy.effortOrder),
   };
 }

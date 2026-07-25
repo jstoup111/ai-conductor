@@ -28,7 +28,7 @@ the S profile from `DEFAULT_STEP_TIER_OVERRIDES` so small work is cheap without 
 
 **Acceptance criteria:**
 - `resolveStepConfig('explore', 'DECIDE', config, { tier: 'S' })` returns `effort: 'low'` (below the
-  `medium` base at `resolved-config.ts:59`), sourced from a new `explore.S` override row.
+  provider policy's `high` base), sourced from the existing `explore.S` override row.
 - The S value flows through the **existing** `hardcodedStepTier` precedence rung
   (`resolved-config.ts:234-236`) — no new resolver branch, field, or code path is added.
 - `stories.S` (`{ effort: 'low' }`) and `plan.S` (`{ effort: 'medium', max_retries: 3 }`) remain

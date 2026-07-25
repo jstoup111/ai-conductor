@@ -34,6 +34,7 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMachinery } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -165,6 +166,62 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     expect(verdict.results).toHaveLength(1);
     expect(verdict.results[0].taskId).toBe('7');
     expect(verdict.results[0].verdict).toBe('satisfied');
+  });
+
+  it('passes the Codex model policy through dispatchVerifier to the attribution provider invocation', async () => {
+    let dispatchConfig: Pick<InvokeOptions, 'model' | 'effort'> | undefined;
+    const provider: LLMProvider = {
+      invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
+        dispatchConfig = { model: opts.model, effort: opts.effort };
+        const verdict = {
+          schema: 1,
+          anchor: { head: 'abc1234567890123456789012345678901234567', residue: ['7'] },
+          results: [
+            {
+              taskId: '7',
+              verdict: 'satisfied',
+              citations: [{ sha: 'def456', rationale: 'implements the feature' }],
+              testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+            },
+          ],
+        };
+        await writeFile(
+          join(projectRoot, '.pipeline', 'attribution-verdict.json'),
+          JSON.stringify(verdict),
+          'utf-8',
+        );
+        return { success: true, output: JSON.stringify(verdict) };
+      },
+      invokeInteractive: async () => {
+        throw new Error('invokeInteractive not supported in fixture');
+      },
+    };
+    const runner = new DefaultStepRunner(
+      provider,
+      '00000000-0000-0000-0000-000000000006',
+      projectRoot,
+      {
+        config: {} as HarnessConfig,
+        pipelineDir: join(projectRoot, '.pipeline'),
+        mode: 'default',
+        modelPolicy: CODEX_MODEL_POLICY,
+      },
+    );
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const planPath = join(planDir, 'test.md');
+    await writeFile(
+      planPath,
+      '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n\nTest task.\n',
+    );
+
+    await runner.dispatchVerifier({
+      residueIds: ['7'],
+      planPath,
+      projectRoot,
+    });
+
+    expect(dispatchConfig).toEqual({ model: 'gpt-5.6-sol', effort: 'high' });
   });
 
   it('provider invocation guard — demonstrates that stub dispatcher regression would fail', async () => {

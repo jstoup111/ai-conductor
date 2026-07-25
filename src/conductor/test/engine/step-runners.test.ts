@@ -6,12 +6,14 @@ import { execSync } from 'node:child_process';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
   DefaultStepRunner,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
 } from '../../src/engine/step-runners.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -27,6 +29,19 @@ function createMockProvider(): LLMProvider {
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
+  it('dispatches the Codex policy default model and effort for the memory step', async () => {
+    const provider = createMockProvider();
+    const options = {
+      modelPolicy: CODEX_MODEL_POLICY,
+    } satisfies StepRunnerOptions;
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', options);
+
+    await runner.run('memory', emptyState);
+
+    const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
+  });
+
   it('all steps use invokeInteractive (stdio: inherit)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

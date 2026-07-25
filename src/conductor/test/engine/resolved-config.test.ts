@@ -2,11 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveStepConfig,
   phaseForStep,
-  DEFAULT_STEP_MODELS,
-  DEFAULT_STEP_EFFORT,
   DEFAULT_STEP_RETRIES,
   DEFAULT_STEP_REVIEW,
-  DEFAULT_STEP_TIER_OVERRIDES,
   FALLBACK_MODEL,
   FALLBACK_EFFORT,
   FALLBACK_RETRIES,
@@ -14,6 +11,7 @@ import {
   resolveBuildReviewConfig,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 describe('engine/resolved-config', () => {
   describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
@@ -68,37 +66,37 @@ describe('engine/resolved-config', () => {
     });
   });
 
-  describe('default tables', () => {
-    it('has model/effort/retries/review for every registry step', async () => {
+  describe('Claude policy and provider-neutral defaults', () => {
+    it('has Claude model/effort and provider-neutral retries/review for every registry step', async () => {
       const { ALL_STEPS } = await import('../../src/engine/steps.js');
       for (const s of ALL_STEPS) {
-        expect(DEFAULT_STEP_MODELS[s.name]).toBeDefined();
-        expect(DEFAULT_STEP_EFFORT[s.name]).toBeDefined();
+        expect(CLAUDE_MODEL_POLICY.stepModels[s.name]).toBeDefined();
+        expect(CLAUDE_MODEL_POLICY.stepEfforts[s.name]).toBeDefined();
         expect(DEFAULT_STEP_RETRIES[s.name]).toBeDefined();
         expect(DEFAULT_STEP_REVIEW[s.name]).toBeDefined();
       }
     });
 
     it('reasoning-heavy steps get high+ effort', () => {
-      expect(DEFAULT_STEP_EFFORT.prd).toBe('medium');
-      expect(DEFAULT_STEP_EFFORT.plan).toBe('high');
-      expect(DEFAULT_STEP_EFFORT.architecture_review).toBe('high');
-      expect(DEFAULT_STEP_EFFORT.assess).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.prd).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.plan).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.architecture_review).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.assess).toBe('high');
     });
 
     it('mechanical steps get low effort', () => {
-      expect(DEFAULT_STEP_EFFORT.bootstrap).toBe('low');
-      expect(DEFAULT_STEP_EFFORT.memory).toBe('low');
-      expect(DEFAULT_STEP_EFFORT.worktree).toBe('low');
-      expect(DEFAULT_STEP_EFFORT.finish).toBe('low');
-      expect(DEFAULT_STEP_EFFORT.build).toBe('low'); // dispatcher
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.bootstrap).toBe('low');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.memory).toBe('low');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.worktree).toBe('low');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.finish).toBe('low');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.build).toBe('low'); // dispatcher
     });
 
     it('recovery steps (rebase, remediate) use fable with high+ effort', () => {
-      expect(DEFAULT_STEP_MODELS.rebase).toBe('fable');
-      expect(DEFAULT_STEP_EFFORT.rebase).toBe('max');
-      expect(DEFAULT_STEP_MODELS.remediate).toBe('fable');
-      expect(DEFAULT_STEP_EFFORT.remediate).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepModels.rebase).toBe('fable');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.rebase).toBe('max');
+      expect(CLAUDE_MODEL_POLICY.stepModels.remediate).toBe('fable');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.remediate).toBe('high');
     });
 
     it('review modes match the per-step design', () => {
@@ -132,7 +130,7 @@ describe('engine/resolved-config', () => {
   });
 
   describe('phaseForStep', () => {
-    it('returns the hardcoded phase', () => {
+    it('returns the registered phase', () => {
       expect(phaseForStep('explore')).toBe('DECIDE');
       expect(phaseForStep('build')).toBe('BUILD');
       expect(phaseForStep('retro')).toBe('SHIP');
@@ -151,22 +149,72 @@ describe('engine/resolved-config', () => {
   });
 
   describe('resolveStepConfig — no config', () => {
-    it('returns hardcoded per-step defaults', () => {
-      const r = resolveStepConfig('prd', 'DECIDE');
-      expect(r.model).toBe(DEFAULT_STEP_MODELS.prd);
-      expect(r.effort).toBe(DEFAULT_STEP_EFFORT.prd);
+    it('returns Claude policy values and provider-neutral retry/review defaults', () => {
+      const r = resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY);
+      expect(r.model).toBe(CLAUDE_MODEL_POLICY.stepModels.prd);
+      expect(r.effort).toBe(CLAUDE_MODEL_POLICY.stepEfforts.prd);
       expect(r.max_retries).toBe(DEFAULT_STEP_RETRIES.prd);
       expect(r.review).toBe(DEFAULT_STEP_REVIEW.prd);
       expect(r.disabled).toBe(false);
     });
+
+    it('resolves the complete Claude policy matrix without user config', () => {
+      const steps = [
+        ['bootstrap', 'UNDERSTAND'], ['memory', 'UNDERSTAND'], ['assess', 'UNDERSTAND'],
+        ['explore', 'DECIDE'], ['prd', 'DECIDE'], ['complexity', 'DECIDE'],
+        ['stories', 'DECIDE'], ['conflict_check', 'DECIDE'], ['plan', 'DECIDE'],
+        ['architecture_diagram', 'DECIDE'], ['architecture_review', 'DECIDE'],
+        ['worktree', 'SETUP'], ['acceptance_specs', 'BUILD'], ['build', 'BUILD'],
+        ['build_review', 'BUILD'], ['wiring_check', 'BUILD'], ['manual_test', 'SHIP'],
+        ['prd_audit', 'SHIP'], ['architecture_review_as_built', 'SHIP'], ['retro', 'SHIP'],
+        ['rebase', 'SHIP'], ['finish', 'SHIP'], ['remediate', 'SHIP'],
+        ['attribution_verify', 'SHIP'],
+      ] as const;
+
+      expect(
+        steps.map(([step, phase]) => {
+          const { model, effort } = resolveStepConfig(
+            step,
+            phase,
+            CLAUDE_MODEL_POLICY,
+          );
+          return { step, model, effort };
+        }),
+      ).toEqual([
+        { step: 'bootstrap', model: 'sonnet', effort: 'low' },
+        { step: 'memory', model: 'haiku', effort: 'low' },
+        { step: 'assess', model: 'sonnet', effort: 'high' },
+        { step: 'explore', model: 'fable', effort: 'high' },
+        { step: 'prd', model: 'fable', effort: 'high' },
+        { step: 'complexity', model: 'sonnet', effort: 'low' },
+        { step: 'stories', model: 'sonnet', effort: 'medium' },
+        { step: 'conflict_check', model: 'sonnet', effort: 'medium' },
+        { step: 'plan', model: 'sonnet', effort: 'high' },
+        { step: 'architecture_diagram', model: 'sonnet', effort: 'medium' },
+        { step: 'architecture_review', model: 'fable', effort: 'high' },
+        { step: 'worktree', model: 'haiku', effort: 'low' },
+        { step: 'acceptance_specs', model: 'sonnet', effort: 'medium' },
+        { step: 'build', model: 'sonnet', effort: 'low' },
+        { step: 'build_review', model: 'opus', effort: 'high' },
+        { step: 'wiring_check', model: 'sonnet', effort: 'low' },
+        { step: 'manual_test', model: 'sonnet', effort: 'medium' },
+        { step: 'prd_audit', model: 'opus', effort: 'high' },
+        { step: 'architecture_review_as_built', model: 'sonnet', effort: 'medium' },
+        { step: 'retro', model: 'sonnet', effort: 'medium' },
+        { step: 'rebase', model: 'fable', effort: 'max' },
+        { step: 'finish', model: 'haiku', effort: 'low' },
+        { step: 'remediate', model: 'fable', effort: 'high' },
+        { step: 'attribution_verify', model: 'opus', effort: 'high' },
+      ]);
+    });
   });
 
   describe('resolveStepConfig — precedence', () => {
-    it('defaults block overrides hardcoded per-step', () => {
+    it('defaults block overrides the Claude policy step value', () => {
       const config: HarnessConfig = {
         defaults: { effort: 'max', max_retries: 10, review: 'auto' },
       };
-      const r = resolveStepConfig('bootstrap', 'UNDERSTAND', config);
+      const r = resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY, config);
       expect(r.effort).toBe('max');
       expect(r.max_retries).toBe(10);
       expect(r.review).toBe('auto');
@@ -177,7 +225,7 @@ describe('engine/resolved-config', () => {
         defaults: { effort: 'low' },
         phases: { UNDERSTAND: { effort: 'high' } },
       };
-      expect(resolveStepConfig('bootstrap', 'UNDERSTAND', config).effort).toBe('high');
+      expect(resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY, config).effort).toBe('high');
     });
 
     it('step overrides phase and defaults', () => {
@@ -186,14 +234,14 @@ describe('engine/resolved-config', () => {
         phases: { UNDERSTAND: { effort: 'medium' } },
         steps: { bootstrap: { effort: 'xhigh' } },
       };
-      expect(resolveStepConfig('bootstrap', 'UNDERSTAND', config).effort).toBe('xhigh');
+      expect(resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY, config).effort).toBe('xhigh');
     });
 
     it('CLI model override beats everything', () => {
       const config: HarnessConfig = {
         steps: { prd: { model: 'opus' } },
       };
-      const r = resolveStepConfig('prd', 'DECIDE', config, {
+      const r = resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY, config, {
         modelCliOverride: 'haiku',
       });
       expect(r.model).toBe('haiku');
@@ -204,7 +252,7 @@ describe('engine/resolved-config', () => {
         defaults: { effort: 'high' },
         steps: { prd: { effort: 'xhigh' } },
       };
-      const r = resolveStepConfig('prd', 'DECIDE', config, {
+      const r = resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY, config, {
         effortCliOverride: 'low',
       });
       expect(r.effort).toBe('low');
@@ -214,7 +262,7 @@ describe('engine/resolved-config', () => {
       const config: HarnessConfig = {
         steps: { rebase: { model: 'opus' } },
       };
-      const r = resolveStepConfig('rebase', 'SHIP', config);
+      const r = resolveStepConfig('rebase', 'SHIP', CLAUDE_MODEL_POLICY, config);
       expect(r.model).toBe('opus');
     });
 
@@ -224,7 +272,7 @@ describe('engine/resolved-config', () => {
       const config: HarnessConfig = {
         steps: { explore: { model: 'sonnet' } },
       };
-      const r = resolveStepConfig('explore', 'DECIDE', config);
+      const r = resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY, config);
       expect(r.model).toBe('sonnet');
     });
 
@@ -234,7 +282,7 @@ describe('engine/resolved-config', () => {
       const config: HarnessConfig = {
         steps: { prd: { model: 'opus' } },
       };
-      const r = resolveStepConfig('prd', 'DECIDE', config);
+      const r = resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY, config);
       expect(r.model).toBe('opus');
     });
 
@@ -244,7 +292,7 @@ describe('engine/resolved-config', () => {
       const config: HarnessConfig = {
         steps: { architecture_review: { model: 'sonnet' } },
       };
-      const r = resolveStepConfig('architecture_review', 'DECIDE', config);
+      const r = resolveStepConfig('architecture_review', 'DECIDE', CLAUDE_MODEL_POLICY, config);
       expect(r.model).toBe('sonnet');
     });
   });
@@ -261,7 +309,7 @@ describe('engine/resolved-config', () => {
           },
         },
       };
-      const r = resolveStepConfig('plan', 'DECIDE', config, { tier: 'L' });
+      const r = resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'L' });
       expect(r.effort).toBe('xhigh');
     });
 
@@ -274,17 +322,17 @@ describe('engine/resolved-config', () => {
           },
         },
       };
-      const r = resolveStepConfig('plan', 'DECIDE', config, { tier: 'S' });
+      const r = resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'S' });
       expect(r.effort).toBe('medium');
     });
 
-    it('hardcoded tier overrides apply when no user config', () => {
-      // DEFAULT_STEP_TIER_OVERRIDES.plan.S → effort: medium, max_retries: 3
-      const rS = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'S' });
+    it('Claude policy tier overrides apply when no user config', () => {
+      // CLAUDE_MODEL_POLICY.stepTierOverrides.plan.S → effort: medium, max_retries: 3
+      const rS = resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(rS.effort).toBe('medium');
       expect(rS.max_retries).toBe(3);
-      // DEFAULT_STEP_TIER_OVERRIDES.plan.L → effort: xhigh, model: fable
-      const rL = resolveStepConfig('plan', 'DECIDE', undefined, { tier: 'L' });
+      // CLAUDE_MODEL_POLICY.stepTierOverrides.plan.L → effort: xhigh, model: fable
+      const rL = resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' });
       expect(rL.effort).toBe('xhigh');
       expect(rL.model).toBe('fable');
     });
@@ -292,71 +340,71 @@ describe('engine/resolved-config', () => {
     it('conflict_check bumps to fable on Large, stays sonnet on S/M', () => {
       // Regression: HARNESS.md promised "sonnet (S/M), fable (L)" but the engine
       // never bumped the model — L ran on sonnet. Now enforced via tier override.
-      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'S' }).model).toBe(
+      expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' }).model).toBe(
         'sonnet',
       );
-      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'M' }).model).toBe(
+      expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'M' }).model).toBe(
         'sonnet',
       );
-      expect(resolveStepConfig('conflict_check', 'DECIDE', undefined, { tier: 'L' }).model).toBe(
+      expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' }).model).toBe(
         'fable',
       );
     });
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
       // Under-modeling here cascades into everything downstream.
-      expect(resolveStepConfig('explore', 'DECIDE').model).toBe('fable');
-      expect(resolveStepConfig('explore', 'DECIDE').effort).toBe('medium');
-      expect(resolveStepConfig('prd', 'DECIDE').model).toBe('fable');
-      expect(resolveStepConfig('prd', 'DECIDE').effort).toBe('medium');
-      expect(resolveStepConfig('architecture_review', 'DECIDE').model).toBe('fable');
-      expect(resolveStepConfig('architecture_review', 'DECIDE').effort).toBe('high');
-      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE').model).toBe('sonnet');
-      expect(resolveStepConfig('complexity', 'DECIDE').model).toBe('sonnet');
-      expect(resolveStepConfig('bootstrap', 'UNDERSTAND').model).toBe('sonnet');
+      expect(resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
+      expect(resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
+      expect(resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
+      expect(resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
+      expect(resolveStepConfig('architecture_review', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
+      expect(resolveStepConfig('architecture_review', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
+      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('complexity', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
     });
 
-    it('user step.by_tier beats hardcoded tier override', () => {
+    it('user step.by_tier beats Claude policy tier override', () => {
       const config: HarnessConfig = {
         steps: { plan: { by_tier: { L: { effort: 'max' } } } },
       };
-      const r = resolveStepConfig('plan', 'DECIDE', config, { tier: 'L' });
-      expect(r.effort).toBe('max'); // user's by_tier, not hardcoded xhigh
+      const r = resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'L' });
+      expect(r.effort).toBe('max'); // user's by_tier, not policy xhigh
     });
 
-    it('stories hardcoded tier overrides — S→low, L→high', () => {
-      const rS = resolveStepConfig('stories', 'DECIDE', undefined, { tier: 'S' });
+    it('stories Claude policy tier overrides — S→low, L→high', () => {
+      const rS = resolveStepConfig('stories', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(rS.effort).toBe('low');
-      const rL = resolveStepConfig('stories', 'DECIDE', undefined, { tier: 'L' });
+      const rL = resolveStepConfig('stories', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' });
       expect(rL.effort).toBe('high');
     });
 
     it('explore and build S-tier overrides — explore low effort, build max_retries 3', () => {
-      const rExplore = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'S' });
+      const rExplore = resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(rExplore.effort).toBe('low');
-      const rBuild = resolveStepConfig('build', 'BUILD', undefined, { tier: 'S' });
+      const rBuild = resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(rBuild.max_retries).toBe(3);
     });
 
     it('explore/build S-tier rows carry no M/L keys — M/L resolution unchanged', () => {
-      // Guard: DEFAULT_STEP_TIER_OVERRIDES.explore and .build only define an
+      // Guard: CLAUDE_MODEL_POLICY.stepTierOverrides.explore and .build only define an
       // S row. M and L tiers must fall through to the untouched base config.
-      const rExploreM = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'M' });
-      expect(rExploreM.effort).toBe('medium');
-      const rExploreL = resolveStepConfig('explore', 'DECIDE', undefined, { tier: 'L' });
-      expect(rExploreL.effort).toBe('medium');
+      const rExploreM = resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'M' });
+      expect(rExploreM.effort).toBe('high');
+      const rExploreL = resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' });
+      expect(rExploreL.effort).toBe('high');
 
-      const rBuildL = resolveStepConfig('build', 'BUILD', undefined, { tier: 'L' });
-      expect(rBuildL.max_retries).toBe(3); // base DEFAULT_STEP_RETRIES.build, not an override
+      const rBuildL = resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' });
+      expect(rBuildL.max_retries).toBe(3); // provider-neutral base retry budget, not an override
     });
 
-    // adr-2026-07-05-retry-as-escalation-ladder, Decision 4: any hardcoded
+    // adr-2026-07-05-retry-as-escalation-ladder, Decision 4: any provider-policy
     // S-tier max_retries floor is >= 3 — S-tier is the cheapest/fastest lane,
     // so it must not silently get fewer retry attempts than the ladder assumes.
     // This is an invariant-locking test (#188): no production change expected,
     // it pins the floor so a future edit can't quietly regress it.
-    it('every S-tier max_retries in DEFAULT_STEP_TIER_OVERRIDES is >= 3', () => {
-      for (const [step, tiers] of Object.entries(DEFAULT_STEP_TIER_OVERRIDES)) {
+    it('every Claude policy S-tier max_retries override is >= 3', () => {
+      for (const [step, tiers] of Object.entries(CLAUDE_MODEL_POLICY.stepTierOverrides)) {
         const sRow = tiers?.S;
         if (sRow && sRow.max_retries !== undefined) {
           expect(sRow.max_retries).toBeGreaterThanOrEqual(3);
@@ -365,8 +413,157 @@ describe('engine/resolved-config', () => {
     });
 
     it('plan.S and build.S max_retries are pinned at exactly 3', () => {
-      expect(DEFAULT_STEP_TIER_OVERRIDES.plan?.S?.max_retries).toBe(3);
-      expect(DEFAULT_STEP_TIER_OVERRIDES.build?.S?.max_retries).toBe(3);
+      expect(CLAUDE_MODEL_POLICY.stepTierOverrides.plan?.S?.max_retries).toBe(3);
+      expect(CLAUDE_MODEL_POLICY.stepTierOverrides.build?.S?.max_retries).toBe(3);
+    });
+  });
+
+  describe('resolveStepConfig — provider-aware model and effort precedence boundaries', () => {
+    const policies = [
+      {
+        name: 'Codex',
+        policy: CODEX_MODEL_POLICY,
+        opaqueModel: 'sonnet',
+        conflictingModel: 'gpt-5.6-sol',
+      },
+      {
+        name: 'Claude',
+        policy: CLAUDE_MODEL_POLICY,
+        opaqueModel: 'gpt-5.6-sol',
+        conflictingModel: 'sonnet',
+      },
+    ] as const;
+
+    const modelCases = policies.flatMap(({ name, policy, opaqueModel, conflictingModel }) => [
+      {
+        name: `${name}: CLI model beats step tier model`,
+        policy,
+        expected: opaqueModel,
+        config: { steps: { plan: { by_tier: { L: { model: conflictingModel } } } } } as HarnessConfig,
+        options: { tier: 'L' as const, modelCliOverride: opaqueModel },
+      },
+      {
+        name: `${name}: step tier model beats step model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          steps: { plan: { model: conflictingModel, by_tier: { L: { model: opaqueModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: step model beats phase tier model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          steps: { plan: { model: opaqueModel } },
+          phases: { DECIDE: { by_tier: { L: { model: conflictingModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase tier model beats phase model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          phases: { DECIDE: { model: conflictingModel, by_tier: { L: { model: opaqueModel } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase model beats defaults model`,
+        policy,
+        expected: opaqueModel,
+        config: {
+          defaults: { model: conflictingModel },
+          phases: { DECIDE: { model: opaqueModel } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: defaults model beats policy tier model`,
+        policy,
+        expected: opaqueModel,
+        config: { defaults: { model: opaqueModel } } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: policy tier model beats policy base model`,
+        policy,
+        expected: policy.stepTierOverrides.plan?.L?.model,
+        config: undefined,
+        options: { tier: 'L' as const },
+      },
+    ]);
+
+    it.each(modelCases)('$name', ({ policy, expected, config, options }) => {
+      expect(resolveStepConfig('plan', 'DECIDE', policy, config, options).model).toBe(expected);
+    });
+
+    const effortCases = policies.flatMap(({ name, policy }) => [
+      {
+        name: `${name}: CLI effort beats step tier effort`,
+        policy,
+        expected: 'max',
+        config: { steps: { plan: { by_tier: { L: { effort: 'low' } } } } } as HarnessConfig,
+        options: { tier: 'L' as const, effortCliOverride: 'max' as const },
+      },
+      {
+        name: `${name}: step tier effort beats step effort`,
+        policy,
+        expected: 'max',
+        config: {
+          steps: { plan: { effort: 'low', by_tier: { L: { effort: 'max' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: step effort beats phase tier effort`,
+        policy,
+        expected: 'max',
+        config: {
+          steps: { plan: { effort: 'max' } },
+          phases: { DECIDE: { by_tier: { L: { effort: 'low' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase tier effort beats phase effort`,
+        policy,
+        expected: 'max',
+        config: {
+          phases: { DECIDE: { effort: 'low', by_tier: { L: { effort: 'max' } } } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: phase effort beats defaults effort`,
+        policy,
+        expected: 'max',
+        config: {
+          defaults: { effort: 'low' },
+          phases: { DECIDE: { effort: 'max' } },
+        } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: defaults effort beats policy tier effort`,
+        policy,
+        expected: 'low',
+        config: { defaults: { effort: 'low' } } as HarnessConfig,
+        options: { tier: 'L' as const },
+      },
+      {
+        name: `${name}: policy tier effort beats policy base effort`,
+        policy,
+        expected: policy.stepTierOverrides.plan?.L?.effort,
+        config: undefined,
+        options: { tier: 'L' as const },
+      },
+    ]);
+
+    it.each(effortCases)('$name', ({ policy, expected, config, options }) => {
+      expect(resolveStepConfig('plan', 'DECIDE', policy, config, options).effort).toBe(expected);
     });
   });
 
@@ -376,12 +573,12 @@ describe('engine/resolved-config', () => {
     // evidence-gate core and must never be silently disabled by tier
     // resolution. No production change expected.
     it('build_review is not disabled at S tier', () => {
-      const r = resolveStepConfig('build_review', 'BUILD', undefined, { tier: 'S' });
+      const r = resolveStepConfig('build_review', 'BUILD', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(r.disabled).toBe(false);
     });
 
     it('manual_test is not disabled at S tier', () => {
-      const r = resolveStepConfig('manual_test', 'SHIP', undefined, { tier: 'S' });
+      const r = resolveStepConfig('manual_test', 'SHIP', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' });
       expect(r.disabled).toBe(false);
     });
   });
@@ -397,7 +594,7 @@ describe('engine/resolved-config', () => {
           },
         },
       };
-      const r = resolveStepConfig('build', 'BUILD', config);
+      const r = resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY, config);
       expect(r.skill).toBe('.harness/skills/build/SKILL.md');
       expect(r.hooks).toEqual({ before: 'pre.sh', after: 'post.sh' });
       expect(r.disabled).toBe(true);
@@ -409,14 +606,14 @@ describe('engine/resolved-config', () => {
       // Regression guard: verify that changes to recovery/failure-response steps
       // (rebase, remediate) do not inadvertently affect unrelated steps.
       // finish stays on its mechanical haiku/low baseline.
-      const rFinish = resolveStepConfig('finish', 'SHIP');
+      const rFinish = resolveStepConfig('finish', 'SHIP', CLAUDE_MODEL_POLICY);
       expect(rFinish.model).toBe('haiku');
       expect(rFinish.effort).toBe('low');
 
       // build was intentionally bumped haiku→sonnet: it launches the code-
       // authoring implementation session, so it needs a capable model. Effort
       // is unchanged at low (the dispatch itself is light).
-      const rBuild = resolveStepConfig('build', 'BUILD');
+      const rBuild = resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY);
       expect(rBuild.model).toBe('sonnet');
       expect(rBuild.effort).toBe('low');
     });
@@ -429,9 +626,9 @@ describe('engine/resolved-config', () => {
       // - build (code-authoring implementation session) → sonnet (bumped from haiku)
       // - acceptance_specs (test generation) → sonnet
       // - stories (feature tasks) → sonnet
-      expect(resolveStepConfig('build', 'BUILD').model).toBe('sonnet');
-      expect(resolveStepConfig('acceptance_specs', 'BUILD').model).toBe('sonnet');
-      expect(resolveStepConfig('stories', 'DECIDE').model).toBe('sonnet');
+      expect(resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('acceptance_specs', 'BUILD', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('stories', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
     });
   });
 
@@ -628,23 +825,23 @@ describe('engine/resolved-config', () => {
   // step → phase → defaults precedence as the other tuning knobs.
   describe('escalate resolution (#188)', () => {
     it('defaults to true when unset everywhere', () => {
-      expect(resolveStepConfig('plan', 'DECIDE', undefined).escalate).toBe(true);
-      expect(resolveStepConfig('build', 'BUILD', {}).escalate).toBe(true);
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, undefined).escalate).toBe(true);
+      expect(resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY, {}).escalate).toBe(true);
     });
 
     it('step-level escalate:false wins', () => {
       const config: HarnessConfig = { steps: { plan: { escalate: false } } };
-      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(false);
     });
 
     it('phase-level applies when step is unset', () => {
       const config: HarnessConfig = { phases: { DECIDE: { escalate: false } } };
-      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(false);
     });
 
     it('defaults-level applies when step and phase are unset', () => {
       const config: HarnessConfig = { defaults: { escalate: false } };
-      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(false);
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(false);
     });
 
     it('step overrides phase (precedence parity with other knobs)', () => {
@@ -652,7 +849,7 @@ describe('engine/resolved-config', () => {
         phases: { DECIDE: { escalate: false } },
         steps: { plan: { escalate: true } },
       };
-      expect(resolveStepConfig('plan', 'DECIDE', config).escalate).toBe(true);
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config).escalate).toBe(true);
     });
   });
 });

@@ -20,6 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
@@ -947,10 +948,12 @@ async function main(): Promise<void> {
   registry.markInitialized();
 
   // Retrieve provider and subscriber from registry with defaults
+  const selectedProviderKey = config?.llm_provider ?? 'claude';
   const provider = registry.get<LLMProvider>(
     'llm_provider',
-    config?.llm_provider ?? 'claude'
+    selectedProviderKey
   );
+  const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, console.warn);
 
   // Select UI subscriber based on config (default: 'terminal')
   const subscriber = registry.get<UISubscriber>(
@@ -995,6 +998,7 @@ async function main(): Promise<void> {
     pipelineDir,
     stepCooldown: opts.cooldown,
     config,
+    modelPolicy,
     modelOverride: opts.model,
     mode,
   });
@@ -1051,6 +1055,7 @@ async function main(): Promise<void> {
     fromStep: opts.from as StepName | undefined,
     mode,
     config,
+    modelPolicy,
     projectRoot,
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,
