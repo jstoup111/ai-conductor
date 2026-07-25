@@ -147,20 +147,30 @@ check 'repeated update is idempotent and creates no duplicate or target churn' \
 # Ownership boundary: foreign files, directories, and links survive update and
 # uninstall byte-for-byte or target-for-target.
 FOREIGN_HOME="$TMP_ROOT/home-foreign"
-mkdir -p "$FOREIGN_HOME/.agents/skills/operator-dir" "$FOREIGN_HOME/.codex/skills"
-printf '%s\n' 'operator file' > "$FOREIGN_HOME/.agents/skills/operator-file"
-printf '%s\n' 'operator directory content' > "$FOREIGN_HOME/.agents/skills/operator-dir/data"
-ln -s "$TMP_ROOT/operator-target" "$FOREIGN_HOME/.codex/skills/operator-link"
-FOREIGN_FILE_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-file" | awk '{print $1}')
-FOREIGN_DIR_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-dir/data" | awk '{print $1}')
-FOREIGN_LINK_TARGET=$(readlink "$FOREIGN_HOME/.codex/skills/operator-link")
+mkdir -p "$FOREIGN_HOME/.agents/skills/pipeline" "$FOREIGN_HOME/.codex/skills"
+printf '%s\n' 'operator-owned tdd file' > "$FOREIGN_HOME/.agents/skills/tdd"
+printf '%s\n' 'operator-owned pipeline directory' > "$FOREIGN_HOME/.agents/skills/pipeline/data"
+ln -s "$TMP_ROOT/operator-conduct-target" "$FOREIGN_HOME/.agents/skills/conduct"
+ln -s "$TMP_ROOT/operator-legacy-tdd-target" "$FOREIGN_HOME/.codex/skills/tdd"
+printf '%s\n' 'operator-owned legacy harness instructions' > "$FOREIGN_HOME/.codex/skills/HARNESS.md"
+# Exact harness-owned current link: update may retain it, uninstall must remove it.
+ln -s "$CHECKOUT/skills/stories" "$FOREIGN_HOME/.agents/skills/stories"
+FOREIGN_FILE_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/tdd" | awk '{print $1}')
+FOREIGN_DIR_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/pipeline/data" | awk '{print $1}')
+FOREIGN_CURRENT_LINK_TARGET=$(readlink "$FOREIGN_HOME/.agents/skills/conduct")
+FOREIGN_LEGACY_LINK_TARGET=$(readlink "$FOREIGN_HOME/.codex/skills/tdd")
+FOREIGN_HARNESS_HASH=$(sha256sum "$FOREIGN_HOME/.codex/skills/HARNESS.md" | awk '{print $1}')
 run_install "$FOREIGN_HOME" --update --providers codex >"$TMP_ROOT/foreign-update.out" 2>&1
-check 'update preserves a foreign current-scope regular file' \
-  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-file" | awk '{print $1}')" = "$FOREIGN_FILE_HASH"
-check 'update preserves a foreign current-scope directory and its contents' \
-  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-dir/data" | awk '{print $1}')" = "$FOREIGN_DIR_HASH"
-check 'update preserves a foreign legacy symlink target' \
-  test "$(readlink "$FOREIGN_HOME/.codex/skills/operator-link")" = "$FOREIGN_LINK_TARGET"
+check 'update preserves a foreign regular file colliding with a current skill name' \
+  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/tdd" | awk '{print $1}')" = "$FOREIGN_FILE_HASH"
+check 'update preserves a foreign directory colliding with a current skill name' \
+  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/pipeline/data" | awk '{print $1}')" = "$FOREIGN_DIR_HASH"
+check 'update preserves a foreign symlink colliding with a current skill name' \
+  test "$(readlink "$FOREIGN_HOME/.agents/skills/conduct")" = "$FOREIGN_CURRENT_LINK_TARGET"
+check 'update preserves a foreign symlink colliding with a legacy skill name' \
+  test "$(readlink "$FOREIGN_HOME/.codex/skills/tdd")" = "$FOREIGN_LEGACY_LINK_TARGET"
+check 'update preserves foreign legacy HARNESS.md content' \
+  test "$(sha256sum "$FOREIGN_HOME/.codex/skills/HARNESS.md" | awk '{print $1}')" = "$FOREIGN_HARNESS_HASH"
 
 # Check mode must diagnose the documented active scope, including missing and
 # duplicate current/legacy views, rather than accepting the old scope alone.
@@ -197,11 +207,11 @@ fi
 
 run_install "$FOREIGN_HOME" --uninstall >"$TMP_ROOT/foreign-uninstall.out" 2>&1
 check 'uninstall removes current harness-owned catalog entries' \
-  test ! -e "$FOREIGN_HOME/.agents/skills/tdd"
-check 'uninstall preserves foreign current-scope files' \
-  test -f "$FOREIGN_HOME/.agents/skills/operator-file"
+  test ! -e "$FOREIGN_HOME/.agents/skills/stories"
+check 'uninstall preserves foreign current-scope files at skill names' \
+  test -f "$FOREIGN_HOME/.agents/skills/tdd"
 check 'uninstall preserves foreign legacy links' \
-  test -L "$FOREIGN_HOME/.codex/skills/operator-link"
+  test "$(readlink "$FOREIGN_HOME/.codex/skills/tdd")" = "$FOREIGN_LEGACY_LINK_TARGET"
 
 printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
