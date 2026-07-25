@@ -1,6 +1,23 @@
-import { createHash, type Hash } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  type Hash,
+  type Hmac,
+} from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, readdir, readlink, realpath } from 'node:fs/promises';
+import {
+  link,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import {
   isAbsolute,
   join,
@@ -34,6 +51,7 @@ export interface FullSuiteFingerprint {
 export const FULL_SUITE_FINGERPRINT_CATEGORIES = [
   'additional_inputs',
   'dependencies',
+  'environment',
   'migrations',
   'project_config',
   'source',
@@ -44,9 +62,7 @@ export const FULL_SUITE_FINGERPRINT_CATEGORIES = [
 export type FullSuitePersistedFingerprintCategory =
   (typeof FULL_SUITE_FINGERPRINT_CATEGORIES)[number];
 
-export type FullSuiteFingerprintCategory =
-  | FullSuitePersistedFingerprintCategory
-  | 'environment';
+export type FullSuiteFingerprintCategory = FullSuitePersistedFingerprintCategory;
 
 export type FullSuiteCategoryFingerprints = Record<
   FullSuitePersistedFingerprintCategory,
@@ -105,6 +121,7 @@ function sortedUnique(values: string[]): string[] {
 function isFullSuiteProjectInput(path: string): boolean {
   const normalized = path.trim();
   if (!normalized) return false;
+  if (normalized === '.pipeline' || normalized.startsWith('.pipeline/')) return false;
   if (normalized === 'CHANGELOG.md') return false;
   if (normalized.startsWith('.docs/') || normalized.startsWith('docs/')) return false;
   if (/(^|\/)README(\.[A-Za-z0-9]+)?$/i.test(normalized)) return false;
@@ -119,7 +136,100 @@ function isFullSuiteProjectInput(path: string): boolean {
   return true;
 }
 
-function updateField(hash: Hash, name: string, value: string | Buffer): void {
+const ENVIRONMENT_KEY_PATH = '.pipeline/test-suite-environment.key';
+const ENVIRONMENT_KEY_PATTERN = /^[0-9a-f]{64}\n$/;
+
+async function readEnvironmentKey(projectRoot: string): Promise<Buffer> {
+  const keyPath = join(projectRoot, ENVIRONMENT_KEY_PATH);
+  let stats;
+  try {
+    stats = await lstat(keyPath);
+  } catch {
+    return fail('input_read_failed', 'Unable to inspect full-suite environment key');
+  }
+  if (
+    !stats.isFile() ||
+    stats.isSymbolicLink() ||
+    (process.platform !== 'win32' && (stats.mode & 0o077) !== 0)
+  ) {
+    return fail('input_read_failed', 'Full-suite environment key is not private');
+  }
+  let serialized: string;
+  try {
+    serialized = await readFile(keyPath, 'utf8');
+  } catch {
+    return fail('input_read_failed', 'Unable to read full-suite environment key');
+  }
+  if (!ENVIRONMENT_KEY_PATTERN.test(serialized)) {
+    return fail('input_read_failed', 'Full-suite environment key is invalid');
+  }
+  return Buffer.from(serialized.trim(), 'hex');
+}
+
+async function environmentKey(projectRoot: string): Promise<Buffer> {
+  const directory = join(projectRoot, '.pipeline');
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const directoryStats = await lstat(directory);
+    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
+      return fail('input_read_failed', 'Full-suite state directory is invalid');
+    }
+  } catch (error) {
+    if (error instanceof FingerprintFailure) throw error;
+    return fail('input_read_failed', 'Unable to prepare full-suite environment key');
+  }
+
+  const keyPath = join(projectRoot, ENVIRONMENT_KEY_PATH);
+  const temporary = join(
+    directory,
+    `.test-suite-environment.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await writeFile(temporary, `${randomBytes(32).toString('hex')}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    });
+    try {
+      await link(temporary, keyPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  } catch {
+    return fail('input_read_failed', 'Unable to provision full-suite environment key');
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+  return readEnvironmentKey(projectRoot);
+}
+
+async function environmentFingerprint(
+  projectRoot: string,
+  names: readonly string[],
+  environmentValues: NodeJS.ProcessEnv,
+): Promise<string> {
+  const normalizedNames = sortedUnique([...names]);
+  if (normalizedNames.length === 0) {
+    const empty = createHash('sha256');
+    updateField(empty, 'schema', 'full-suite-environment-v1');
+    updateField(empty, 'category', 'environment');
+    return empty.digest('hex');
+  }
+  const keyed = createHmac('sha256', await environmentKey(projectRoot));
+  updateField(keyed, 'schema', 'full-suite-environment-v1');
+  updateField(keyed, 'category', 'environment');
+  for (const name of normalizedNames) {
+    updateField(keyed, 'environment_name', name);
+    const value = Object.prototype.hasOwnProperty.call(environmentValues, name)
+      ? environmentValues[name]
+      : undefined;
+    updateField(keyed, 'environment_state', value === undefined ? 'unset' : 'set');
+    if (value !== undefined) updateField(keyed, 'environment_value', value);
+  }
+  return keyed.digest('hex');
+}
+
+function updateField(hash: Hash | Hmac, name: string, value: string | Buffer): void {
   const bytes = typeof value === 'string' ? Buffer.from(value) : value;
   hash.update(name);
   hash.update('\0');
@@ -130,7 +240,7 @@ function updateField(hash: Hash, name: string, value: string | Buffer): void {
 }
 
 function updateFields(
-  hashes: readonly Hash[],
+  hashes: readonly (Hash | Hmac)[],
   name: string,
   value: string | Buffer,
 ): void {
@@ -474,12 +584,14 @@ async function calculateFingerprint(
     testSuite.working_directory,
   );
 
-  const [headSha, trackedOutput, untrackedOutput, expandedInputs] = await Promise.all([
-    gitOutput(projectRoot, ['rev-parse', 'HEAD']),
-    gitOutput(projectRoot, ['ls-files', '-z']),
-    gitOutput(projectRoot, ['ls-files', '--others', '--exclude-standard', '-z']),
-    Promise.all(normalizedInputs.map((input) => expandDeclaredInput(projectRoot, input))),
-  ]);
+  const [headSha, trackedOutput, untrackedOutput, expandedInputs, environmentDigest] =
+    await Promise.all([
+      gitOutput(projectRoot, ['rev-parse', 'HEAD']),
+      gitOutput(projectRoot, ['ls-files', '-z']),
+      gitOutput(projectRoot, ['ls-files', '--others', '--exclude-standard', '-z']),
+      Promise.all(normalizedInputs.map((input) => expandDeclaredInput(projectRoot, input))),
+      environmentFingerprint(projectRoot, testSuite.environment ?? [], environmentValues),
+    ]);
 
   const broadPaths = [
     ...nulSeparatedPaths(trackedOutput),
@@ -497,21 +609,14 @@ async function calculateFingerprint(
       return [category, categoryHash];
     }),
   ) as Record<FullSuitePersistedFingerprintCategory, Hash>;
-  updateField(hash, 'schema', 'full-suite-working-tree-v2');
+  updateField(hash, 'schema', 'full-suite-working-tree-v3');
   updateFields(
     [hash, categoryHashes.project_config],
     'test_suite',
     normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory),
   );
 
-  for (const name of sortedUnique(testSuite.environment ?? [])) {
-    updateField(hash, 'environment_name', name);
-    const value = Object.prototype.hasOwnProperty.call(environmentValues, name)
-      ? environmentValues[name]
-      : undefined;
-    updateField(hash, 'environment_state', value === undefined ? 'unset' : 'set');
-    if (value !== undefined) updateField(hash, 'environment_value', value);
-  }
+  updateField(hash, 'environment_commitment', environmentDigest);
 
   for (const path of paths) {
     const required = requiredPaths.has(path);
@@ -528,7 +633,9 @@ async function calculateFingerprint(
   const categoryFingerprints = Object.fromEntries(
     FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => [
       category,
-      categoryHashes[category].digest('hex'),
+      category === 'environment'
+        ? environmentDigest
+        : categoryHashes[category].digest('hex'),
     ]),
   ) as FullSuiteCategoryFingerprints;
 

@@ -627,13 +627,14 @@ export class FullSuiteVerifier {
             freshness,
           };
         }
+        const sanitizedDiagnostic = sanitizeFullSuiteDiagnosticOutput(
+          execution.stderr || execution.stdout,
+          secretValues,
+        );
         return {
           status: 'FAILED',
           reason: execution.reason,
-          message: sanitizeFullSuiteDiagnosticOutput(
-            execution.stderr || execution.stdout || 'Full test suite failed',
-            secretValues,
-          ),
+          message: sanitizedDiagnostic || 'Full test suite failed',
           freshness,
           evidence: persisted.evidence,
         };
@@ -767,7 +768,6 @@ export class FullSuiteVerifier {
           inspection: changedFingerprintInspection(
             persisted.evidence,
             fingerprintResult.fingerprint,
-            (testSuite.environment?.length ?? 0) > 0,
           ),
           context,
         };
@@ -871,7 +871,6 @@ const CATEGORY_STALE_REASONS: Record<
 function changedFingerprintInspection(
   persisted: FullSuitePassEvidence,
   current: FullSuiteFingerprint,
-  hasDeclaredEnvironment: boolean,
 ): FullSuiteStaleInspection {
   const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
     (category) =>
@@ -890,9 +889,6 @@ function changedFingerprintInspection(
       reason: 'multiple_categories_changed',
       changedCategories,
     };
-  }
-  if (hasDeclaredEnvironment) {
-    return { status: 'STALE', reason: 'environment_changed' };
   }
   return { status: 'STALE', reason: 'fingerprint_mismatch' };
 }

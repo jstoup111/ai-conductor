@@ -16,6 +16,7 @@ import {
 const CATEGORY_FINGERPRINTS = {
   additional_inputs: 'category:additional_inputs',
   dependencies: 'category:dependencies',
+  environment: 'category:environment',
   migrations: 'category:migrations',
   project_config: 'category:project_config',
   source: 'category:source',
@@ -126,6 +127,16 @@ describe('full-suite evidence', () => {
     });
   });
 
+  it('treats v2 PASS evidence as unsupported rather than reusable', async () => {
+    const projectRoot = await makeProject();
+    await writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 2 });
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: false,
+      reason: 'unsupported_version',
+    });
+  });
+
   it('never removes another active writer temporary file', async () => {
     const projectRoot = await makeProject();
     const activeTemporary = join(
@@ -172,6 +183,24 @@ describe('full-suite evidence', () => {
         writePersisted(projectRoot, {
           ...PASS_EVIDENCE,
           stdout: 'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT + 1),
+        }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'oversized persisted command metadata',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, {
+          ...PASS_EVIDENCE,
+          command: 'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT + 1),
+        }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'oversized persisted working-directory metadata',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, {
+          ...PASS_EVIDENCE,
+          workingDirectory: '界'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT),
         }),
       expected: { usable: false, reason: 'corrupt' },
     },
@@ -358,6 +387,87 @@ describe('full-suite evidence', () => {
       stderrWithinLimit: true,
       stderrRetainsEnds: true,
       stderrMarked: true,
+    });
+  });
+
+  it('sanitizes and bounds every diagnostic metadata field before persistence', async () => {
+    const projectRoot = await makeProject();
+    const secret = 'metadata-secret-940';
+    const evidence: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      command: secret,
+      workingDirectory: secret,
+      stdout: secret,
+      stderr: secret,
+    };
+
+    await writeFullSuiteEvidence(projectRoot, evidence, [secret]);
+
+    const serialized = await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'),
+      'utf8',
+    );
+    expect({
+      leaked: serialized.includes(secret),
+      persisted: JSON.parse(serialized),
+      readback: await readFullSuiteEvidence(projectRoot),
+    }).toEqual({
+      leaked: false,
+      persisted: {
+        ...evidence,
+        command: null,
+        workingDirectory: null,
+        stdout: '',
+        stderr: '',
+      },
+      readback: {
+        usable: false,
+        reason: 'not_pass',
+        evidence: {
+          ...evidence,
+          command: null,
+          workingDirectory: null,
+          stdout: '',
+          stderr: '',
+        },
+      },
+    });
+  });
+
+  it('bounds non-secret command and working-directory diagnostics', async () => {
+    const projectRoot = await makeProject();
+    const evidence: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      command: `command-start-${'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}-command-end`,
+      workingDirectory:
+        `directory-start-${'界'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT)}-directory-end`,
+    };
+
+    await writeFullSuiteEvidence(projectRoot, evidence);
+
+    const persisted = JSON.parse(await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'),
+      'utf8',
+    )) as FullSuiteFailEvidence;
+    expect({
+      commandWithinLimit:
+        persisted.command !== null &&
+        Buffer.byteLength(persisted.command, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT,
+      commandRetainsEnds:
+        persisted.command?.startsWith('command-start-') === true &&
+        persisted.command.endsWith('-command-end'),
+      directoryWithinLimit:
+        persisted.workingDirectory !== null &&
+        Buffer.byteLength(persisted.workingDirectory, 'utf8') <=
+          FULL_SUITE_DIAGNOSTIC_LIMIT,
+      directoryRetainsEnds:
+        persisted.workingDirectory?.startsWith('directory-start-') === true &&
+        persisted.workingDirectory.endsWith('-directory-end'),
+    }).toEqual({
+      commandWithinLimit: true,
+      commandRetainsEnds: true,
+      directoryWithinLimit: true,
+      directoryRetainsEnds: true,
     });
   });
 });

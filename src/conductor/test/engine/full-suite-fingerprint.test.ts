@@ -3,12 +3,16 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
+  readdir,
   rename,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -316,6 +320,87 @@ describe('fingerprintFullSuiteInputs', () => {
     );
 
     expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it('atomically provisions one private non-oracle environment key per worktree', async () => {
+    const firstRepo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const secondRepo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const secret = 'low-entropy-choice';
+    const config = { ...DEFAULT_TEST_SUITE, environment: ['SUITE_MODE'] };
+    const concurrent = await Promise.all([
+      fingerprint(firstRepo, config, { SUITE_MODE: secret }),
+      fingerprint(firstRepo, config, { SUITE_MODE: secret }),
+    ]);
+    const independent = await fingerprint(secondRepo, config, { SUITE_MODE: secret });
+    const keyPath = join(firstRepo, '.pipeline/test-suite-environment.key');
+    const [key, keyStats, stateEntries] = await Promise.all([
+      readFile(keyPath, 'utf8'),
+      stat(keyPath),
+      readdir(join(firstRepo, '.pipeline')),
+    ]);
+
+    expect({
+      stableConcurrentDigest: concurrent[0].digest === concurrent[1].digest,
+      stableConcurrentEnvironment:
+        concurrent[0].categoryFingerprints.environment ===
+        concurrent[1].categoryFingerprints.environment,
+      worktreeScopedEnvironment:
+        concurrent[0].categoryFingerprints.environment !==
+        independent.categoryFingerprints.environment,
+      bareSecretHash:
+        concurrent[0].categoryFingerprints.environment ===
+        createHash('sha256').update(secret).digest('hex'),
+      keyShape: /^[0-9a-f]{64}\n$/.test(key),
+      privateMode: process.platform === 'win32' || (keyStats.mode & 0o077) === 0,
+      temporaryKeys: stateEntries.filter((entry) =>
+        entry.startsWith('.test-suite-environment.') && entry.endsWith('.tmp')),
+      leaked: JSON.stringify({ concurrent, independent }).includes(secret),
+    }).toEqual({
+      stableConcurrentDigest: true,
+      stableConcurrentEnvironment: true,
+      worktreeScopedEnvironment: true,
+      bareSecretHash: false,
+      keyShape: true,
+      privateMode: true,
+      temporaryKeys: [],
+      leaked: false,
+    });
+  });
+
+  it('fails closed for malformed or non-private environment keys', async () => {
+    const cases = [
+      {
+        name: 'malformed',
+        arrange: (path: string) => writeFile(path, 'not-a-key\n', 'utf8'),
+      },
+      {
+        name: 'non-private',
+        arrange: (path: string) => chmod(path, 0o644),
+      },
+    ];
+    const observed: unknown[] = [];
+
+    for (const testCase of cases) {
+      const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+      const config = { ...DEFAULT_TEST_SUITE, environment: ['SUITE_MODE'] };
+      await fingerprint(repo, config, { SUITE_MODE: 'first' });
+      await testCase.arrange(join(repo, '.pipeline/test-suite-environment.key'));
+      observed.push({
+        name: testCase.name,
+        result: await fingerprintResult(repo, config, { SUITE_MODE: 'first' }),
+      });
+    }
+
+    expect(observed).toEqual(cases.map((testCase) => ({
+      name: testCase.name,
+      result: {
+        ok: false,
+        reason: {
+          code: 'input_read_failed',
+          message: expect.stringMatching(/environment key/),
+        },
+      },
+    })));
   });
 
   it('returns typed indeterminate for a missing declared input', async () => {

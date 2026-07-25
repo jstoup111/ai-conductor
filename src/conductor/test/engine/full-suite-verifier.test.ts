@@ -24,6 +24,7 @@ const CONCURRENT_ENSURE_FIXTURE = join(
 const CATEGORY_FINGERPRINTS = {
   additional_inputs: 'category:additional_inputs',
   dependencies: 'category:dependencies',
+  environment: 'category:environment',
   migrations: 'category:migrations',
   project_config: 'category:project_config',
   source: 'category:source',
@@ -95,6 +96,148 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('keeps raw secret-bearing config in memory while returning only sanitized PASS evidence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-secret-metadata-pass-'));
+    scratches.push(projectRoot);
+    const secret = 'configured-metadata-secret-940';
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        `  command: ${secret}`,
+        `  working_directory: ${secret}`,
+        '  environment:',
+        '    - SUITE_SECRET',
+        '',
+      ].join('\n'),
+    );
+    await mkdir(join(projectRoot, secret), { recursive: true });
+    let receivedConfig: unknown;
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      environment: { SUITE_SECRET: secret },
+      fingerprint: async (options) => {
+        receivedConfig = options.testSuite;
+        return {
+          ok: true,
+          fingerprint: {
+            digest: 'sha256:secret-metadata-pass',
+            headSha: 'head-secret-metadata-pass',
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
+          },
+        };
+      },
+      execute: async (options) => {
+        expect(options.testSuite).toEqual({
+          command: secret,
+          working_directory: secret,
+          environment: ['SUITE_SECRET'],
+        });
+        return {
+          ok: true,
+          command: secret,
+          cwd: secret,
+          startedAt: '2026-07-25T15:00:00.000Z',
+          endedAt: '2026-07-25T15:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: secret,
+          stderr: secret,
+        };
+      },
+    });
+
+    const result = await verifier.ensure();
+    const serialized = await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'),
+      'utf8',
+    );
+
+    expect(receivedConfig).toEqual({
+      command: secret,
+      working_directory: secret,
+      environment: ['SUITE_SECRET'],
+    });
+    expect({
+      resultLeaks: JSON.stringify(result).includes(secret),
+      serializedLeaks: serialized.includes(secret),
+      result,
+    }).toEqual({
+      resultLeaks: false,
+      serializedLeaks: false,
+      result: {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'missing' },
+        evidence: expect.objectContaining({
+          outcome: 'PASS',
+          command: null,
+          workingDirectory: null,
+          stdout: '',
+          stderr: '',
+        }),
+      },
+    });
+  });
+
+  it('sanitizes secret-bearing config and diagnostics from preflight results', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-secret-preflight-'));
+    scratches.push(projectRoot);
+    const secret = 'configured-preflight-secret-940';
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      [
+        'test_suite:',
+        `  command: ${secret}`,
+        `  working_directory: ${secret}`,
+        '  environment:',
+        '    - SUITE_SECRET',
+        '',
+      ].join('\n'),
+    );
+    const verifier = new FullSuiteVerifier({
+      projectRoot,
+      environment: { SUITE_SECRET: secret },
+      fingerprint: async () => ({
+        ok: false,
+        reason: {
+          code: 'input_read_failed',
+          message: secret,
+          path: secret,
+        },
+      }),
+      execute: async () => {
+        throw new Error('preflight failures must not execute');
+      },
+    });
+
+    const result = await verifier.ensure();
+    const serialized = await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'),
+      'utf8',
+    );
+
+    expect({
+      resultLeaks: JSON.stringify(result).includes(secret),
+      serializedLeaks: serialized.includes(secret),
+      result,
+    }).toEqual({
+      resultLeaks: false,
+      serializedLeaks: false,
+      result: {
+        status: 'FAILED',
+        reason: 'preflight_failed',
+        message: '',
+        evidence: expect.objectContaining({
+          command: null,
+          workingDirectory: null,
+          stderr: '',
+        }),
+      },
+    });
+  });
+
   it('executes once and atomically records current PASS evidence when none exists', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-verifier-'));
     scratches.push(projectRoot);
@@ -508,6 +651,76 @@ describe('FullSuiteVerifier', () => {
       },
       launches: 2,
     });
+  });
+
+  it('attributes simultaneous source and environment changes across verifier instances', async () => {
+    const projectRoot = await makeFingerprintProject();
+    let launches = 0;
+    const createVerifier = (suiteMode: string) => new FullSuiteVerifier({
+      projectRoot,
+      environment: { PATH: '/fixture/bin', SUITE_MODE: suiteMode },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T17:00:00.000Z',
+          endedAt: '2026-07-25T17:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+    });
+    await createVerifier('first').ensure();
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const value = 5;\n');
+
+    const inspection = await createVerifier('second').inspect();
+    const ensured = await createVerifier('second').ensure();
+
+    expect({
+      inspection,
+      ensured: ensured.status,
+      freshness: 'freshness' in ensured ? ensured.freshness : undefined,
+      launches,
+    }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'multiple_categories_changed',
+        changedCategories: ['environment', 'source'],
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'multiple_categories_changed',
+        changedCategories: ['environment', 'source'],
+      },
+      launches: 2,
+    });
+  });
+
+  it('treats deletion of the private environment key as environment-only staleness', async () => {
+    const projectRoot = await makeFingerprintProject();
+    const environment = { PATH: '/fixture/bin', SUITE_MODE: 'stable' };
+    const execute = async () => ({
+      ok: true as const,
+      command: 'node suite.mjs --all',
+      cwd: projectRoot,
+      startedAt: '2026-07-25T17:00:00.000Z',
+      endedAt: '2026-07-25T17:00:01.000Z',
+      durationMs: 1_000,
+      exitCode: 0 as const,
+      stdout: 'all suites passed\n',
+      stderr: '',
+    });
+    await new FullSuiteVerifier({ projectRoot, environment, execute }).ensure();
+    await rm(join(projectRoot, '.pipeline/test-suite-environment.key'));
+
+    await expect(
+      new FullSuiteVerifier({ projectRoot, environment, execute }).inspect(),
+    ).resolves.toEqual({ status: 'STALE', reason: 'environment_changed' });
   });
 
   it('reruns once and replaces every computable unusable evidence state', async () => {

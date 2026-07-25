@@ -7,7 +7,7 @@ import {
   type FullSuiteCategoryFingerprints,
 } from './full-suite-fingerprint.js';
 
-export const FULL_SUITE_EVIDENCE_VERSION = 2 as const;
+export const FULL_SUITE_EVIDENCE_VERSION = 3 as const;
 export const FULL_SUITE_EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
 export const FULL_SUITE_DIAGNOSTIC_LIMIT = 16_384;
 export const FULL_SUITE_TRUNCATION_MARKER = '\n...[output truncated]...\n';
@@ -32,8 +32,8 @@ export interface FullSuitePassEvidence {
   fingerprint: string;
   categoryFingerprints: FullSuiteCategoryFingerprints;
   provenanceHeadSha: string;
-  command: string;
-  workingDirectory: string;
+  command: string | null;
+  workingDirectory: string | null;
   startedAt: string;
   endedAt: string;
   durationMs: number;
@@ -185,6 +185,13 @@ function isNullableNonEmptyString(value: unknown): value is string | null {
   return value === null || isNonEmptyString(value);
 }
 
+function isNullableBoundedNonEmptyString(value: unknown): value is string | null {
+  return value === null || (
+    isNonEmptyString(value) &&
+    Buffer.byteLength(value, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT
+  );
+}
+
 function isCategoryFingerprints(value: unknown): value is FullSuiteCategoryFingerprints {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
@@ -203,8 +210,8 @@ function isPassEvidence(
     isNonEmptyString(value.fingerprint) &&
     isCategoryFingerprints(value.categoryFingerprints) &&
     isNonEmptyString(value.provenanceHeadSha) &&
-    isNonEmptyString(value.command) &&
-    isNonEmptyString(value.workingDirectory) &&
+    isNullableBoundedNonEmptyString(value.command) &&
+    isNullableBoundedNonEmptyString(value.workingDirectory) &&
     value.exitCode === 0 &&
     hasValidCommonFields(value)
   );
@@ -228,8 +235,8 @@ function isFailEvidence(
     FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
     isNullableNonEmptyString(value.fingerprint) &&
     isNullableNonEmptyString(value.provenanceHeadSha) &&
-    isNullableNonEmptyString(value.command) &&
-    isNullableNonEmptyString(value.workingDirectory) &&
+    isNullableBoundedNonEmptyString(value.command) &&
+    isNullableBoundedNonEmptyString(value.workingDirectory) &&
     hasValidTermination &&
     hasValidCommonFields(value)
   );
@@ -248,8 +255,16 @@ export async function writeFullSuiteEvidence(
   );
   await mkdir(directory, { recursive: true });
   try {
+    const command = evidence.command === null
+      ? null
+      : sanitizeFullSuiteDiagnosticOutput(evidence.command, secretValues) || null;
+    const workingDirectory = evidence.workingDirectory === null
+      ? null
+      : sanitizeFullSuiteDiagnosticOutput(evidence.workingDirectory, secretValues) || null;
     const persisted: FullSuiteEvidence = {
       ...evidence,
+      command,
+      workingDirectory,
       stdout: sanitizeFullSuiteDiagnosticOutput(evidence.stdout, secretValues),
       stderr: sanitizeFullSuiteDiagnosticOutput(evidence.stderr, secretValues),
     };
