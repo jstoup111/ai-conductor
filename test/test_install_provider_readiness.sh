@@ -149,6 +149,43 @@ else
   exit 1
 fi
 
+# Every non-interactive provider selection, including the implicit default,
+# establishes the common conduct command and both client skill surfaces.
+INSTALL_SURFACE_MATRIX_FAILURE=''
+for INSTALL_SELECTION in claude codex claude,codex omitted; do
+  INSTALL_SURFACE_HOME="$TMP_ROOT/install-surface-$INSTALL_SELECTION"
+  mkdir -p "$INSTALL_SURFACE_HOME"
+
+  case "$INSTALL_SELECTION" in
+    omitted) INSTALL_SURFACE_ARGS=(--allow-worktree-root) ;;
+    *) INSTALL_SURFACE_ARGS=(--providers "$INSTALL_SELECTION" --allow-worktree-root) ;;
+  esac
+
+  set +e
+  INSTALL_SURFACE_OUT=$(cd "$CHECKOUT" && HOME="$INSTALL_SURFACE_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" "${INSTALL_SURFACE_ARGS[@]}" </dev/null 2>&1)
+  INSTALL_SURFACE_CODE=$?
+  set -e
+
+  ( [ "$INSTALL_SURFACE_CODE" -eq 0 ] \
+    && [ -L "$INSTALL_SURFACE_HOME/.local/bin/conduct" ] \
+    && [ -f "$INSTALL_SURFACE_HOME/.claude/skills/conduct/SKILL.md" ] \
+    && [ -f "$INSTALL_SURFACE_HOME/.claude/skills/HARNESS.md" ] \
+    && [ -f "$INSTALL_SURFACE_HOME/.codex/skills/conduct/SKILL.md" ] \
+    && [ -f "$INSTALL_SURFACE_HOME/.codex/skills/HARNESS.md" ] ) || {
+      INSTALL_SURFACE_MATRIX_FAILURE="$INSTALL_SELECTION (exit $INSTALL_SURFACE_CODE)"
+      INSTALL_SURFACE_MATRIX_OUT="$INSTALL_SURFACE_OUT"
+    }
+done
+
+if [ -z "$INSTALL_SURFACE_MATRIX_FAILURE" ]; then
+  echo 'PASS non-interactive install establishes common, Claude, and Codex surfaces for every provider selection'
+else
+  echo 'FAIL non-interactive install establishes common, Claude, and Codex surfaces for every provider selection'
+  printf 'selection: %s\n' "$INSTALL_SURFACE_MATRIX_FAILURE"
+  printf '%s\n' "$INSTALL_SURFACE_MATRIX_OUT"
+  exit 1
+fi
+
 # A trailing comma denotes an empty provider token and must be rejected before
 # the installer reaches any setup action.
 set +e
