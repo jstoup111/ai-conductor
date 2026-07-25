@@ -948,7 +948,10 @@ async function main(): Promise<void> {
   registry.markInitialized();
 
   // Retrieve provider and subscriber from registry with defaults
-  const selectedProviderKey = config?.llm_provider ?? 'claude';
+  const providerSelection = config?.llm_provider ?? 'claude';
+  const selectedProviderKey = Array.isArray(providerSelection)
+    ? providerSelection[0]
+    : providerSelection;
   const provider = registry.get<LLMProvider>(
     'llm_provider',
     selectedProviderKey

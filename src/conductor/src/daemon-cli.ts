@@ -790,7 +790,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   );
   registry.markInitialized();
   subscriber.start();
-  const selectedProviderKey = config?.llm_provider ?? 'claude';
+  const providerSelection = config?.llm_provider ?? 'claude';
+  const selectedProviderKey = Array.isArray(providerSelection)
+    ? providerSelection[0]
+    : providerSelection;
   const provider = registry.get<LLMProvider>('llm_provider', selectedProviderKey);
   const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, log);
   // Resolve the active memory provider once at run start so all steps see the

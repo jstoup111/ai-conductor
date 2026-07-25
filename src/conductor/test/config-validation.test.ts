@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { validateConfig } from '../src/engine/config.js';
+import type { HarnessConfig } from '../src/types/config.js';
+
+describe('LLM provider selection config types', () => {
+  it('types scalar and ordered run selections plus an explicit step selection', () => {
+    const scalar: HarnessConfig = { llm_provider: 'claude' };
+    const ordered: HarnessConfig = {
+      llm_provider: ['claude', 'codex'],
+      steps: { judgement: { llm_provider: 'codex' } },
+    };
+
+    expect([scalar.llm_provider, ordered.llm_provider, ordered.steps?.judgement?.llm_provider])
+      .toEqual(['claude', ['claude', 'codex'], 'codex']);
+  });
+});
 
 describe('engine_refresh_min_interval_seconds config field', () => {
   it('accepts a positive number as-is', () => {
