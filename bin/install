@@ -992,12 +992,26 @@ build_conduct_ts() {
 
 # ─── Install ──────────────────────────────────────────────────────────────────
 
+choose_builtin_provider() {
+  [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
+
+  echo ""
+  info "Built-in provider — choose the CLI you plan to use:"
+  echo "    1) Claude"
+  echo "    2) Codex"
+  echo "    3) Both Claude and Codex"
+  local choice
+  read -r -p "  Choice [1]: " choice || choice=1
+}
+
 install() {
   guard_worktree_root
 
   echo -e "${BOLD}${CYAN}Installing James Stoup Agents Harness${NC}"
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
+
+  choose_builtin_provider
 
   # 1. Ensure directories exist
   mkdir -p "$CLAUDE_SKILLS_DIR" || warn "Could not create $CLAUDE_SKILLS_DIR"
