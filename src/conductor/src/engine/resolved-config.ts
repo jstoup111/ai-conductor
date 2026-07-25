@@ -135,6 +135,16 @@ export interface ResolveOptions {
   tier?: ComplexityTier;
 }
 
+export interface ResolvePreferredProviderNativeInput {
+  step: StepName;
+  phase: Phase;
+  preferredProvider: string;
+  inheritedProvider: string;
+  policy: ProviderModelPolicy;
+  config?: HarnessConfig;
+  options?: ResolveOptions;
+}
+
 /**
  * Resolve every knob for a step.
  *
@@ -237,6 +247,42 @@ export function resolveProviderNativeStepConfig(
     FALLBACK_EFFORT;
 
   return { model, effort };
+}
+
+/**
+ * Resolve provider-native settings after provider selection.
+ *
+ * Phase/default model and effort belong to the inherited (first configured)
+ * provider. An explicitly specialized step therefore keeps only its own
+ * authored native settings (including tier overrides), CLI overrides, and the
+ * selected provider's policy defaults.
+ */
+export function resolvePreferredProviderNativeStepConfig({
+  step,
+  phase,
+  preferredProvider,
+  inheritedProvider,
+  policy,
+  config,
+  options,
+}: ResolvePreferredProviderNativeInput): ResolvedProviderNativeStepConfig {
+  if (preferredProvider === inheritedProvider) {
+    return resolveProviderNativeStepConfig(step, phase, policy, config, options);
+  }
+
+  const stepConfig = config?.steps?.[step];
+  const specializedConfig: HarnessConfig | undefined =
+    stepConfig === undefined
+      ? undefined
+      : { steps: { [step]: stepConfig } };
+
+  return resolveProviderNativeStepConfig(
+    step,
+    phase,
+    policy,
+    specializedConfig,
+    options,
+  );
 }
 
 export function resolveProviderNeutralStepConfig(

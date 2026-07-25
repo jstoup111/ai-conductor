@@ -26,8 +26,33 @@ import type {
   LLMProvider,
   TokenUsage,
 } from '../../src/execution/llm-provider.js';
-import type { HarnessConfig } from '../../src/types/config.js';
-import type { StepName } from '../../src/types/index.js';
+import type { EffortLevel, HarnessConfig } from '../../src/types/config.js';
+import type { ComplexityTier, Phase, StepName } from '../../src/types/index.js';
+
+type ResolvePreferredProviderNativeStepConfig = (input: {
+  step: StepName;
+  phase: Phase;
+  preferredProvider: string;
+  inheritedProvider: string;
+  policy: ProviderModelPolicy;
+  config?: HarnessConfig;
+  options?: {
+    tier?: ComplexityTier;
+    modelCliOverride?: string;
+    effortCliOverride?: EffortLevel;
+  };
+}) => { model: string; effort: EffortLevel };
+
+async function loadPreferredNativeResolver(): Promise<
+  ResolvePreferredProviderNativeStepConfig | undefined
+> {
+  const loaded = await import('../../src/engine/resolved-config.js');
+  return (
+    loaded as typeof loaded & {
+      resolvePreferredProviderNativeStepConfig?: ResolvePreferredProviderNativeStepConfig;
+    }
+  ).resolvePreferredProviderNativeStepConfig;
+}
 
 interface ProviderAttempt {
   provider: string;
@@ -223,6 +248,181 @@ describe('ST-927-1 — configured provider set and validation', () => {
 });
 
 describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => {
+  it.each([
+    {
+      name: 'inherited Claude build review at M',
+      preferredProvider: 'claude',
+      inheritedProvider: 'claude',
+      policy: CLAUDE_MODEL_POLICY,
+      step: 'build_review',
+      phase: 'BUILD',
+      tier: 'M',
+      config: undefined,
+      expected: { model: 'opus', effort: 'high' },
+    },
+    {
+      name: 'specialized Claude plan at L',
+      preferredProvider: 'claude',
+      inheritedProvider: 'codex',
+      policy: CLAUDE_MODEL_POLICY,
+      step: 'plan',
+      phase: 'DECIDE',
+      tier: 'L',
+      config: {
+        defaults: { model: 'gpt-global-default', effort: 'low' },
+        phases: { DECIDE: { model: 'gpt-phase-default', effort: 'low' } },
+      },
+      expected: { model: 'fable', effort: 'xhigh' },
+    },
+    {
+      name: 'inherited Codex build review at M',
+      preferredProvider: 'codex',
+      inheritedProvider: 'codex',
+      policy: CODEX_MODEL_POLICY,
+      step: 'build_review',
+      phase: 'BUILD',
+      tier: 'M',
+      config: undefined,
+      expected: { model: 'gpt-5.6-sol', effort: 'high' },
+    },
+    {
+      name: 'specialized Codex plan at S',
+      preferredProvider: 'codex',
+      inheritedProvider: 'claude',
+      policy: CODEX_MODEL_POLICY,
+      step: 'plan',
+      phase: 'DECIDE',
+      tier: 'S',
+      config: {
+        defaults: { model: 'claude-global-default', effort: 'max' },
+        phases: { DECIDE: { model: 'claude-phase-default', effort: 'max' } },
+      },
+      expected: { model: 'gpt-5.6-terra', effort: 'medium' },
+    },
+  ] satisfies Array<{
+    name: string;
+    preferredProvider: string;
+    inheritedProvider: string;
+    policy: ProviderModelPolicy;
+    step: StepName;
+    phase: Phase;
+    tier: ComplexityTier;
+    config: HarnessConfig | undefined;
+    expected: { model: string; effort: EffortLevel };
+  }>)('resolves $name from the selected provider policy', async (fixture) => {
+    const resolvePreferred = await loadPreferredNativeResolver();
+
+    expect(
+      resolvePreferred?.({
+        step: fixture.step,
+        phase: fixture.phase,
+        preferredProvider: fixture.preferredProvider,
+        inheritedProvider: fixture.inheritedProvider,
+        policy: fixture.policy,
+        config: fixture.config,
+        options: { tier: fixture.tier },
+      }),
+    ).toEqual(fixture.expected);
+  });
+
+  it('preserves an explicit opaque step-local model for a specialized provider', async () => {
+    const resolvePreferred = await loadPreferredNativeResolver();
+
+    expect(
+      resolvePreferred?.({
+        step: 'build_review',
+        phase: 'BUILD',
+        preferredProvider: 'codex',
+        inheritedProvider: 'claude',
+        policy: CODEX_MODEL_POLICY,
+        config: {
+          defaults: { model: 'claude-global-default', effort: 'low' },
+          steps: {
+            build_review: {
+              model: 'opaque-model/verbatim',
+              effort: 'xhigh',
+            },
+          },
+        },
+      }),
+    ).toEqual({ model: 'opaque-model/verbatim', effort: 'xhigh' });
+  });
+
+  it('preserves opaque CLI native overrides for a specialized provider', async () => {
+    const resolvePreferred = await loadPreferredNativeResolver();
+
+    expect(
+      resolvePreferred?.({
+        step: 'plan',
+        phase: 'DECIDE',
+        preferredProvider: 'claude',
+        inheritedProvider: 'codex',
+        policy: CLAUDE_MODEL_POLICY,
+        config: {
+          defaults: { model: 'gpt-global-default', effort: 'low' },
+        },
+        options: {
+          tier: 'L',
+          modelCliOverride: 'cli-model/verbatim',
+          effortCliOverride: 'max',
+        },
+      }),
+    ).toEqual({ model: 'cli-model/verbatim', effort: 'max' });
+  });
+
+  it('retains phase and default native precedence for the inherited provider', async () => {
+    const resolvePreferred = await loadPreferredNativeResolver();
+
+    expect(
+      resolvePreferred?.({
+        step: 'plan',
+        phase: 'DECIDE',
+        preferredProvider: 'claude',
+        inheritedProvider: 'claude',
+        policy: CLAUDE_MODEL_POLICY,
+        config: {
+          defaults: { model: 'inherited-default', effort: 'low' },
+          phases: {
+            DECIDE: { model: 'inherited-phase', effort: 'high' },
+          },
+        },
+      }),
+    ).toEqual({ model: 'inherited-phase', effort: 'high' });
+  });
+
+  it('retains explicit step-tier native settings for a specialized provider', async () => {
+    const resolvePreferred = await loadPreferredNativeResolver();
+
+    expect(
+      resolvePreferred?.({
+        step: 'plan',
+        phase: 'DECIDE',
+        preferredProvider: 'codex',
+        inheritedProvider: 'claude',
+        policy: CODEX_MODEL_POLICY,
+        config: {
+          defaults: { model: 'inherited-default', effort: 'low' },
+          phases: {
+            DECIDE: { model: 'inherited-phase', effort: 'low' },
+          },
+          steps: {
+            plan: {
+              model: 'explicit-step',
+              effort: 'high',
+              by_tier: {
+                L: {
+                  model: 'opaque-tier-model/verbatim',
+                  effort: 'max',
+                },
+              },
+            },
+          },
+        },
+        options: { tier: 'L' },
+      }),
+    ).toEqual({ model: 'opaque-tier-model/verbatim', effort: 'max' });
+  });
+
   it('inherits the first provider, honors explicit specialization, and never infers a judgment provider', async () => {
     const execute = await loadExecuteProviderCandidates();
     const claude = scriptedProvider(() => ok('claude'));
