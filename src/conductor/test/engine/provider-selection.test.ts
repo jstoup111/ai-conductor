@@ -62,6 +62,61 @@ describe.each([
   });
 });
 
+describe('resolveProviderCandidates hardening', () => {
+  it('stably de-duplicates preferred and configured provider keys', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+
+    expect(
+      resolveProviderCandidates?.({
+        configuredProviders: ['claude', 'codex', 'claude', 'custom', 'codex'],
+        stepSelection: ['codex', 'codex'],
+      }),
+    ).toEqual(['codex', 'claude', 'custom']);
+  });
+
+  it('does not infer a provider from the step role', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const inputWithRoleContext = {
+      configuredProviders: ['claude', 'codex'],
+      stepName: 'judgement',
+    };
+
+    expect(resolveProviderCandidates?.(inputWithRoleContext)).toEqual(['claude', 'codex']);
+  });
+
+  it('does not mutate provider inputs or leak an explicit choice into the next step', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const configuredProviders = ['claude', 'codex'];
+    const explicitSelection: ProviderSelection = ['codex'];
+    Object.freeze(configuredProviders);
+    Object.freeze(explicitSelection);
+
+    const explicit = resolveProviderCandidates?.({
+      configuredProviders,
+      stepSelection: explicitSelection,
+    });
+    const inherited = resolveProviderCandidates?.({ configuredProviders });
+
+    expect({ explicit, inherited, configuredProviders, explicitSelection }).toEqual({
+      explicit: ['codex', 'claude'],
+      inherited: ['claude', 'codex'],
+      configuredProviders: ['claude', 'codex'],
+      explicitSelection: ['codex'],
+    });
+  });
+
+  it('falls back from an outside-list explicit provider only through the run list', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+    const inputWithRegistryContext = {
+      configuredProviders: ['claude'],
+      stepSelection: 'codex',
+      registeredProviders: ['claude', 'codex', 'custom'],
+    };
+
+    expect(resolveProviderCandidates?.(inputWithRegistryContext)).toEqual(['codex', 'claude']);
+  });
+});
+
 describe('validateRegisteredProviderSelections', () => {
   it('exposes the post-registration validation seam', async () => {
     const validateRegistered = await loadRegisteredSelectionValidator();

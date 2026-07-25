@@ -14,13 +14,13 @@ export function resolveProviderCandidates({
   configuredProviders: readonly string[];
   stepSelection?: ProviderSelection;
 }): string[] {
-  if (stepSelection === undefined) return [...configuredProviders];
+  const selectedProviders =
+    stepSelection === undefined ? [] : normalizeProviderSelection(stepSelection);
+  return stableUniqueProviders([...selectedProviders, ...configuredProviders]);
+}
 
-  const selectedProviders = normalizeProviderSelection(stepSelection);
-  return [
-    ...selectedProviders,
-    ...configuredProviders.filter((provider) => !selectedProviders.includes(provider)),
-  ];
+function stableUniqueProviders(providers: readonly string[]): string[] {
+  return [...new Set(providers)];
 }
 
 export function validateRegisteredProviderSelections({
