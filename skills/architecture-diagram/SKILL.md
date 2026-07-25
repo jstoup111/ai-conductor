@@ -127,8 +127,8 @@ Present all diagrams to the engineer for validation before proceeding.
 > **Render diagrams for review.** When a mermaid renderer is configured (set at
 > install, stored as `mermaid_renderer` in `~/.ai-conductor/config.yml`), the
 > engineer should review the diagrams as visuals, not raw Mermaid. Under
-> the configured harness this happens automatically at the approval gate. Otherwise use
-> the repository's configured diagram-rendering action to render and open them. If no
+> `conduct-ts` this happens automatically at the approval gate. Otherwise run
+> `conduct render-diagrams .docs/architecture/*.md` to render and open them. If no
 > renderer is configured the diagrams fall back to raw Markdown — never a blocker.
 
 ### 2. Plan Update
