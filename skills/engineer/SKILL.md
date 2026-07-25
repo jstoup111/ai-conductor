@@ -20,7 +20,7 @@ operator idea ─▶ [ENGINEER: route → DECIDE → spec PR → nudge]      (th
                  [DAEMON: build the merged spec]                    (separate, independent loop)
 ```
 
-**How it starts.** The operator runs `conduct-ts engineer` (no subcommand) in a terminal; that launches
+**How it starts.** The operator runs the configured harness engineer launcher (no subcommand) in a terminal; that launches
 an interactive `claude /engineer` session and drops them here. Inside an existing session, the
 operator invokes `/engineer` directly. Either way, this skill is now driving.
 
@@ -32,7 +32,7 @@ waits on, or owns the daemon.
 **Why this is a host-agent skill and not a CLI REPL (ADR-008).** The loop must run your *real*
 skills, agent personas, and hooks (`/explore`, `/prd`, `/stories`, `/plan` with their clarity loops).
 Those exist only inside a live Claude Code session. A Node REPL or a `claude -p` subprocess cannot
-run them interactively — so the engineer **is** the host agent, calling deterministic conduct-ts
+run them interactively — so the engineer **is** the host agent, calling deterministic harness
 primitives for the mechanical parts (registry read, path-guarded commit, PR open, daemon nudge)
 and running the DECIDE skills directly in chat for the reasoning parts.
 
@@ -51,7 +51,7 @@ and running the DECIDE skills directly in chat for the reasoning parts.
 
 ## The Loop
 
-**Handle exactly ONE idea per session, then end.** The launcher (`conduct-ts engineer`) relaunches you
+**Handle exactly ONE idea per session, then end.** The configured harness launcher relaunches you
 in a **fresh session with clean context** for the next idea — so do NOT loop over multiple ideas
 in-chat (that bloats and degrades context). Durable state (registry, lessons, processed markers)
 is file-backed, so the next fresh session picks up everything that matters. For this one idea:
@@ -59,17 +59,16 @@ is file-backed, so the next fresh session picks up everything that matters. For 
 ### 1. Capture the idea
 The idea can arrive from **three** sources — resolve them in this order:
 
-1. **GitHub intake.** First run `conduct-ts engineer claim`. It dequeues the oldest pending intake
+1. **GitHub intake.** First run the configured harness intake-claim action. It dequeues the oldest pending intake
    idea and prints JSON. On `{ "kind": "claim", "text": "...", "sourceRef": "owner/repo#N" }`, use
    `text` as the idea and **carry `sourceRef`** — you'll pass it back in steps 3–5 so the originating
    issue gets commented + labelled. On `{ "kind": "claim", "empty": true }`, fall through.
-2. **Launch argument / chat.** If the launch prompt already carried an idea (`conduct-ts engineer
-   "<idea>"` or `--idea "<idea>"`), use it. Otherwise take the operator's raw idea from the chat.
+2. **Launch argument / chat.** If the launcher already carried an idea, use it. Otherwise take the operator's raw idea from the chat.
 
 Empty/whitespace from all three → re-prompt, do not proceed. There is **no `sourceRef`** for ideas
 that came from the CLI arg or chat — omit `--source-ref` in steps 3–5 for those.
 
-> The bare `conduct-ts engineer` launcher pre-polls GitHub issues before this session starts, so a
+> The bare harness engineer launcher pre-polls GitHub issues before this session starts, so a
 > `claim` here returns work captured at launch. You do not poll yourself — just claim.
 
 **Hypothesis reframing for embedded solution content.** If the captured idea embeds solution content
@@ -91,19 +90,19 @@ problem or outcomes:
 - Confirm the WHAT with the operator before proceeding to step 2 (routing).
 
 ### 2. Route to a target repo
-Read the registry: `conduct-ts engineer projects` (JSON: `{name, path, description, tags}` per project).
+Read the registry through the configured harness project-list action (JSON: `{name, path, description, tags}` per project).
 Reason **in chat** about the best-fit project — this is your own judgment over the registry, not a
 spawned `claude`. Present the proposed target and your rationale, then **confirm with the operator**.
 
 - **Redirect:** if the operator names a different project, switch to it. The originally-proposed
   repo is left byte-for-byte untouched.
-- **No fit:** offer to scaffold a new project (`conduct-ts create <path>`). On decline, drop the idea
+- **No fit:** offer to scaffold a new project through the configured harness project-creation action. On decline, drop the idea
   with zero side effects. On accept, create it, then continue with it as the target.
 
 ### 3. Create the per-idea worktree, then run the REAL DECIDE skills inside it
 **Author in an isolated per-idea worktree — never the target's primary checkout.** First create it:
 
-`conduct-ts engineer worktree --project <name> --idea "<idea>" [--source-ref <ref>]` → prints JSON
+The configured harness engineer-worktree action accepts project, idea, and optional source-ref inputs and prints JSON
 `{ slug, branch, worktreePath, reconcile }`. For **intake-claimed ideas**, pass the `sourceRef`
 carried from step 1 as `--source-ref <ref>` — the claim record it resolves lets a later `land`
 auto-resolve the intake body without having to re-thread it by hand. `--source-ref` can be omitted
@@ -148,7 +147,7 @@ hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the op
 step, loop within that skill until accepted or abandon the idea — never carry a DRAFT forward.
 
 ### 4. Land the already-authored spec — from within the worktree
-`conduct-ts engineer land --project <name> --idea "<idea>" --worktree <worktreePath>` (the
+The configured harness engineer-land action accepts project, idea, and worktree inputs (the
 `worktreePath` from step 3; append `--source-ref <ref>` when the idea came from GitHub intake — this
 comments "Routed to `<repo>`" on the originating issue, commits a `.docs/intake/<slug>.md` marker
 carrying `Source-Ref: <ref>` so the issue origin travels with the spec, and advances the intake
@@ -168,7 +167,7 @@ On failure it leaves the worktree in place for inspection (**keep-on-failure**).
 `{ slug, branch, repoPath }` — pass `branch` and the same `--worktree` to step 5.
 
 ### 5. Open the spec PR + nudge the daemon — remove the worktree on success
-`conduct-ts engineer handoff --project <name> --branch <branch> --worktree <worktreePath>` (the
+The configured harness engineer-handoff action accepts project, branch, and worktree inputs (the
 `branch` from step 4 and the same `worktreePath`; append `--source-ref <ref>` when the idea came from
 GitHub intake — on a real PR this comments the PR URL on the originating issue, adds a non-closing
 `Refs <ref>` to the spec PR body (links the issue without closing it; the daemon's implementation PR

@@ -34,7 +34,7 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
 - Display the skip reason to the user, then **record it via the CLI** — this is the sole
   way the step is marked done; there is no hand-written marker path:
   ```
-  conduct-ts manual-test-record --skip --reason "<reason>" --pipeline-dir /abs/path/to/.pipeline
+  <harness-cli> manual-test-record --skip --reason "<reason>" --pipeline-dir /abs/path/to/.pipeline
   ```
   Use the absolute worktree `.pipeline` path supplied in the step's system prompt (see the
   "Daemon mode" note under Step 5 for why it must be absolute, not relative).
@@ -122,7 +122,7 @@ Record the run by piping (or pointing at) the results content and the absolute w
 `.pipeline` path supplied in the step's system prompt:
 
 ```
-conduct-ts manual-test-record --results - --pipeline-dir /abs/path/to/.pipeline <<'EOF'
+<harness-cli> manual-test-record --results - --pipeline-dir /abs/path/to/.pipeline <<'EOF'
 <results table + bugs section, in the format below>
 EOF
 ```
@@ -130,7 +130,7 @@ EOF
 or, if the results were written to a file first:
 
 ```
-conduct-ts manual-test-record --results /path/to/results.md --pipeline-dir /abs/path/to/.pipeline
+<harness-cli> manual-test-record --results /path/to/results.md --pipeline-dir /abs/path/to/.pipeline
 ```
 
 `manual-test-record` handles the append semantics (new `## Attempt N — <ISO timestamp>`
@@ -239,7 +239,7 @@ docker compose down
 - [ ] Every story (happy + negative paths) tested manually
 - [ ] Results displayed to user
 - [ ] Every exit path (Step 0 SKIP or Step 5 real-run PASS/FAIL) ended by actually invoking
-      `conduct-ts manual-test-record` (`--skip --reason ...` or `--results ...`) against the
+      the harness `manual-test-record` action (`--skip --reason ...` or `--results ...`) against the
       absolute worktree `.pipeline` path — not a hand-written or fabricated marker
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes

@@ -9,16 +9,16 @@ requires: [".docs/plans/ with implementation plan"]
 
 ## Purpose
 
-Orchestrates execution of an implementation plan through quality-gated stages. The conductor
-(`bin/conduct`) drives the task loop — it parses the plan, iterates tasks, and sends one prompt
+Orchestrates execution of an implementation plan through quality-gated stages. The configured
+harness runner drives the task loop — it parses the plan, iterates tasks, and sends one prompt
 per task. Claude orchestrates each task by dispatching subagents for implementation. Subagent
 context is isolated and discarded after completion, keeping the orchestrator's context lean.
 
 ## Execution Model
 
 ```
-bin/conduct (bash)          Claude (orchestrator)         Subagent (implementer)
-─────────────────          ─────────────────────         ──────────────────────
+Harness runner              Claude (orchestrator)         Subagent (implementer)
+──────────────              ─────────────────────         ──────────────────────
 Parse plan, extract task →  Receive task context    →     Full TDD cycle
                             Dispatch subagent       →     RED → DOMAIN → GREEN
                             Verify result           ←     → DOMAIN → COMMIT
@@ -95,7 +95,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
                   only routes the handoff to `build_review`, which is the actual completion
                   authority. If state ever needs manual correction (e.g. after a crash),
-                  `conduct-ts task start/done` remain available as operator/recovery commands,
+                  harness task-status recovery actions remain available for operators,
                   but are not part of the normal per-task flow.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
@@ -114,7 +114,7 @@ listed in the task's `**Dependencies:**` field are marked as completed in
 **Design-conformance check (step 1):** Before dispatching the subagent, confirm the task builds
 toward — not against — the governing APPROVED design (the relevant ADR in `.docs/decisions/`
 and the FR in the approved PRD). This is the BUILD-phase instance of the harness-wide
-**design-conformance-before-effort** convention (HARNESS.md → Key Conventions). If a task would
+**design-conformance-before-effort** convention in the repository harness documentation. If a task would
 implement or harden a code path that a current APPROVED ADR/PRD supersedes or forbids, do NOT
 dispatch it — report BLOCKED and escalate as a conformance finding. Writing code slated for
 deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
@@ -175,7 +175,7 @@ section describes dormant machinery, not a behavior change to existing projects.
 
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
 session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
-`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
+harness task-status commands as part of normal per-task flow. The PreToolUse/PostToolUse session
 hooks stamp `in_progress` on dispatch and clear `.pipeline/current-task` on return, keyed off the
 dispatch prompt's line-1 `Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
 CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
@@ -422,7 +422,7 @@ This contract is mandatory. Without the marker, the conductor reads
 is done — silently cascading through `manual-test` / `retro` / `finish`
 to mark the entire feature complete while the user's actual blocker is
 still open. The build-completion predicate in
-`src/conductor/src/engine/artifacts.ts` (`build` predicate) checks for the
+the build-completion predicate checks for the
 halt marker on every attempt; a marker present at gate-check time fails
 the gate.
 
