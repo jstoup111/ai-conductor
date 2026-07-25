@@ -95,7 +95,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
                   only routes the handoff to `build_review`, which is the actual completion
                   authority. If state ever needs manual correction (e.g. after a crash),
-                  `conduct-ts task start/done` remain available as operator/recovery commands,
+                  harness task-status recovery actions remain available for operators,
                   but are not part of the normal per-task flow.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
@@ -175,7 +175,7 @@ section describes dormant machinery, not a behavior change to existing projects.
 
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
 session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
-`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
+harness task-status commands as part of normal per-task flow. The PreToolUse/PostToolUse session
 hooks stamp `in_progress` on dispatch and clear `.pipeline/current-task` on return, keyed off the
 dispatch prompt's line-1 `Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
 CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
