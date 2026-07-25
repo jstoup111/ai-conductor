@@ -239,6 +239,80 @@ describe('engine/artifacts', () => {
         },
       ]);
     });
+
+    it('fails closed when configured completion evidence is not fresh and verifiable', async () => {
+      const step = 'maintain-documentation' as StepName;
+      const configFor = (completionArtifact: string): HarnessConfig => ({
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: completionArtifact,
+          },
+        },
+      });
+      const staleMarker = '.pipeline/stale-documentation-pass';
+      const noFloorMarker = '.pipeline/no-floor-documentation-pass';
+      const blockedMarker = '.pipeline/blocked-documentation-pass';
+      const review = '.pipeline/maintain-documentation-review.md';
+      const attemptStartedAt = Date.now();
+      const staleTime = new Date(attemptStartedAt - 60_000);
+
+      await createFile(staleMarker, 'PASS\n');
+      await utimes(join(dir, staleMarker), staleTime, staleTime);
+      await createFile(noFloorMarker, 'PASS\n');
+      await createFile(blockedMarker, 'PASS\n');
+      await utimes(join(dir, blockedMarker), staleTime, staleTime);
+      await createFile(review, '# Documentation review\n\n**Verdict:** BLOCKED\n');
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config: configFor('.pipeline/missing-documentation-pass'),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(staleMarker),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(noFloorMarker),
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(blockedMarker),
+          attemptStartedAt,
+        }),
+      ]);
+
+      expect({
+        outcomes: results.map(({ done, reason }) => ({ done, reason })),
+        review: await readFile(join(dir, review), 'utf-8'),
+      }).toEqual({
+        outcomes: [
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/missing-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/stale-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/no-floor-documentation-pass" cannot be verified without an attempt or session freshness floor',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/blocked-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+        ],
+        review: '# Documentation review\n\n**Verdict:** BLOCKED\n',
+      });
+    });
   });
 
   describe('checkStepCompletion: acceptance_specs (monorepo + config globs)', () => {

@@ -2942,20 +2942,36 @@ export async function checkStepCompletion(
   if (completionArtifact) {
     const artifact = join(dir, completionArtifact);
     const floor = verdictFreshnessFloor(ctx);
-    const comparand = verdictFreshnessComparand(ctx);
-    if (await fileIsFreshSinceSession(artifact, comparand)) {
-      const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
+    if (floor === undefined) {
       return {
-        done: true,
-        verdictFreshness: {
-          artifact,
-          mtimeMs,
-          floorMs: floor,
-          floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
-          fresh: true,
-        },
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" cannot be verified without an attempt or session freshness floor`,
       };
     }
+    const comparand = verdictFreshnessComparand(ctx);
+    const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
+    if (mtimeMs === undefined) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is missing — ${step} must write it after a passing review`,
+      };
+    }
+    if (mtimeMs < comparand!) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is stale — ${step} must rewrite it during this attempt`,
+      };
+    }
+    return {
+      done: true,
+      verdictFreshness: {
+        artifact,
+        mtimeMs,
+        floorMs: floor,
+        floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+        fresh: true,
+      },
+    };
   }
 
   const extra = extraArtifactGlobs(step, ctx.config);
