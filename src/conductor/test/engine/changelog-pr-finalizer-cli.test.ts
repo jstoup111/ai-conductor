@@ -228,6 +228,11 @@ describe('finalizeChangelogPr', () => {
       ['fragment suffix', 'https://github.com/org/repo/pull/42#fake'],
       ['userinfo', 'https://user@github.com/org/repo/pull/42'],
       ['port', 'https://github.com:443/org/repo/pull/42'],
+      ['dot repository segment', 'https://github.com/octo/./pull/42'],
+      ['dot-dot repository segment', 'https://github.com/octo/../pull/42'],
+      ['encoded dot repository segment', 'https://github.com/octo/%2e/pull/42'],
+      ['encoded dot-dot repository segment', 'https://github.com/octo/%2E%2E/pull/42'],
+      ['mixed encoded dot-dot repository segment', 'https://github.com/octo/.%2e/pull/42'],
     ] as const;
     const outcomes = [];
 

@@ -41,11 +41,29 @@ export async function finalizeChangelogPr(
     rm: (path) => rm(path, { force: true }).then(() => undefined),
   },
 ): Promise<ChangelogPrFinalizationState> {
+  let parsedPrUrl: URL;
+  try {
+    parsedPrUrl = new URL(prUrl);
+  } catch {
+    throw new Error('invalid canonical GitHub pull request URL');
+  }
   const match =
-    /^https:\/\/github\.com\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9._-]+\/pull\/([1-9]\d*)$/.exec(
-      prUrl,
+    /^\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.{1,2}\/)[A-Za-z0-9._-]+\/pull\/([1-9]\d*)$/.exec(
+      parsedPrUrl.pathname,
     );
-  if (match === null) throw new Error('invalid canonical GitHub pull request URL');
+  if (
+    parsedPrUrl.protocol !== 'https:' ||
+    parsedPrUrl.hostname !== 'github.com' ||
+    parsedPrUrl.username !== '' ||
+    parsedPrUrl.password !== '' ||
+    parsedPrUrl.port !== '' ||
+    parsedPrUrl.search !== '' ||
+    parsedPrUrl.hash !== '' ||
+    parsedPrUrl.href !== prUrl ||
+    match === null
+  ) {
+    throw new Error('invalid canonical GitHub pull request URL');
+  }
 
   const changelog = await runners.readFile(changelogPath);
   const tokenCount = changelog.split(IMPLEMENTATION_PR_TOKEN).length - 1;
