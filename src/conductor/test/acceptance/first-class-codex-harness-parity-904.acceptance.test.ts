@@ -27,6 +27,10 @@ import {
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -107,6 +111,7 @@ function runnerFor(
   configuredProviders: readonly string[],
   claude: LLMProvider,
   codex: LLMProvider,
+  projectRoot = process.cwd(),
 ) {
   const sessions = new ProviderSessionStore({
     createSessionId: () => `session-${crypto.randomUUID()}`,
@@ -115,7 +120,7 @@ function runnerFor(
   const runner = new DefaultStepRunner(
     captured.provider,
     'captured-session',
-    process.cwd(),
+    projectRoot,
     {
       mode: 'auto',
       configuredProviders,
@@ -150,6 +155,105 @@ describe('ST-904-9/ST-904-10 — daemon-selected Codex lifecycle dispatch', () =
     ]);
     expect(claude.calls).toEqual([]);
     expect(captured.calls).toEqual([]);
+  });
+
+  it('advances from Codex acceptance specs to build only after RED evidence satisfies the gate', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'codex-parity-progression-'));
+    temporaryDirectories.push(directory);
+    const pipelineDirectory = join(directory, '.pipeline');
+    const stateFilePath = join(pipelineDirectory, 'conduct-state.json');
+    const targetSpec = 'test/acceptance/feature.acceptance.test.ts';
+    await mkdir(pipelineDirectory, { recursive: true });
+    await mkdir(join(directory, 'test/acceptance'), { recursive: true });
+    await writeFile(join(directory, targetSpec), 'acceptance spec', 'utf8');
+
+    const seededState: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'acceptance_specs') break;
+      seededState[step.name] = 'done';
+    }
+    seededState.complexity_tier = 'M';
+    seededState.feature_desc = 'codex-gate-progression-fixture';
+    seededState.track = 'technical';
+    await writeState(
+      stateFilePath,
+      seededState as unknown as ConductState,
+    );
+
+    const claude = provider();
+    const codex = provider(({ prompt }) =>
+      prompt === '$pipeline'
+        ? {
+            success: false,
+            output: 'bounded build failure',
+            exitCode: 1,
+          }
+        : successful(),
+    );
+    const { runner, captured } = runnerFor(
+      ['codex', 'claude'],
+      claude.provider,
+      codex.provider,
+      directory,
+    );
+    const makeConductor = (resume = false) =>
+      new Conductor({
+        stateFilePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: directory,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        ...(resume ? { resume: true } : { fromStep: 'acceptance_specs' }),
+      });
+
+    await makeConductor().run();
+    const stateBeforeEvidence = await readState(stateFilePath);
+    const promptsBeforeEvidence = codex.calls.map(({ prompt }) => prompt);
+    codex.calls.length = 0;
+    claude.calls.length = 0;
+    captured.calls.length = 0;
+
+    const command = `npm test -- --run ${targetSpec}`;
+    await writeFile(
+      join(pipelineDirectory, 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command,
+        targetSpecs: [targetSpec],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        summary: '1 failed',
+      }),
+      'utf8',
+    );
+
+    await makeConductor(true).run();
+    const stateAfterEvidence = await readState(stateFilePath);
+
+    expect({
+      acceptanceBeforeEvidence: stateBeforeEvidence.ok
+        ? stateBeforeEvidence.value.acceptance_specs
+        : 'state-read-failed',
+      promptsBeforeEvidence,
+      acceptanceAfterEvidence: stateAfterEvidence.ok
+        ? stateAfterEvidence.value.acceptance_specs
+        : 'state-read-failed',
+      promptsAfterEvidence: codex.calls.map(({ prompt }) => prompt),
+      claudeCalls: claude.calls,
+      capturedCalls: captured.calls,
+    }).toEqual({
+      acceptanceBeforeEvidence: 'failed',
+      promptsBeforeEvidence: ['$writing-system-tests'],
+      acceptanceAfterEvidence: 'done',
+      promptsAfterEvidence: ['$writing-system-tests', '$pipeline'],
+      claudeCalls: [],
+      capturedCalls: [],
+    });
   });
 
   it.each([
