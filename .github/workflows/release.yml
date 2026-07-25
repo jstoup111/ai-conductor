@@ -20,6 +20,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Classify pending release content
+        id: release_state
+        run: |
+          bash .github/scripts/release-unreleased-state.sh >> "$GITHUB_OUTPUT"
+
       - name: Read VERSION
         id: version
         run: |
@@ -46,28 +51,8 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify [Unreleased] has content
-        if: steps.tag_check.outputs.skip == 'false'
-        run: |
-          if [ ! -f CHANGELOG.md ]; then
-            echo "CHANGELOG.md missing" >&2
-            exit 1
-          fi
-          # Extract content between ## [Unreleased] and the next ## heading.
-          block=$(awk '
-            /^## \[Unreleased\]/ { inblock=1; next }
-            inblock && /^## / { exit }
-            inblock { print }
-          ' CHANGELOG.md)
-          # Strip whitespace and section headers (### Added etc.) to check for real content.
-          stripped=$(printf '%s\n' "$block" | sed -E '/^[[:space:]]*$/d; /^###[[:space:]]/d')
-          if [ -z "$stripped" ]; then
-            echo "CHANGELOG.md [Unreleased] block is empty — every PR must add an entry." >&2
-            exit 1
-          fi
-
       - name: Rewrite CHANGELOG and bump VERSION
-        if: steps.tag_check.outputs.skip == 'false'
+        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
         id: rewrite
         run: |
           version="${{ steps.version.outputs.version }}"
@@ -106,7 +91,7 @@ jobs:
           echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
 
       - name: Commit, tag, push
-        if: steps.tag_check.outputs.skip == 'false'
+        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -119,7 +104,7 @@ jobs:
           git push origin "${TAG}"
 
       - name: Create GitHub Release
-        if: steps.tag_check.outputs.skip == 'false'
+        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
