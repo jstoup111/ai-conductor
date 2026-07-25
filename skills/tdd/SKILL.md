@@ -28,7 +28,7 @@ only when they assert generated or runtime behavior (for example OpenAPI contrac
 ```
 RED → DOMAIN → GREEN → DOMAIN → COMMIT
  │       │        │        │        │
- │       │        │        │        └─ Full suite green, clean tree, commit
+ │       │        │        │        └─ Scoped affected-test union green, clean tree, commit
  │       │        │        └─ Review implementation for domain integrity
  │       │        └─ Implement minimally (scope check: ~20 lines, 1 file, 1 function)
  │       └─ Review test for primitive obsession, invalid states

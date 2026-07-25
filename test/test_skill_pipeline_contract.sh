@@ -133,7 +133,7 @@ for relative_path in "${SCOPE_CONTRACT_FILES[@]}"; do
     fail "${relative_path} must default intermediate verification to affected tests"
   fi
 
-  if grep -qiE 'run the full test suite|full test suite passes|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)' "$scope_file"; then
+  if grep -qiE 'run the full test suite|full test suite passes|full suite green|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)' "$scope_file"; then
     fail "${relative_path} still mandates an unconditional aggregate run"
   else
     pass "${relative_path} has no unconditional aggregate-run mandate"

@@ -318,7 +318,7 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
     for (const [path, pattern, contents] of files) {
       expect(contents, path).toMatch(pattern);
       expect(contents, path).not.toMatch(
-        /run the full test suite|full test suite passes|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)/i,
+        /run the full test suite|full test suite passes|full suite green|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)/i,
       );
     }
 
