@@ -2609,7 +2609,32 @@ export class Conductor {
                 .filter((i) => i !== -1);
               if (authFailureIdxs.length === 0) break;
 
-              const park = await this.parkOnAuthFailure();
+              // A group branch carries the provider-owned readiness evidence
+              // from its failed dispatch. Park and retry only the members
+              // that failed against that exact provider/source pair; a
+              // completed sibling (or a member waiting on another source)
+              // must never be redispatched as an implicit fallback.
+              const failedOutcome = outcomes[authFailureIdxs[0]!]!;
+              const authentication =
+                failedOutcome.kind === 'no-verdict'
+                  ? failedOutcome.authentication
+                  : undefined;
+              const retryIdxs = authentication
+                ? authFailureIdxs.filter((idx) => {
+                    const outcome = outcomes[idx]!;
+                    const candidate =
+                      outcome.kind === 'no-verdict' ? outcome.authentication : undefined;
+                    return (
+                      candidate?.provider === authentication.provider &&
+                      candidate.source === authentication.source
+                    );
+                  })
+                : authFailureIdxs;
+              const park = await this.parkOnAuthFailure(
+                authentication
+                  ? { actualProvider: authentication.provider, authentication }
+                  : undefined,
+              );
               if (park.timedOut) {
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
@@ -2631,11 +2656,11 @@ export class Conductor {
                 return;
               }
 
-              const retryMembers = authFailureIdxs.map((i) => membership.dispatchable[i]!);
+              const retryMembers = retryIdxs.map((i) => membership.dispatchable[i]!);
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
-              authFailureIdxs.forEach((idx, k) => {
+              retryIdxs.forEach((idx, k) => {
                 outcomes[idx] = retryOutcomes[k]!;
               });
             }

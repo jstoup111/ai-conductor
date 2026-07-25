@@ -4896,6 +4896,84 @@ describe('engine/conductor', () => {
       };
     }
 
+    it('rechecks the failed Codex source and redispatches only auth-failed group members', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const readiness = vi
+        .fn()
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: {
+            invoke: vi.fn(),
+            invokeInteractive: vi.fn(async () => {}),
+            readiness,
+          },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          calls.push({ step, attempt: options?.attempt });
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          const priorCalls = calls.filter((call) => call.step === step).length;
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+            return { success: true };
+          }
+          if (step === 'prd_audit' && priorCalls === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+            };
+          }
+          if (step === 'architecture_review_as_built' && priorCalls === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'missing' },
+            };
+          }
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 1,
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      });
+
+      await conductor.run();
+
+      expect(readiness).toHaveBeenCalledTimes(2);
+      expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
+      expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
+      expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+    });
+
     it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
