@@ -936,7 +936,6 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   async runInteractive(step: StepName): Promise<void> {
-    const resolved = this.resolvedConfigFor(step);
     const prompt = `Fix issues from the failed ${step} step, then exit when done.`;
     if (this.providerRuntimes && this.sessionStore) {
       await this.runProviderAwareNormal(
@@ -950,6 +949,7 @@ export class DefaultStepRunner implements StepRunner {
       );
       return;
     }
+    const resolved = this.resolvedConfigFor(step);
     await this.provider.invokeInteractive({
       prompt,
       sessionId: this.sessionId,
