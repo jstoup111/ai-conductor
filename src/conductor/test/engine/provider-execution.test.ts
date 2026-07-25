@@ -59,6 +59,12 @@ type ExecuteProviderCandidates = (input: {
     transition: ProviderTransitionWarning,
   ) => void;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  optionsForCandidate?: (
+    candidateKey: ProviderRuntime['key'],
+  ) => Omit<
+    InvokeOptions,
+    'sessionId' | 'resume' | 'model' | 'effort'
+  >;
 }) => Promise<PreferredExecutionResult>;
 
 function runtime(
@@ -293,6 +299,59 @@ describe('executeProviderCandidates', () => {
           },
         ],
       },
+    });
+  });
+
+  it('resolves invocation options for the actual provider candidate', async () => {
+    const candidateKeys: Array<ProviderRuntime['key']> = [];
+    const codexInvoke = vi.fn(
+      async (_options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: 'candidate-local prompt used',
+        exitCode: 0,
+      }),
+    );
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+
+    await execute?.({
+      step: 'build',
+      configuredProviders: ['claude', 'codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', {
+          invoke: codexInvoke,
+          invokeInteractive: vi.fn(async (): Promise<void> => {}),
+        }),
+      ]),
+      sessions: new ProviderSessionScope(
+        vi.fn().mockReturnValue('candidate-local-session'),
+      ),
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      options: {
+        prompt: 'Static prompt.',
+        cwd: '/workspace/feature',
+      },
+      optionsForCandidate: (candidateKey) => {
+        candidateKeys.push(candidateKey);
+        return {
+          prompt: `Prompt for ${candidateKey}.`,
+          cwd: '/workspace/feature',
+        };
+      },
+    });
+
+    expect({
+      candidateKeys,
+      prompts: codexInvoke.mock.calls.map(([options]) => options.prompt),
+    }).toEqual({
+      candidateKeys: ['codex'],
+      prompts: ['Prompt for codex.'],
     });
   });
 
