@@ -433,7 +433,18 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
 
     expect(finish).toMatch(/conduct-ts test-suite/);
     expect(finish).toMatch(/REUSED|missing|stale/i);
-    expect(pr).not.toMatch(/(?:npm test|conduct-ts test-suite|full (?:test )?suite)/i);
+    const rawAggregateCommand = /(?:\bnpm(?: run)? test\b|\bpnpm(?: run)? test\b|\byarn(?: run)? test\b|\bbun test\b|\bnpx vitest run\b|\bgo test\b|\bcargo test\b|bundle exec rspec\b|\bpytest\b|\bmvn test\b|\bgradle test\b|\bdotnet test\b|\bmix test\b|conduct-ts test-suite|full (?:test )?suite)/i;
+    for (const command of ['npx vitest run', 'npm run test', 'go test ./...']) {
+      expect(command, `raw aggregate guard: ${command}`).toMatch(rawAggregateCommand);
+    }
+    const prePushSection = pr.slice(
+      pr.indexOf('### 5. Pre-Push Verification'),
+      pr.indexOf('### 6. Create or Update the PR'),
+    );
+    expect(prePushSection).not.toMatch(rawAggregateCommand);
+    expect(pr).not.toMatch(
+      /(?:\bnpm(?: run)? test\b|\bnpx vitest run\b|\bgo test\b|conduct-ts test-suite|full (?:test )?suite)/i,
+    );
   });
 
   it('preserves independent CI, autoresolve, and CI-repair suite execution', async () => {

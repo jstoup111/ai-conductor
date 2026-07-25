@@ -134,9 +134,23 @@ PR_PRE_PUSH_SECTION="$(awk '
   /^### 6\. Create or Update the PR/ { in_section = 0 }
   in_section
 ' "$PR_SKILL_FILE")"
+PR_AGGREGATE_COMMAND_PATTERN='npm( run)? test|pnpm( run)? test|yarn( run)? test|bun test|npx vitest run|go test|cargo test|bundle exec rspec|pytest|mvn test|gradle test|dotnet test|mix test|conduct-ts test-suite|full (test )?suite'
+
+pr_guard_covers_raw_commands=true
+for raw_command in 'npx vitest run' 'npm run test' 'go test ./...'; do
+  if ! grep -qiE "$PR_AGGREGATE_COMMAND_PATTERN" <<<"$raw_command"; then
+    pr_guard_covers_raw_commands=false
+  fi
+done
+
+if [ "$pr_guard_covers_raw_commands" = true ]; then
+  pass "PR aggregate guard recognizes representative raw project commands"
+else
+  fail "PR aggregate guard must recognize npx vitest run, npm run test, and go test"
+fi
 
 if grep -qiE 'completion verification|/finish' <<<"$PR_PRE_PUSH_SECTION" \
-  && ! grep -qiE 'npm test|conduct-ts test-suite|full (test )?suite|bundle exec rspec|pytest' <<<"$PR_PRE_PUSH_SECTION"; then
+  && ! grep -qiE "$PR_AGGREGATE_COMMAND_PATTERN" <<<"$PR_PRE_PUSH_SECTION"; then
   pass "PR preparation reuses completion verification without a local aggregate run"
 else
   fail "PR preparation must defer local aggregate verification to finish"
