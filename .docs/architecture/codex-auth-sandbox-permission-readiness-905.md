@@ -274,3 +274,4 @@ container, and ERD diagrams therefore require no update.
 | 2026-07-25 | Initial planned architecture | DECIDE input for issue #905, Medium tier |
 | 2026-07-25 | Resolved auth probe, recovery, policy, and self-host boundaries | Operator-approved architecture ADR |
 | 2026-07-25 | Replaced Codex-only HALT with shared auth park and source-specific readiness | Operator-approved PRD and superseding ADR amendment |
+| 2026-07-25 | Mapped approved components and sequences to the #905 implementation plan | Plan update; no new container, service, datastore, or external integration |
