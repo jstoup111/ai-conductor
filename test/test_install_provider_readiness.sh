@@ -41,9 +41,47 @@ set -e
 # readiness choices visible before setup continues.
 if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*both'; then
   echo 'PASS interactive install offers Claude, Codex, and both choices'
+else
+  echo 'FAIL interactive install offers Claude, Codex, and both choices'
+  printf '%s\n' "$OUT"
+  exit 1
+fi
+
+# One behavior, one assertion: unsupported explicit selection is rejected
+# synchronously, before installation can continue into setup or readiness.
+set +e
+UNSUPPORTED_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --providers unsupported --allow-worktree-root" "$TMP_ROOT/unsupported.log" 2>&1)
+UNSUPPORTED_CODE=$?
+set -e
+
+if [ "$UNSUPPORTED_CODE" -ne 0 ] \
+  && [ "$UNSUPPORTED_CODE" -ne 124 ] \
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'claude' \
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'codex'; then
+  echo 'PASS unsupported provider selection names Claude and Codex before setup'
+else
+  echo 'FAIL unsupported provider selection names Claude and Codex before setup'
+  printf 'exit code: %s\n' "$UNSUPPORTED_CODE"
+  printf '%s\n' "$UNSUPPORTED_OUT"
+  exit 1
+fi
+
+# A trailing comma denotes an empty provider token and must be rejected before
+# the installer reaches any setup action.
+set +e
+TRAILING_COMMA_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s script -qec "$CHECKOUT/bin/install --providers claude, --allow-worktree-root" "$TMP_ROOT/trailing-comma.log" 2>&1)
+TRAILING_COMMA_CODE=$?
+set -e
+
+if [ "$TRAILING_COMMA_CODE" -ne 0 ] \
+  && [ "$TRAILING_COMMA_CODE" -ne 124 ] \
+  && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'claude' \
+  && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'codex'; then
+  echo 'PASS trailing-comma provider selection names Claude and Codex before setup'
   exit 0
 fi
 
-echo 'FAIL interactive install offers Claude, Codex, and both choices'
-printf '%s\n' "$OUT"
+echo 'FAIL trailing-comma provider selection names Claude and Codex before setup'
+printf 'exit code: %s\n' "$TRAILING_COMMA_CODE"
+printf '%s\n' "$TRAILING_COMMA_OUT"
 exit 1

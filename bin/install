@@ -25,6 +25,11 @@ UPDATE_MODE=false
 # mode dispatch so it composes with any mode (e.g. --update).
 ALLOW_WORKTREE_ROOT=false
 
+# PROVIDER_SELECTION records the optional, comma-separated built-in provider
+# selection supplied to install. Readiness behavior will consume it separately;
+# validate it here so an invalid selection never begins a global installation.
+PROVIDER_SELECTION=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -1241,18 +1246,59 @@ uninstall() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-# Strip --allow-worktree-root from "$@" before the mode dispatch so it can be
+# Strip install-wide options from "$@" before the mode dispatch so they can be
 # combined with any mode (e.g. `--update --allow-worktree-root`).
 _filtered_args=()
-for _arg in "$@"; do
-  if [ "$_arg" = "--allow-worktree-root" ]; then
-    ALLOW_WORKTREE_ROOT=true
-  else
-    _filtered_args+=("$_arg")
-  fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-worktree-root)
+      ALLOW_WORKTREE_ROOT=true
+      ;;
+    --providers)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      PROVIDER_SELECTION="$1"
+      ;;
+    --providers=*)
+      PROVIDER_SELECTION="${1#--providers=}"
+      if [ -z "$PROVIDER_SELECTION" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      ;;
+    *)
+      _filtered_args+=("$1")
+      ;;
+  esac
+  shift
 done
+
+if [ -n "$PROVIDER_SELECTION" ]; then
+  case ",${PROVIDER_SELECTION}," in
+    *,,*)
+      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex"
+      exit 1
+      ;;
+  esac
+
+  IFS=',' read -r -a _selected_providers <<< "$PROVIDER_SELECTION"
+  for _provider in "${_selected_providers[@]}"; do
+    case "$_provider" in
+      claude|codex) ;;
+      *)
+        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex"
+        exit 1
+        ;;
+    esac
+  done
+  unset _selected_providers _provider
+fi
+
 set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
-unset _filtered_args _arg
+unset _filtered_args
 
 case "${1:-}" in
   --check)     check_installation; exit $? ;;
