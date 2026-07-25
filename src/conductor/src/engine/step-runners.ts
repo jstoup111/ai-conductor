@@ -50,48 +50,10 @@ import {
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
-
-const STEP_PROMPTS: Record<StepName, string> = {
-  bootstrap: '/bootstrap',
-  memory: '/memory',
-  assess: '/assess',
-  explore: '/explore',
-  prd: '/prd',
-  complexity: '/conduct complexity',
-  stories: '/stories',
-  conflict_check: '/conflict-check',
-  plan: '/plan',
-  coherence_check: '/coherence-check',
-  architecture_diagram: '/architecture-diagram',
-  architecture_review: '/architecture-review',
-  worktree: '/conduct worktree',
-  acceptance_specs: '/writing-system-tests',
-  build: '/pipeline',
-  // Display sentinel for the model table; the grader dispatch is driven by
-  // the fresh-session assembly logic (see resolveRebaseConflict pattern),
-  // not by invoking a literal `/build-review` skill.
-  build_review: '/build-review',
-  // Engine-native (like complexity/rebase) — the completion predicate reads
-  // or computes the wiring-reachability evidence file directly; no skill
-  // dispatch. Present only to keep the Record<StepName, string> exhaustive.
-  wiring_check: '/conduct wiring-check',
-  // Engine-native aggregate verifier gate (Task 16 wires execution). This is
-  // a display/exhaustiveness sentinel, never a skill dispatch.
-  test_suite: '/conduct test-suite',
-  manual_test: '/manual-test',
-  prd_audit: '/prd-audit',
-  // Runs the architecture-review skill in its as-built compliance-gate mode.
-  architecture_review_as_built: '/architecture-review --as-built',
-  retro: '/retro',
-  // Engine-native (like complexity) — never dispatched; present only to keep
-  // the Record<StepName, string> exhaustive.
-  rebase: '/conduct rebase',
-  finish: '/finish',
-  // Conditional SHIP sub-routine: plans remediation for a blocking audit.
-  remediate: '/remediate',
-  // Out-of-band verification step: semantic attribution verification.
-  attribution_verify: '/attribution-verify',
-};
+import {
+  renderSkillInvocation,
+  STEP_SKILL_INVOCATIONS,
+} from './skill-invocation.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -467,7 +429,7 @@ export class DefaultStepRunner implements StepRunner {
       await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
-    const prompt = STEP_PROMPTS[step] ?? `/${step}`;
+    const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS[step], 'claude');
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
