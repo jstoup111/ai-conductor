@@ -85,5 +85,10 @@ export interface InvokeOptions {
 
 export interface LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult>;
-  invokeInteractive(options: InvokeOptions): Promise<void>;
+  /**
+   * Built-in providers return classified completion after their streamed
+   * process exits. Legacy custom providers may keep returning void; absence of
+   * a result carries no provider-fallback authority.
+   */
+  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void>;
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { InvokeResult } from '../../src/execution/llm-provider.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from '../../src/execution/llm-provider.js';
 
 type ProviderUnavailableClassification = {
   scope: 'run';
@@ -11,6 +15,23 @@ type ClassifyProviderAttempt = (
 ) => ProviderUnavailableClassification | undefined;
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('keeps void-returning custom interactive providers valid and non-classifying', async () => {
+    const legacyProvider: LLMProvider = {
+      async invoke(): Promise<InvokeResult> {
+        return { success: true, output: 'ok', exitCode: 0 };
+      },
+      async invokeInteractive(_options: InvokeOptions): Promise<void> {},
+    };
+
+    const completion = await legacyProvider.invokeInteractive({
+      prompt: 'legacy custom provider',
+      sessionId: 'legacy-session',
+      resume: false,
+    });
+
+    expect(completion).toBeUndefined();
+  });
+
   it('classifies only explicit run-wide provider unavailability and preserves every existing failure class', async () => {
     const module = await import('../../src/engine/provider-execution.js');
     const classify = (

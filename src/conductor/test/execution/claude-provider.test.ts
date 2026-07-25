@@ -885,15 +885,171 @@ describe('ClaudeProvider', () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
       await provider.invokeInteractive({ ...baseOptions, interactive: false });
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(opts.stdio).toEqual(['ignore', 'inherit', 'inherit']);
+      expect(opts).toMatchObject({
+        stdin: 'ignore',
+        stdout: ['pipe', 'inherit'],
+        stderr: ['pipe', 'inherit'],
+      });
     });
 
-    it('inherits all stdio in REPL mode so the user can type', async () => {
+    it('inherits REPL input while streaming and capturing output', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
       await provider.invokeInteractive({ ...baseOptions, interactive: true });
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(opts.stdio).toBe('inherit');
+      expect(opts).toMatchObject({
+        stdin: 'inherit',
+        stdout: ['pipe', 'inherit'],
+        stderr: ['pipe', 'inherit'],
+      });
     });
+  });
+
+  it('streams interactive output and returns classified completion', async () => {
+    const missingOutput =
+      "LLM provider 'claude' not found. Install it or check your PATH.";
+    const cases = [
+      {
+        name: 'success',
+        response: { stdout: 'Done!', stderr: '', exitCode: 0, failed: false },
+        expected: { success: true, output: 'Done!', exitCode: 0 },
+      },
+      {
+        name: 'model unavailable',
+        response: {
+          stdout: '',
+          stderr: 'There is an issue with the selected model; it may not exist',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'There is an issue with the selected model; it may not exist',
+          exitCode: 1,
+          modelUnavailable: true,
+        },
+      },
+      {
+        name: 'missing executable',
+        interactive: true,
+        response: {
+          stdout: '',
+          stderr: '',
+          exitCode: undefined,
+          code: 'ENOENT',
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: missingOutput,
+          exitCode: 1,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: missingOutput,
+        },
+      },
+      {
+        name: 'authentication',
+        response: {
+          stdout: '',
+          stderr: 'Not logged in. Please run /login.',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'Not logged in. Please run /login.',
+          exitCode: 1,
+          authFailure: true,
+        },
+      },
+      {
+        name: 'rate limit',
+        response: {
+          stdout: '',
+          stderr: 'Error 429: rate limit exceeded',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'Error 429: rate limit exceeded',
+          exitCode: 1,
+          rateLimited: true,
+          waitSeconds: 300,
+        },
+      },
+    ] as const;
+    const observed = [];
+
+    for (const fixture of cases) {
+      mockExeca.mockResolvedValue(fixture.response as any);
+      const result = await provider.invokeInteractive({
+        ...baseOptions,
+        interactive: 'interactive' in fixture && fixture.interactive,
+      });
+      const [, , execaOptions] = mockExeca.mock.calls.at(-1) as [
+        string,
+        string[],
+        any,
+      ];
+      observed.push({
+        name: fixture.name,
+        result:
+          result === undefined
+            ? undefined
+            : {
+                success: result.success,
+                output: result.output,
+                exitCode: result.exitCode,
+                modelUnavailable: result.modelUnavailable,
+                providerUnavailable: result.providerUnavailable,
+                providerUnavailableScope: result.providerUnavailableScope,
+                providerUnavailableReason: result.providerUnavailableReason,
+                authFailure: result.authFailure,
+                rateLimited: result.rateLimited,
+                waitSeconds: result.waitSeconds,
+              },
+        stdin: execaOptions.stdin,
+        stdout: execaOptions.stdout,
+        stderr: execaOptions.stderr,
+      });
+    }
+
+    expect(observed).toEqual(
+      cases.map(({ name, expected }) => ({
+        name,
+        result: {
+          success: expected.success,
+          output: expected.output,
+          exitCode: expected.exitCode,
+          modelUnavailable:
+            'modelUnavailable' in expected
+              ? expected.modelUnavailable
+              : undefined,
+          providerUnavailable:
+            'providerUnavailable' in expected
+              ? expected.providerUnavailable
+              : undefined,
+          providerUnavailableScope:
+            'providerUnavailableScope' in expected
+              ? expected.providerUnavailableScope
+              : undefined,
+          providerUnavailableReason:
+            'providerUnavailableReason' in expected
+              ? expected.providerUnavailableReason
+              : undefined,
+          authFailure:
+            'authFailure' in expected ? expected.authFailure : undefined,
+          rateLimited:
+            'rateLimited' in expected ? expected.rateLimited : undefined,
+          waitSeconds:
+            'waitSeconds' in expected ? expected.waitSeconds : undefined,
+        },
+        stdin: name === 'missing executable' ? 'inherit' : 'ignore',
+        stdout: ['pipe', 'inherit'],
+        stderr: ['pipe', 'inherit'],
+      })),
+    );
   });
 });
 
