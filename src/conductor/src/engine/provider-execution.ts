@@ -12,6 +12,7 @@ import type {
 import type { ProviderSessionScope } from './provider-session.js';
 import {
   phaseForStep,
+  resolveFallbackProviderNativeStepConfig,
   resolvePreferredProviderNativeStepConfig,
 } from './resolved-config.js';
 
@@ -27,6 +28,14 @@ export interface ProviderExecutionResult extends InvokeResult {
   resolvedEffort: EffortLevel;
 }
 
+export interface ProviderTransitionWarning {
+  type: 'provider_fallback';
+  step: StepName;
+  failedProvider: string;
+  reason: string;
+  nextProvider: string;
+}
+
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
@@ -35,8 +44,14 @@ export interface ExecuteProviderCandidatesInput {
   sessions: ProviderSessionScope;
   config?: HarnessConfig;
   tier?: ComplexityTier;
+  attempt?: number;
+  escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  warn?: (
+    message: string,
+    transition: ProviderTransitionWarning,
+  ) => void;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
 }
 
@@ -88,8 +103,8 @@ export async function invokeRuntime(
 }
 
 /**
- * Execute the preferred provider for one caller-owned step/session scope.
- * Candidate advancement and cross-provider diagnostics are added separately.
+ * Execute selected-first configured providers in one caller-owned step scope.
+ * Only explicit run-wide provider unavailability authorizes advancement.
  */
 export async function executeProviderCandidates({
   step,
@@ -99,43 +114,79 @@ export async function executeProviderCandidates({
   sessions,
   config,
   tier,
+  attempt = 1,
+  escalate = true,
   modelOverride,
   effortOverride,
+  warn,
   options,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
-  const [preferredProvider] = resolveProviderCandidates({
+  const candidates = resolveProviderCandidates({
     configuredProviders,
     stepSelection,
   });
-  const runtime = runtimes.get(preferredProvider);
-  const resolved = resolvePreferredProviderNativeStepConfig({
-    step,
-    phase: phaseForStep(step),
-    preferredProvider,
-    inheritedProvider: configuredProviders[0],
-    policy: runtime.policy,
-    config,
-    options: {
-      tier,
-      modelCliOverride: modelOverride,
-      effortCliOverride: effortOverride,
-    },
-  });
-  const session = await sessions.prepare(preferredProvider);
-  const result = await invokeRuntime(runtime, {
-    ...options,
-    sessionId: session.id,
-    resume: session.resume,
-    model: resolved.model,
-    effort: resolved.effort,
-  });
-  await sessions.markCreated(preferredProvider);
+  const preferredProvider = candidates[0];
 
-  return {
-    ...result,
-    preferredProvider,
-    actualProvider: preferredProvider,
-    resolvedModel: resolved.model,
-    resolvedEffort: resolved.effort,
-  };
+  for (const [index, providerKey] of candidates.entries()) {
+    const runtime = runtimes.get(providerKey);
+    const resolved =
+      index === 0
+        ? resolvePreferredProviderNativeStepConfig({
+            step,
+            phase: phaseForStep(step),
+            preferredProvider,
+            inheritedProvider: configuredProviders[0],
+            policy: runtime.policy,
+            config,
+            options: {
+              tier,
+              modelCliOverride: modelOverride,
+              effortCliOverride: effortOverride,
+            },
+          })
+        : resolveFallbackProviderNativeStepConfig({
+            step,
+            tier,
+            policy: runtime.policy,
+            attempt,
+            escalate,
+          });
+    const session = await sessions.prepare(providerKey);
+    const result = await invokeRuntime(runtime, {
+      ...options,
+      sessionId: session.id,
+      resume: session.resume,
+      model: resolved.model,
+      effort: resolved.effort,
+    });
+    if (!result.providerInvocationSkipped) {
+      await sessions.markCreated(providerKey);
+    }
+
+    const unavailable = classifyProviderAttempt(result);
+    const nextProvider = candidates[index + 1];
+    if (!unavailable || !nextProvider) {
+      return {
+        ...result,
+        preferredProvider,
+        actualProvider: providerKey,
+        resolvedModel: resolved.model,
+        resolvedEffort: resolved.effort,
+      };
+    }
+
+    const transition: ProviderTransitionWarning = {
+      type: 'provider_fallback',
+      step,
+      failedProvider: providerKey,
+      reason: unavailable.reason,
+      nextProvider,
+    };
+    warn?.(
+      `Step ${step}: provider ${providerKey} unavailable (${unavailable.reason}); falling back to ${nextProvider}.`,
+      transition,
+    );
+  }
+
+  throw new Error('Provider candidate resolution produced no candidates');
 }
