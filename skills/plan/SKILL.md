@@ -29,6 +29,13 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+### Documentation boundary
+
+Never create plan tasks, subtasks, requirements, verification items, or notes for writing or
+updating ordinary project documentation—even when it accompanies functional work. Documentation-only
+requests belong to `/explore`'s direct delivery route. Plans cover only functional behavior and its
+implementation.
+
 ## Practices
 
 ### 1. Validate Preconditions

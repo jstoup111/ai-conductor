@@ -13,6 +13,14 @@ Enforces test-driven development with domain integrity as a first-class concern.
 goes through a five-step cycle with subagent isolation — the RED agent only sees tests, the
 GREEN agent only sees source, and the DOMAIN reviewer has veto authority over both.
 
+### Documentation boundary
+
+Do not start a RED/GREEN cycle for ordinary human-facing documentation, and do not add tests that
+assert documentation wording, headings, formatting, placement, links, or repository explanations.
+Documentation-only requests are delivered from `/explore`. Keep tests for machine-consumed documents
+only when they assert generated or runtime behavior (for example OpenAPI contracts or generated
+`HARNESS.md` functionality), never prose shape.
+
 ## Practices
 
 ### The Cycle
@@ -171,7 +179,8 @@ task are covered.
 ### Commit-less Completions: Evidence Trailers
 
 Not all tasks require code commits. Some tasks verify that existing behavior meets acceptance
-criteria, and some have no implementation work (documentation, architectural decisions, etc.).
+criteria, and some have no implementation work (architectural decisions, etc.). Ordinary
+documentation maintenance is not a TDD task; `/explore` delivers it directly.
 When a task completes without code changes, emit an empty commit with Evidence trailers.
 
 A plan task may carry a `**Verify-only:** yes` marker (see `skills/plan/SKILL.md` §5d)
