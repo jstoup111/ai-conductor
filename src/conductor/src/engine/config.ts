@@ -335,6 +335,7 @@ export function validateConfig(
         'by_tier',
         'after',
         'enforcement',
+        'completion_artifact',
         'when',
         'parallel',
         'tdd',

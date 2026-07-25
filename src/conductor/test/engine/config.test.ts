@@ -380,6 +380,21 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('accepts an exact .pipeline completion artifact for a custom step', () => {
+      const result = validateConfig({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+            completion_artifact: '.pipeline/custom-lint-pass',
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects built-in step setting `after` (fail-fast)', () => {
       const result = validateConfig({
         steps: { memory: { after: 'worktree' } },
