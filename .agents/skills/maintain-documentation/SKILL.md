@@ -47,3 +47,18 @@ Maintain this repository's human-facing documentation when invoked.
 4. Overwrite the review with the final mode, scope, inputs, documentation changes, actual commit result, changelog result, evidence, verdict, and blockers.
 5. Write `.pipeline/maintain-documentation-pass` only after a PASS verdict.
 6. For BLOCKED, keep the pass marker absent and record the blockers in the review.
+
+## Impact decisions
+
+1. Inspect the current implementation for changes to these documented surfaces: installation, CLI, workflow, configuration, artifact, state, behavior, recovery, extension, code organization, and architecture.
+2. Apply this authority rule: implemented code, tests, generated help, schemas, and observed behavior outrank `.docs/`; treat `.docs/` as context only.
+3. When no documented surface changed, record an evidence-backed no-op and create no documentation commit.
+4. Remove obsolete human-facing documentation only when removal leaves no dangling canonical link; otherwise return BLOCKED.
+5. When authoritative evidence contains an unresolved contradiction, return BLOCKED and keep the pass marker absent. Do not document disputed intent as fact.
+
+## Mutation boundaries
+
+- `.docs/` is read-only. Never create, edit, move, rename, or delete any `.docs/` file. This rule has no exception.
+- Inline source comments: Flag contradictions only. Do not create, edit, move, rename, or delete them.
+- JSDoc: Flag contradictions only. Do not create, edit, move, rename, or delete it.
+- Docstrings: Flag contradictions only. Do not create, edit, move, rename, or delete them.

@@ -197,4 +197,103 @@ describe('repository-local maintain-documentation contract', () => {
       },
     });
   });
+
+  it('constrains impact decisions to implementation truth and human-documentation mutations', async () => {
+    const skill = await readFile(canonicalSkill, 'utf-8');
+    const section = (heading: string): string =>
+      skill.match(new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`))?.[1] ?? '';
+    const impact = section('Impact decisions');
+    const boundaries = section('Mutation boundaries');
+    const surfaces = [
+      'installation',
+      'CLI',
+      'workflow',
+      'configuration',
+      'artifact',
+      'state',
+      'behavior',
+      'recovery',
+      'extension',
+      'code organization',
+      'architecture',
+    ];
+    const containsSurface = (surface: string): boolean =>
+      new RegExp(`\\b${surface.replace(' ', '\\s+')}\\b`, 'i').test(impact);
+    const sourceIsFlagOnly = (source: string): boolean =>
+      new RegExp(
+        `${source}:[^\\n]*flag [^\\n]*only[^\\n]*do not (?:create|edit|move|rename|delete)`,
+        'i',
+      ).test(boundaries);
+    const docsMutationIsProhibited = (verb: string): boolean =>
+      new RegExp(`\\.docs\\/[^\\n]*never[^\\n]*\\b${verb}\\b`, 'i').test(boundaries);
+
+    expect({
+      surfaces: Object.fromEntries(
+        surfaces.map((surface) => [surface, containsSurface(surface)]),
+      ),
+      authorityPrecedence:
+        /implemented code, tests, generated help, schemas?, and observed behavior (?:outrank|take precedence over) `?\.docs\/`?.*context only/i.test(
+          impact,
+        ),
+      noOpImpliesNoCommit:
+        /evidence-backed no-op.*(?:create|make) no documentation commit/is.test(impact),
+      obsoleteRemovalIsSafe:
+        /remove obsolete human-facing.*only (?:when|if).*no dangling canonical link.*otherwise.*BLOCKED/is.test(
+          impact,
+        ),
+      contradiction: {
+        unresolvedBlocks: /unresolved contradiction.*BLOCKED/is.test(impact),
+        passMarkerAbsent: /BLOCKED.*pass marker absent/is.test(impact),
+      },
+      sourceDocumentation: {
+        comments: sourceIsFlagOnly('Inline source comments'),
+        jsdoc: sourceIsFlagOnly('JSDoc'),
+        docstrings: sourceIsFlagOnly('Docstrings'),
+      },
+      docsDirectory: {
+        readOnly: /\.docs\/.*read-only/i.test(boundaries),
+        create: docsMutationIsProhibited('create'),
+        edit: docsMutationIsProhibited('edit'),
+        move: docsMutationIsProhibited('move'),
+        rename: docsMutationIsProhibited('rename'),
+        delete: docsMutationIsProhibited('delete'),
+        noException: /\.docs\/[\s\S]*no exception/i.test(boundaries),
+      },
+    }).toEqual({
+      surfaces: {
+        installation: true,
+        CLI: true,
+        workflow: true,
+        configuration: true,
+        artifact: true,
+        state: true,
+        behavior: true,
+        recovery: true,
+        extension: true,
+        'code organization': true,
+        architecture: true,
+      },
+      authorityPrecedence: true,
+      noOpImpliesNoCommit: true,
+      obsoleteRemovalIsSafe: true,
+      contradiction: {
+        unresolvedBlocks: true,
+        passMarkerAbsent: true,
+      },
+      sourceDocumentation: {
+        comments: true,
+        jsdoc: true,
+        docstrings: true,
+      },
+      docsDirectory: {
+        readOnly: true,
+        create: true,
+        edit: true,
+        move: true,
+        rename: true,
+        delete: true,
+        noException: true,
+      },
+    });
+  });
 });
