@@ -31,8 +31,10 @@ Gather what the evaluator needs:
   do NOT re-review earlier batches line by line — they already passed their own evaluator gate.
 - The story/acceptance criteria being implemented (from `.docs/stories/`)
 - The implementation plan task (from `.docs/plans/`)
-- The test results (full suite output)
+- The relevant affected-test result set
 - Tech-context review checklist if loaded in session
+
+For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.
 
 ### 2. Dispatch Evaluator Agent
 
@@ -50,8 +52,9 @@ Provide the evaluator with:
 - The spec (story + acceptance criteria)
 - The test output
 - The review checklist (generic + tech-context from session if available)
-- **Impacted test file paths** — spec files changed in the diff, plus specs corresponding to
-  changed source files. The evaluator will run these before reviewing.
+- **Impacted test file paths** — for batch reviews, the provided `BATCH_AFFECTED_TESTS` union;
+  otherwise, spec files changed in the diff plus specs corresponding to changed source files.
+  The evaluator will run these before reviewing.
 
 ### 3. Three-Stage Review
 
