@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from '../../src/execution/llm-provider.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -25,6 +29,11 @@ type CreateProviderRuntimeSet = (
   registry: PluginRegistry,
 ) => ProviderRuntimeSet;
 
+type InvokeRuntime = (
+  runtime: ProviderRuntime,
+  options: InvokeOptions,
+) => Promise<InvokeResult>;
+
 async function loadRuntimeSetFactory(): Promise<
   CreateProviderRuntimeSet | undefined
 > {
@@ -36,6 +45,15 @@ async function loadRuntimeSetFactory(): Promise<
       | { createProviderRuntimeSet?: CreateProviderRuntimeSet }
       | null
   )?.createProviderRuntimeSet;
+}
+
+async function loadRuntimeInvoker(): Promise<InvokeRuntime | undefined> {
+  const module = await import('../../src/engine/provider-execution.js').catch(
+    () => null,
+  );
+  return (
+    module as { invokeRuntime?: InvokeRuntime } | null
+  )?.invokeRuntime;
 }
 
 function provider(): LLMProvider {
@@ -112,6 +130,100 @@ describe('ProviderRuntimeSet', () => {
       policies: [true, true, true],
       builtIn: [true, true, false],
       isolatedState: [true, true, true, true, true, true, true, true],
+    });
+  });
+
+  it('isolates identical model failures and completes each native ladder inside its runtime', async () => {
+    const opaqueModel = 'shared-opaque-model';
+    const codexCalls: string[] = [];
+    const claudeCalls: string[] = [];
+    const ladderProvider = (
+      calls: string[],
+      nativeFallback: string,
+    ): LLMProvider => ({
+      invoke: vi.fn(async (options: InvokeOptions) => {
+        const model = options.model ?? '';
+        calls.push(model);
+        return model === opaqueModel
+          ? {
+              success: false,
+              output: `${model} unavailable`,
+              exitCode: 1,
+              modelUnavailable: true,
+            }
+          : {
+              success: model === nativeFallback,
+              output: model === nativeFallback ? 'ok' : 'wrong ladder',
+              exitCode: model === nativeFallback ? 0 : 1,
+            };
+      }),
+      invokeInteractive: vi.fn(async () => {}),
+    });
+    const registry = new PluginRegistry();
+    registry.register(
+      'llm_provider',
+      'claude',
+      ladderProvider(claudeCalls, CLAUDE_MODEL_POLICY.modelFallbackLadder[0]),
+    );
+    registry.register(
+      'llm_provider',
+      'codex',
+      ladderProvider(codexCalls, CODEX_MODEL_POLICY.modelFallbackLadder[0]),
+    );
+    registry.markInitialized();
+    const createRuntimeSet = await loadRuntimeSetFactory();
+    const invokeRuntime = await loadRuntimeInvoker();
+    const runtimes = createRuntimeSet?.(registry);
+    const codexRuntime = runtimes?.get('codex');
+    const claudeRuntime = runtimes?.get('claude');
+
+    const codexResult =
+      codexRuntime &&
+      (await invokeRuntime?.(codexRuntime, {
+        prompt: 'codex',
+        sessionId: 'codex-session',
+        resume: false,
+        model: opaqueModel,
+      }));
+    const claudeBeforeInvocation = {
+      calls: [...claudeCalls],
+      effective: claudeRuntime?.availability.effectiveModel(opaqueModel),
+    };
+    const claudeResult =
+      claudeRuntime &&
+      (await invokeRuntime?.(claudeRuntime, {
+        prompt: 'claude',
+        sessionId: 'claude-session',
+        resume: false,
+        model: opaqueModel,
+      }));
+
+    expect({
+      codexResult,
+      claudeResult,
+      codexCalls,
+      claudeCalls,
+      claudeBeforeInvocation,
+      dead: {
+        codex: codexRuntime?.availability.dead.has(opaqueModel),
+        claude: claudeRuntime?.availability.dead.has(opaqueModel),
+      },
+    }).toEqual({
+      codexResult: { success: true, output: 'ok', exitCode: 0 },
+      claudeResult: { success: true, output: 'ok', exitCode: 0 },
+      codexCalls: [
+        opaqueModel,
+        CODEX_MODEL_POLICY.modelFallbackLadder[0],
+      ],
+      claudeCalls: [
+        opaqueModel,
+        CLAUDE_MODEL_POLICY.modelFallbackLadder[0],
+      ],
+      claudeBeforeInvocation: {
+        calls: [],
+        effective: { model: opaqueModel, downgraded: false },
+      },
+      dead: { codex: true, claude: true },
     });
   });
 });
