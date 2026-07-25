@@ -29,8 +29,15 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
 
 ### Phase 1: RED
 
-**Agent:** Generator (test-files-only context) — dispatch with `model="sonnet"`
+**Agent:** Generator (test-files-only context).
 **Goal:** Write exactly one failing test that captures the next behavior.
+
+**Advisory model selection:** Before dispatching RED or GREEN, read
+`.ai-conductor/config.yml`. If `steps.build.tdd.red.model` or
+`steps.build.tdd.green.model` is configured, dispatch that phase's generator with the
+configured `model`. The config validator guarantees the model belongs to the selected
+`llm_provider`'s native family. If a phase is not configured, retain the build session's
+normal model. This is an orchestration instruction, not a separate conductor step.
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
@@ -64,7 +71,8 @@ production call site of any security/correctness derivation, with real adversari
 
 ### Phase 3: GREEN
 
-**Agent:** Generator (source-files-only context) — dispatch with `model="sonnet"`
+**Agent:** Generator (source-files-only context) — use
+`steps.build.tdd.green.model` when configured (see RED's advisory model selection rule).
 **Goal:** Write the simplest code that makes the failing test pass.
 
 1. **Scope check BEFORE writing code:**
@@ -84,13 +92,13 @@ production call site of any security/correctness derivation, with real adversari
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
 **When GREEN won't go green — escalate to debugging, do not thrash.**
-The GREEN generator runs on Sonnet. If the target test still fails after a bounded attempt
-(≈2 edits), or step 4 shows the change broke other tests and the cause is not immediately
-obvious, STOP editing. A Sonnet generator guessing at a non-obvious failure burns tokens and
-risks masking the bug rather than fixing it. Dispatch the `/debugging` protocol in a fresh
-sub-session on **`model="opus"`** (root-cause analysis is reasoning-heavy — see the model
-table in HARNESS.md), handing it the failing test, the current diff, and the full failure
-output. Return to GREEN only once debugging has produced an evidence-backed root cause.
+If the target test still fails after a bounded attempt (≈2 edits), or step 4 shows the change
+broke other tests and the cause is not immediately obvious, STOP editing. A generator guessing
+at a non-obvious failure burns tokens and risks masking the bug rather than fixing it. Dispatch
+the `/debugging` protocol in a fresh sub-session on **`model="opus"** (root-cause analysis is
+reasoning-heavy — see the model table in HARNESS.md), handing it the failing test, the current
+diff, and the full failure output. Return to GREEN only once debugging has produced an
+evidence-backed root cause.
 
 See `references/green.md` for detailed GREEN phase guidance.
 See `references/drill-down.md` for nested TDD cycle instructions.

@@ -78,6 +78,15 @@ steps:
         model: haiku
         max_retries: 2
 
+    # Advisory child-agent model selection inside the TDD loop. These do not
+    # create separate conductor steps; the build agent reads them before each
+    # RED/GREEN dispatch.
+    tdd:
+      red:
+        model: haiku
+      green:
+        model: sonnet
+
 # ── Model availability fallback ladder ────────────────────────────────────────
 # When a configured/pinned model is detected unavailable, the daemon automatically
 # retries down this provider-native list instead of failing the step. Omit to use
@@ -175,6 +184,35 @@ An installed provider under an unknown/plugin key remains the executing provider
 Until plugins can register their own model-policy contract, its autonomous defaults use the
 Claude compatibility policy and the composition root emits one warning. Plugin-defined policies
 are intentionally deferred.
+
+### Advisory TDD phase models
+
+The structural `build` step may give its nested TDD generator phases distinct models. The build
+agent reads this configuration before each RED or GREEN dispatch; the conductor does not turn
+those phases into separate steps or enforce the handoff. This keeps task lifecycle, retries, and
+commit attribution owned by the existing build session.
+
+Configure only native models for the selected built-in `llm_provider`; validation rejects models
+from the other provider and rejects this block for custom providers until they register a native
+model policy. Omit either phase to retain the build session's normal model for that phase.
+
+```yaml
+# Claude
+llm_provider: claude
+steps:
+  build:
+    tdd:
+      red: { model: haiku }
+      green: { model: sonnet }
+
+# Codex
+llm_provider: codex
+steps:
+  build:
+    tdd:
+      red: { model: gpt-5.6-luna }
+      green: { model: gpt-5.6-terra }
+```
 
 ### Model fallback ladder (`conduct-ts` only)
 
