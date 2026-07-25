@@ -139,7 +139,11 @@ export async function publishShipmentRepair(
 
   assertRecordOnlyRepair(plan.writes);
   const branch = `shipment-repair/${plan.identity}`;
-  await publisher.ensureRepairBranch({ branch, base: 'main' });
+  try {
+    await publisher.ensureRepairBranch({ branch, base: 'main' });
+  } catch (error) {
+    throw new Error(`repair ${plan.identity} branch failed: ${errorMessage(error)}`);
+  }
   const { headSha: expectedHeadSha } = await publisher.commitRecordOnly({ branch, writes: plan.writes });
   const { url: pullRequestUrl, headSha } = await publisher.findOrCreateRepairPullRequest({
     branch,
@@ -178,4 +182,8 @@ function assertRecordOnlyRepair(writes: [ShipmentRecordWrite]): void {
 
 function repairFailureDescription(verdict: Exclude<ShipmentEvidenceResult, { kind: 'valid' }>): string {
   return verdict.kind === 'refusal' ? verdict.code : verdict.reason;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

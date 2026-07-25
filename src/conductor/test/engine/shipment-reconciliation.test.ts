@@ -353,6 +353,16 @@ describe('publishShipmentRepair', () => {
     expect(result).toMatchObject({ headSha: repairPrHead, status: 'success' });
   });
 
+  it('surfaces a repair-branch permission failure with its deterministic retry identity', async () => {
+    await expect(publishShipmentRepair(repairPlan, {
+      ensureRepairBranch: async () => { throw new Error('403 Resource not accessible by integration'); },
+      commitRecordOnly: async () => { throw new Error('must not commit after branch failure'); },
+      findOrCreateRepairPullRequest: async () => { throw new Error('must not create a PR after branch failure'); },
+      verifyRepairHead: async () => { throw new Error('must not verify after branch failure'); },
+      postStatus: async () => { throw new Error('must not post after branch failure'); },
+    })).rejects.toThrow('repair 916/durable-shipped-records branch failed: 403 Resource not accessible by integration');
+  });
+
   it('does not publish a branch, commit, PR, or status for aligned or unresolved plans', async () => {
     const publisher = {
       ensureRepairBranch: async () => { throw new Error('must not create a branch'); },
