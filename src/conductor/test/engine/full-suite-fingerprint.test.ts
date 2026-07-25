@@ -5,6 +5,7 @@ import {
   mkdtemp,
   rename,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -13,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fingerprintFullSuiteInputs } from '../../src/engine/full-suite-fingerprint.js';
+import type { TestSuiteConfig } from '../../src/types/config.js';
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
@@ -43,8 +45,36 @@ async function makeRepo(files: Record<string, string>): Promise<string> {
   return repo;
 }
 
-async function fingerprint(repo: string) {
-  return fingerprintFullSuiteInputs({ projectRoot: repo });
+const DEFAULT_TEST_SUITE: TestSuiteConfig = {
+  command: 'npm test',
+  working_directory: '.',
+  timeout_seconds: 1800,
+};
+
+async function fingerprintResult(
+  repo: string,
+  testSuite: TestSuiteConfig = DEFAULT_TEST_SUITE,
+  environmentValues: NodeJS.ProcessEnv = {},
+  fileHasher?: (path: string) => Promise<string>,
+) {
+  return fingerprintFullSuiteInputs({
+    projectRoot: repo,
+    testSuite,
+    environmentValues,
+    fileHasher,
+  });
+}
+
+async function fingerprint(
+  repo: string,
+  testSuite: TestSuiteConfig = DEFAULT_TEST_SUITE,
+  environmentValues: NodeJS.ProcessEnv = {},
+) {
+  const result = await fingerprintResult(repo, testSuite, environmentValues);
+  if (!result.ok) {
+    throw new Error(`Unexpected indeterminate fingerprint: ${result.reason.code}`);
+  }
+  return result.fingerprint;
 }
 
 afterEach(async () => {
@@ -180,5 +210,181 @@ describe('fingerprintFullSuiteInputs', () => {
     await writeProjectFile(repo, 'README.md', '# Updated project\n');
 
     expect((await fingerprint(repo)).digest).toBe(before.digest);
+  });
+
+  it('includes every normalized test_suite execution field', async () => {
+    const repo = await makeRepo({
+      'config/extra.bin': 'config\n',
+      'src/main.ts': 'main\n',
+    });
+    const baseline = await fingerprint(repo);
+    const changed = await Promise.all([
+      fingerprint(repo, { ...DEFAULT_TEST_SUITE, command: 'npm run test:all' }),
+      fingerprint(repo, { ...DEFAULT_TEST_SUITE, working_directory: 'src' }),
+      fingerprint(repo, { ...DEFAULT_TEST_SUITE, timeout_seconds: 900 }),
+      fingerprint(repo, { ...DEFAULT_TEST_SUITE, inputs: ['config/extra.bin'] }),
+      fingerprint(repo, { ...DEFAULT_TEST_SUITE, environment: ['CI'] }),
+    ]);
+
+    expect(changed.every((entry) => entry.digest !== baseline.digest)).toBe(true);
+  });
+
+  it.each([
+    ['package-lock.json', '{"lockfileVersion": 3}\n', '{"lockfileVersion": 4}\n'],
+    ['db/migrations/001.sql', 'CREATE TABLE one;\n', 'CREATE TABLE two;\n'],
+    ['test/setup.ts', 'export const setup = 1;\n', 'export const setup = 2;\n'],
+  ])('invalidates when broad tracked input %s changes', async (path, before, after) => {
+    const repo = await makeRepo({ [path]: before, 'src/main.ts': 'main\n' });
+    const baseline = await fingerprint(repo);
+
+    await writeProjectFile(repo, path, after);
+
+    expect((await fingerprint(repo)).digest).not.toBe(baseline.digest);
+  });
+
+  it('includes declared ignored input content', async () => {
+    const repo = await makeRepo({
+      '.gitignore': 'private/*.bin\n',
+      'src/main.ts': 'main\n',
+    });
+    await writeProjectFile(repo, 'private/state.bin', 'first\n');
+    const config = { ...DEFAULT_TEST_SUITE, inputs: ['private/*.bin'] };
+    const before = await fingerprint(repo, config);
+
+    await writeProjectFile(repo, 'private/state.bin', 'second\n');
+
+    expect((await fingerprint(repo, config)).digest).not.toBe(before.digest);
+  });
+
+  it('normalizes declaration and glob expansion ordering', async () => {
+    const repo = await makeRepo({
+      '.gitignore': 'fixtures/\n',
+      'src/main.ts': 'main\n',
+    });
+    await writeProjectFile(repo, 'fixtures/a.bin', 'a\n');
+    await writeProjectFile(repo, 'fixtures/z.bin', 'z\n');
+    const forward = await fingerprint(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['fixtures/a.bin', 'fixtures/*.bin'],
+      environment: ['BETA', 'ALPHA'],
+    });
+    const reverse = await fingerprint(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['fixtures/*.bin', 'fixtures/a.bin'],
+      environment: ['ALPHA', 'BETA'],
+    });
+
+    expect(reverse.digest).toBe(forward.digest);
+  });
+
+  it('distinguishes set, changed, and unset declared environment values', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const config = { ...DEFAULT_TEST_SUITE, environment: ['SUITE_SECRET'] };
+    const first = await fingerprint(repo, config, { SUITE_SECRET: 'alpha' });
+    const changed = await fingerprint(repo, config, { SUITE_SECRET: 'beta' });
+    const unset = await fingerprint(repo, config, {});
+
+    expect(new Set([first.digest, changed.digest, unset.digest]).size).toBe(3);
+  });
+
+  it('treats inherited object properties as unset environment names', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const config = { ...DEFAULT_TEST_SUITE, environment: ['toString'] };
+    const unset = await fingerprintResult(repo, config, {});
+    const set = await fingerprintResult(
+      repo,
+      config,
+      { toString: 'declared-value' } as unknown as NodeJS.ProcessEnv,
+    );
+
+    expect({
+      unsetOk: unset.ok,
+      setOk: set.ok,
+      digestChanged:
+        unset.ok && set.ok && unset.fingerprint.digest !== set.fingerprint.digest,
+    }).toEqual({ unsetOk: true, setOk: true, digestChanged: true });
+  });
+
+  it('never returns declared environment values in plaintext', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const secret = 'do-not-store-this-secret';
+    const result = await fingerprintResult(
+      repo,
+      { ...DEFAULT_TEST_SUITE, environment: ['SUITE_SECRET'] },
+      { SUITE_SECRET: secret },
+    );
+
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  it('returns typed indeterminate for a missing declared input', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['missing/*.bin'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'missing_input', path: 'missing/*.bin' },
+    });
+  });
+
+  it('returns typed indeterminate for a root-escaping declared input', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['../outside.bin'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: '../outside.bin' },
+    });
+  });
+
+  it('returns typed indeterminate when a glob root symlink escapes the project', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n' });
+    const outside = await mkdtemp(join(tmpdir(), 'full-suite-fingerprint-outside-'));
+    scratches.push(outside);
+    await writeProjectFile(outside, 'nested/secret.bin', 'outside\n');
+    await symlink(outside, join(repo, 'linked'));
+
+    const result = await fingerprintResult(repo, {
+      ...DEFAULT_TEST_SUITE,
+      inputs: ['linked/nested/*.bin'],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'linked/nested/*.bin' },
+    });
+  });
+
+  it('returns typed indeterminate when a required input cannot be hashed', async () => {
+    const repo = await makeRepo({
+      '.gitignore': 'private.bin\n',
+      'src/main.ts': 'main\n',
+    });
+    await writeProjectFile(repo, 'private.bin', 'unreadable\n');
+
+    const result = await fingerprintResult(
+      repo,
+      { ...DEFAULT_TEST_SUITE, inputs: ['private.bin'] },
+      {},
+      async (path) => {
+        if (path.endsWith('private.bin')) {
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        }
+        return 'injected-content-digest';
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: { code: 'input_read_failed', path: 'private.bin' },
+    });
   });
 });
