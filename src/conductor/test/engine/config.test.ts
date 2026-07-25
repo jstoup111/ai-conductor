@@ -548,6 +548,55 @@ complexity:
   });
 
   describe('mergeConfigs', () => {
+    it.each([
+      {
+        name: 'project scalar replaces a user array',
+        user: { llm_provider: ['claude', 'codex'] },
+        project: { llm_provider: 'codex' },
+        expected: 'codex',
+      },
+      {
+        name: 'project array replaces a user scalar without index merging',
+        user: { llm_provider: 'claude' },
+        project: { llm_provider: ['codex', 'claude'] },
+        expected: ['codex', 'claude'],
+      },
+    ] satisfies Array<{
+      name: string;
+      user: Parameters<typeof mergeConfigs>[0];
+      project: Parameters<typeof mergeConfigs>[1];
+      expected: 'codex' | string[];
+    }>)('$name', ({ user, project, expected }) => {
+      expect(mergeConfigs(user, project).llm_provider).toEqual(expected);
+    });
+
+    it('preserves a user step provider while project model settings override independently', () => {
+      const merged = mergeConfigs(
+        {
+          defaults: { model: 'sonnet', effort: 'low', max_retries: 2 },
+          steps: { build_review: { llm_provider: 'codex', model: 'sonnet' } },
+        },
+        {
+          defaults: { model: 'opus', effort: 'high' },
+          steps: { build_review: { model: 'opus' } },
+        },
+      );
+
+      expect({
+        stepProvider: merged.steps?.build_review?.llm_provider,
+        stepModel: merged.steps?.build_review?.model,
+        defaultModel: merged.defaults?.model,
+        defaultEffort: merged.defaults?.effort,
+        defaultRetries: merged.defaults?.max_retries,
+      }).toEqual({
+        stepProvider: 'codex',
+        stepModel: 'opus',
+        defaultModel: 'opus',
+        defaultEffort: 'high',
+        defaultRetries: 2,
+      });
+    });
+
     it('project scalars replace user scalars', () => {
       const merged = mergeConfigs(
         { defaults: { model: 'sonnet' } },
