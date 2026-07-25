@@ -149,6 +149,35 @@ else
   exit 1
 fi
 
+# Strict readiness must report every missing required provider in one result,
+# while leaving an unselected missing CLI out of a Claude-only readiness check.
+MISSING_PROVIDER_CLI_STUBS="$TMP_ROOT/stubs-without-provider-clis"
+mkdir -p "$MISSING_PROVIDER_CLI_STUBS"
+for tool in rtk npm node uv python3; do
+  ln -s "$STUBS/$tool" "$MISSING_PROVIDER_CLI_STUBS/$tool"
+done
+
+set +e
+STRICT_BOTH_MISSING_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_PROVIDER_CLI_STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers claude,codex --allow-worktree-root 2>&1)
+STRICT_BOTH_MISSING_CODE=$?
+STRICT_CLAUDE_ONLY_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_CODEX_STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers claude --allow-worktree-root 2>&1)
+STRICT_CLAUDE_ONLY_CODE=$?
+set -e
+
+if [ "$STRICT_BOTH_MISSING_CODE" -ne 0 ] \
+  && printf '%s' "$STRICT_BOTH_MISSING_OUT" | grep -Fqi 'Claude Code CLI not found' \
+  && printf '%s' "$STRICT_BOTH_MISSING_OUT" | grep -Fqi 'Codex CLI not found' \
+  && [ "$STRICT_CLAUDE_ONLY_CODE" -eq 0 ]; then
+  echo 'PASS strict readiness reports both missing required CLIs and ignores an unselected absent Codex CLI'
+else
+  echo 'FAIL strict readiness reports both missing required CLIs and ignores an unselected absent Codex CLI'
+  printf 'both missing exit code: %s\n' "$STRICT_BOTH_MISSING_CODE"
+  printf '%s\n' "$STRICT_BOTH_MISSING_OUT"
+  printf 'Claude-only exit code: %s\n' "$STRICT_CLAUDE_ONLY_CODE"
+  printf '%s\n' "$STRICT_CLAUDE_ONLY_OUT"
+  exit 1
+fi
+
 # Every non-interactive provider selection, including the implicit default,
 # establishes the common conduct command and both client skill surfaces.
 INSTALL_SURFACE_MATRIX_FAILURE=''
