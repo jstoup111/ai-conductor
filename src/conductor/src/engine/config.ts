@@ -1,6 +1,14 @@
 import { readFile, rename, mkdir } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
-import { join, isAbsolute, resolve as resolvePath, dirname, relative, sep } from 'path';
+import {
+  join,
+  isAbsolute,
+  normalize,
+  resolve as resolvePath,
+  dirname,
+  relative,
+  sep,
+} from 'path';
 import { load as loadYaml } from 'js-yaml';
 import type {
   HarnessConfig,
@@ -460,6 +468,31 @@ export function validateConfig(
       const isCustom = !builtInNames.has(name as StepName);
 
       if (isCustom) {
+        if (cfg.completion_artifact !== undefined) {
+          const field = `steps.${name}.completion_artifact`;
+          if (
+            typeof cfg.completion_artifact !== 'string' ||
+            cfg.completion_artifact.trim() === ''
+          ) {
+            return errVal(`${field} must be a non-empty string`);
+          }
+          const artifact = cfg.completion_artifact;
+          if (isAbsolute(artifact)) return errVal(`${field} must be repository-relative`);
+          if (!artifact.startsWith('.pipeline/')) {
+            return errVal(`${field} must be under .pipeline/`);
+          }
+          if (artifact.split(/[\\/]/).includes('..')) {
+            return errVal(`${field} must not contain traversal segments`);
+          }
+          if (/[*?[\]{}]/.test(artifact)) {
+            return errVal(`${field} must be an exact file path without glob syntax`);
+          }
+          if (artifact.endsWith('/')) {
+            return errVal(`${field} must name a file under .pipeline/`);
+          }
+          if (normalize(artifact) !== artifact) return errVal(`${field} must be normalized`);
+        }
+
         // Custom steps need both `after` and `skill`.
         if (typeof cfg.after !== 'string') {
           return errVal(`Custom step "${name}" requires 'after: <existing-step>'`);
@@ -498,6 +531,9 @@ export function validateConfig(
         }
         if (cfg.enforcement !== undefined) {
           return errVal(`steps.${name}.enforcement is not valid for built-in steps`);
+        }
+        if (cfg.completion_artifact !== undefined) {
+          return errVal(`steps.${name}.completion_artifact is not valid for built-in steps`);
         }
 
         // Disabling a gating/structural built-in is not allowed, unless the

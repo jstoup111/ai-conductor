@@ -395,6 +395,47 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('enforces the custom-step completion artifact path boundary', () => {
+      const customStepConfig = (completionArtifact: string) => ({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+            completion_artifact: completionArtifact,
+          },
+        },
+      });
+      const configs = [
+        customStepConfig(''),
+        customStepConfig('/'),
+        customStepConfig('.pipeline-evil/pass'),
+        customStepConfig('.pipeline/../pass'),
+        customStepConfig('.pipeline/*-pass'),
+        customStepConfig('.pipeline/'),
+        customStepConfig('.pipeline//pass'),
+        customStepConfig('.pipeline/pass'),
+        { steps: { memory: { completion_artifact: '.pipeline/memory-pass' } } },
+      ];
+
+      const outcomes = configs.map((config) => {
+        const result = validateConfig(config);
+        return result.ok ? 'accepted' : result.error.message;
+      });
+
+      expect(outcomes).toEqual([
+        'steps.lint.completion_artifact must be a non-empty string',
+        'steps.lint.completion_artifact must be repository-relative',
+        'steps.lint.completion_artifact must be under .pipeline/',
+        'steps.lint.completion_artifact must not contain traversal segments',
+        'steps.lint.completion_artifact must be an exact file path without glob syntax',
+        'steps.lint.completion_artifact must name a file under .pipeline/',
+        'steps.lint.completion_artifact must be normalized',
+        'accepted',
+        'steps.memory.completion_artifact is not valid for built-in steps',
+      ]);
+    });
+
     it('rejects built-in step setting `after` (fail-fast)', () => {
       const result = validateConfig({
         steps: { memory: { after: 'worktree' } },
