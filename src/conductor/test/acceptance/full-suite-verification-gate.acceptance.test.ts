@@ -13,6 +13,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa, type ResultPromise } from 'execa';
+import { spawnSync } from 'node:child_process';
+import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -27,6 +29,7 @@ import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 const SOURCE_INDEX = join(CONDUCTOR_ROOT, 'src', 'index.ts');
 const TSX_LOADER = join(CONDUCTOR_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs');
 const EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
@@ -36,6 +39,7 @@ type CliResult = Awaited<ResultPromise>;
 
 let scratchParent: string;
 let repo: string;
+let realSuiteInvocation = 0;
 
 async function git(args: string[]): Promise<void> {
   await execa('git', args, { cwd: repo });
@@ -82,6 +86,35 @@ async function invokeSuite(
   );
 }
 
+function invokeRealSuite(
+  env: Record<string, string | undefined> = {},
+): { exitCode: number | null; stdout: string; stderr: string } {
+  const pipelineDirectory = join(repo, '.pipeline');
+  mkdirSync(pipelineDirectory, { recursive: true });
+  realSuiteInvocation += 1;
+  const stdoutPath = join(pipelineDirectory, `finish-cli-${realSuiteInvocation}.stdout`);
+  const stderrPath = join(pipelineDirectory, `finish-cli-${realSuiteInvocation}.stderr`);
+  const stdout = openSync(stdoutPath, 'w');
+  const stderr = openSync(stderrPath, 'w');
+  let exitCode: number | null;
+  try {
+    exitCode = spawnSync(REAL_CONDUCT_TS, ['test-suite'], {
+      cwd: repo,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', stdout, stderr],
+      timeout: 20_000,
+    }).status;
+  } finally {
+    closeSync(stdout);
+    closeSync(stderr);
+  }
+  return {
+    exitCode,
+    stdout: readFileSync(stdoutPath, 'utf8'),
+    stderr: readFileSync(stderrPath, 'utf8'),
+  };
+}
+
 async function readCount(): Promise<number> {
   const raw = await readFile(join(repo, COUNTER_PATH), 'utf8');
   return Number.parseInt(raw.trim(), 10);
@@ -92,6 +125,7 @@ async function readEvidence(): Promise<Record<string, unknown>> {
 }
 
 beforeEach(async () => {
+  realSuiteInvocation = 0;
   scratchParent = await mkdtemp(join(tmpdir(), 'full-suite-gate-940-'));
   repo = join(scratchParent, 'repo');
   await mkdir(repo);
@@ -284,7 +318,80 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
 });
 
 describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, FR-15, FR-17)', () => {
-  it('makes finish reuse or supply the only fallback and removes a local suite run from /pr', async () => {
+  it('has finish invoke the shared CLI and reuse a current PASS without launching the project suite', async () => {
+    const finishSkill = await readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8');
+    const gate = await invokeRealSuite();
+    const launchesBeforeFinish = await readCount();
+    const finishVerification = await invokeRealSuite();
+    const launchesAfterFinish = await readCount();
+
+    expect({
+      finishUsesSharedCli: finishSkill.includes('conduct-ts test-suite'),
+      gateExitCode: gate.exitCode,
+      gateOutput: gate.stdout + gate.stderr,
+      finishExitCode: finishVerification.exitCode,
+      finishOutput: finishVerification.stdout + finishVerification.stderr,
+      additionalProjectSuiteLaunches: launchesAfterFinish - launchesBeforeFinish,
+    }).toEqual({
+      finishUsesSharedCli: true,
+      gateExitCode: 0,
+      gateOutput: expect.stringMatching(/EXECUTED.*PASS/i),
+      finishExitCode: 0,
+      finishOutput: expect.stringMatching(/REUSED.*PASS/i),
+      additionalProjectSuiteLaunches: 0,
+    });
+  });
+
+  it('executes exactly once for each standalone missing or stale finish proof', async () => {
+    const missingProof = await invokeRealSuite();
+    const launchesAfterMissing = await readCount();
+    await writeProjectFile('src/app.ts', 'export const value = 2;\n');
+    const staleProof = await invokeRealSuite();
+    const launchesAfterStale = await readCount();
+
+    expect({
+      missingExitCode: missingProof.exitCode,
+      missingOutput: missingProof.stdout + missingProof.stderr,
+      missingLaunches: launchesAfterMissing,
+      staleExitCode: staleProof.exitCode,
+      staleOutput: staleProof.stdout + staleProof.stderr,
+      staleAdditionalLaunches: launchesAfterStale - launchesAfterMissing,
+    }).toEqual({
+      missingExitCode: 0,
+      missingOutput: expect.stringMatching(/EXECUTED.*PASS/i),
+      missingLaunches: 1,
+      staleExitCode: 0,
+      staleOutput: expect.stringMatching(/EXECUTED.*PASS/i),
+      staleAdditionalLaunches: 1,
+    });
+  });
+
+  it('blocks finish before choices when the shared CLI exits non-zero', async () => {
+    const finishSkill = await readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8');
+    const suiteSection = finishSkill.slice(
+      finishSkill.indexOf('### 1. Fresh Verification'),
+      finishSkill.indexOf('### 1b.'),
+    );
+    const failure = await invokeRealSuite({ SUITE_MODE: 'fail:finish-block' });
+    const finishChoiceExists = await readFile(join(repo, '.pipeline/finish-choice'), 'utf8')
+      .then(() => true)
+      .catch(() => false);
+
+    expect({
+      exitCode: failure.exitCode,
+      output: failure.stdout + failure.stderr,
+      contractStopsBeforeChoice:
+        /non-?zero[\s\S]*STOP[\s\S]*(?:choice|options)[\s\S]*finish-choice/i.test(suiteSection),
+      finishChoiceExists,
+    }).toEqual({
+      exitCode: 1,
+      output: expect.stringMatching(/FAILED.*evidence=nonzero_exit.*\/tdd or \/pipeline/is),
+      contractStopsBeforeChoice: true,
+      finishChoiceExists: false,
+    });
+  });
+
+  it('makes finish supply the only fallback and removes a local suite run from /pr', async () => {
     const [finish, pr] = await Promise.all([
       readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
       readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),

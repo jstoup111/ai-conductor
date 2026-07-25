@@ -50,21 +50,41 @@ Do NOT trust:
 - Test results from earlier in the session
 - "It was passing last time I checked"
 - Agent reports from subagents (verify their claims independently)
+- A hand-read evidence file without recalculating its content fingerprint
 
 Run these commands and read the full output:
 
-1. **Full test suite** — Run it fresh. Read the output. Count passing/failing/pending. This is the SINGLE in-pipeline full-suite checkpoint before push — it complements, and is not duplicated by, intermediate steps (which run scoped tests) or CI's authoritative `conductor` job.
+1. **Aggregate suite proof** — From the project root, run `conduct-ts test-suite`.
+   The shared verifier recalculates freshness and produces one of two successful
+   results:
+   - `EXECUTED` — evidence was missing or stale, so the project suite launched
+     exactly once and recorded a current PASS.
+   - `REUSED` — current PASS evidence matched the verification inputs, so the
+     project suite did not launch.
+
+   Read the complete CLI output. Do not run the project suite command directly
+   or inspect the evidence sidecar as a substitute; the CLI owns both the
+   run-versus-reuse decision and the evidence update.
 2. **Git status** — Check for uncommitted files, untracked files, unexpected changes.
 3. **Linting/type checking** — If the project has linters or type checkers, run them.
 
 All must pass before proceeding.
 
-**When the fresh suite fails — flake-check, then record the evidence:**
+**When `conduct-ts test-suite` exits non-zero — stop before completion choices:**
 
-1. **Flake-check**: re-run JUST the failing specs once. A failure that passes on
-   re-run, or that is plainly transient infra (DB not up, port in use, network
-   timeout), is a flake — note it and proceed normally.
-2. **Real failures remain** → this is NOT a finishable state:
+**STOP before presenting options, executing any choice, pushing, creating a PR,
+or writing `.pipeline/finish-choice`.** Report the actionable, redacted CLI
+failure output. The shared verifier retains its canonical failure in
+`.pipeline/test-suite-evidence.json`.
+
+1. **Flake-check executable test failures only**: if the CLI output identifies
+   failing specs, re-run JUST those specs once. A failure that passes on re-run,
+   or that is plainly transient infra (DB not up, port in use, network timeout),
+   is a flake — note it, then run `conduct-ts test-suite` again so only the shared
+   verifier can record the replacement PASS. For configuration, preflight,
+   launch, or timeout failures, do not invent a failing-spec rerun; use the
+   verifier's blocking evidence.
+2. **Real test failures remain** → this is NOT a finishable state:
    - Write **`.pipeline/test-failures.md`** (run evidence — overwrite any prior
      one): one section per failing test file with the test names, a one-line
      failure reason each, and your read on the cause — an implementation bug, or
@@ -409,8 +429,8 @@ After executing the chosen option:
 ## Verification
 
 - [ ] GATE 0: checked `git status` first — confirmed NO rebase/merge in progress and no unmerged paths (else stopped without pushing/PR/`finish-choice`)
-- [ ] Test suite ran fresh (not cached) — output read
-- [ ] If the fresh suite failed: flake-check performed; real failures recorded in `.pipeline/test-failures.md`; NO `finish-choice` written
+- [ ] `conduct-ts test-suite` ran now — output read; success was `EXECUTED` or `REUSED`
+- [ ] If the verifier exited non-zero: applicable flake-check performed; real test failures recorded in `.pipeline/test-failures.md`; NO choices presented and NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
 - [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
       completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
