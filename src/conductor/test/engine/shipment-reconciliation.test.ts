@@ -373,6 +373,16 @@ describe('publishShipmentRepair', () => {
     })).rejects.toThrow('repair 916/durable-shipped-records record-commit failed: non-fast-forward update rejected');
   });
 
+  it('surfaces a rate-limited repair-PR write without a fallback', async () => {
+    await expect(publishShipmentRepair(repairPlan, {
+      ensureRepairBranch: async () => {},
+      commitRecordOnly: async () => ({ headSha: repairHead }),
+      findOrCreateRepairPullRequest: async () => { throw new Error('API rate limit exceeded'); },
+      verifyRepairHead: async () => { throw new Error('must not verify after PR write failure'); },
+      postStatus: async () => { throw new Error('must not post after PR write failure'); },
+    })).rejects.toThrow('repair 916/durable-shipped-records pull-request failed: API rate limit exceeded');
+  });
+
   it('does not publish a branch, commit, PR, or status for aligned or unresolved plans', async () => {
     const publisher = {
       ensureRepairBranch: async () => { throw new Error('must not create a branch'); },

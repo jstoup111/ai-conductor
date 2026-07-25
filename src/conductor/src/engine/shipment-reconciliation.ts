@@ -150,12 +150,18 @@ export async function publishShipmentRepair(
   } catch (error) {
     throw new Error(`repair ${plan.identity} record-commit failed: ${errorMessage(error)}`);
   }
-  const { url: pullRequestUrl, headSha } = await publisher.findOrCreateRepairPullRequest({
-    branch,
-    base: 'main',
-    identity: plan.identity,
-    expectedHeadSha,
-  });
+  let pullRequestUrl: string;
+  let headSha: string;
+  try {
+    ({ url: pullRequestUrl, headSha } = await publisher.findOrCreateRepairPullRequest({
+      branch,
+      base: 'main',
+      identity: plan.identity,
+      expectedHeadSha,
+    }));
+  } catch (error) {
+    throw new Error(`repair ${plan.identity} pull-request failed: ${errorMessage(error)}`);
+  }
   const verdict = await publisher.verifyRepairHead({ headSha });
   const status = verdict.kind === 'valid' ? 'success' : 'failure';
   const description = verdict.kind === 'valid'
