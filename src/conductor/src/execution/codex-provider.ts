@@ -30,6 +30,32 @@ interface SelectedAuthentication {
   apiKey?: string;
 }
 
+interface DoctorCommandResult {
+  stdout?: unknown;
+  stderr?: unknown;
+  exitCode?: number | null;
+}
+
+export interface CodexDoctorRunnerOptions {
+  reject: false;
+  timeout: number;
+  stdout: 'pipe';
+  stderr: 'pipe';
+  env?: Record<string, string>;
+}
+
+/** A narrow injectable boundary for captured, non-mutating Codex readiness checks. */
+export type CodexDoctorRunner = (
+  command: 'codex',
+  args: readonly ['doctor', '--json', '--summary'],
+  options: CodexDoctorRunnerOptions,
+) => Promise<DoctorCommandResult>;
+
+const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
+
+const defaultCodexDoctorRunner: CodexDoctorRunner = async (command, args, options) =>
+  execa(command, args, options) as Promise<DoctorCommandResult>;
+
 /** Extract the final agent message and optional usage from Codex JSONL output. */
 export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: TokenUsage } {
   let output: string | undefined;
@@ -67,6 +93,30 @@ function parseWaitSeconds(output: string): number {
 }
 
 export class CodexProvider implements LLMProvider {
+  constructor(private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner) {}
+
+  async readiness(): Promise<AuthenticationReadiness> {
+    const authentication = this.selectAuthentication();
+    try {
+      const result = await this.runDoctor(
+        'codex',
+        ['doctor', '--json', '--summary'],
+        {
+          reject: false,
+          timeout: CODEX_DOCTOR_TIMEOUT_MS,
+          stdout: 'pipe',
+          stderr: 'pipe',
+          env: authentication.apiKey
+            ? { CODEX_API_KEY: authentication.apiKey }
+            : undefined,
+        },
+      );
+      return this.classifyReadiness(result, authentication);
+    } catch {
+      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    }
+  }
+
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const authentication = this.selectAuthentication();
     const args = this.buildArgs(options, true);
@@ -193,6 +243,88 @@ export class CodexProvider implements LLMProvider {
         ? { remediation: 'Update the selected Codex authentication source and retry.' }
         : {}),
     };
+  }
+
+  private classifyReadiness(
+    result: DoctorCommandResult,
+    authentication: SelectedAuthentication,
+  ): AuthenticationReadiness {
+    const evidence = this.parseDoctorEvidence(result.stdout);
+    if (!evidence || evidence.source !== authentication.source) {
+      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    }
+
+    const exitCode = result.exitCode ?? 1;
+    if (
+      evidence.configured === true &&
+      evidence.authenticated === true &&
+      evidence.rejected !== true &&
+      exitCode === 0
+    ) {
+      return { provider: 'codex', source: authentication.source, state: 'ready' };
+    }
+    if (
+      evidence.configured === false &&
+      evidence.authenticated === false &&
+      evidence.rejected !== true &&
+      exitCode === 0
+    ) {
+      return this.nonReadyReadiness(authentication.source, 'missing');
+    }
+    if (
+      evidence.configured === true &&
+      evidence.authenticated === false &&
+      evidence.rejected === true &&
+      exitCode !== 0
+    ) {
+      return this.nonReadyReadiness(authentication.source, 'unusable');
+    }
+    return this.nonReadyReadiness(authentication.source, 'unverifiable');
+  }
+
+  private parseDoctorEvidence(stdout: unknown): {
+    source: AuthenticationSource;
+    configured: boolean;
+    authenticated: boolean;
+    rejected?: boolean;
+  } | undefined {
+    if (typeof stdout !== 'string') return undefined;
+    try {
+      const parsed: unknown = JSON.parse(stdout);
+      if (!parsed || typeof parsed !== 'object') return undefined;
+      const { schemaVersion, auth, transport } = parsed as Record<string, unknown>;
+      if (schemaVersion !== 1 || !auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') {
+        return undefined;
+      }
+      const { selectedMode, configured, rejected } = auth as Record<string, unknown>;
+      const { authenticated } = transport as Record<string, unknown>;
+      if (
+        (selectedMode !== 'api-key' && selectedMode !== 'cached-login') ||
+        typeof configured !== 'boolean' ||
+        typeof authenticated !== 'boolean' ||
+        (rejected !== undefined && typeof rejected !== 'boolean')
+      ) {
+        return undefined;
+      }
+      return { source: selectedMode, configured, authenticated, rejected };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private nonReadyReadiness(
+    source: AuthenticationSource,
+    state: Exclude<AuthenticationReadiness['state'], 'ready'>,
+  ): AuthenticationReadiness {
+    const action = source === 'api-key'
+      ? 'Replace CODEX_API_KEY and restart the daemon.'
+      : 'Sign in to Codex and retry.';
+    const reason = state === 'missing'
+      ? 'The selected Codex authentication source is not configured.'
+      : state === 'unusable'
+        ? 'The selected Codex authentication source was rejected.'
+        : 'Codex authentication readiness could not be verified.';
+    return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
   }
 
   private sanitizeOutput(output: string, apiKey: string | undefined): string {
