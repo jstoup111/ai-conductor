@@ -580,6 +580,56 @@ complexity:
 
       expect(result.ok && result.config.test_suite).toEqual(testSuite);
     });
+
+    it.each([
+      ['a non-object block', 'npm test', /test_suite must be an object/],
+      ['an unknown key', { command: 'npm test', retries: 2 }, /test_suite.*retries/],
+      ['a missing command', {}, /test_suite\.command/],
+      ['a blank command', { command: '   ' }, /test_suite\.command/],
+      [
+        'a non-numeric timeout',
+        { command: 'npm test', timeout_seconds: 'slow' },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a zero timeout',
+        { command: 'npm test', timeout_seconds: 0 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a negative timeout',
+        { command: 'npm test', timeout_seconds: -1 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a non-string inputs entry',
+        { command: 'npm test', inputs: ['package.json', 42] },
+        /test_suite\.inputs/,
+      ],
+      [
+        'a non-string environment entry',
+        { command: 'npm test', environment: ['CI', false] },
+        /test_suite\.environment/,
+      ],
+      [
+        'an absolute working directory',
+        { command: 'npm test', working_directory: '/tmp/project' },
+        /test_suite\.working_directory/,
+      ],
+      [
+        'a working directory that escapes the project root',
+        { command: 'npm test', working_directory: '../outside' },
+        /test_suite\.working_directory/,
+      ],
+    ])('rejects %s with a field-specific error', (_name, testSuite, expectedMessage) => {
+      const result = validateConfig({ test_suite: testSuite }, tmpDir);
+
+      expect(result.ok ? '' : result.error.message).toMatch(expectedMessage);
+    });
+
+    it('keeps the entire test_suite block optional at global config validation', () => {
+      expect(validateConfig({}).ok).toBe(true);
+    });
   });
 
   describe('model_fallback_ladder validation', () => {

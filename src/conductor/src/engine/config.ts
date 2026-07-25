@@ -1,6 +1,6 @@
 import { readFile, rename, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, isAbsolute, resolve as resolvePath, dirname } from 'path';
+import { join, isAbsolute, resolve as resolvePath, dirname, relative, sep } from 'path';
 import { load as loadYaml } from 'js-yaml';
 import type {
   HarnessConfig,
@@ -577,6 +577,12 @@ export function validateConfig(
     }
   }
 
+  // test_suite — the project-owned aggregate verification operation.
+  if (obj.test_suite !== undefined) {
+    const err = validateTestSuiteBlock(obj.test_suite, projectRoot);
+    if (err) return { ok: false, error: err };
+  }
+
   // spec_owner — the daemon operator identity (owner-gate, FR-1). Naming
   // boundary (ADR-1): the operator concept, never the lock holder.
   //
@@ -1086,6 +1092,82 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
       }
     }
   }
+  return null;
+}
+
+function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'test_suite must be an object' };
+  }
+
+  const allowed = new Set([
+    'command',
+    'working_directory',
+    'timeout_seconds',
+    'inputs',
+    'environment',
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in test_suite: "${key}"` };
+    }
+  }
+
+  if (typeof raw.command !== 'string' || raw.command.trim() === '') {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command must be a non-empty string',
+    };
+  }
+
+  if (raw.working_directory !== undefined) {
+    if (typeof raw.working_directory !== 'string') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.working_directory must be a relative path within the project root',
+      };
+    }
+    const root = resolvePath(projectRoot ?? '.');
+    const resolvedDirectory = resolvePath(root, raw.working_directory);
+    const relativeDirectory = relative(root, resolvedDirectory);
+    if (
+      isAbsolute(raw.working_directory) ||
+      relativeDirectory === '..' ||
+      relativeDirectory.startsWith(`..${sep}`) ||
+      isAbsolute(relativeDirectory)
+    ) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.working_directory must be a relative path within the project root',
+      };
+    }
+  }
+
+  if (
+    raw.timeout_seconds !== undefined &&
+    (typeof raw.timeout_seconds !== 'number' ||
+      !Number.isFinite(raw.timeout_seconds) ||
+      raw.timeout_seconds <= 0)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.timeout_seconds must be a finite positive number',
+    };
+  }
+
+  for (const field of ['inputs', 'environment'] as const) {
+    const value = raw[field];
+    if (
+      value !== undefined &&
+      (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string'))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.${field} must be an array of strings`,
+      };
+    }
+  }
+
   return null;
 }
 
