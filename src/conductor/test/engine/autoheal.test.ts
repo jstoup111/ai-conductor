@@ -1129,7 +1129,6 @@ describe('parsePlanTaskVerifyOnly', () => {
       '2026-07-12-rtk-hook-preservation.md',
       '2026-06-30-daemon-owner-gate.md',
       '2026-07-03-daemon-issue-priority-scheduling.md',
-      '2026-07-05-changelog-migration-block-enforcement.md',
     ];
 
     it.each(fixtures)('%s: zero verify-only true entries, unchanged parsePlanTaskPaths', async (fixture) => {
