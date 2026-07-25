@@ -72,6 +72,10 @@ import {
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
 import {
+  detectShipmentEvidenceCommand,
+  dispatchShipmentEvidence,
+} from './engine/shipment-evidence-cli.js';
+import {
   detectFinishRecordCommand,
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -458,6 +462,12 @@ async function main(): Promise<void> {
   const shippedRecordCmd = detectShippedRecordCommand(process.argv);
   if (shippedRecordCmd) {
     const code = await dispatchShippedRecord(shippedRecordCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const shipmentEvidenceCmd = detectShipmentEvidenceCommand(process.argv);
+  if (shipmentEvidenceCmd) {
+    const code = await dispatchShipmentEvidence(shipmentEvidenceCmd, process.cwd());
     process.exit(code);
   }
 
