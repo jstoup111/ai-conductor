@@ -22,6 +22,7 @@ import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
+import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -955,13 +956,21 @@ async function main(): Promise<void> {
     registeredProviders: registry.list('llm_provider'),
   });
 
-  // Retrieve provider and subscriber from registry with defaults
+  // Compose one provider-routing context from the complete frozen registry.
+  // The ordered config survives intact; its first entry is only the
+  // compatibility adapter for legacy constructor surfaces.
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
-  const selectedProviderKey = configuredProviders[0];
-  const providerRuntimes = createProviderRuntimeSet(registry, console.warn);
-  const selectedRuntime = providerRuntimes.get(selectedProviderKey);
-  const provider = selectedRuntime.provider;
-  const modelPolicy = selectedRuntime.policy;
+  const providerExecution: ProviderExecutionContext = {
+    configuredProviders: configuredProviders,
+    runtimes: createProviderRuntimeSet(registry, console.warn),
+    sessions: new ProviderSessionStore(),
+    config: config,
+    modelOverride: opts.model,
+    warn: console.warn,
+  };
+  const compatibilityRuntime = providerExecution.runtimes.get(
+    providerExecution.configuredProviders[0],
+  );
 
   // Select UI subscriber based on config (default: 'terminal')
   const subscriber = registry.get<UISubscriber>(
@@ -1001,14 +1010,14 @@ async function main(): Promise<void> {
   }
   buildVisualizers(visualizerList, events);
 
-  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
+  const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
     stepCooldown: opts.cooldown,
     config,
-    modelPolicy,
-    modelOverride: opts.model,
+    modelPolicy: compatibilityRuntime.policy,
     mode,
+    providerExecution,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and
@@ -1028,19 +1037,13 @@ async function main(): Promise<void> {
     };
   const prelude = await runProjectPrelude(
     projectRoot,
-    provider,
+    compatibilityRuntime.provider,
     sessionId,
     config ?? {},
     {
       harnessVersion,
       onAssessStalePrompt: interactivePrompt,
-      providerExecution: {
-        configuredProviders,
-        runtimes: providerRuntimes,
-        sessions: new ProviderSessionStore(),
-        modelOverride: opts.model,
-        warn: console.warn,
-      },
+      providerExecution,
     },
   );
   if (prelude.bootstrapExecuted) {
@@ -1073,7 +1076,8 @@ async function main(): Promise<void> {
     fromStep: opts.from as StepName | undefined,
     mode,
     config,
-    modelPolicy,
+    modelPolicy: compatibilityRuntime.policy,
+    providerExecution,
     projectRoot,
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,

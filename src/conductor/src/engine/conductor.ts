@@ -29,6 +29,7 @@ import type { ProviderSessionScope } from './provider-session.js';
 import type {
   ProviderAttemptMetadata,
   ProviderAttributionMetadata,
+  ProviderExecutionContext,
 } from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
@@ -542,6 +543,8 @@ export interface ConductorOptions {
    * Claude remains the compatibility default.
    */
   modelPolicy?: ProviderModelPolicy;
+  /** Shared provider routing state owned by this conductor run. */
+  providerExecution?: ProviderExecutionContext;
   projectRoot: string;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
@@ -872,6 +875,7 @@ export class Conductor {
   private mode: RunMode;
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
+  private readonly providerExecution?: ProviderExecutionContext;
   private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
@@ -1104,6 +1108,7 @@ export class Conductor {
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
+    this.providerExecution = opts.providerExecution;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
@@ -1155,6 +1160,9 @@ export class Conductor {
     }
 
     const preferredProvider = normalizeProviderSelection(selection)[0];
+    if (preferredProvider && this.providerExecution) {
+      return this.providerExecution.runtimes.get(preferredProvider).policy;
+    }
     return preferredProvider === undefined
       ? this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY
       : resolveProviderModelPolicy(preferredProvider);
@@ -2285,6 +2293,8 @@ export class Conductor {
           this.config,
           {
             tier: state.complexity_tier,
+            modelCliOverride: this.providerExecution?.modelOverride,
+            effortCliOverride: this.providerExecution?.effortOverride,
           },
         );
 

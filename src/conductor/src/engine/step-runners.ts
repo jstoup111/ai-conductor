@@ -42,6 +42,7 @@ import {
   executeProviderCandidates,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
+  type ProviderExecutionContext,
 } from './provider-execution.js';
 import {
   ProviderRuntimeSet,
@@ -323,6 +324,8 @@ export interface StepRunnerOptions {
   providerExecutor?: typeof executeProviderCandidates;
   /** Visible provider-transition warning sink. */
   providerWarn?: ExecuteProviderCandidatesInput['warn'];
+  /** Shared provider routing state owned by this conductor run. */
+  providerExecution?: ProviderExecutionContext;
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -369,8 +372,10 @@ export class DefaultStepRunner implements StepRunner {
     this.sleepFn = options?.sleepFn ?? defaultSleep;
     this.config = options?.config;
     this.modelPolicy = options?.modelPolicy ?? CLAUDE_MODEL_POLICY;
-    this.modelOverride = options?.modelOverride;
-    this.effortOverride = options?.effortOverride;
+    this.modelOverride =
+      options?.modelOverride ?? options?.providerExecution?.modelOverride;
+    this.effortOverride =
+      options?.effortOverride ?? options?.providerExecution?.effortOverride;
     this.mode = options?.mode ?? 'default';
     this.modelAvailability = new ModelAvailability(
       this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder,
@@ -378,16 +383,23 @@ export class DefaultStepRunner implements StepRunner {
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
-    this.sessionStore = options?.sessionStore;
+    this.sessionStore =
+      options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
-    this.providerRuntimes = options?.providerRuntimes;
+    this.providerRuntimes =
+      options?.providerRuntimes ?? options?.providerExecution?.runtimes;
     this.configuredProviders =
       options?.configuredProviders ??
+      options?.providerExecution?.configuredProviders ??
       normalizeProviderSelection(this.config?.llm_provider);
     this.providerExecutor =
-      options?.providerExecutor ?? executeProviderCandidates;
+      options?.providerExecutor ??
+      options?.providerExecution?.executor ??
+      executeProviderCandidates;
     this.providerWarn =
-      options?.providerWarn ?? ((message) => console.warn(message));
+      options?.providerWarn ??
+      options?.providerExecution?.warn ??
+      ((message) => console.warn(message));
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {

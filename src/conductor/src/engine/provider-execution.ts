@@ -90,6 +90,8 @@ export interface ProviderExecutionContext {
   runtimes: ProviderRuntimeSet;
   sessions: ProviderSessionStore;
   config?: HarnessConfig;
+  modelOverride?: string;
+  effortOverride?: EffortLevel;
   executor?: typeof executeProviderCandidates;
   warn?: ExecuteProviderCandidatesInput['warn'];
 }

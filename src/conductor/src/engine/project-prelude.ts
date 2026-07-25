@@ -18,11 +18,9 @@ import { load as loadYaml, dump as dumpYaml } from 'js-yaml';
 import type { HarnessConfig } from '../types/config.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { StepName } from '../types/index.js';
-import type { ProviderRuntimeSet } from './provider-runtime.js';
-import type { ProviderSessionStore } from './provider-session.js';
 import {
   executeProviderCandidates,
-  type ExecuteProviderCandidatesInput,
+  type ProviderExecutionContext,
 } from './provider-execution.js';
 
 const exec = promisify(execCb);
@@ -73,14 +71,7 @@ export interface PreludeOptions {
    */
   onAssessStalePrompt?: (reason: { days: number; commits: number }) => Promise<boolean>;
   /** Optional provider-aware routing context for project-scoped steps. */
-  providerExecution?: {
-    configuredProviders: readonly string[];
-    runtimes: ProviderRuntimeSet;
-    sessions: ProviderSessionStore;
-    providerExecutor?: typeof executeProviderCandidates;
-    modelOverride?: string;
-    warn?: ExecuteProviderCandidatesInput['warn'];
-  };
+  providerExecution?: ProviderExecutionContext;
 }
 
 interface BootstrapMarker {
@@ -165,7 +156,7 @@ async function invokePreludeSkill(
   }
 
   const result = await (
-    execution.providerExecutor ?? executeProviderCandidates
+    execution.executor ?? executeProviderCandidates
   )({
     step,
     configuredProviders: execution.configuredProviders,

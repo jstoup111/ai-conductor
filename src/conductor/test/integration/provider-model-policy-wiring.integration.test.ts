@@ -42,7 +42,7 @@ function objectBindsPolicy(
   });
 }
 
-it('resolves one selected inline provider key to both its provider and immutable policy before construction', async () => {
+it('composes one ordered provider context across the interactive run after registry freeze', async () => {
   const source = await readFile(
     new URL('../../src/index.ts', import.meta.url),
     'utf8',
@@ -65,106 +65,142 @@ it('resolves one selected inline provider key to both its provider and immutable
   };
   visit(sourceFile);
 
-  const providerBinding = declarations.find((declaration) => {
-    if (
-      !ts.isIdentifier(declaration.name) ||
-      !declaration.initializer ||
-      !ts.isPropertyAccessExpression(declaration.initializer)
-    ) return false;
-    return declaration.initializer.name.text === 'provider' &&
-      ts.isIdentifier(declaration.initializer.expression);
-  });
-  const providerName = providerBinding && ts.isIdentifier(providerBinding.name)
-    ? providerBinding.name.text
-    : undefined;
-  const selectedRuntimeName =
-    providerBinding?.initializer &&
-    ts.isPropertyAccessExpression(providerBinding.initializer) &&
-    ts.isIdentifier(providerBinding.initializer.expression)
-      ? providerBinding.initializer.expression.text
+  const binding = (name: string) =>
+    declarations.find(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === name,
+    );
+  const contextBinding = binding('providerExecution');
+  const contextObject =
+    contextBinding?.initializer &&
+    ts.isObjectLiteralExpression(contextBinding.initializer)
+      ? contextBinding.initializer
       : undefined;
-  const selectedRuntimeBinding = declarations.find(
-    (declaration) =>
-      selectedRuntimeName !== undefined &&
-      ts.isIdentifier(declaration.name) &&
-      declaration.name.text === selectedRuntimeName &&
-      declaration.initializer !== undefined &&
-      ts.isCallExpression(declaration.initializer) &&
-      declaration.initializer.expression.getText(sourceFile) ===
-        'providerRuntimes.get',
+  const contextProperties = new Map(
+    contextObject?.properties
+      .filter(ts.isPropertyAssignment)
+      .map((property) => [
+        property.name.getText(sourceFile),
+        property.initializer.getText(sourceFile),
+      ]) ?? [],
   );
-  const selectedKey =
-    selectedRuntimeBinding?.initializer &&
-    ts.isCallExpression(selectedRuntimeBinding.initializer) &&
-    ts.isIdentifier(selectedRuntimeBinding.initializer.arguments[0])
-      ? selectedRuntimeBinding.initializer.arguments[0].text
-      : undefined;
-  const selectedKeyBindings = declarations.filter(
-    (declaration) =>
-      ts.isIdentifier(declaration.name) &&
-      declaration.name.text === selectedKey,
-  );
-  const runtimeSetCalls = calls.filter((call) =>
-    call.expression.getText(sourceFile) === 'createProviderRuntimeSet' &&
-    call.arguments.length === 2 &&
-    call.arguments[0].getText(sourceFile) === 'registry' &&
-    call.arguments[1].getText(sourceFile) === 'console.warn'
-  );
-  const policyBinding = declarations.find(
-    (declaration) =>
-      ts.isIdentifier(declaration.name) &&
-      declaration.initializer !== undefined &&
-      ts.isPropertyAccessExpression(declaration.initializer) &&
-      declaration.initializer.name.text === 'policy' &&
-      ts.isIdentifier(declaration.initializer.expression) &&
-      declaration.initializer.expression.text === selectedRuntimeName,
-  );
-  const policyName = policyBinding && ts.isIdentifier(policyBinding.name)
-    ? policyBinding.name.text
-    : undefined;
+  const compatibilityRuntime = binding('compatibilityRuntime');
   const runnerConstruction = constructions.find(
     (node) => node.expression.getText(sourceFile) === 'DefaultStepRunner',
   );
   const conductorConstruction = constructions.find(
     (node) => node.expression.getText(sourceFile) === 'Conductor',
   );
+  const runnerOptions =
+    runnerConstruction?.arguments[3] &&
+    ts.isObjectLiteralExpression(runnerConstruction.arguments[3])
+      ? runnerConstruction.arguments[3]
+      : undefined;
+  const conductorOptions =
+    conductorConstruction?.arguments[0] &&
+    ts.isObjectLiteralExpression(conductorConstruction.arguments[0])
+      ? conductorConstruction.arguments[0]
+      : undefined;
+  const propertyText = (
+    object: ts.ObjectLiteralExpression | undefined,
+    name: string,
+  ) =>
+    object?.properties.find((property) => property.name?.getText(sourceFile) === name)
+      ?.getText(sourceFile);
+  const preludeCall = calls.find(
+    (call) => call.expression.getText(sourceFile) === 'runProjectPrelude',
+  );
+  const validationCall = calls.find(
+    (call) =>
+      call.expression.getText(sourceFile) ===
+      'validateRegisteredProviderSelections',
+  );
+  const markInitializedCall = calls.find(
+    (call) => call.expression.getText(sourceFile) === 'registry.markInitialized',
+  );
+  const subscriberStart = calls.find(
+    (call) => call.expression.getText(sourceFile) === 'subscriber.start',
+  );
+  const runtimeCalls = calls.filter(
+    (call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet',
+  );
+  const validationOptions =
+    validationCall?.arguments[0] &&
+    ts.isObjectLiteralExpression(validationCall.arguments[0])
+      ? validationCall.arguments[0]
+      : undefined;
+  const sessionConstructions = constructions.filter(
+    (node) => node.expression.getText(sourceFile) === 'ProviderSessionStore',
+  );
+  const compact = (text: string | undefined) =>
+    text?.replace(/\s+/g, '').replace(/,\)/g, ')');
 
   expect({
-    selectedKeyDeclaredOnce:
-      selectedKeyBindings.length === 1 &&
-      isConstBinding(selectedKeyBindings[0]),
-    providerBoundFromSelectedKey:
-      isConstBinding(providerBinding) && providerName !== undefined,
-    immutablePolicyBoundFromSelectedKey:
-      isConstBinding(policyBinding) && policyName !== undefined,
-    runtimeSetConstructionCount: runtimeSetCalls.length,
-    bothResolveBeforeConstruction:
-      providerBinding !== undefined &&
-      policyBinding !== undefined &&
-      runnerConstruction !== undefined &&
-      conductorConstruction !== undefined &&
-      providerBinding.getStart() < runnerConstruction.getStart() &&
-      policyBinding.getStart() < runnerConstruction.getStart() &&
-      providerBinding.getStart() < conductorConstruction.getStart() &&
-      policyBinding.getStart() < conductorConstruction.getStart(),
-    runnerReceivesExactProviderAndPolicy:
-      runnerConstruction !== undefined &&
-      providerName !== undefined &&
-      runnerConstruction.arguments[0] !== undefined &&
-      ts.isIdentifier(runnerConstruction.arguments[0]) &&
-      runnerConstruction.arguments[0].text === providerName &&
-      objectBindsPolicy(runnerConstruction.arguments[3], policyName),
-    conductorReceivesExactPolicy:
-      conductorConstruction !== undefined &&
-      objectBindsPolicy(conductorConstruction.arguments[0], policyName),
+    selectedProviderKeyBindings: declarations.filter(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === 'selectedProviderKey',
+    ).length,
+    configuredProviderNormalization:
+      binding('configuredProviders')?.initializer?.getText(sourceFile),
+    validationConfig: propertyText(validationOptions, 'config'),
+    validationRegistry: propertyText(
+      validationOptions,
+      'registeredProviders',
+    ),
+    runtimeRegistry: runtimeCalls[0]?.arguments[0]?.getText(sourceFile),
+    contextIsConst: isConstBinding(contextBinding),
+    contextProperties: Object.fromEntries(contextProperties),
+    compatibilityRuntime: compact(
+      compatibilityRuntime?.initializer?.getText(sourceFile),
+    ),
+    runtimeSetConstructionCount: runtimeCalls.length,
+    sessionStoreConstructionCount: sessionConstructions.length,
+    runnerProvider: runnerConstruction?.arguments[0]?.getText(sourceFile),
+    runnerContext: propertyText(runnerOptions, 'providerExecution'),
+    conductorContext: propertyText(conductorOptions, 'providerExecution'),
+    preludeContext:
+      preludeCall?.arguments[4] &&
+      ts.isObjectLiteralExpression(preludeCall.arguments[4])
+        ? propertyText(preludeCall.arguments[4], 'providerExecution')
+        : undefined,
+    startupOrder:
+      markInitializedCall !== undefined &&
+      validationCall !== undefined &&
+      contextBinding !== undefined &&
+      subscriberStart !== undefined &&
+      markInitializedCall.getStart() < validationCall.getStart() &&
+      validationCall.getStart() < contextBinding.getStart() &&
+      contextBinding.getStart() < subscriberStart.getStart(),
   }).toEqual({
-    selectedKeyDeclaredOnce: true,
-    providerBoundFromSelectedKey: true,
-    immutablePolicyBoundFromSelectedKey: true,
+    selectedProviderKeyBindings: 0,
+    configuredProviderNormalization:
+      'normalizeProviderSelection(config?.llm_provider)',
+    validationConfig: 'config: config ?? {}',
+    validationRegistry:
+      "registeredProviders: registry.list('llm_provider')",
+    runtimeRegistry: 'registry',
+    contextIsConst: true,
+    contextProperties: {
+      configuredProviders: 'configuredProviders',
+      runtimes: 'createProviderRuntimeSet(registry, console.warn)',
+      sessions: 'new ProviderSessionStore()',
+      config: 'config',
+      modelOverride: 'opts.model',
+      warn: 'console.warn',
+    },
+    compatibilityRuntime:
+      'providerExecution.runtimes.get(providerExecution.configuredProviders[0])'.replace(
+        /\s+/g,
+        '',
+      ),
     runtimeSetConstructionCount: 1,
-    bothResolveBeforeConstruction: true,
-    runnerReceivesExactProviderAndPolicy: true,
-    conductorReceivesExactPolicy: true,
+    sessionStoreConstructionCount: 1,
+    runnerProvider: 'compatibilityRuntime.provider',
+    runnerContext: 'providerExecution',
+    conductorContext: 'providerExecution',
+    preludeContext: 'providerExecution',
+    startupOrder: true,
   });
 });
 

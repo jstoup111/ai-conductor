@@ -7800,6 +7800,72 @@ describe('engine/conductor', () => {
     expect(planDispatch).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
   });
 
+  it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+
+    let planDispatch: { model?: string; effort?: string } | undefined;
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        if (step === 'plan') {
+          planDispatch = {
+            model: options?.modelOverride,
+            effort: options?.effortOverride,
+          };
+        }
+        return { success: true };
+      }),
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+      invokeInteractive: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider,
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'plan',
+      config: {
+        llm_provider: 'codex',
+        steps: {
+          plan: { model: 'gpt-configured', effort: 'low' },
+        },
+      },
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes,
+        sessions: new ProviderSessionStore(),
+        modelOverride: 'gpt-cli',
+        effortOverride: 'max',
+      },
+    });
+
+    await conductor.run();
+
+    expect(planDispatch).toEqual({ model: 'gpt-cli', effort: 'max' });
+  });
+
   it.each([
     {
       signal: 'rate-limit',
