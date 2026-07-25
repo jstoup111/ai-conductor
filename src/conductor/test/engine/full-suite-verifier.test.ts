@@ -132,4 +132,107 @@ describe('FullSuiteVerifier', () => {
       temporaryFiles: [],
     });
   });
+
+  it('reuses an earlier fallback PASS across callers, reconstruction, and SHA churn', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-verifier-reuse-'));
+    scratches.push(projectRoot);
+    const workingDirectory = join(projectRoot, 'packages/app');
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await mkdir(workingDirectory, { recursive: true });
+    await writeFile(
+      join(projectRoot, '.ai-conductor/config.yml'),
+      [
+        'test_suite:',
+        '  command: node suite.mjs --all',
+        '  working_directory: packages/app',
+        '  timeout_seconds: 42',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const environment = { PATH: '/fixture/bin' };
+    const originalHeadSha = '1111111111111111';
+    let currentHeadSha = originalHeadSha;
+    let executionCount = 0;
+    let fingerprintCount = 0;
+    const expectedEvidence: FullSuitePassEvidence = {
+      version: FULL_SUITE_EVIDENCE_VERSION,
+      outcome: 'PASS',
+      reason: 'exit_zero',
+      fingerprint: 'sha256:byte-identical-content',
+      provenanceHeadSha: originalHeadSha,
+      command: 'node suite.mjs --all',
+      workingDirectory,
+      startedAt: '2026-07-25T16:00:00.000Z',
+      endedAt: '2026-07-25T16:00:03.000Z',
+      durationMs: 3_000,
+      exitCode: 0,
+      stdout: 'all suites passed\n',
+      stderr: '',
+    };
+    const verifier = () => new FullSuiteVerifier({
+      projectRoot,
+      environment,
+      fingerprint: async () => {
+        fingerprintCount += 1;
+        return {
+          ok: true,
+          fingerprint: {
+            digest: expectedEvidence.fingerprint,
+            headSha: currentHeadSha,
+          },
+        };
+      },
+      execute: async () => {
+        executionCount += 1;
+        return {
+          ok: true,
+          command: expectedEvidence.command,
+          cwd: workingDirectory,
+          startedAt: expectedEvidence.startedAt,
+          endedAt: expectedEvidence.endedAt,
+          durationMs: expectedEvidence.durationMs,
+          exitCode: 0,
+          stdout: expectedEvidence.stdout,
+          stderr: expectedEvidence.stderr,
+        };
+      },
+    });
+    const inspect = async () => {
+      const reconstructed = verifier() as FullSuiteVerifier & {
+        inspect?: () => Promise<unknown>;
+      };
+      return reconstructed.inspect === undefined
+        ? { status: 'UNAVAILABLE' }
+        : reconstructed.inspect();
+    };
+
+    const fallback = await verifier().ensure();
+    const laterCaller = await verifier().ensure();
+    const sameHeadInspection = await inspect();
+    currentHeadSha = '2222222222222222';
+    const reconstructedCaller = await verifier().ensure();
+    const changedHeadInspection = await inspect();
+    const persisted = await readFullSuiteEvidence(projectRoot);
+
+    expect({
+      fallback,
+      laterCaller,
+      sameHeadInspection,
+      reconstructedCaller,
+      changedHeadInspection,
+      executionCount,
+      fingerprintCount,
+      persisted,
+    }).toEqual({
+      fallback: { status: 'EXECUTED', evidence: expectedEvidence },
+      laterCaller: { status: 'REUSED', evidence: expectedEvidence },
+      sameHeadInspection: { status: 'CURRENT', evidence: expectedEvidence },
+      reconstructedCaller: { status: 'REUSED', evidence: expectedEvidence },
+      changedHeadInspection: { status: 'CURRENT', evidence: expectedEvidence },
+      executionCount: 1,
+      fingerprintCount: 5,
+      persisted: { usable: true, evidence: expectedEvidence },
+    });
+  });
 });
