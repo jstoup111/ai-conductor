@@ -272,8 +272,8 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
-**`.memory/` is set up by the harness, not by this skill.** The configured harness launcher
-initializes memory before any bootstrap sub-step runs. This creates a canonical
+**`.memory/` is set up by the harness, not by this skill.** `conduct-ts memory setup <dir>`
+runs before any bootstrap sub-step. This creates a canonical
 per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
 it (adr-2026-06-29-shared-memory-store-placement-and-durability). If `.memory/` already exists as a real directory (legacy), it is migrated via
 copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-memory-migration). **Do NOT create or mkdir `.memory/`

@@ -53,13 +53,13 @@ if [ ! -f "$FINISH_SKILL_FILE" ]; then
 fi
 pass "skills/finish/SKILL.md exists"
 
-if rg -n 'conduct-ts|src/conductor|bin/conduct|HARNESS\.md' "$HARNESS_DIR/skills" --glob '*.md' >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
+if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
   rm -f /tmp/pipeline_contract_genericity_hits.$$
-  fail "reusable skills contain project-specific command, path, or harness-file references"
+  fail "reusable skills contain a project-specific verifier command, path, legacy runner name, or harness-file reference"
 else
   rm -f /tmp/pipeline_contract_genericity_hits.$$
-  pass "all reusable skills are free of project-specific command, path, and harness-file references"
+  pass "all reusable skills are free of project-specific verifier commands, paths, legacy runner names, and harness-file references"
 fi
 
 # Must NOT contain imperative "Run `conduct-ts task start`" / "Run `conduct-ts task done`"

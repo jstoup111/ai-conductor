@@ -263,8 +263,8 @@ Save the plan to `.docs/plans/YYYY-MM-DD-<feature>.md`
 
 ### 8a. Advisory Overlap Scan
 
-Before the plan is committed, run the repository's configured overlap-scan action over
-the union of every task's `**Files:**` paths (add the source reference
+Before the plan is committed, run `conduct-ts overlap-scan --files <comma-separated Files set>` over
+the union of every task's `**Files:**` paths (add `--source-ref
 <issue ref>` when the feature's originating issue/intake ref is known). Surface the
 rendered report to the author as-is.
 

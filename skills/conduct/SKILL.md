@@ -62,7 +62,7 @@ Step 17: /finish                → SHIP (verify, review changes, present option
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
 > implementation plan is grounded in the agreed design. This is the canonical
-> harness order. Any legacy project runner that preserves the prior
+> `conduct-ts` order. Any legacy project runner that preserves the prior
 > plan→architecture order must not be used for the PRD-driven flow.
 
 ## Practices
