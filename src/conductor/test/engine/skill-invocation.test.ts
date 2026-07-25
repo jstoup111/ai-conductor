@@ -7,35 +7,60 @@ import {
 import type { StepName } from '../../src/types/index.js';
 
 const EXPECTED_INVOCATIONS = {
-  bootstrap: { skillName: 'bootstrap', arguments: [] },
-  memory: { skillName: 'memory', arguments: [] },
-  assess: { skillName: 'assess', arguments: [] },
-  explore: { skillName: 'explore', arguments: [] },
-  prd: { skillName: 'prd', arguments: [] },
-  complexity: { skillName: 'conduct', arguments: ['complexity'] },
-  stories: { skillName: 'stories', arguments: [] },
-  conflict_check: { skillName: 'conflict-check', arguments: [] },
-  plan: { skillName: 'plan', arguments: [] },
-  coherence_check: { skillName: 'coherence-check', arguments: [] },
-  architecture_diagram: { skillName: 'architecture-diagram', arguments: [] },
-  architecture_review: { skillName: 'architecture-review', arguments: [] },
-  worktree: { skillName: 'conduct', arguments: ['worktree'] },
-  acceptance_specs: { skillName: 'writing-system-tests', arguments: [] },
-  build: { skillName: 'pipeline', arguments: [] },
-  build_review: { skillName: 'build-review', arguments: [] },
-  wiring_check: { skillName: 'conduct', arguments: ['wiring-check'] },
-  test_suite: { skillName: 'conduct', arguments: ['test-suite'] },
-  manual_test: { skillName: 'manual-test', arguments: [] },
-  prd_audit: { skillName: 'prd-audit', arguments: [] },
+  bootstrap: { kind: 'skill', skillName: 'bootstrap', arguments: [] },
+  memory: { kind: 'skill', skillName: 'memory', arguments: [] },
+  assess: { kind: 'skill', skillName: 'assess', arguments: [] },
+  explore: { kind: 'skill', skillName: 'explore', arguments: [] },
+  prd: { kind: 'skill', skillName: 'prd', arguments: [] },
+  complexity: {
+    kind: 'skill',
+    skillName: 'conduct',
+    arguments: ['complexity'],
+  },
+  stories: { kind: 'skill', skillName: 'stories', arguments: [] },
+  conflict_check: {
+    kind: 'skill',
+    skillName: 'conflict-check',
+    arguments: [],
+  },
+  plan: { kind: 'skill', skillName: 'plan', arguments: [] },
+  coherence_check: {
+    kind: 'skill',
+    skillName: 'coherence-check',
+    arguments: [],
+  },
+  architecture_diagram: {
+    kind: 'skill',
+    skillName: 'architecture-diagram',
+    arguments: [],
+  },
+  architecture_review: {
+    kind: 'skill',
+    skillName: 'architecture-review',
+    arguments: [],
+  },
+  worktree: { kind: 'skill', skillName: 'conduct', arguments: ['worktree'] },
+  acceptance_specs: {
+    kind: 'skill',
+    skillName: 'writing-system-tests',
+    arguments: [],
+  },
+  build: { kind: 'skill', skillName: 'pipeline', arguments: [] },
+  build_review: { kind: 'engine-native' },
+  wiring_check: { kind: 'engine-native' },
+  test_suite: { kind: 'engine-native' },
+  manual_test: { kind: 'skill', skillName: 'manual-test', arguments: [] },
+  prd_audit: { kind: 'skill', skillName: 'prd-audit', arguments: [] },
   architecture_review_as_built: {
+    kind: 'skill',
     skillName: 'architecture-review',
     arguments: ['--as-built'],
   },
-  retro: { skillName: 'retro', arguments: [] },
-  rebase: { skillName: 'conduct', arguments: ['rebase'] },
-  finish: { skillName: 'finish', arguments: [] },
-  remediate: { skillName: 'remediate', arguments: [] },
-  attribution_verify: { skillName: 'attribution-verify', arguments: [] },
+  retro: { kind: 'skill', skillName: 'retro', arguments: [] },
+  rebase: { kind: 'skill', skillName: 'rebase', arguments: [] },
+  finish: { kind: 'skill', skillName: 'finish', arguments: [] },
+  remediate: { kind: 'skill', skillName: 'remediate', arguments: [] },
+  attribution_verify: { kind: 'engine-native' },
 } as const satisfies Record<StepName, SkillInvocationDescriptor>;
 
 describe('provider-native skill invocation', () => {
@@ -47,6 +72,7 @@ describe('provider-native skill invocation', () => {
     {
       providerKey: 'claude',
       descriptor: {
+        kind: 'skill',
         skillName: 'architecture-review',
         arguments: ['--as-built'],
       },
@@ -54,12 +80,13 @@ describe('provider-native skill invocation', () => {
     },
     {
       providerKey: 'codex',
-      descriptor: { skillName: 'pipeline', arguments: [] },
+      descriptor: { kind: 'skill', skillName: 'pipeline', arguments: [] },
       expected: '$pipeline',
     },
     {
       providerKey: 'custom-provider',
       descriptor: {
+        kind: 'skill',
         skillName: 'explore',
         arguments: ['complexity', '--deep'],
       },
@@ -76,4 +103,18 @@ describe('provider-native skill invocation', () => {
   }) => {
     expect(renderSkillInvocation(descriptor, providerKey)).toBe(expected);
   });
+
+  it.each([
+    'build_review',
+    'wiring_check',
+    'test_suite',
+    'attribution_verify',
+  ] as const)(
+    'rejects rendering the %s engine-native sentinel as a skill',
+    (stepName) => {
+      expect(() =>
+        renderSkillInvocation(STEP_SKILL_INVOCATIONS[stepName], 'claude'),
+      ).toThrow(/engine-native/i);
+    },
+  );
 });

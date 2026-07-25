@@ -1,60 +1,62 @@
 import type { StepName } from '../types/index.js';
 
-export interface SkillInvocationDescriptor {
-  readonly skillName: string;
-  readonly arguments: readonly string[];
-}
+export type SkillInvocationDescriptor =
+  | {
+      readonly kind: 'skill';
+      readonly skillName: string;
+      readonly arguments: readonly string[];
+    }
+  | { readonly kind: 'engine-native' };
 
 export const STEP_SKILL_INVOCATIONS: Readonly<
   Record<StepName, SkillInvocationDescriptor>
 > = {
-  bootstrap: { skillName: 'bootstrap', arguments: [] },
-  memory: { skillName: 'memory', arguments: [] },
-  assess: { skillName: 'assess', arguments: [] },
-  explore: { skillName: 'explore', arguments: [] },
-  prd: { skillName: 'prd', arguments: [] },
-  complexity: { skillName: 'conduct', arguments: ['complexity'] },
-  stories: { skillName: 'stories', arguments: [] },
-  conflict_check: { skillName: 'conflict-check', arguments: [] },
-  plan: { skillName: 'plan', arguments: [] },
-  coherence_check: { skillName: 'coherence-check', arguments: [] },
-  architecture_diagram: { skillName: 'architecture-diagram', arguments: [] },
-  architecture_review: { skillName: 'architecture-review', arguments: [] },
-  worktree: { skillName: 'conduct', arguments: ['worktree'] },
-  acceptance_specs: { skillName: 'writing-system-tests', arguments: [] },
-  build: { skillName: 'pipeline', arguments: [] },
-  // Display sentinel for the model table; the grader dispatch is driven by
-  // the fresh-session assembly logic (see resolveRebaseConflict pattern),
-  // not by invoking a literal build-review skill.
-  build_review: { skillName: 'build-review', arguments: [] },
-  // Engine-native (like complexity/rebase) — the completion predicate reads
-  // or computes the wiring-reachability evidence file directly; no skill
-  // dispatch. Present only to keep the Record<StepName, ...> exhaustive.
-  wiring_check: { skillName: 'conduct', arguments: ['wiring-check'] },
-  // Engine-native aggregate verifier gate; never dispatched as a skill.
-  test_suite: { skillName: 'conduct', arguments: ['test-suite'] },
-  manual_test: { skillName: 'manual-test', arguments: [] },
-  prd_audit: { skillName: 'prd-audit', arguments: [] },
+  bootstrap: { kind: 'skill', skillName: 'bootstrap', arguments: [] },
+  memory: { kind: 'skill', skillName: 'memory', arguments: [] },
+  assess: { kind: 'skill', skillName: 'assess', arguments: [] },
+  explore: { kind: 'skill', skillName: 'explore', arguments: [] },
+  prd: { kind: 'skill', skillName: 'prd', arguments: [] },
+  complexity: { kind: 'skill', skillName: 'conduct', arguments: ['complexity'] },
+  stories: { kind: 'skill', skillName: 'stories', arguments: [] },
+  conflict_check: { kind: 'skill', skillName: 'conflict-check', arguments: [] },
+  plan: { kind: 'skill', skillName: 'plan', arguments: [] },
+  coherence_check: { kind: 'skill', skillName: 'coherence-check', arguments: [] },
+  architecture_diagram: { kind: 'skill', skillName: 'architecture-diagram', arguments: [] },
+  architecture_review: { kind: 'skill', skillName: 'architecture-review', arguments: [] },
+  worktree: { kind: 'skill', skillName: 'conduct', arguments: ['worktree'] },
+  acceptance_specs: { kind: 'skill', skillName: 'writing-system-tests', arguments: [] },
+  build: { kind: 'skill', skillName: 'pipeline', arguments: [] },
+  // Grader dispatch is assembled by engine logic, not by invoking a skill.
+  build_review: { kind: 'engine-native' },
+  // The engine computes wiring-reachability evidence directly; no skill dispatch.
+  wiring_check: { kind: 'engine-native' },
+  // The engine runs the aggregate verifier directly; no skill dispatch.
+  test_suite: { kind: 'engine-native' },
+  manual_test: { kind: 'skill', skillName: 'manual-test', arguments: [] },
+  prd_audit: { kind: 'skill', skillName: 'prd-audit', arguments: [] },
   // Runs the architecture-review skill in its as-built compliance-gate mode.
   architecture_review_as_built: {
+    kind: 'skill',
     skillName: 'architecture-review',
     arguments: ['--as-built'],
   },
-  retro: { skillName: 'retro', arguments: [] },
-  // Engine-native (like complexity) — never dispatched; present only to keep
-  // the Record<StepName, ...> exhaustive.
-  rebase: { skillName: 'conduct', arguments: ['rebase'] },
-  finish: { skillName: 'finish', arguments: [] },
+  retro: { kind: 'skill', skillName: 'retro', arguments: [] },
+  rebase: { kind: 'skill', skillName: 'rebase', arguments: [] },
+  finish: { kind: 'skill', skillName: 'finish', arguments: [] },
   // Conditional SHIP sub-routine: plans remediation for a blocking audit.
-  remediate: { skillName: 'remediate', arguments: [] },
-  // Out-of-band verification step: semantic attribution verification.
-  attribution_verify: { skillName: 'attribution-verify', arguments: [] },
+  remediate: { kind: 'skill', skillName: 'remediate', arguments: [] },
+  // The engine performs semantic attribution verification directly.
+  attribution_verify: { kind: 'engine-native' },
 };
 
 export function renderSkillInvocation(
   descriptor: SkillInvocationDescriptor,
   providerKey: string,
 ): string {
+  if (descriptor.kind === 'engine-native') {
+    throw new Error('Cannot render an engine-native step as a skill invocation');
+  }
+
   const prefix = providerKey === 'codex' ? '$' : '/';
   return [`${prefix}${descriptor.skillName}`, ...descriptor.arguments].join(' ');
 }
