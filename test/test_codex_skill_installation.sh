@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# RED public-entry-point acceptance coverage for #904's installation and
+# migration stories. Every scenario invokes the real bin/install against an
+# isolated HOME; no Codex plugin, prompt preamble, or per-skill copy is used.
+# Covers: FR-1, FR-2, FR-3, FR-4, FR-13
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMP_ROOT=$(mktemp -d)
+trap 'rm -rf "$TMP_ROOT"' EXIT
+
+PASS=0
+FAIL=0
+
+pass() {
+  printf 'PASS %s\n' "$1"
+  PASS=$((PASS + 1))
+}
+
+fail() {
+  printf 'FAIL %s\n' "$1"
+  FAIL=$((FAIL + 1))
+}
+
+check() {
+  local description=$1
+  shift
+  if "$@"; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
+CHECKOUT="$TMP_ROOT/checkout"
+mkdir -p "$CHECKOUT"
+cp -r "$HARNESS_DIR/bin" "$CHECKOUT/bin"
+cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
+cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
+cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
+
+STUBS="$TMP_ROOT/stubs"
+mkdir -p "$STUBS"
+for tool in rtk npm node claude codex uv; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
+  chmod +x "$STUBS/$tool"
+done
+ln -s "$(python3 -c 'import sys; print(sys.executable)')" "$STUBS/python3"
+
+run_install() {
+  local fake_home=$1
+  shift
+  mkdir -p "$fake_home"
+  (
+    cd "$CHECKOUT" || exit 1
+    HOME="$fake_home" PATH="$STUBS:/usr/bin:/bin" \
+      timeout 15s "$CHECKOUT/bin/install" "$@" --allow-worktree-root </dev/null
+  )
+}
+
+owned_catalog_is_current() {
+  local fake_home=$1
+  local skill source target
+  local expected=0
+  local found=0
+
+  for source in "$CHECKOUT"/skills/*/SKILL.md; do
+    [ -f "$source" ] || continue
+    skill=$(basename "$(dirname "$source")")
+    expected=$((expected + 1))
+    target="$fake_home/.agents/skills/$skill"
+    [ -L "$target" ] || return 1
+    [ "$(readlink -f "$target")" = "$CHECKOUT/skills/$skill" ] || return 1
+    [ -r "$target/SKILL.md" ] || return 1
+    found=$((found + 1))
+  done
+
+  [ "$found" -eq "$expected" ] \
+    && [ -L "$fake_home/.agents/skills/HARNESS.md" ] \
+    && [ "$(readlink -f "$fake_home/.agents/skills/HARNESS.md")" = "$CHECKOUT/HARNESS.md" ]
+}
+
+legacy_catalog_has_no_owned_entries() {
+  local fake_home=$1
+  local skill source target
+  for source in "$CHECKOUT"/skills/*/SKILL.md; do
+    [ -f "$source" ] || continue
+    skill=$(basename "$(dirname "$source")")
+    target="$fake_home/.codex/skills/$skill"
+    if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$CHECKOUT/skills/$skill" ]; then
+      return 1
+    fi
+  done
+  target="$fake_home/.codex/skills/HARNESS.md"
+  if [ -L "$target" ] && [ "$(readlink -f "$target")" = "$CHECKOUT/HARNESS.md" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# ST-904-1/ST-904-2: normal built-in installation exposes the whole canonical
+# catalog and linked resources through Codex's documented user scope.
+FRESH_HOME="$TMP_ROOT/home-fresh"
+if run_install "$FRESH_HOME" --providers codex >"$TMP_ROOT/fresh.out" 2>&1; then
+  pass 'normal Codex installation completes without plugin or prompt setup'
+else
+  fail 'normal Codex installation completes without plugin or prompt setup'
+fi
+check 'every canonical skill is readable exactly once from ~/.agents/skills' \
+  owned_catalog_is_current "$FRESH_HOME"
+check 'a linked skill resource is readable from the installed Codex view' \
+  test -r "$FRESH_HOME/.agents/skills/tdd/references/red.md"
+check 'normal installation creates no Codex plugin dependency' \
+  test ! -e "$FRESH_HOME/.codex/plugins"
+check 'normal installation leaves no harness-owned duplicate catalog in the legacy scope' \
+  legacy_catalog_has_no_owned_entries "$FRESH_HOME"
+
+# ST-904-3/ST-904-4: update replaces an older harness-owned target, removes
+# legacy duplication, and converges when repeated.
+UPDATE_HOME="$TMP_ROOT/home-update"
+OLD_CHECKOUT="$TMP_ROOT/old-checkout"
+mkdir -p "$UPDATE_HOME/.agents/skills" "$UPDATE_HOME/.codex/skills" "$OLD_CHECKOUT/skills/tdd"
+printf '%s\n' 'old workflow revision' > "$OLD_CHECKOUT/skills/tdd/SKILL.md"
+ln -s "$OLD_CHECKOUT/skills/tdd" "$UPDATE_HOME/.agents/skills/tdd"
+ln -s "$CHECKOUT/skills/tdd" "$UPDATE_HOME/.codex/skills/tdd"
+
+run_install "$UPDATE_HOME" --update --providers codex >"$TMP_ROOT/update-1.out" 2>&1
+check 'update refreshes a stale current-scope harness skill to this checkout' \
+  test "$(readlink -f "$UPDATE_HOME/.agents/skills/tdd")" = "$CHECKOUT/skills/tdd"
+check 'update removes a recognized harness-owned legacy duplicate' \
+  test ! -e "$UPDATE_HOME/.codex/skills/tdd"
+check 'updated catalog matches the complete current source catalog' \
+  owned_catalog_is_current "$UPDATE_HOME"
+
+FIRST_SNAPSHOT="$TMP_ROOT/update-first.snapshot"
+SECOND_SNAPSHOT="$TMP_ROOT/update-second.snapshot"
+find "$UPDATE_HOME/.agents/skills" -mindepth 1 -maxdepth 1 -printf '%f %l\n' 2>/dev/null \
+  | sort > "$FIRST_SNAPSHOT"
+run_install "$UPDATE_HOME" --update --providers codex >"$TMP_ROOT/update-2.out" 2>&1
+find "$UPDATE_HOME/.agents/skills" -mindepth 1 -maxdepth 1 -printf '%f %l\n' 2>/dev/null \
+  | sort > "$SECOND_SNAPSHOT"
+check 'repeated update is idempotent and creates no duplicate or target churn' \
+  cmp -s "$FIRST_SNAPSHOT" "$SECOND_SNAPSHOT"
+
+# Ownership boundary: foreign files, directories, and links survive update and
+# uninstall byte-for-byte or target-for-target.
+FOREIGN_HOME="$TMP_ROOT/home-foreign"
+mkdir -p "$FOREIGN_HOME/.agents/skills/operator-dir" "$FOREIGN_HOME/.codex/skills"
+printf '%s\n' 'operator file' > "$FOREIGN_HOME/.agents/skills/operator-file"
+printf '%s\n' 'operator directory content' > "$FOREIGN_HOME/.agents/skills/operator-dir/data"
+ln -s "$TMP_ROOT/operator-target" "$FOREIGN_HOME/.codex/skills/operator-link"
+FOREIGN_FILE_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-file" | awk '{print $1}')
+FOREIGN_DIR_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-dir/data" | awk '{print $1}')
+FOREIGN_LINK_TARGET=$(readlink "$FOREIGN_HOME/.codex/skills/operator-link")
+run_install "$FOREIGN_HOME" --update --providers codex >"$TMP_ROOT/foreign-update.out" 2>&1
+check 'update preserves a foreign current-scope regular file' \
+  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-file" | awk '{print $1}')" = "$FOREIGN_FILE_HASH"
+check 'update preserves a foreign current-scope directory and its contents' \
+  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/operator-dir/data" | awk '{print $1}')" = "$FOREIGN_DIR_HASH"
+check 'update preserves a foreign legacy symlink target' \
+  test "$(readlink "$FOREIGN_HOME/.codex/skills/operator-link")" = "$FOREIGN_LINK_TARGET"
+
+# Check mode must diagnose the documented active scope, including missing and
+# duplicate current/legacy views, rather than accepting the old scope alone.
+CHECK_HOME="$TMP_ROOT/home-check"
+run_install "$CHECK_HOME" --providers codex >"$TMP_ROOT/check-install.out" 2>&1
+mkdir -p "$CHECK_HOME/.local/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$CHECK_HOME/.local/bin/conduct-ts"
+chmod +x "$CHECK_HOME/.local/bin/conduct-ts"
+rm -f "$CHECK_HOME/.agents/skills/tdd"
+HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
+  "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \
+  >"$TMP_ROOT/check-missing.out" 2>&1
+MISSING_CODE=$?
+if [ "$MISSING_CODE" -ne 0 ] && grep -qiE 'tdd.*(missing|absent|unreadable)' "$TMP_ROOT/check-missing.out"; then
+  pass 'check fails with a skill-named diagnostic for a missing current entry'
+else
+  fail 'check fails with a skill-named diagnostic for a missing current entry'
+fi
+
+mkdir -p "$CHECK_HOME/.agents/skills" "$CHECK_HOME/.codex/skills"
+ln -s "$CHECKOUT/skills/tdd" "$CHECK_HOME/.agents/skills/tdd"
+ln -sfn "$CHECKOUT/skills/tdd" "$CHECK_HOME/.codex/skills/tdd"
+HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
+  "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \
+  >"$TMP_ROOT/check-duplicate.out" 2>&1
+DUPLICATE_CODE=$?
+if [ "$DUPLICATE_CODE" -ne 0 ] \
+  && grep -qi 'tdd' "$TMP_ROOT/check-duplicate.out" \
+  && grep -qiE 'duplicate|both.*locations|legacy' "$TMP_ROOT/check-duplicate.out"; then
+  pass 'check rejects and identifies simultaneous current and legacy discovery'
+else
+  fail 'check rejects and identifies simultaneous current and legacy discovery'
+fi
+
+run_install "$FOREIGN_HOME" --uninstall >"$TMP_ROOT/foreign-uninstall.out" 2>&1
+check 'uninstall removes current harness-owned catalog entries' \
+  test ! -e "$FOREIGN_HOME/.agents/skills/tdd"
+check 'uninstall preserves foreign current-scope files' \
+  test -f "$FOREIGN_HOME/.agents/skills/operator-file"
+check 'uninstall preserves foreign legacy links' \
+  test -L "$FOREIGN_HOME/.codex/skills/operator-link"
+
+printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]
