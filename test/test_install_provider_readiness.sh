@@ -90,6 +90,28 @@ else
   exit 1
 fi
 
+# The normal install above has established both provider surfaces. Its strict
+# readiness counterpart must still fail specifically for the selected, absent
+# Codex CLI; stub the common conduct-ts check so it cannot mask that condition.
+mkdir -p "$FAKE_HOME/.local/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_HOME/.local/bin/conduct-ts"
+chmod +x "$FAKE_HOME/.local/bin/conduct-ts"
+
+set +e
+MISSING_CODEX_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_CODEX_STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root 2>&1)
+MISSING_CODEX_CHECK_CODE=$?
+set -e
+
+if [ "$MISSING_CODEX_CHECK_CODE" -ne 0 ] \
+  && printf '%s' "$MISSING_CODEX_CHECK_OUT" | grep -qiE 'codex.*(not found|missing|not installed)'; then
+  echo 'PASS strict Codex readiness fails when the selected Codex CLI is absent'
+else
+  echo 'FAIL strict Codex readiness fails when the selected Codex CLI is absent'
+  printf 'exit code: %s\n' "$MISSING_CODEX_CHECK_CODE"
+  printf '%s\n' "$MISSING_CODEX_CHECK_OUT"
+  exit 1
+fi
+
 # A trailing comma denotes an empty provider token and must be rejected before
 # the installer reaches any setup action.
 set +e
