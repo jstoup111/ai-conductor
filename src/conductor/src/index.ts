@@ -465,6 +465,8 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // `shipment-evidence audit` is report-only: it persists a complete or
+  // incomplete historical-evidence report and never writes shipped records.
   const shipmentEvidenceCmd = detectShipmentEvidenceCommand(process.argv);
   if (shipmentEvidenceCmd) {
     const code = await dispatchShipmentEvidence(shipmentEvidenceCmd, process.cwd());

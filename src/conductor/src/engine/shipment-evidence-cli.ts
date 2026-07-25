@@ -15,6 +15,10 @@ import {
   type ShipmentRepairPublisher,
 } from './shipment-reconciliation.js';
 import {
+  DEFAULT_SHIPMENT_AUDIT_REPORT,
+  runShipmentAudit,
+} from './shipment-audit.js';
+import {
   makeProductionGh,
   makeProductionGit,
   type GhRunner,
@@ -25,10 +29,11 @@ import { specHash } from './shipped-record.js';
 export type ShipmentEvidenceCommand =
   | { kind: 'check'; pr: string }
   | { kind: 'reconcile'; pr: string; shipped: string }
+  | { kind: 'audit'; reportPath: string }
   | { kind: 'guide' };
 
 export const SHIPMENT_EVIDENCE_USAGE =
-  'conduct shipment-evidence [reconcile] --pr <implementation-pr-url> [--shipped <YYYY-MM-DD>]';
+  'conduct shipment-evidence [reconcile] --pr <implementation-pr-url> [--shipped <YYYY-MM-DD>] | audit [--report <path>]';
 
 export interface ShipmentEvidenceRunners {
   runGh?: GhRunner;
@@ -51,6 +56,11 @@ interface PullRequestEvidenceMetadata {
 
 export function detectShipmentEvidenceCommand(argv: string[]): ShipmentEvidenceCommand | null {
   if (argv[2] !== 'shipment-evidence') return null;
+  if (argv[3] === 'audit') {
+    const reportIndex = argv.indexOf('--report', 4);
+    const reportPath = reportIndex === -1 ? DEFAULT_SHIPMENT_AUDIT_REPORT : argv[reportIndex + 1];
+    return reportPath && !reportPath.startsWith('--') ? { kind: 'audit', reportPath } : { kind: 'guide' };
+  }
   const reconcile = argv[3] === 'reconcile';
   const argsStart = reconcile ? 4 : 3;
   const prIndex = argv.indexOf('--pr', argsStart);
@@ -84,6 +94,17 @@ export async function dispatchShipmentEvidence(
   try {
     const runGh = runners.runGh ?? makeProductionGh();
     const runGit = runners.runGit ?? makeProductionGit();
+    if (cmd.kind === 'audit') {
+      const audit = await runShipmentAudit({
+        cwd,
+        reportPath: cmd.reportPath,
+        runGh,
+        runGit,
+        evaluateEvidence: runners.evaluateEvidence ?? evaluateShipmentEvidence,
+      });
+      report(`shipped-record audit: complete (${audit.rows.length} candidates)`);
+      return 0;
+    }
     const metadata = await readPullRequestEvidenceMetadata(runGh, cwd, cmd.pr);
     if (metadata.url !== cmd.pr) {
       throw new Error(`implementation PR binding mismatch: expected ${cmd.pr}, got ${metadata.url || 'empty'}`);
