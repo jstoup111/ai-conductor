@@ -25,6 +25,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Implement the per-step provider routing (#927) retrospective follow-ups:
+  missing or unreadable event ledgers now produce visibly incomplete shipped
+  cost records that clean KPI aggregates exclude, while the provider candidate
+  executor is decomposed into bounded native-config, invocation/session, and
+  result-construction helpers without changing fallback behavior.
 - Per-step provider routing (#927) preserves scalar `llm_provider` configuration
   while accepting an ordered provider array and explicit per-step scalar/array
   selections. The first configured provider remains the inherited default;

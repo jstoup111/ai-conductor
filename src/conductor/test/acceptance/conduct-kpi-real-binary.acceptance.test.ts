@@ -138,6 +138,7 @@ describe('conduct kpi — real-binary acceptance smoke (Story 4, #537)', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toMatch(/feat-partial/);
       expect(result.stdout).toMatch(/partial|incomplete/i);
+      expect(result.stdout).toMatch(/Aggregate \/ trend across 0 feature\(s\): total tokens=0/i);
     },
     30_000,
   );

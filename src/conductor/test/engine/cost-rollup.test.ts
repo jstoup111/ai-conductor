@@ -239,7 +239,22 @@ describe('engine/cost-rollup', () => {
     });
   });
 
-  it('returns an all-zero rollup when events.jsonl is missing', async () => {
+  it('marks the rollup unmetered when events.jsonl is missing', async () => {
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toEqual({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 0,
+      dispatches: 0,
+      retries: 0,
+      halts: 0,
+      unmetered: { count: 1, durationMs: 0 },
+    });
+  });
+
+  it('returns a clean all-zero rollup for a readable empty events.jsonl', async () => {
+    await writeEvents([]);
+
     const rollup = await computeCostRollup(dir);
 
     expect(rollup).toEqual({
@@ -250,6 +265,14 @@ describe('engine/cost-rollup', () => {
       halts: 0,
       unmetered: { count: 0, durationMs: 0 },
     });
+  });
+
+  it('marks the rollup unmetered when events.jsonl cannot be read', async () => {
+    await mkdir(join(dir, '.pipeline', 'events.jsonl'), { recursive: true });
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.unmetered.count).toBeGreaterThan(0);
   });
 
   it('skips unparseable lines, folding them into unmetered.count, and still sums good lines', async () => {

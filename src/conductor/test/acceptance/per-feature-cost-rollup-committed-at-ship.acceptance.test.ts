@@ -215,11 +215,10 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     // The record still exists and is still committed...
     expect(body).toContain(`slug: ${SLUG}`);
     expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
-    // ...and the Cost block (if present at all) reflects total absence as
-    // unmetered rather than a fabricated zero-cost clean rollup.
-    if (/##\s*Cost/i.test(body)) {
-      expect(body).toMatch(/unmetered/i);
-    }
+    // ...and the Cost block reflects total absence as unmetered rather than a
+    // fabricated zero-cost clean rollup.
+    expect(body).toMatch(/##\s*Cost/i);
+    expect(body).toMatch(/unmetered:\s*(?:\{\s*)?count:\s*[1-9]\d*/i);
   });
 
   it('negative: a partial/corrupt events.jsonl (unparseable line mixed with good ones) still ships — partial data folded into unmetered, never a crash', async () => {

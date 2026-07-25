@@ -77,6 +77,20 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('exposes bounded helpers for native config, invocation/session handling, and attempt metadata', async () => {
+    const module = await import('../../src/engine/provider-execution.js');
+
+    expect({
+      resolveNativeConfig: typeof module.resolveProviderCandidateNativeConfig,
+      invokeWithSession: typeof module.invokeProviderCandidate,
+      buildAttempt: typeof module.buildProviderAttemptMetadata,
+    }).toEqual({
+      resolveNativeConfig: 'function',
+      invokeWithSession: 'function',
+      buildAttempt: 'function',
+    });
+  });
+
   it('executes the explicitly preferred provider with its native settings and scoped session', async () => {
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,

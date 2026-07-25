@@ -22,6 +22,7 @@ import {
   phaseForStep,
   resolveFallbackProviderNativeStepConfig,
   resolvePreferredProviderNativeStepConfig,
+  type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
 
 export interface ProviderUnavailableClassification {
@@ -187,6 +188,139 @@ async function invokeRuntimeResolved(
   return invocation;
 }
 
+export interface ResolveProviderCandidateNativeConfigInput {
+  step: StepName;
+  candidateIndex: number;
+  preferredProvider: string;
+  inheritedProvider: string;
+  runtime: ProviderRuntime;
+  config?: HarnessConfig;
+  tier?: ComplexityTier;
+  attempt: number;
+  escalate: boolean;
+  modelOverride?: string;
+  effortOverride?: EffortLevel;
+}
+
+/** Resolve provider-native settings for exactly one selected candidate. */
+export function resolveProviderCandidateNativeConfig({
+  step,
+  candidateIndex,
+  preferredProvider,
+  inheritedProvider,
+  runtime,
+  config,
+  tier,
+  attempt,
+  escalate,
+  modelOverride,
+  effortOverride,
+}: ResolveProviderCandidateNativeConfigInput): ResolvedProviderNativeStepConfig {
+  return candidateIndex === 0
+    ? resolvePreferredProviderNativeStepConfig({
+        step,
+        phase: phaseForStep(step),
+        preferredProvider,
+        inheritedProvider,
+        policy: runtime.policy,
+        config,
+        options: {
+          tier,
+          modelCliOverride: modelOverride,
+          effortCliOverride: effortOverride,
+        },
+      })
+    : resolveFallbackProviderNativeStepConfig({
+        step,
+        tier,
+        policy: runtime.policy,
+        attempt,
+        escalate,
+      });
+}
+
+export interface InvokeProviderCandidateInput {
+  providerKey: string;
+  runtime: ProviderRuntime;
+  sessions: Pick<ProviderSessionScope, 'prepare' | 'markCreated'>;
+  resolved: ResolvedProviderNativeStepConfig;
+  options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+}
+
+/** Invoke one candidate while preserving its provider-scoped session state. */
+export async function invokeProviderCandidate({
+  providerKey,
+  runtime,
+  sessions,
+  resolved,
+  options,
+}: InvokeProviderCandidateInput): Promise<{
+  result: InvokeResult;
+  invokedModel?: string;
+}> {
+  const session = await sessions.prepare(providerKey);
+  let invocation: Awaited<ReturnType<typeof invokeRuntimeResolved>>;
+  try {
+    invocation = await invokeRuntimeResolved(runtime, {
+      ...options,
+      sessionId: session.id,
+      resume: session.resume,
+      model: resolved.model,
+      effort: resolved.effort,
+    });
+  } catch (error) {
+    // A runtime rejection occurs only after a live dispatch was attempted.
+    // Preserve same-step retry continuity without marking cached skips.
+    await sessions.markCreated(providerKey);
+    throw error;
+  }
+  if (!invocation.result.providerInvocationSkipped) {
+    await sessions.markCreated(providerKey);
+  }
+  return {
+    result: invocation.result,
+    invokedModel: invocation.model,
+  };
+}
+
+export interface BuildProviderAttemptMetadataInput {
+  providerKey: string;
+  result: InvokeResult;
+  resolvedModel: string;
+  invokedModel?: string;
+  unavailable?: ProviderCandidateFailureClassification;
+  nextProvider?: string;
+}
+
+/** Construct event-boundary metadata for exactly one candidate result. */
+export function buildProviderAttemptMetadata({
+  providerKey,
+  result,
+  resolvedModel,
+  invokedModel,
+  unavailable,
+  nextProvider,
+}: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
+  const invoked = result.providerInvocationSkipped !== true;
+  return {
+    provider: providerKey,
+    ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
+    ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+    outcome: unavailable
+      ? 'unavailable'
+      : result.success
+        ? 'success'
+        : 'failure',
+    ...(!result.success
+      ? { reason: unavailable?.reason ?? result.output }
+      : {}),
+    ...(unavailable && nextProvider
+      ? { fallbackReason: unavailable.reason }
+      : {}),
+    invoked,
+  };
+}
+
 /**
  * Execute selected-first configured providers in one caller-owned step scope.
  * Advancement requires explicit run-wide provider unavailability or completed
@@ -217,73 +351,37 @@ export async function executeProviderCandidates({
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
-    const resolved =
-      index === 0
-        ? resolvePreferredProviderNativeStepConfig({
-            step,
-            phase: phaseForStep(step),
-            preferredProvider,
-            inheritedProvider: configuredProviders[0],
-            policy: runtime.policy,
-            config,
-            options: {
-              tier,
-              modelCliOverride: modelOverride,
-              effortCliOverride: effortOverride,
-            },
-          })
-        : resolveFallbackProviderNativeStepConfig({
-            step,
-            tier,
-            policy: runtime.policy,
-            attempt,
-            escalate,
-          });
-    const session = await sessions.prepare(providerKey);
-    let result: InvokeResult;
-    let invokedModel: string | undefined;
-    try {
-      const invocation = await invokeRuntimeResolved(runtime, {
-        ...options,
-        sessionId: session.id,
-        resume: session.resume,
-        model: resolved.model,
-        effort: resolved.effort,
-      });
-      result = invocation.result;
-      invokedModel = invocation.model;
-    } catch (error) {
-      // A runtime rejection occurs only after a live dispatch was attempted.
-      // Preserve same-step retry continuity without marking cached skips.
-      await sessions.markCreated(providerKey);
-      throw error;
-    }
-    if (!result.providerInvocationSkipped) {
-      await sessions.markCreated(providerKey);
-    }
+    const resolved = resolveProviderCandidateNativeConfig({
+      step,
+      candidateIndex: index,
+      preferredProvider,
+      inheritedProvider: configuredProviders[0],
+      runtime,
+      config,
+      tier,
+      attempt,
+      escalate,
+      modelOverride,
+      effortOverride,
+    });
+    const { result, invokedModel } = await invokeProviderCandidate({
+      providerKey,
+      runtime,
+      sessions,
+      resolved,
+      options,
+    });
 
     const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];
-    const invoked = result.providerInvocationSkipped !== true;
-    const attemptMetadata: ProviderAttemptMetadata = {
-      provider: providerKey,
-      ...(invoked ? { model: invokedModel ?? resolved.model } : {}),
-      ...(invoked && result.tokenUsage
-        ? { tokenUsage: result.tokenUsage }
-        : {}),
-      outcome: unavailable
-        ? 'unavailable'
-        : result.success
-          ? 'success'
-          : 'failure',
-      ...(!result.success
-        ? { reason: unavailable?.reason ?? result.output }
-        : {}),
-      ...(unavailable && nextProvider
-        ? { fallbackReason: unavailable.reason }
-        : {}),
-      invoked,
-    };
+    const attemptMetadata = buildProviderAttemptMetadata({
+      providerKey,
+      result,
+      resolvedModel: resolved.model,
+      invokedModel,
+      unavailable,
+      nextProvider,
+    });
     attempts.push(attemptMetadata);
     await onAttempt?.(step, attemptMetadata);
     if (!unavailable) {

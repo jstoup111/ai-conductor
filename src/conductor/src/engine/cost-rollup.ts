@@ -3,8 +3,8 @@
  * counts, and unmetered-dispatch tracking from a worktree's
  * `.pipeline/events.jsonl`.
  *
- * Pure/read-only — no side effects, no writes. Tolerates a missing file
- * (returns all-zero rollup) and tolerates corrupt/unparseable lines
+ * Pure/read-only — no side effects, no writes. Tolerates a missing or
+ * unreadable file (marks the rollup unmetered) and corrupt/unparseable lines
  * (skipped, folded into `unmetered.count` so the gap stays visible).
  */
 import { readFile } from 'node:fs/promises';
@@ -68,6 +68,7 @@ export async function computeCostRollup(worktreeDir: string): Promise<CostRollup
   try {
     raw = await readFile(eventsPath, 'utf-8');
   } catch {
+    rollup.unmetered.count += 1;
     return rollup;
   }
 
