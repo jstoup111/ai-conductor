@@ -122,7 +122,7 @@ export class CodexProvider implements LLMProvider {
     if (readiness.state !== 'ready') return this.readinessFailure(readiness);
 
     const authentication = this.selectAuthentication();
-    const args = this.buildArgs(options, true);
+    const args = this.buildArgs(options, true, true);
     const prompt = this.composePrompt(options);
 
     const result = await execa('codex', args, {
@@ -153,7 +153,7 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.selectAuthentication();
-    const result = await execa('codex', this.buildArgs(options, false), {
+    const result = await execa('codex', this.buildArgs(options, false, !options.interactive), {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
@@ -371,14 +371,21 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, json: boolean): string[] {
+  private buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[] {
     const args = options.resume
       ? ['exec', 'resume', options.sessionId]
       : ['exec'];
 
     if (options.model) args.push('--model', options.model);
     if (options.effort) args.push('--config', `model_reasoning_effort="${options.effort}"`);
-    if (options.dangerouslySkipPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (unattended) {
+      args.push(
+        '--config', 'sandbox_mode="workspace-write"',
+        '--config', 'approval_policy="on-request"',
+        '--config', 'approvals_reviewer="auto_review"',
+        '--config', 'shell_environment_policy.ignore_default_excludes=false',
+      );
+    }
     // `resume` does not expose --cd, but execa's cwd still sets the working root.
     if (!options.resume && options.cwd) args.push('--cd', options.cwd);
     if (json) args.push('--json');

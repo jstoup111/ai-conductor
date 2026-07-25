@@ -53,7 +53,7 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('runs a fresh Codex exec with JSONL, model, cwd, and stdin prompt delivery', async () => {
+  it('runs a fresh Codex exec with its fixed unattended policy, JSONL, model, cwd, and stdin prompt delivery', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('No-op complete.'), exitCode: 0 } as any);
 
     const result = await provider.invoke({
@@ -67,7 +67,13 @@ describe('CodexProvider', () => {
     expect(command).toBe('codex');
     expect(args).toEqual(expect.arrayContaining(['exec', '--json', '--model', 'gpt-5.4', '--cd', '/workspace/project', '-']));
     expect(args).toEqual(expect.arrayContaining(['--config', 'model_reasoning_effort="high"']));
-    expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(args).toEqual(expect.arrayContaining([
+      '--config', 'sandbox_mode="workspace-write"',
+      '--config', 'approval_policy="on-request"',
+      '--config', 'approvals_reviewer="auto_review"',
+      '--config', 'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args).not.toContain(baseOptions.prompt);
     expect(options.input).toBe('You are the conductor.\n\nMake the no-op change');
     expect(options.cwd).toBe('/workspace/project');
@@ -83,8 +89,44 @@ describe('CodexProvider', () => {
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-123']);
     expect(args).not.toContain('--cd');
+    expect(args).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args).toContain('-');
     expect(options.cwd).toBe('/workspace/project');
+  });
+
+  it('enforces the same policy for automatic streaming while keeping API keys in the Codex client environment', async () => {
+    const key = 'sk-905-scoped-client-key';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({ stdout: 'Streamed.', exitCode: 0 } as any);
+
+    try {
+      await provider.invokeInteractive({
+        ...baseOptions,
+        interactive: false,
+        dangerouslySkipPermissions: true,
+      });
+
+      const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).toEqual(expect.arrayContaining([
+        'sandbox_mode="workspace-write"',
+        'approval_policy="on-request"',
+        'approvals_reviewer="auto_review"',
+        'shell_environment_policy.ignore_default_excludes=false',
+      ]));
+      expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(options.env).toEqual({ CODEX_API_KEY: key });
+      expect(args).not.toContain(key);
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
   });
 
   it('keeps a >128 KiB prompt out of argv', async () => {
@@ -293,6 +335,7 @@ describe('CodexProvider', () => {
       readinessChecks: 1,
       interactiveSuccess: true,
     });
+    expect(mockExeca.mock.calls[0]?.[1]).not.toContain('approval_policy="on-request"');
   });
 
   it.each([
