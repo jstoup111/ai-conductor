@@ -8,13 +8,6 @@
 **Track:** Product
 **Complexity:** Large
 
-> **Provider-specific auth amendment (#905, approved 2026-07-25):** ST-927-6's
-> no-provider-fallback invariant remains unchanged, but authentication recovery is
-> provider-neutral at the lifecycle boundary and provider-specific at the readiness
-> boundary. Every built-in provider enters the same bounded auth park; only the failed
-> provider's selected source is rechecked, with no provider fallback or retry/escalation
-> budget consumption.
-
 ## Traceability
 
 | Story | Requirements |
@@ -256,9 +249,8 @@ their established recovery semantics.
 #### Happy Path
 
 - Given a preferred provider reports authentication failure, when the result is
-  classified, then the common bounded auth park receives it, retains the failed
-  provider and source, and invokes only that provider's readiness path; no alternate
-  provider is attempted.
+  classified, then the existing authentication retry/park flow receives it and no
+  alternate provider is attempted.
 - Given a preferred provider reports a rate limit, session expiry, timeout,
   rejected request, unsuccessful work result, or ordinary non-zero exit, when the
   result is classified, then its existing retry/recovery path receives it and no
@@ -283,10 +275,8 @@ their established recovery semantics.
       rejected work, and ordinary failure without provider fallback.
 - [ ] Mixed-message tests prove classification precedence cannot poison provider
       or model availability caches.
-- [ ] Existing Claude authentication, rate-limit, and stale-session recovery suites
-      remain green, and built-in-provider authentication failures prove the same
-      parked disposition with provider/source-specific recovery and no provider
-      fallback.
+- [ ] Existing authentication, rate-limit, and stale-session recovery suites remain
+      green unchanged in observable behavior.
 
 ## Story ST-927-7: Isolate sessions, permissions, retries, and usage by provider
 
