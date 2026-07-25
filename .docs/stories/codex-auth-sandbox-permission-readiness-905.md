@@ -1,4 +1,4 @@
-**Status:** DRAFT
+**Status:** Accepted
 
 # User Stories: Codex Authentication and Autonomous Execution Readiness (#905)
 
