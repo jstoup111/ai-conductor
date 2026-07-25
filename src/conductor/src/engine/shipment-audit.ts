@@ -139,6 +139,10 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
     'log', '--all', '--pretty=format:', '--name-only', '--', '.docs/plans', '.docs/specs',
   ]);
   const paths = [...new Set(output.split('\n').filter(Boolean))].sort();
+  const auditHead = (await git(options, ['rev-parse', 'HEAD'])).trim();
+  const currentPaths = new Set((await git(options, [
+    'ls-tree', '-r', '--name-only', auditHead, '--', '.docs/plans', '.docs/specs',
+  ])).split('\n').filter(Boolean));
   const planPaths = paths.filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
   const plans = new Map(planPaths.map((path) => [path, { path, slug: stem(path) }]));
   const sources: AuditSource[] = planPaths.map((path) => ({
@@ -146,10 +150,19 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
     kind: 'plan',
     plan: plans.get(path),
     relatedSourcePaths: [],
+    ...(!currentPaths.has(path) ? { reason: 'historical plan is not present at the audit head' } : {}),
   }));
   const sourcesByPlanPath = new Map(sources.flatMap((source) => source.plan ? [[source.plan.path, source]] : []));
 
   for (const path of paths.filter((candidate) => candidate.startsWith('.docs/specs/') && candidate.endsWith('.md'))) {
+    if (!currentPaths.has(path)) {
+      sources.push({
+        path,
+        kind: 'spec',
+        reason: 'historical product spec is not present at the audit head',
+      });
+      continue;
+    }
     const referencedPlans = [...new Set([
       ...await referencedPlanPaths(options, path),
       ...await plansReferencingSpec(options, planPaths, path),
@@ -170,9 +183,8 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
 }
 
 async function referencedPlanPaths(options: ShipmentAuditOptions, path: string): Promise<string[]> {
-  const commit = (await git(options, ['log', '-1', '--format=%H', '--', path])).trim();
-  if (!commit) return [];
-  const content = await git(options, ['show', `${commit}:${path}`]);
+  const content = await latestCommittedFile(options, path);
+  if (content === null) return [];
   return [...new Set([...content.matchAll(/\.docs\/plans\/([^/\s`]+\.md)(?![A-Za-z0-9_.-])/g)]
     .map((match) => `.docs/plans/${match[1]}`))];
 }
@@ -184,12 +196,27 @@ async function plansReferencingSpec(
 ): Promise<string[]> {
   const matches: string[] = [];
   for (const planPath of planPaths) {
-    const commit = (await git(options, ['log', '-1', '--format=%H', '--', planPath])).trim();
-    if (!commit) continue;
-    const content = await git(options, ['show', `${commit}:${planPath}`]);
+    const content = await latestCommittedFile(options, planPath);
+    if (content === null) continue;
     if (extractSpecPaths(content).includes(specPath)) matches.push(planPath);
   }
   return matches;
+}
+
+/**
+ * `git log -- <path>` can lead with a deletion or rename commit, whose tree
+ * necessarily lacks the path. Historical provenance needs the latest blob,
+ * not merely the latest path-changing commit.
+ */
+async function latestCommittedFile(options: ShipmentAuditOptions, path: string): Promise<string | null> {
+  const commits = (await git(options, ['log', '--format=%H', '--', path]))
+    .split('\n')
+    .filter(Boolean);
+  for (const commit of commits) {
+    const content = await committedFile(options, commit, path);
+    if (content !== null) return content.toString('utf8');
+  }
+  return null;
 }
 
 async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promise<MergedPullRequest[]> {
@@ -256,11 +283,13 @@ async function auditSource(
   planStems: string[],
   mergedPullRequests: MergedPullRequest[],
 ): Promise<ShipmentAuditRow> {
-  if (!source.plan) {
+  if (!source.plan || source.reason) {
     return {
       sourcePath: source.path,
       sourceKind: source.kind,
       classification: 'unresolved',
+      ...(source.plan ? { plan: source.plan } : {}),
+      ...(source.relatedSourcePaths?.length ? { relatedSourcePaths: source.relatedSourcePaths } : {}),
       reason: source.reason ?? 'canonical plan is unavailable',
     };
   }
