@@ -1,9 +1,11 @@
 import { execa } from 'execa';
 import { constants as osConstants } from 'node:os';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { TestSuiteConfig } from '../types/config.js';
 
 export const DEFAULT_FULL_SUITE_TIMEOUT_MS = 30 * 60 * 1_000;
+const FULL_SUITE_TERMINATION_GRACE_MS = 100;
 
 export interface FullSuiteCommandRunnerOptions {
   cwd: string;
@@ -55,6 +57,11 @@ type FullSuiteExecutionFailureDetails =
       signal: NodeJS.Signals;
     }
   | {
+      reason: 'timeout';
+      exitCode: null;
+      signal: null;
+    }
+  | {
       reason: 'nonzero_exit';
       exitCode: number;
       signal: null;
@@ -84,14 +91,34 @@ async function runFullSuiteCommand(
   command: string,
   options: FullSuiteCommandRunnerOptions,
 ): Promise<FullSuiteCommandSuccess> {
-  const result = await execa(command, {
+  const subprocess = execa(command, {
     cwd: options.cwd,
     env: options.env,
     extendEnv: false,
     shell: options.shell,
-    timeout: options.timeoutMs,
+    detached: process.platform !== 'win32',
   });
-  return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+  let timedOut = false;
+  let cleanupPromise: Promise<void> | undefined;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    cleanupPromise = terminateProcessTree(
+      subprocess.pid,
+      (signal) => subprocess.kill(signal),
+    );
+  }, options.timeoutMs);
+  try {
+    const result = await subprocess;
+    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    await cleanupPromise;
+    if (timedOut && typeof error === 'object' && error !== null) {
+      Object.assign(error, { timedOut: true });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 const UNLAUNCHABLE_CODES = new Set([
@@ -107,6 +134,31 @@ const SIGNAL_BY_SHELL_EXIT_CODE = new Map<number, NodeJS.Signals>(
     signal as NodeJS.Signals,
   ]),
 );
+
+function signalProcessTree(
+  pid: number | undefined,
+  killDirectProcess: (signal: NodeJS.Signals) => boolean,
+  signal: NodeJS.Signals,
+): void {
+  try {
+    if (process.platform !== 'win32' && pid !== undefined) {
+      process.kill(-pid, signal);
+    } else {
+      killDirectProcess(signal);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+async function terminateProcessTree(
+  pid: number | undefined,
+  killDirectProcess: (signal: NodeJS.Signals) => boolean,
+): Promise<void> {
+  signalProcessTree(pid, killDirectProcess, 'SIGTERM');
+  await delay(FULL_SUITE_TERMINATION_GRACE_MS);
+  signalProcessTree(pid, killDirectProcess, 'SIGKILL');
+}
 
 function errorRecord(error: unknown): Record<string, unknown> {
   return typeof error === 'object' && error !== null
@@ -129,6 +181,9 @@ function errorOutput(
 function classifyFailure(
   error: Record<string, unknown>,
 ): FullSuiteExecutionFailureDetails {
+  if (error.timedOut === true) {
+    return { reason: 'timeout', exitCode: null, signal: null };
+  }
   const signal = typeof error.signal === 'string'
     ? error.signal as NodeJS.Signals
     : null;
@@ -182,7 +237,6 @@ export async function executeFullSuite(
     });
   } catch (error) {
     const failure = errorRecord(error);
-    if (failure.timedOut === true) throw error;
     const classification = classifyFailure(failure);
     const ended = clock();
     return {

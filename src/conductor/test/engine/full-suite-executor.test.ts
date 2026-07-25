@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { resolve } from 'node:path';
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   DEFAULT_FULL_SUITE_TIMEOUT_MS,
   executeFullSuite,
@@ -229,4 +232,47 @@ describe('executeFullSuite', () => {
       stderr: 'runner exploded',
     });
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'returns timeout failure only after its real process tree is gone',
+    async () => {
+      const scratch = await mkdtemp(join(tmpdir(), 'full-suite-timeout-'));
+      const sentinelPath = join(scratch, 'descendant-survived');
+      const fixturePath = resolve('test/fixtures/test-suite-timeout-child.mjs');
+      const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixturePath)} ${JSON.stringify(sentinelPath)}`;
+      let result: unknown;
+
+      try {
+        result = await executeFullSuite({
+          projectRoot: process.cwd(),
+          testSuite: { command, timeout_seconds: 0.05 },
+        });
+      } catch (error) {
+        result = {
+          threw: true,
+          timedOut:
+            typeof error === 'object' && error !== null &&
+            (error as Record<string, unknown>).timedOut === true,
+        };
+      }
+      await delay(500);
+      const sentinelSurvived = await access(sentinelPath).then(
+        () => true,
+        () => false,
+      );
+      await rm(scratch, { recursive: true, force: true });
+
+      expect({ result, sentinelSurvived }).toMatchObject({
+        result: {
+          ok: false,
+          reason: 'timeout',
+          command,
+          cwd: process.cwd(),
+          exitCode: null,
+          signal: null,
+        },
+        sentinelSurvived: false,
+      });
+    },
+  );
 });
