@@ -18,8 +18,8 @@ graph TD
   end
 
   subgraph ENGINE["Conductor engine"]
-    GENERATE["Existing record generator<br/>hash + render + write + commit"]
-    VERIFY["shipment-evidence policy (NEW)<br/>strict parse + slug + PR + hash<br/>+ candidate-tree/head reachability"]
+    GENERATE["Existing #937 record producer<br/>hash + render + write + commit<br/>production-proven by #943"]
+    VERIFY["shipment-evidence backstop (NEW)<br/>strict parse + slug + PR + hash<br/>+ candidate-tree/head reachability"]
     ASSOC["shipment-association policy (NEW)<br/>exact plan stem + PR metadata<br/>+ non-spec implementation diff"]
     CLI["shipment-evidence CLI (NEW)<br/>check-pr + reconcile + audit<br/>+ configure-protection"]
     FINISH["Finish convergence seams<br/>finish-record + finish predicate<br/>+ complete-state verifier"]
@@ -84,6 +84,9 @@ graph TD
 - **Protection cutover** occurs only after the bootstrap PR emits the stable context. The adapter
   refuses live-rule drift instead of reconstructing or weakening ruleset `15933604`.
 - Dotted edges are blocking or recovery paths. `«»` denotes variable values.
+- **#937/#943 baseline** remains the ordinary producer path. This feature does not replace it or
+  change record schema/hash resolution; the new verifier prevents other engine and merge paths from
+  claiming success without its durable output.
 
 ## Change Log
 
@@ -92,3 +95,4 @@ graph TD
 | 2026-07-25 | Initial generation | DECIDE architecture for issues #916/#936 and repaired example PR #877 |
 | 2026-07-25 | Corrected `main` protection baseline | Ruleset inspection showed active PR/review protection; only the required evidence check is missing |
 | 2026-07-25 | Added planned policy, CLI, audit, and protection seams | `/plan` fixed the module boundaries, call paths, repair-head status, and safe cutover sequence |
+| 2026-07-25 | Narrowed around verified #937/#943 baseline | Current `main` already produces records on the ordinary finish path; remaining work is enforcement and recovery |

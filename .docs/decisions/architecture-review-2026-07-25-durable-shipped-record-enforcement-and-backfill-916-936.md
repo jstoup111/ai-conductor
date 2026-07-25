@@ -5,10 +5,11 @@
 **Mode:** Pre-implementation DECIDE review plus post-plan conformance pass, lightweight (Tier M,
 technical track)
 
-**Inputs reviewed:** approved component and sequence diagrams; committed 40-task implementation
-plan; accepted stories and clean conflict report; issues #916/#936; merged spec PR #877 and
-implementation/repair evidence #893/#911; existing shipped-record, finish, daemon, guard, rekick,
-and mergeable-watch code; approved ADRs listed below
+**Inputs reviewed:** approved component and sequence diagrams; committed 20-task implementation
+plan; accepted stories and clean conflict report; issues #916/#936; merged spec PR #877;
+implementation/repair evidence #893/#911; the #937 finish safeguard and its successful #943
+production exercise; existing shipped-record, finish, daemon, guard, rekick, and mergeable-watch
+code; approved ADRs listed below
 
 **Verdict:** APPROVED
 
@@ -20,6 +21,10 @@ and mergeable-watch code; approved ADRs listed below
   complete verifier, merged-PR guard, daemon outcome boundary, rekick sweep, and mergeable watch are
   viable seams. The new code is one strict verifier/association policy with thin CLI and workflow
   adapters.
+- **Verified baseline:** #937 already orders the ordinary skill-driven record creation/verification
+  before local terminal recording, and #943 landed a record from that path. The implementation does
+  not rewrite the skill producer; it verifies that baseline and adds engine-owned backstops around
+  the still-permissive recorder, completion predicates, daemon boundary, and merged guard.
 - **Data:** the existing `.docs/shipped/<slug>.md` schema remains unchanged. The historical audit
   emits a report plus only proven records; no migration or destructive rewrite is required.
 - **Git semantics:** checking that a record is part of the candidate commit and that engine HEAD is
@@ -61,7 +66,7 @@ and mergeable-watch code; approved ADRs listed below
 | CLI dispatch (thin) | existing `src/conductor/src/index.ts` detect/dispatch chain; workflow scripts call the built CLI rather than duplicate policy |
 | Premerge Action (new, always reports) | `pull_request`; checks immutable PR head; stable context added to ruleset `15933604` |
 | Reconciliation Action (new) | merged `pull_request`; deterministic repair branch/PR; runs verifier and posts its repair-head status |
-| Existing record generator | reused by finish and backfill; renderer/hash/parser schema unchanged |
+| Existing record generator | #937 producer retained; reused by finish and backfill; renderer/hash/parser schema and story-resolution semantics unchanged |
 
 **Early overlap scan (advisory):** completed successfully. It reports
 `src/conductor/src/engine/shipped-record.ts` as overlapping with many local and origin spec branches,
@@ -90,18 +95,20 @@ merge) a repair PR. The architecture gate is clear for stories.
 
 ## Post-Plan Conformance Pass
 
-**Verdict:** APPROVED — no new ADR, condition, or structural gap.
+**Verdict:** APPROVED — narrowed after current-main verification; no new ADR, condition, or
+structural gap.
 
-- **Coverage and dependency shape:** all six accepted stories and all 29 negative paths map to the
-  40 sequential tasks. Every task declares files, design-time wiring, and an acyclic dependency;
-  the task-count warning is acknowledged but remains below the 41-task split gate.
+- **Coverage and dependency shape:** all six accepted stories and all negative paths map to 20
+  implementation/verification tasks. Table-driven refusal matrices replace one-task-per-defect
+  decomposition, bringing the plan into the normal 1–20 task range while retaining explicit
+  negative-path assertions and acyclic dependencies.
 - **Boundary fidelity:** new policy stays in sibling `shipment-evidence`, `shipment-association`,
   reconciliation, audit, and protection modules. Existing hot files receive only compatible parser
   exports or production wiring, matching the overlap-risk mitigation.
-- **Terminal convergence:** Tasks 5–6 and 16–20 cover every architecture-review consumer: finish
-  recorder/predicate, complete verifier, daemon outcome, merged guard, conductor shortcuts, and
-  rekick. Discovery's permissive boolean remains type- and authority-separated from the strict
-  terminal verdict.
+- **Terminal convergence:** Tasks 1 and 5–8 retain the verified #937/#943 producer and cover every
+  unresolved consumer: finish recorder/predicate, complete verifier, daemon outcome, merged guard,
+  conductor shortcuts, and rekick. Discovery's permissive boolean remains type- and
+  authority-separated from the strict terminal verdict.
 - **GitHub boundary:** premerge is read-only and exact-head; reconciliation has job-scoped writes,
   a record-only allowlist, deterministic identity, and explicit API denylists. The creator-posted
   repair status remains required even though current GitHub documentation now describes
@@ -112,10 +119,13 @@ merge) a repair PR. The architecture gate is clear for stories.
   is not complete until the post-merge cutover re-reads ruleset `15933604` and the Actions setting
   and proves the exact additive result.
 - **Backfill verification boundary:** per operator direction on 2026-07-25, the one-time historical
-  backfill adds no dedicated automated audit/backfill fixtures. Tasks 9 and 31–35 still implement
-  every accepted classification/failure branch, while Task 40 gates delivery on the real complete
-  report, exact record diff, strict verification of every generated record, and a diff-free second
-  run. Reusable verifier, association, repair, and discovery behavior remains automated-test covered.
+  backfill adds no dedicated automated audit/backfill fixtures. Tasks 16–18 implement and exercise
+  the real audit, complete report, exact record diff, strict verification of every generated record,
+  and a diff-free second run. Reusable verifier, association, repair, and discovery behavior remains
+  automated-test covered.
+- **Hash compatibility boundary:** #943's record is valid under the existing writer's canonical
+  resolution. This feature compares against that same behavior; it does not silently change record
+  identity or introduce a historical hash migration.
 - **Repository release gates:** ordinary documentation, changelog, and VERSION approval remain
   ship-time repository obligations outside `/plan`'s functional-task boundary. The new CLI/check
   must not reach PR creation without satisfying `CLAUDE.md`'s documentation and release rules.
