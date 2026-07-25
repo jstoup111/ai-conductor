@@ -57,7 +57,7 @@ Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd �
 Step 14: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
 Step 15: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
 Step 16: /retro                 → SHIP
-Step 17: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
+Step 17: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
@@ -91,10 +91,13 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
 | 14. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
 | 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 16. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
+| 16. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
-`"complete"` in `conduct-state.json`. Complete features are excluded from `--resume` menus.
+`"complete"` in `conduct-state.json`. Do not mark a PR or merge-local outcome complete until
+`/finish` has created and verified the committed `.docs/shipped/<plan-stem>.md` record. Ignored
+`.pipeline/DONE`, `finish-choice`, or `pr_url` state alone is not durable shipment evidence.
+Complete features are excluded from `--resume` menus.
 
 **Worktree cleanup:** On `--resume` or `--cleanup`, conduct checks all worktrees for merged PRs.
 If a PR is merged, it offers to: remove the worktree, delete the local branch, and mark complete.
@@ -343,6 +346,7 @@ Harness test complete. Review the retro for improvement findings.
 - [ ] Re-entry works (picks up from current state, doesn't restart)
 - [ ] Clean conflict-check creates marker file
 - [ ] Completion message shown when all steps done
+- [ ] PR/merge-local completion includes the committed `.docs/shipped/<plan-stem>.md`; PR completion verifies that commit is pushed to the PR head
 - [ ] Feature marked complete (`feature_status: complete`) after all steps finish
 - [ ] `--resume` cleans up worktrees with merged PRs before showing menu
 - [ ] `--cleanup` removes worktrees, deletes branches, marks features complete
