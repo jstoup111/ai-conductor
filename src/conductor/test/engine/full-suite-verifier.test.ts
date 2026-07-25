@@ -1,15 +1,75 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { execa } from 'execa';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
   readFullSuiteEvidence,
+  writeFullSuiteEvidence,
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
+import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
+
+async function writeProjectFile(
+  projectRoot: string,
+  path: string,
+  contents: string,
+): Promise<void> {
+  const destination = join(projectRoot, path);
+  await mkdir(resolve(destination, '..'), { recursive: true });
+  await writeFile(destination, contents, 'utf8');
+}
+
+async function makeFingerprintProject(): Promise<string> {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-verifier-matrix-'));
+  scratches.push(projectRoot);
+  const files: Record<string, string> = {
+    '.ai-conductor/config.yml': [
+      'test_suite:',
+      '  command: node suite.mjs --all',
+      '  working_directory: .',
+      '  timeout_seconds: 42',
+      '  inputs:',
+      '    - private/state.bin',
+      '  environment:',
+      '    - SUITE_MODE',
+      '',
+    ].join('\n'),
+    '.gitignore': 'private/*.bin\n.pipeline/\n',
+    'README.md': '# fixture\n',
+    'db/migrations/001.sql': 'CREATE TABLE one;\n',
+    'package-lock.json': '{"lockfileVersion":3}\n',
+    'requirements.txt': 'pytest==8.0.0\n',
+    'src/app.ts': 'export const value = 1;\n',
+    'test/app.test.ts': 'test("value", () => {});\n',
+    'test/setup.ts': 'export const setup = 1;\n',
+  };
+  for (const [path, contents] of Object.entries(files)) {
+    await writeProjectFile(projectRoot, path, contents);
+  }
+  await writeProjectFile(projectRoot, 'private/state.bin', 'private state one\n');
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+  await execa('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+  await execa('git', ['add', '.'], { cwd: projectRoot });
+  await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: projectRoot });
+  return projectRoot;
+}
+
+async function makeConfiguredProject(prefix: string): Promise<string> {
+  const projectRoot = await mkdtemp(join(tmpdir(), prefix));
+  scratches.push(projectRoot);
+  await writeProjectFile(
+    projectRoot,
+    '.ai-conductor/config.yml',
+    'test_suite:\n  command: node suite.mjs --all\n  environment:\n    - SUITE_SECRET\n',
+  );
+  return projectRoot;
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -102,7 +162,11 @@ describe('FullSuiteVerifier', () => {
         (entry) => entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp'),
       ),
     }).toEqual({
-      result: { status: 'EXECUTED', evidence: expectedEvidence },
+      result: {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'missing' },
+        evidence: expectedEvidence,
+      },
       fingerprintCalls: [
         {
           projectRoot,
@@ -225,7 +289,11 @@ describe('FullSuiteVerifier', () => {
       fingerprintCount,
       persisted,
     }).toEqual({
-      fallback: { status: 'EXECUTED', evidence: expectedEvidence },
+      fallback: {
+        status: 'EXECUTED',
+        freshness: { status: 'STALE', reason: 'missing' },
+        evidence: expectedEvidence,
+      },
       laterCaller: { status: 'REUSED', evidence: expectedEvidence },
       sameHeadInspection: { status: 'CURRENT', evidence: expectedEvidence },
       reconstructedCaller: { status: 'REUSED', evidence: expectedEvidence },
@@ -234,5 +302,399 @@ describe('FullSuiteVerifier', () => {
       fingerprintCount: 5,
       persisted: { usable: true, evidence: expectedEvidence },
     });
+  });
+
+  it('classifies the complete mutation matrix and reruns only content-stale inputs', async () => {
+    const mutationCases: Array<{
+      name: string;
+      mutate: (projectRoot: string) => Promise<void>;
+      environment?: NodeJS.ProcessEnv;
+    }> = [
+      {
+        name: 'source',
+        mutate: (root) => writeProjectFile(root, 'src/app.ts', 'export const value = 2;\n'),
+      },
+      {
+        name: 'tests',
+        mutate: (root) => writeProjectFile(root, 'test/app.test.ts', 'test("changed", () => {});\n'),
+      },
+      {
+        name: 'project config',
+        mutate: async (root) => {
+          const path = join(root, '.ai-conductor/config.yml');
+          await writeFile(path, `${await readFile(path, 'utf8')}# changed\n`, 'utf8');
+        },
+      },
+      {
+        name: 'package lock',
+        mutate: (root) => writeProjectFile(root, 'package-lock.json', '{"lockfileVersion":4}\n'),
+      },
+      {
+        name: 'requirements.txt',
+        mutate: (root) => writeProjectFile(root, 'requirements.txt', 'pytest==8.1.0\n'),
+      },
+      {
+        name: 'migration',
+        mutate: (root) => writeProjectFile(root, 'db/migrations/001.sql', 'CREATE TABLE two;\n'),
+      },
+      {
+        name: 'test infrastructure',
+        mutate: (root) => writeProjectFile(root, 'test/setup.ts', 'export const setup = 2;\n'),
+      },
+      {
+        name: 'declared ignored input',
+        mutate: (root) => writeProjectFile(root, 'private/state.bin', 'private state two\n'),
+      },
+      {
+        name: 'declared environment',
+        environment: { PATH: '/fixture/bin', SUITE_MODE: 'second' },
+        mutate: async () => undefined,
+      },
+      {
+        name: 'mixed docs and code',
+        mutate: async (root) => {
+          await writeProjectFile(root, 'README.md', '# changed docs\n');
+          await writeProjectFile(root, 'src/app.ts', 'export const value = 3;\n');
+        },
+      },
+      {
+        name: 'docs only',
+        mutate: (root) => writeProjectFile(root, 'README.md', '# changed docs only\n'),
+      },
+    ];
+    const observed: unknown[] = [];
+
+    for (const testCase of mutationCases) {
+      const projectRoot = await makeFingerprintProject();
+      let launches = 0;
+      const createVerifier = (environment: NodeJS.ProcessEnv) => new FullSuiteVerifier({
+        projectRoot,
+        environment,
+        execute: async () => {
+          launches += 1;
+          return {
+            ok: true,
+            command: 'node suite.mjs --all',
+            cwd: projectRoot,
+            startedAt: '2026-07-25T17:00:00.000Z',
+            endedAt: '2026-07-25T17:00:01.000Z',
+            durationMs: 1_000,
+            exitCode: 0,
+            stdout: 'all suites passed\n',
+            stderr: '',
+          };
+        },
+      });
+      const initialEnvironment = { PATH: '/fixture/bin', SUITE_MODE: 'first' };
+      const baseline = await createVerifier(initialEnvironment).ensure();
+      await testCase.mutate(projectRoot);
+      const verifier = createVerifier(testCase.environment ?? initialEnvironment);
+      const inspection = await verifier.inspect();
+      const ensured = await verifier.ensure();
+      const freshness = 'freshness' in ensured ? ensured.freshness : undefined;
+
+      observed.push({
+        name: testCase.name,
+        baseline: baseline.status,
+        inspection: inspection.status === 'STALE'
+          ? `${inspection.status}:${inspection.reason}`
+          : inspection.status,
+        ensured: ensured.status,
+        freshness,
+        launches,
+      });
+    }
+
+    expect(observed).toEqual(mutationCases.map((testCase) => testCase.name === 'docs only'
+      ? {
+          name: testCase.name,
+          baseline: 'EXECUTED',
+          inspection: 'CURRENT',
+          ensured: 'REUSED',
+          freshness: undefined,
+          launches: 1,
+        }
+      : {
+          name: testCase.name,
+          baseline: 'EXECUTED',
+          inspection: 'STALE:fingerprint_mismatch',
+          ensured: 'EXECUTED',
+          freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          launches: 2,
+        }));
+  });
+
+  it('reruns once and replaces every computable unusable evidence state', async () => {
+    const states: Array<{
+      name: string;
+      reason: string;
+      arrange: (projectRoot: string) => Promise<void>;
+    }> = [
+      { name: 'missing', reason: 'missing', arrange: async () => undefined },
+      {
+        name: 'previous FAIL',
+        reason: 'not_pass',
+        arrange: (projectRoot) => writeFullSuiteEvidence(projectRoot, {
+          version: FULL_SUITE_EVIDENCE_VERSION,
+          outcome: 'FAIL',
+          reason: 'nonzero_exit',
+          fingerprint: 'sha256:current',
+          provenanceHeadSha: 'head-before',
+          command: 'node suite.mjs --all',
+          workingDirectory: projectRoot,
+          startedAt: '2026-07-25T16:59:00.000Z',
+          endedAt: '2026-07-25T16:59:01.000Z',
+          durationMs: 1_000,
+          exitCode: 7,
+          signal: null,
+          stdout: '',
+          stderr: 'failed\n',
+        }),
+      },
+      {
+        name: 'corrupt',
+        reason: 'corrupt',
+        arrange: (root) => writeProjectFile(root, '.pipeline/test-suite-evidence.json', '{'),
+      },
+      {
+        name: 'unsupported',
+        reason: 'unsupported_version',
+        arrange: (root) => writeProjectFile(
+          root,
+          '.pipeline/test-suite-evidence.json',
+          JSON.stringify({ version: 999, outcome: 'PASS' }),
+        ),
+      },
+      {
+        name: 'incomplete',
+        reason: 'incomplete_write',
+        arrange: (root) => writeProjectFile(
+          root,
+          '.pipeline/.test-suite-evidence.crashed.tmp',
+          'partial',
+        ),
+      },
+    ];
+    const observed: unknown[] = [];
+
+    for (const state of states) {
+      const projectRoot = await makeConfiguredProject('full-suite-verifier-state-');
+      await state.arrange(projectRoot);
+      let launches = 0;
+      const verifier = new FullSuiteVerifier({
+        projectRoot,
+        fingerprint: async () => ({
+          ok: true,
+          fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+        }),
+        execute: async () => {
+          launches += 1;
+          return {
+            ok: true,
+            command: 'node suite.mjs --all',
+            cwd: projectRoot,
+            startedAt: '2026-07-25T17:00:00.000Z',
+            endedAt: '2026-07-25T17:00:01.000Z',
+            durationMs: 1_000,
+            exitCode: 0,
+            stdout: 'passed\n',
+            stderr: '',
+          };
+        },
+      });
+
+      const result = await verifier.ensure();
+      observed.push({
+        name: state.name,
+        result: result.status,
+        freshness: 'freshness' in result ? result.freshness : undefined,
+        launches,
+        persisted: await readFullSuiteEvidence(projectRoot),
+      });
+    }
+
+    expect(observed).toEqual(states.map((state) => ({
+      name: state.name,
+      result: 'EXECUTED',
+      freshness: { status: 'STALE', reason: state.reason },
+      launches: 1,
+      persisted: {
+        usable: true,
+        evidence: expect.objectContaining({
+          outcome: 'PASS',
+          fingerprint: 'sha256:current',
+          provenanceHeadSha: 'head-current',
+        }),
+      },
+    })));
+  });
+
+  it('fails closed with actionable reasons when freshness or persistence is indeterminate', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-verifier-indeterminate-');
+    let launches = 0;
+    const execution = async () => {
+      launches += 1;
+      return {
+        ok: true as const,
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-07-25T17:00:00.000Z',
+        endedAt: '2026-07-25T17:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 0 as const,
+        stdout: 'passed\n',
+        stderr: '',
+      };
+    };
+    const fingerprintFailure = await new FullSuiteVerifier({
+      projectRoot,
+      execute: execution,
+      fingerprint: async () => ({
+        ok: false,
+        reason: {
+          code: 'input_read_failed',
+          message: 'Unable to hash verification input: src/app.ts',
+          path: 'src/app.ts',
+        },
+      }),
+    }).ensure();
+    const readFailure = await new FullSuiteVerifier({
+      projectRoot,
+      execute: execution,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+      }),
+      readEvidence: async () => ({ usable: false, reason: 'io_error' }),
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+    const writeFailure = await new FullSuiteVerifier({
+      projectRoot,
+      execute: execution,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+      }),
+      writeEvidence: async () => {
+        throw new Error('fixture write failure');
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+    const invalidConfigRoot = await makeConfiguredProject('full-suite-verifier-invalid-');
+    await writeProjectFile(
+      invalidConfigRoot,
+      '.ai-conductor/config.yml',
+      'test_suite:\n  command: ""\n',
+    );
+    const invalidConfig = await new FullSuiteVerifier({
+      projectRoot: invalidConfigRoot,
+      execute: execution,
+    }).ensure();
+
+    expect({ fingerprintFailure, readFailure, writeFailure, invalidConfig, launches }).toEqual({
+      fingerprintFailure: {
+        status: 'FAILED',
+        reason: 'preflight_failed',
+        message: 'Unable to hash verification input: src/app.ts',
+      },
+      readFailure: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to read full-suite evidence',
+      },
+      writeFailure: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to persist full-suite PASS evidence',
+        freshness: { status: 'STALE', reason: 'missing' },
+      },
+      invalidConfig: {
+        status: 'FAILED',
+        reason: 'invalid_config',
+        message: expect.stringMatching(/test_suite|command/i),
+      },
+      launches: 1,
+    });
+  });
+
+  it('persists sanitized correlated FAIL evidence without making it reusable', async () => {
+    const failures = [
+      { name: 'nonzero', reason: 'nonzero_exit' as const, exitCode: 7, signal: null },
+      { name: 'signal', reason: 'signal' as const, exitCode: null, signal: 'SIGTERM' as NodeJS.Signals },
+    ];
+    const observed: unknown[] = [];
+
+    for (const failure of failures) {
+      const projectRoot = await makeConfiguredProject('full-suite-verifier-failure-');
+      const secret = `secret-${failure.name}`;
+      let launches = 0;
+      const verifier = new FullSuiteVerifier({
+        projectRoot,
+        environment: { SUITE_SECRET: secret },
+        fingerprint: async () => ({
+          ok: true,
+          fingerprint: { digest: 'sha256:failing', headSha: 'head-failing' },
+        }),
+        execute: async () => {
+          launches += 1;
+          return {
+            ok: false,
+            reason: failure.reason,
+            command: 'node suite.mjs --all',
+            cwd: projectRoot,
+            startedAt: '2026-07-25T17:00:00.000Z',
+            endedAt: '2026-07-25T17:00:01.000Z',
+            durationMs: 1_000,
+            exitCode: failure.exitCode,
+            signal: failure.signal,
+            stdout: `started ${secret}\n`,
+            stderr: `failed ${secret}\n`,
+          } as FullSuiteExecutionResult;
+        },
+      });
+
+      const first = await verifier.ensure();
+      const persisted = await readFullSuiteEvidence(projectRoot);
+      const second = await verifier.ensure();
+      observed.push({
+        name: failure.name,
+        first,
+        persisted,
+        second: second.status,
+        launches,
+        leaked: JSON.stringify({ first, persisted }).includes(secret),
+      });
+    }
+
+    expect(observed).toEqual(failures.map((failure) => ({
+      name: failure.name,
+      first: {
+        status: 'FAILED',
+        reason: failure.reason,
+        message: 'failed \n',
+        freshness: { status: 'STALE', reason: 'missing' },
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: failure.reason,
+          exitCode: failure.exitCode,
+          signal: failure.signal,
+          fingerprint: 'sha256:failing',
+          provenanceHeadSha: 'head-failing',
+          stdout: 'started \n',
+          stderr: 'failed \n',
+        }),
+      },
+      persisted: {
+        usable: false,
+        reason: 'not_pass',
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: failure.reason,
+          exitCode: failure.exitCode,
+          signal: failure.signal,
+        }),
+      },
+      second: 'FAILED',
+      launches: 2,
+      leaked: false,
+    })));
   });
 });

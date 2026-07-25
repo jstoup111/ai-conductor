@@ -83,6 +83,19 @@ export type FullSuiteEvidenceReadResult =
       evidence?: FullSuiteFailEvidence;
     };
 
+function isIncompleteEvidenceWrite(entry: string): boolean {
+  return entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp');
+}
+
+async function removeIncompleteEvidenceWrites(directory: string): Promise<void> {
+  const entries = await readdir(directory);
+  await Promise.all(
+    entries
+      .filter(isIncompleteEvidenceWrite)
+      .map((entry) => rm(join(directory, entry), { force: true })),
+  );
+}
+
 const FAILURE_REASONS = new Set<FullSuiteFailureReason>([
   'missing_config',
   'invalid_config',
@@ -229,6 +242,7 @@ export async function writeFullSuiteEvidence(
     `.test-suite-evidence.${process.pid}.${randomUUID()}.tmp`,
   );
   await mkdir(directory, { recursive: true });
+  await removeIncompleteEvidenceWrites(directory);
   try {
     const persisted: FullSuiteEvidence = {
       ...evidence,
@@ -256,9 +270,7 @@ export async function readFullSuiteEvidence(
       : { usable: false, reason: 'io_error' };
   }
   if (
-    entries.some(
-      (entry) => entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp'),
-    )
+    entries.some(isIncompleteEvidenceWrite)
   ) {
     return { usable: false, reason: 'incomplete_write' };
   }
