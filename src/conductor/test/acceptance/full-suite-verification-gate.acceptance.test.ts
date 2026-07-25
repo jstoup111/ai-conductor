@@ -357,7 +357,12 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
     );
 
     const combined = files.map(([, , contents]) => contents).join('\n');
-    expect(combined).toMatch(/conduct-ts test-suite/);
+    const genericSkillContents = files
+      .filter(([path]) => path.startsWith('skills/'))
+      .map(([, , contents]) => contents)
+      .join('\n');
+    expect(combined).toMatch(/configured aggregate verifier/i);
+    expect(genericSkillContents).not.toMatch(/conduct-ts test-suite/);
     expect(combined).toMatch(/shared\/core[^\n]*3\+|3\+[^\n]*(?:importer|production module)/i);
     expect(combined).toMatch(/config[^\n]*migrations[^\n]*dependenc[^\n]*test infrastructure/i);
     expect(combined).toMatch(/empty[^\n]*(?:scoped|affected)|(?:scoped|affected)[^\n]*empty/i);
@@ -379,14 +384,14 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
     const launchesAfterFinish = await readCount();
 
     expect({
-      finishUsesSharedCli: finishSkill.includes('conduct-ts test-suite'),
+      finishUsesConfiguredVerifier: /configured aggregate verifier/i.test(finishSkill),
       gateExitCode: gate.exitCode,
       gateOutput: gate.stdout + gate.stderr,
       finishExitCode: finishVerification.exitCode,
       finishOutput: finishVerification.stdout + finishVerification.stderr,
       additionalProjectSuiteLaunches: launchesAfterFinish - launchesBeforeFinish,
     }).toEqual({
-      finishUsesSharedCli: true,
+      finishUsesConfiguredVerifier: true,
       gateExitCode: 0,
       gateOutput: expect.stringMatching(/EXECUTED.*PASS/i),
       finishExitCode: 0,
@@ -450,9 +455,9 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
       readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
     ]);
 
-    expect(finish).toMatch(/conduct-ts test-suite/);
+    expect(finish).toMatch(/configured aggregate verifier/i);
     expect(finish).toMatch(/REUSED|missing|stale/i);
-    const rawAggregateCommand = /(?:\bnpm(?: run)? test\b|\bpnpm(?: run)? test\b|\byarn(?: run)? test\b|\bbun test\b|\bnpx vitest run\b|\bgo test\b|\bcargo test\b|bundle exec rspec\b|\bpytest\b|\bmvn test\b|\bgradle test\b|\bdotnet test\b|\bmix test\b|conduct-ts test-suite|full (?:test )?suite)/i;
+    const rawAggregateCommand = /(?:\bnpm(?: run)? test\b|\bpnpm(?: run)? test\b|\byarn(?: run)? test\b|\bbun test\b|\bnpx vitest run\b|\bgo test\b|\bcargo test\b|bundle exec rspec\b|\bpytest\b|\bmvn test\b|\bgradle test\b|\bdotnet test\b|\bmix test\b|full (?:test )?suite)/i;
     for (const command of ['npx vitest run', 'npm run test', 'go test ./...']) {
       expect(command, `raw aggregate guard: ${command}`).toMatch(rawAggregateCommand);
     }
@@ -462,7 +467,7 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
     );
     expect(prePushSection).not.toMatch(rawAggregateCommand);
     expect(pr).not.toMatch(
-      /(?:\bnpm(?: run)? test\b|\bnpx vitest run\b|\bgo test\b|conduct-ts test-suite|full (?:test )?suite)/i,
+      /(?:\bnpm(?: run)? test\b|\bnpx vitest run\b|\bgo test\b|full (?:test )?suite)/i,
     );
   });
 
@@ -513,7 +518,7 @@ describe('Task 25 thin automated delivery proof (FR-1, FR-4, FR-13, FR-14)', () 
       gateOutput: gate.stdout + gate.stderr,
       gateEvidence: evidenceAfterGate.outcome,
       launchesAfterGate,
-      finishUsesSharedVerifier: finishSkill.includes('conduct-ts test-suite'),
+      finishUsesConfiguredVerifier: /configured aggregate verifier/i.test(finishSkill),
       finishExitCode: finish.exitCode,
       finishOutput: finish.stdout + finish.stderr,
       finishEvidence: evidenceAfterFinish.outcome,
@@ -532,7 +537,7 @@ describe('Task 25 thin automated delivery proof (FR-1, FR-4, FR-13, FR-14)', () 
       gateOutput: expect.stringMatching(/EXECUTED.*PASS/is),
       gateEvidence: 'PASS',
       launchesAfterGate: 1,
-      finishUsesSharedVerifier: true,
+      finishUsesConfiguredVerifier: true,
       finishExitCode: 0,
       finishOutput: expect.stringMatching(/REUSED.*PASS/is),
       finishEvidence: 'PASS',

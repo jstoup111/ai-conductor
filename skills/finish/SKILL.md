@@ -54,23 +54,23 @@ Do NOT trust:
 
 Run these commands and read the full output:
 
-1. **Aggregate suite proof** — From the project root, run `conduct-ts test-suite`.
-   The shared verifier recalculates freshness and produces one of two successful
-   results:
+1. **Aggregate suite proof** — From the project root, run the repository's
+   configured aggregate verifier. The verifier recalculates freshness and
+   produces one of two successful results:
    - `EXECUTED` — evidence was missing or stale, so the project suite launched
      exactly once and recorded a current PASS.
    - `REUSED` — current PASS evidence matched the verification inputs, so the
      project suite did not launch.
 
-   Read the complete CLI output. Do not run the project suite command directly
-   or inspect the evidence sidecar as a substitute; the CLI owns both the
-   run-versus-reuse decision and the evidence update.
+   Read the complete verifier output. Do not run the project suite command
+   directly or inspect an evidence sidecar as a substitute; the configured
+   verifier owns both the run-versus-reuse decision and the evidence update.
 2. **Git status** — Check for uncommitted files, untracked files, unexpected changes.
 3. **Linting/type checking** — If the project has linters or type checkers, run them.
 
 All must pass before proceeding.
 
-**When `conduct-ts test-suite` exits non-zero — stop before completion choices:**
+**When the configured aggregate verifier exits non-zero — stop before completion choices:**
 
 **STOP before presenting options, executing any choice, pushing, creating a PR,
 or writing `.pipeline/finish-choice`.** Report the actionable, redacted CLI
@@ -80,8 +80,8 @@ failure output. The shared verifier retains its canonical failure in
 1. **Flake-check executable test failures only**: if the CLI output identifies
    failing specs, re-run JUST those specs once. A failure that passes on re-run,
    or that is plainly transient infra (DB not up, port in use, network timeout),
-   is a flake — note it, then run `conduct-ts test-suite` again so only the shared
-   verifier can record the replacement PASS. For configuration, preflight,
+   is a flake — note it, then run the configured aggregate verifier again so
+   only that verifier can record the replacement PASS. For configuration, preflight,
    launch, or timeout failures, do not invent a failing-spec rerun; use the
    verifier's blocking evidence.
 2. **Real test failures remain** → this is NOT a finishable state:
@@ -248,12 +248,16 @@ describe the choice):
 `.docs/plans/<slug>.md`. After `/pr` creates or reuses the PR, run every command below
 from the feature worktree, in order:
 
+`<harness-cli>` below means the repository's configured durable-recording interface.
+Resolve that interface from the project harness; this generic skill intentionally does
+not prescribe a product-specific binary name.
+
 ```
-conduct-ts shipped-record --slug <slug> --pr <PR_URL>
+<harness-cli> shipped-record --slug <slug> --pr <PR_URL>
 git cat-file -e "HEAD:.docs/shipped/<slug>.md"
 git push  # follow §1b's safe-push rules if the remote branch has diverged
 git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
-conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+<harness-cli> finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
 ```
 
 `shipped-record` is historically best-effort and may warn while exiting zero, so its exit code
@@ -265,10 +269,10 @@ For Keep (no remote, or `gh` unavailable/unauthenticated), leave the work commit
 and run:
 
 ```
-conduct-ts finish-record --choice keep --pipeline-dir /abs/path/to/.pipeline
+<harness-cli> finish-record --choice keep --pipeline-dir /abs/path/to/.pipeline
 ```
 
-The final act after the durable PR record is verified is always `conduct-ts finish-record`. It is
+The final act after the durable PR record is verified is always the harness `finish-record` action. It is
 the single source of truth for the `.pipeline/finish-choice` marker and (for `pr`) `state.pr_url`;
 do not hand-write these files yourself in auto mode. Use the absolute pipeline directory supplied
 in the step's system prompt.
@@ -280,7 +284,7 @@ written) rather than recording a false completion.
 
 **Refusal contract:** any gate above (GATE 0, fresh-verification failures, push
 staleness/lease failures, the §5 Option 2 STOP gate) that says STOP means do
-NOT run `conduct-ts finish-record` in that pass — an absent `finish-choice`
+NOT run the harness `finish-record` action in that pass — an absent `finish-choice`
 marker IS the refusal signal the conductor watches for. Never write the marker
 by hand to paper over a blocked gate.
 
@@ -305,14 +309,14 @@ completion gate can verify the step actually did something:
 
 - **Auto mode (`pr` or `keep`)**: for `pr`, first complete and verify the durable shipped-record
   sequence above. Then record the outcome by running
-  `conduct-ts finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir
+  `<harness-cli> finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir
   /abs/path/to/.pipeline` (see §4) — this is the final act, and it writes both
   `.pipeline/finish-choice` and, for `pr`, `state.pr_url` atomically after
   re-verifying the PR/push. Do NOT hand-write these files yourself when
   running auto/unattended.
 - **Interactive mode (Options 1–4, user chose manually)**:
   - **Option 2 (PR)**: after the durable shipped-record and PR/push STOP gates pass, the final action MUST
-    be `conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir
+    be `<harness-cli> finish-record --choice pr --pr-url <url> --pipeline-dir
     /abs/path/to/.pipeline`. Do not write `finish-choice` or `pr_url` by hand:
     the recorder verifies the PR and push, then writes both records plus the
     terminal `.pipeline/DONE` marker.
@@ -330,7 +334,7 @@ conductor reads.
 
 **Option 1: Merge locally**
 - **Shipped record (before the merge):** on the feature branch, run
-  `conduct-ts shipped-record --slug <slug> --pr local` (where `<slug>` is the
+  `<harness-cli> shipped-record --slug <slug> --pr local` (where `<slug>` is the
   plan-file stem, `.docs/plans/<slug>.md`). It commits `.docs/shipped/<slug>.md`
   on the branch so the merge lands the code and the shipped-fact atomically.
   Because the command may warn while exiting zero, verify the record is committed with
@@ -387,7 +391,7 @@ Explain what failed and what to do next:
 (Story 1), routing to HALT for human review.
 
 - **Shipped record (before handing the PR to the human):** on the feature
-  branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
+  branch, run `<harness-cli> shipped-record --slug <slug> --pr <PR_URL>` (where
   `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then push using
   §1b's safe-push rules so the record commit rides the PR branch — the human
   merge lands the code and the shipped-fact atomically. Verify both
@@ -398,7 +402,7 @@ Explain what failed and what to do next:
 - Return the PR URL to the user
 - As the final action, run:
   ```
-  conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+  <harness-cli> finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
   ```
   This is the only writer for `pr_url`, `finish-choice=pr`, and the terminal
   `.pipeline/DONE` marker. If it fails, do not hand-write a substitute record.
@@ -407,7 +411,7 @@ Explain what failed and what to do next:
 - No action needed
 - Remind the user which branch they're on
 - Write `keep` to `.pipeline/finish-choice`
-- Never run `conduct-ts shipped-record` for `keep` (or `discard`) — nothing
+- Never run the harness `shipped-record` action for `keep` (or `discard`) — nothing
   ships, so no `.docs/shipped/` record may exist for the slug
 
 **Option 4: Discard**
@@ -429,10 +433,10 @@ After executing the chosen option:
 ## Verification
 
 - [ ] GATE 0: checked `git status` first — confirmed NO rebase/merge in progress and no unmerged paths (else stopped without pushing/PR/`finish-choice`)
-- [ ] `conduct-ts test-suite` ran now — output read; success was `EXECUTED` or `REUSED`
+- [ ] The configured aggregate verifier ran now — output read; success was `EXECUTED` or `REUSED`
 - [ ] If the verifier exited non-zero: applicable flake-check performed; real test failures recorded in `.pipeline/test-failures.md`; NO choices presented and NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
-- [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
+- [ ] Outcome recorded via the harness `finish-record` action — the
       completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
       `pr` without a recorded URL fails the gate
 - [ ] Reused halt-PR verified for engine rehabilitation: PR title does not start with

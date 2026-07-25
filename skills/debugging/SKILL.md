@@ -74,7 +74,7 @@ a plausible-but-unverified theory produces a band-aid, not a fix.
 **GATE: Before any fix, confirm the buggy code path is supposed to exist.**
 
 This is the SHIP/fix instance of the harness-wide **design-conformance-before-effort**
-convention (HARNESS.md → Key Conventions): the same check applies whenever code is written,
+convention in the repository harness documentation: the same check applies whenever code is written,
 not only when it is fixed. A bug is only worth a fix cycle if the code that has it is sanctioned
 by the authoritative design. Before writing a test or touching code, read the governing APPROVED
 decision for the affected component — the relevant ADR in `.docs/decisions/` (Status: APPROVED) and/or the FR
@@ -100,9 +100,9 @@ first, every time.
       tests covering every changed production module)
     - A known scoped failure blocks this debugging activity and is fixed here
       rather than deferred
-    - If one of HARNESS.md's four intermediate fallback triggers makes scope
-      genuinely unsafe, state the exact trigger and invoke
-      `conduct-ts test-suite`; never call the raw aggregate command
+    - If one of the repository's documented intermediate fallback triggers
+      makes scope genuinely unsafe, state the exact trigger and invoke the
+      configured aggregate verifier; never call the raw aggregate command
     - The original symptoms are gone
 
 ### The 3-Strike Rule
@@ -143,5 +143,5 @@ Skip if: the root cause was a simple typo, missing import, or other mechanical e
 - [ ] Failing test written that reproduces the bug
 - [ ] Fix targets root cause, not symptoms
 - [ ] Scoped union of affected tests passes after fix; any known failure blocked the activity
-- [ ] Any genuinely uncertain-scope fallback named its trigger and used `conduct-ts test-suite`
+- [ ] Any genuinely uncertain-scope fallback named its trigger and used the configured aggregate verifier
 - [ ] Non-obvious root cause persisted to `.memory/gotchas/` (if applicable)

@@ -19,7 +19,7 @@ Do not start a RED/GREEN cycle for ordinary human-facing documentation, and do n
 assert documentation wording, headings, formatting, placement, links, or repository explanations.
 Documentation-only requests are delivered from `/explore`. Keep tests for machine-consumed documents
 only when they assert generated or runtime behavior (for example OpenAPI contracts or generated
-`HARNESS.md` functionality), never prose shape.
+repository-harness functionality), never prose shape.
 
 ## Practices
 
@@ -56,10 +56,10 @@ normal model. This is an orchestration instruction, not a separate conductor ste
 5. Paste the expected failure output
 
 Any unrelated scoped test failure blocks the current RED phase; fix that
-failure before proceeding to DOMAIN. If one of HARNESS.md's four intermediate
-fallback triggers makes the affected set genuinely unsafe, name the exact
-trigger and reason and invoke `conduct-ts test-suite`. Never call the project's
-aggregate command directly or use the legacy Bash conductor.
+failure before proceeding to DOMAIN. If one of the repository's documented
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and reason and invoke the configured aggregate verifier.
+Never call a raw project aggregate command directly.
 
 **Rules:**
 - One test, one behavior, one assertion
@@ -103,10 +103,10 @@ production call site of any security/correctness derivation, with real adversari
 4. Run the affected/scoped test set (the task's own tests + the files this change touches). The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here
-rather than deferring it to a later gate. If one of HARNESS.md's four
+rather than deferring it to a later gate. If one of the repository's documented
 intermediate fallback triggers makes the affected set genuinely unsafe, name
-the exact trigger and invoke `conduct-ts test-suite`. Never call the project's
-aggregate command directly.
+the exact trigger and invoke the configured aggregate verifier. Never call a
+raw project aggregate command directly.
 
 **Rules:**
 - Simplest code that passes. Not the "best" code — that's for refactoring.
@@ -119,7 +119,7 @@ If the target test still fails after a bounded attempt (≈2 edits), or step 4 s
 broke other tests and the cause is not immediately obvious, STOP editing. A generator guessing
 at a non-obvious failure burns tokens and risks masking the bug rather than fixing it. Dispatch
 the `/debugging` protocol in a fresh sub-session on **`model="opus"** (root-cause analysis is
-reasoning-heavy — see the model table in HARNESS.md), handing it the failing test, the current
+reasoning-heavy — see the repository's model table), handing it the failing test, the current
 diff, and the full failure output. Return to GREEN only once debugging has produced an
 evidence-backed root cause.
 
@@ -186,7 +186,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
-   resolver — both outside this loop. See HARNESS.md → Rebase Policy.
+   resolver — both outside this loop. See the repository's rebase policy.
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.

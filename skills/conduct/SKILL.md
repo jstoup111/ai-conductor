@@ -61,9 +61,9 @@ Step 17: /finish                → SHIP (verify, review changes, present option
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
-> implementation plan is grounded in the agreed design. This is the canonical `conduct-ts`
-> order. The legacy bash `bin/conduct` retains the prior plan→architecture order (its
-> `architecture-review` gates on the plan); use `conduct-ts` for the PRD-driven flow.
+> implementation plan is grounded in the agreed design. This is the canonical
+> harness order. Any legacy project runner that preserves the prior
+> plan→architecture order must not be used for the PRD-driven flow.
 
 ## Practices
 
@@ -238,9 +238,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Run the union of affected tests for the BUILD diff and verify it passes
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
-- If one of HARNESS.md's four intermediate fallback triggers makes the union
-  genuinely unsafe, name the exact trigger and invoke `conduct-ts test-suite`;
-  never call the raw aggregate command
+- If one of the repository's documented intermediate fallback triggers makes
+  the union genuinely unsafe, name the exact trigger and invoke the configured
+  aggregate verifier; never call the raw aggregate command
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
@@ -254,7 +254,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - **Daemon (auto) runs** route this automatically: an all-`impl-gap` audit self-heals back to
   BUILD (bounded, then HALTs if unresolved); any product/plan gap (`intended-drift` or an
   unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
-  autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
+  autonomously. Consult the repository's daemon PRD-audit routing documentation.
 
 **After architecture-review --as-built (before suggesting retro):**
 - This gate is **skipped** when `architecture_review` was skipped (Small tier, or a config/`when:`
@@ -278,7 +278,7 @@ kept-in-sync `mergeable` label (added when open + conflict-free + CI-green, remo
 pruned on merge/close). A `needs-remediation` PR is never labeled `mergeable`. If a previously
 failed feature later succeeds on re-dispatch, the daemon clears the stale `needs-remediation`
 label and un-drafts the PR before enrolling it in the sweep. Interactive runs are unchanged.
-See `src/conductor/README.md` → "PR labeling".
+Consult the repository's daemon PR-labeling documentation.
 
 ### 4. Handle Edge Cases
 

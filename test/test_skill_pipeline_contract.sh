@@ -3,7 +3,7 @@ set -euo pipefail
 
 # test_skill_pipeline_contract.sh — Validates cross-skill pipeline contracts.
 # Pipeline documents session-hook task stamping rather than imperative task
-# CLI calls, and finish delegates aggregate verification to the shared CLI.
+# CLI calls, and finish delegates aggregate verification to the configured verifier.
 #
 # Usage: ./test/test_skill_pipeline_contract.sh
 
@@ -96,10 +96,11 @@ fi
 
 FINISH_SUITE_SECTION="$(sed -n '/^### 1\. Fresh Verification/,/^### 1b\./p' "$FINISH_SKILL_FILE")"
 
-if grep -q 'conduct-ts test-suite' <<<"$FINISH_SUITE_SECTION"; then
-  pass "finish delegates aggregate verification to conduct-ts test-suite"
+if grep -qiE 'configured aggregate verifier' <<<"$FINISH_SUITE_SECTION" \
+  && ! grep -q 'conduct-ts test-suite' <<<"$FINISH_SUITE_SECTION"; then
+  pass "finish delegates aggregate verification to the configured verifier"
 else
-  fail "finish does not delegate aggregate verification to conduct-ts test-suite"
+  fail "finish must delegate aggregate verification without a project CLI name"
 fi
 
 if grep -q 'EXECUTED' <<<"$FINISH_SUITE_SECTION" && grep -q 'REUSED' <<<"$FINISH_SUITE_SECTION"; then
@@ -190,6 +191,11 @@ for relative_path in "${SCOPE_CONTRACT_FILES[@]}"; do
 done
 
 SCOPE_CONTRACT_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do cat "${HARNESS_DIR}/${relative_path}"; done)"
+GENERIC_SCOPE_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do
+  case "$relative_path" in
+    skills/*) cat "${HARNESS_DIR}/${relative_path}" ;;
+  esac
+done)"
 TDD_RED_SECTION="$(awk '
   /^### Phase 1: RED/ { in_red = 1; next }
   /^### Phase 2: DOMAIN/ { in_red = 0 }
@@ -211,15 +217,16 @@ else
   fail "HARNESS intermediate policy must explicitly include RED"
 fi
 
-if grep -q 'conduct-ts test-suite' <<<"$SCOPE_CONTRACT_TEXT" \
+if grep -qiE 'configured aggregate verifier' <<<"$SCOPE_CONTRACT_TEXT" \
+  && ! grep -q 'conduct-ts test-suite' <<<"$GENERIC_SCOPE_TEXT" \
   && grep -qiE 'shared/core.*3\+|3\+.*(importer|production module)' <<<"$SCOPE_CONTRACT_TEXT" \
   && grep -qiE 'config.*migration.*dependenc.*test infrastructure' <<<"$SCOPE_CONTRACT_TEXT" \
   && grep -qiE 'empty.*(scoped|affected).*(set|union)|(scoped|affected).*(set|union).*empty' <<<"$SCOPE_CONTRACT_TEXT" \
   && grep -qiE 'low-confidence|cannot confidently map' <<<"$SCOPE_CONTRACT_TEXT" \
   && grep -qiE 'name.*trigger|trigger.*reason' <<<"$SCOPE_CONTRACT_TEXT"; then
-  pass "aggregate fallback uses the shared CLI and names one of four explicit triggers"
+  pass "aggregate fallback uses the configured verifier and names one of four explicit triggers"
 else
-  fail "aggregate fallback must use the shared CLI and name one of four explicit triggers"
+  fail "aggregate fallback must use the configured verifier and name one of four explicit triggers"
 fi
 
 if grep -qiE 'scoped (test|set).*(fail|failure).*(block|stop)|(fail|failure).*scoped (test|set).*(block|stop)' <<<"$SCOPE_CONTRACT_TEXT"; then
