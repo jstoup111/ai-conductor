@@ -322,6 +322,21 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
       );
     }
 
+    const tddContents = files.find(([path]) => path === 'skills/tdd/SKILL.md')?.[2] ?? '';
+    const redSection = tddContents.match(/### Phase 1: RED([\s\S]*?)### Phase 2: DOMAIN/i)?.[1] ?? '';
+    expect(redSection, 'TDD RED section').toMatch(/scoped union of affected tests/i);
+    expect(redSection, 'TDD RED section').toMatch(
+      /test under change[\s\S]{0,80}expected failing member/i,
+    );
+    expect(redSection, 'TDD RED section').toMatch(
+      /unrelated scoped (?:test )?failure[\s\S]{0,80}block/i,
+    );
+
+    const harnessContents = files.find(([path]) => path === 'HARNESS.md')?.[2] ?? '';
+    expect(harnessContents, 'HARNESS intermediate test policy').toMatch(
+      /RED\/GREEN[^\n]*scoped union of affected tests/i,
+    );
+
     const combined = files.map(([, , contents]) => contents).join('\n');
     expect(combined).toMatch(/conduct-ts test-suite/);
     expect(combined).toMatch(/shared\/core[^\n]*3\+|3\+[^\n]*(?:importer|production module)/i);

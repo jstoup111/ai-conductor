@@ -141,6 +141,26 @@ for relative_path in "${SCOPE_CONTRACT_FILES[@]}"; do
 done
 
 SCOPE_CONTRACT_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do cat "${HARNESS_DIR}/${relative_path}"; done)"
+TDD_RED_SECTION="$(awk '
+  /^### Phase 1: RED/ { in_red = 1; next }
+  /^### Phase 2: DOMAIN/ { in_red = 0 }
+  in_red
+' "${HARNESS_DIR}/skills/tdd/SKILL.md")"
+TDD_RED_TEXT="$(tr '\n' ' ' <<<"$TDD_RED_SECTION")"
+
+if grep -qiE 'scoped union of affected tests' <<<"$TDD_RED_TEXT" \
+  && grep -qiE 'test under change.*expected failing member' <<<"$TDD_RED_TEXT" \
+  && grep -qiE 'unrelated scoped (test )?failure.*block' <<<"$TDD_RED_TEXT"; then
+  pass "TDD RED runs the affected-test union and blocks unrelated scoped failures"
+else
+  fail "TDD RED must run the affected-test union, retain the expected failing member, and block unrelated scoped failures"
+fi
+
+if grep -qiE 'RED/GREEN.*scoped union of affected tests' "${HARNESS_DIR}/HARNESS.md"; then
+  pass "HARNESS intermediate policy explicitly includes RED"
+else
+  fail "HARNESS intermediate policy must explicitly include RED"
+fi
 
 if grep -q 'conduct-ts test-suite' <<<"$SCOPE_CONTRACT_TEXT" \
   && grep -qiE 'shared/core.*3\+|3\+.*(importer|production module)' <<<"$SCOPE_CONTRACT_TEXT" \

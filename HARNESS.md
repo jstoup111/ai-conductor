@@ -276,11 +276,11 @@ or a status line is waste.
 
 ### BUILD Phase (tdd, pipeline, debugging, writing-system-tests, code-review)
 
-**Intermediate test execution policy:** Ordinary TDD/GREEN, debugging, and
-conduct progression run the scoped union of affected tests. Pipeline batch
-boundaries, parallel joins, and evaluators use pipeline's existing named
-`BATCH_AFFECTED_TESTS` union. A known scoped failure blocks its current BUILD
-activity; it is never deferred to the aggregate gate.
+**Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests.
+Debugging and conduct progression use the same policy. Pipeline batch boundaries,
+parallel joins, and evaluators use pipeline's existing named `BATCH_AFFECTED_TESTS`
+union. A known scoped failure blocks its current BUILD activity; it is never
+deferred to the aggregate gate.
 
 Broad fallback is permitted only when one of these four triggers makes the
 affected-test scope genuinely uncertain:

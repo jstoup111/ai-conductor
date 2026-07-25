@@ -49,8 +49,17 @@ normal model. This is an orchestration instruction, not a separate conductor ste
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
-3. Run the test — **watch it fail**
-4. Paste the failure output
+3. Run the scoped union of affected tests, retaining the test under change as
+   an expected failing member
+4. Confirm that the test under change fails for the expected reason and every
+   other affected test passes
+5. Paste the expected failure output
+
+Any unrelated scoped test failure blocks the current RED phase; fix that
+failure before proceeding to DOMAIN. If one of HARNESS.md's four intermediate
+fallback triggers makes the affected set genuinely unsafe, name the exact
+trigger and reason and invoke `conduct-ts test-suite`. Never call the project's
+aggregate command directly or use the legacy Bash conductor.
 
 **Rules:**
 - One test, one behavior, one assertion
