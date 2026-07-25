@@ -443,6 +443,8 @@ export interface StepRunOptions {
 
 export interface StepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  /** Resolve the effective retry-escalation policy for a detached branch. */
+  escalateForStep?(step: StepName, state: ConductState): boolean;
   /**
    * Create a detached provider-session scope for one concurrent-group member.
    * Legacy runners omit this seam and continue using scalar branch sessions.

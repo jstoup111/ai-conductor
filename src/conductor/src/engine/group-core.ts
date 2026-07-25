@@ -290,6 +290,7 @@ export function runWithConcurrency<T>(
  */
 export interface BranchStepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  escalateForStep?(step: StepName, state: ConductState): boolean;
   beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
 }
 
@@ -411,6 +412,7 @@ async function runGroupBranchInner(
   const mintSessionId = deps.mintSessionId ?? uuidv4;
   const memberStep = member.name as StepName;
   const providerSessions = deps.stepRunner.beginProviderBranch?.(memberStep);
+  const escalate = deps.stepRunner.escalateForStep?.(memberStep, state) ?? true;
   let sessionId = providerSessions ? "" : mintSessionId();
 
   // Task 9: sweep THIS member's own stale marker (if any) before its first
@@ -449,8 +451,8 @@ async function runGroupBranchInner(
         memberStep,
         state,
         providerSessions
-          ? { providerSessions }
-          : { sessionId, resume },
+          ? { providerSessions, attempt, escalate }
+          : { sessionId, resume, attempt, escalate },
       );
     } catch (err) {
       // A THROW from the step runner is an infra failure of THIS branch

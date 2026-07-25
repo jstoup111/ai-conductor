@@ -402,6 +402,10 @@ export class DefaultStepRunner implements StepRunner {
     return this.resolvedConfigFor(step).model;
   }
 
+  escalateForStep(step: StepName, state: ConductState): boolean {
+    return this.resolvedConfigFor(step, state.complexity_tier).escalate;
+  }
+
   beginProviderBranch(step: StepName): ProviderSessionScope | undefined {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
     return this.sessionStore.beginBranch(step);

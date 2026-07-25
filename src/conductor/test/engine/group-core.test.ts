@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DefaultStepRunner } from "../../src/engine/step-runners.js";
 import { ProviderRuntimeSet } from "../../src/engine/provider-runtime.js";
+import { executeProviderCandidates } from "../../src/engine/provider-execution.js";
 import { ProviderSessionStore } from "../../src/engine/provider-session.js";
 import { ModelAvailability } from "../../src/engine/model-availability.js";
 import {
@@ -256,6 +257,83 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
   }
 
   const fakeState = {} as ConductState;
+
+  it("transports provider retry attempt and disabled escalation without changing the branch session", async () => {
+    const providerExecutor = vi.fn(executeProviderCandidates);
+    const invokeInteractive = vi
+      .fn<LLMProvider["invokeInteractive"]>()
+      .mockResolvedValueOnce({ success: false, output: "retry", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
+    const provider: LLMProvider = {
+      invoke: vi.fn(),
+      invokeInteractive,
+    };
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => "manual-codex-session",
+    });
+    const runner = new DefaultStepRunner(
+      provider,
+      "captured-session",
+      "/tmp/project",
+      {
+        mode: "interactive",
+        config: {
+          llm_provider: "codex",
+          steps: {
+            manual_test: {
+              llm_provider: "codex",
+              escalate: false,
+            },
+          },
+        },
+        sessionStore: sessions,
+        providerRuntimes: new ProviderRuntimeSet([
+          {
+            key: "codex",
+            provider,
+            policy: CODEX_MODEL_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability(
+              CODEX_MODEL_POLICY.modelFallbackLadder,
+            ),
+          },
+        ]),
+        configuredProviders: ["codex"],
+        providerExecutor,
+      },
+    );
+
+    await runGroupBranch(
+      {
+        name: "manual_test",
+        skill: "manual-test",
+        outcome: makeSkippedOutcome(),
+      },
+      fakeState,
+      { stepRunner: runner },
+      2,
+    );
+
+    expect({
+      retryPolicy: providerExecutor.mock.calls.map(([input]) => ({
+        attempt: input.attempt,
+        escalate: input.escalate,
+      })),
+      sessions: invokeInteractive.mock.calls.map(([options]) => ({
+        sessionId: options.sessionId,
+        resume: options.resume,
+      })),
+    }).toEqual({
+      retryPolicy: [
+        { attempt: 1, escalate: false },
+        { attempt: 2, escalate: false },
+      ],
+      sessions: [
+        { sessionId: "manual-codex-session", resume: false },
+        { sessionId: "manual-codex-session", resume: true },
+      ],
+    });
+  });
 
   it("routes reversed concurrent members through provider-local branch scopes without mutating serial authority", async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), "group-provider-routing-"));
