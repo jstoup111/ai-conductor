@@ -12,6 +12,7 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -46,6 +47,14 @@ function deps(
       maybeThrow('runConductor');
     },
     readOutcome: async () => outcome,
+    shipmentEvidence: async (_input: ShipmentEvidenceInput) => ({
+      kind: 'valid',
+      slug: outcome.finishChoice === 'pr' ? ITEM.slug : 'not-a-ship',
+      pr: outcome.prUrl ?? '',
+      recordPath: `.docs/shipped/${ITEM.slug}.md`,
+      hash: 'verified',
+      commit: 'verified',
+    }),
     teardownWorktree: async (_wt, keep) => {
       rec.teardownKeep = keep;
     },
@@ -275,6 +284,59 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
     expect(rec.teardownKeep).toBe(false); // removed on success
+  });
+
+  it.each([
+    {
+      label: 'a refused record',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipped-record-missing' as const,
+        expected: '.docs/shipped/feat-x.md',
+        observed: null,
+      },
+    },
+    {
+      label: 'an unavailable verifier',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipment-evidence-git-unavailable' as const,
+        expected: 'candidate-tree/head reachability',
+        observed: 'git unavailable',
+      },
+    },
+  ])('PR-shaped done outcome with $label halts before daemon ship side effects', async ({ verdict }) => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-evidence-'));
+    try {
+      await mkdir(join(wt, '.pipeline'), { recursive: true });
+      await writeFile(join(wt, '.pipeline', 'DONE'), 'done\n', 'utf-8');
+      const rec: TestRecorder = {};
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl: 'https://github.com/owner/repo/pull/916',
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: async () => verdict,
+      });
+
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('halted');
+      expect(out.reason).toContain(verdict.code);
+      expect(rec.processedCalls).toHaveLength(0);
+      expect(rec.enrollCalls).toHaveLength(0);
+      expect(rec.teardownKeep).toBe(true);
+      await expect(readFile(join(wt, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(wt, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(verdict.code);
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
   });
 
   it('halted → keeps the worktree, does not mark processed', async () => {

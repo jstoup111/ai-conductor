@@ -228,6 +228,69 @@ describe('engine/conductor', () => {
       verifierCalls: 1,
       mainRunnerCalls: 0,
     });
+
+  describe('merged shipment terminal guard (Task 7)', () => {
+    const terminalState: ConductState = {
+      feature_desc: 'feat',
+      pr_url: 'https://github.com/owner/repo/pull/916',
+    };
+
+    async function stopIfPrMerged(
+      conductor: Conductor,
+      state: ConductState = terminalState,
+    ): Promise<boolean> {
+      return (
+        conductor as unknown as {
+          stopIfPrMerged: (
+            current: ConductState,
+            onSigint: () => Promise<void>,
+            onSigterm: () => Promise<void>,
+          ) => Promise<boolean>;
+        }
+      ).stopIfPrMerged(state, async () => {}, async () => {});
+    }
+
+    it('halts a merged evidence refusal without writing synthetic finish or DONE markers', async () => {
+      const verifier = vi.fn(async () => ({
+        kind: 'halt' as const,
+        reason: 'shipped-record-missing',
+      }));
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        daemon: true,
+        verifyMergedShipment: verifier,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      expect(await stopIfPrMerged(conductor)).toBe(true);
+      expect(verifier).toHaveBeenCalledWith(terminalState.pr_url, terminalState.feature_desc);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
+        'durable shipment evidence: shipped-record-missing',
+      );
+      await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('lets verified merged evidence continue through the normal state machine without synthetic markers', async () => {
+      const verifier = vi.fn(async () => ({ kind: 'verified' as const }));
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        daemon: true,
+        verifyMergedShipment: verifier,
+      });
+
+      expect(await stopIfPrMerged(conductor)).toBe(false);
+      expect(verifier).toHaveBeenCalledWith(terminalState.pr_url, terminalState.feature_desc);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
   });
 
   describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
@@ -3281,6 +3344,14 @@ describe('engine/conductor', () => {
         maxRetries: 1,
         escalateBuildFailure: async () => ({}),
         git: fakeGit,
+        shipmentEvidence: async () => ({
+          kind: 'valid',
+          slug: 'feat',
+          pr: 'https://github.com/org/repo/pull/1',
+          recordPath: '.docs/shipped/feat.md',
+          hash: 'verified',
+          commit: 'verified',
+        }),
       });
 
       await conductor.run();

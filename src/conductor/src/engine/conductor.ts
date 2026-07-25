@@ -212,7 +212,8 @@ import {
   type TaskEvidence,
 } from './task-evidence.js';
 import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
-import { checkMergedPrGuard, writeSyntheticShipMarkers } from './merged-pr-guard.js';
+import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
+import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-evidence.js';
 import {
   rehabilitateHaltPr,
   retitleFloor,
@@ -680,6 +681,17 @@ export interface ConductorOptions {
    */
   runGh?: GhRunner;
   /**
+   * Test seam for the strict merged-history verifier. Production always uses
+   * `verifyMergedPrShipment`; a valid verdict still follows the normal gate
+   * loop instead of fabricating terminal markers.
+   */
+  verifyMergedShipment?: (
+    prUrl: string,
+    slug: string,
+  ) => Promise<VerifiedMergedPrResult>;
+  /** Test seam for the finish completion gate's strict evidence verifier. */
+  shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
+  /**
    * Optional rate-limit episode coordinator (Task 10). When provided and active,
    * enables coordinated episode-aware backoff during rate-limit waits, allowing
    * SIGTERM handling and deadline-coordinated redrives. If undefined, rate-limit
@@ -948,6 +960,10 @@ export class Conductor {
   private git: GitRunner;
   /** gh CLI runner for merged-PR guard (kickback/rebase entry checks, ADR-2026-07-09). */
   private runGh: GhRunner;
+  /** Strict merged-history verifier; injection is limited to hermetic tests. */
+  private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
+  /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
+  private shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
   /**
    * The most recent engine-native rebase outcome. The `rebase` step is special:
    * its gate verdict is computed by the native handler (not from a file
@@ -1101,6 +1117,7 @@ export class Conductor {
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
+      shipmentEvidence: this.shipmentEvidence,
       daemon: this.daemon,
       isHeadPushed: async () => {
         if (!this.projectRoot) return null;
@@ -1182,6 +1199,8 @@ export class Conductor {
     this.gh = opts.gh ?? makeProductionGh();
     this.git = opts.git ?? makeProductionGit();
     this.runGh = opts.runGh ?? makeProductionGh();
+    this.verifyMergedShipment = opts.verifyMergedShipment;
+    this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
   }
@@ -1673,20 +1692,22 @@ export class Conductor {
     }
   }
 
+  /** Resolve the strict merged-history verdict for the recorded implementation PR. */
+  private async recordedMergedShipment(
+    state: ConductState,
+  ): Promise<VerifiedMergedPrResult | null> {
+    if (!state.pr_url) return null;
+    const slug = state.feature_desc ?? this.featureDesc;
+    if (!slug) return { kind: 'halt', reason: 'shipment-evidence-inputs-incomplete' };
+    return this.verifyMergedShipment
+      ? this.verifyMergedShipment(state.pr_url, slug)
+      : verifyMergedPrShipment(this.runGh, this.projectRoot, state.pr_url, slug);
+  }
+
   /**
-   * Merged-PR guard: check if the recorded PR has been merged out-of-band.
-   * If so, write synthetic verified-ship markers, emit completion event, and
-   * return true to signal early exit from the run loop. Otherwise return false
-   * to proceed with normal retry/rebase flow.
-   *
-   * Daemon-mode only; inactive if `pr_url` is absent or daemon:false.
-   * Per ADR-2026-07-09-mid-run-merged-pr-guard, on MERGED verdict writes:
-   * - `.pipeline/finish-choice` = 'pr'
-   * - `.pipeline/DONE`
-   * - Leaves pr_url unchanged in conduct-state.json
-   * - Emits completion event with out-of-band merge message
-   * - Detaches signal handlers (mirroring loop_halt path shape)
-   * On OPEN/CLOSED/NOTFOUND/UNKNOWN or gh failure: logs at debug, returns false (fail-open).
+   * Check a recorded merged PR without manufacturing local completion. Valid
+   * merged history is allowed to continue through the ordinary gate loop; an
+   * unproven or unavailable record is terminally HALTed with its typed reason.
    */
   private async stopIfPrMerged(
     state: ConductState,
@@ -1698,68 +1719,27 @@ export class Conductor {
       return false;
     }
 
-    // Query the recorded PR's current merge state using the shared guard wrapper.
-    // Single-shot call, no retries: per TS-4 cost bound in adr-2026-07-09-mid-run-merged-pr-guard.
-    const guardVerdict = await checkMergedPrGuard(
-      this.runGh,
-      this.projectRoot,
-      state.pr_url,
-      (msg) => console.log(msg),
-    );
+    const mergedShipment = await this.recordedMergedShipment(state);
 
-    // On non-MERGED verdicts, proceed with normal retry/rebase unchanged.
-    if (guardVerdict !== 'merged') {
+    // An open/non-merged PR and a verified merged record both continue through
+    // the normal state machine. Neither branch writes a synthetic DONE or
+    // finish-choice marker.
+    if (
+      mergedShipment === null ||
+      mergedShipment.kind === 'not-merged' ||
+      mergedShipment.kind === 'verified'
+    ) {
       return false;
     }
 
-    // MERGED verdict: stop the run as a synthetic verified ship.
-    // Write finish-choice marker (pr) and DONE marker.
-    await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {
-      /* best-effort marker */
-    });
+    const reason = `durable shipment evidence: ${mergedShipment.reason}`;
+    await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+    await writeState(this.stateFilePath, state);
+    const prUrl = await this.surfaceRemediationPr(reason);
+    await this.events.emit({ type: 'loop_halt', reason, prUrl });
 
-    await writeFile(join(this.projectRoot, FINISH_CHOICE_MARKER), 'pr\n', 'utf-8').catch(() => {
-      /* best-effort marker */
-    });
-
-    await writeFile(join(this.projectRoot, DONE_MARKER), '', 'utf-8').catch(() => {
-      /* best-effort marker */
-    });
-
-    // Get the current HEAD SHA for the log message.
-    // If unavailable (no git repo or error), use a deterministic fake SHA
-    // derived from the pr_url so the log message is still meaningful.
-    let sha: string | null = null;
-    try {
-      sha = await currentCommitSha(this.projectRoot);
-    } catch {
-      // Proceed even if we can't get the SHA; the markers are what matter.
-    }
-    if (!sha) {
-      // Generate a deterministic fake SHA from the pr_url for test environments
-      // without a git repo. In production, currentCommitSha always succeeds.
-      const hash = createHash('sha1').update(state.pr_url || 'merged').digest('hex');
-      // pad to 40 chars (sha1 produces 40 hex chars, but just in case)
-      sha = (hash + '0'.repeat(40)).substring(0, 40);
-    }
-
-    // Emit a completion event that includes the out-of-band merge message.
-    await this.events.emit({
-      type: 'feature_complete',
-      prUrl: state.pr_url,
-      message: `already shipped out-of-band; local branch retained at ${sha}`,
-    } as any);
-
-    // Detach signal handlers (mirroring loop_halt return path at ~2010-2012).
     process.off('SIGINT', sigintHandler);
-    if (this.daemon) {
-      // In daemon mode, the process-level SIGTERM handler is installed at daemon-cli.ts,
-      // not here, so we don't detach it.
-    } else {
-      process.off('SIGTERM', sigterm);
-    }
-
-    // Return true to signal that the run should terminate successfully.
+    process.off('SIGTERM', sigterm);
     return true;
   }
 
@@ -6273,22 +6253,17 @@ export class Conductor {
     const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
 
-    // ── Merged-PR guard: rebase backstop (adr-2026-07-09-mid-run-merged-pr-guard) ────
-    // Check if the recorded PR is already merged (out-of-band), and if so, stop
-    // cleanly without rebasing. This prevents the duplicate-branch rebase HALT
-    // when a merge lands after the kickback guard but before rebase entry.
-    const prUrl = state.pr_url;
-    const guardVerdict = await checkMergedPrGuard(
-      this.runGh,
-      this.projectRoot,
-      prUrl,
-      (msg) => console.log(msg),
-    );
-
-    if (guardVerdict === 'merged') {
-      // PR is already merged — stop cleanly as a synthetic verified ship.
-      const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-      await writeSyntheticShipMarkers(this.projectRoot, headSha, (msg) => console.log(msg));
+    // ── Merged-PR guard: rebase backstop ────────────────────────────────────
+    // A merged PR is only eligible to skip rebase when strict durable evidence
+    // verifies it. Refusal or unavailable merge metadata remains a recoverable
+    // HALT; neither branch writes synthetic success markers.
+    const mergedShipment = await this.recordedMergedShipment(state);
+    if (mergedShipment?.kind === 'halt') {
+      const reason = `durable shipment evidence: ${mergedShipment.reason}`;
+      await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+      return { success: false, output: reason };
+    }
+    if (mergedShipment?.kind === 'verified') {
       return { success: true };
     }
 

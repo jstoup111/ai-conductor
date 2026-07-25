@@ -23,6 +23,12 @@ import type { FinishChoice } from './artifacts.js';
 import type { TriageOutcome } from './setup-triage.js';
 import { SetupFailureError } from './worktree-prepare.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import {
+  evaluateShipmentEvidence,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
+import { currentCommitSha } from './project-prelude.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -90,6 +96,12 @@ export interface FeatureRunnerDeps {
   ) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
+  /**
+   * Strict durable-evidence verifier for a terminal PR outcome. The production
+   * default reads committed evidence; injection keeps daemon orchestration
+   * tests independent of a real Git repository.
+   */
+  shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
   /** Remove the worktree (keep=true leaves it for inspection after halt/error). */
   teardownWorktree: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
   /** Persist that a slug shipped (with its PR url, when opened) so
@@ -220,6 +232,37 @@ function failureReasonForFalseShip(outcome: WorktreeOutcome): string {
 }
 
 /**
+ * A PR-shaped terminal marker is only a candidate for shipment. Re-check the
+ * record against the worktree's committed HEAD before any daemon-owned ship
+ * side effect (cache, presentation cleanup, watch enrollment, or teardown).
+ */
+async function shipmentFailureReason(
+  deps: FeatureRunnerDeps,
+  worktree: FeatureWorktree,
+  item: BacklogItem,
+  outcome: WorktreeOutcome,
+): Promise<string | null> {
+  if (!isVerifiedShip(outcome)) return failureReasonForFalseShip(outcome);
+
+  const candidateCommit = (await currentCommitSha(worktree.path)) ?? 'HEAD';
+  const verify = deps.shipmentEvidence ?? evaluateShipmentEvidence;
+  try {
+    const verdict = await verify({
+      repoDir: worktree.path,
+      slug: item.slug,
+      implementationPr: outcome.prUrl!,
+      candidateCommit,
+      implementationHead: candidateCommit,
+    });
+    if (verdict.kind === 'valid') return null;
+    const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
+    return `durable shipment evidence refused ship: ${detail}`;
+  } catch (error) {
+    return `durable shipment evidence check failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
  * Build the `runFeature` the daemon pool calls. Discipline:
  *   - done   → mark processed, remove the worktree, report prUrl.
  *   - halted → KEEP the worktree (for the human), park the feature.
@@ -333,7 +376,8 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        if (isVerifiedShip(outcome)) {
+        const shipmentFailure = await shipmentFailureReason(deps, worktree, item, outcome);
+        if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
           // Run the existing ship side effects.
 
@@ -396,7 +440,7 @@ export function makeRunFeature(
         // reason naming the contradiction, call escalateBuildFailure (best-effort — push
         // failure logs and does not disrupt), keep the worktree, teardown with keep=true,
         // and report halted.
-        const reason = failureReasonForFalseShip(outcome);
+        const reason = shipmentFailure;
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
         await writeErrorHalt(worktree, reason, log);
