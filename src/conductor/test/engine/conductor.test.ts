@@ -8235,7 +8235,9 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         projectRoot: dir,
-        maxRetries: 2,
+        // One budgeted attempt: the successful retry can occur only if the
+        // stale-session cycle is explicitly budget-neutral.
+        maxRetries: 1,
       });
 
       const resetEvents: Array<{ reason: string }> = [];
@@ -8246,6 +8248,7 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect(resetSession).toHaveBeenCalled();
+      expect(resetSession).toHaveBeenCalledWith();
       expect(resetEvents.length).toBeGreaterThanOrEqual(1);
       expect(attempt).toBeGreaterThanOrEqual(2);
     });

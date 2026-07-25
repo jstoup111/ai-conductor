@@ -6,35 +6,30 @@ export interface ProviderSession {
   created: boolean;
 }
 
-export interface ProviderSessionStoreOptions {
-  createSessionId?: () => string;
-  legacy?: {
-    providerKey: string;
-    session: SessionManager;
-  };
+export interface ProviderSessionInvocation {
+  id: string;
+  resume: boolean;
 }
 
-export class ProviderSessionStore {
+interface LegacySessionMirror {
+  providerKey: string;
+  session: SessionManager;
+}
+
+export interface ProviderSessionStoreOptions {
+  createSessionId?: () => string;
+  legacy?: LegacySessionMirror;
+}
+
+export class ProviderSessionScope {
   private readonly sessions = new Map<string, ProviderSession>();
-  private readonly createSessionId: () => string;
-  private readonly legacy?: ProviderSessionStoreOptions['legacy'];
-  private stepActive = false;
 
-  constructor(options: ProviderSessionStoreOptions = {}) {
-    this.createSessionId = options.createSessionId ?? uuidv4;
-    this.legacy = options.legacy;
-  }
-
-  async beginStep(_stepLabel: string): Promise<void> {
-    this.sessions.clear();
-    this.stepActive = true;
-    await this.legacy?.session.clearCompatibilityCreatedMarker();
-  }
+  constructor(
+    private readonly createSessionId: () => string,
+    private readonly legacy?: LegacySessionMirror,
+  ) {}
 
   async create(providerKey: string): Promise<ProviderSession> {
-    if (!this.stepActive) {
-      throw new Error('ProviderSessionStore.beginStep must be called before create');
-    }
     const existing = this.sessions.get(providerKey);
     if (existing) return { ...existing };
 
@@ -46,10 +41,21 @@ export class ProviderSessionStore {
     return { ...session };
   }
 
+  async prepare(providerKey: string): Promise<ProviderSessionInvocation> {
+    const session = await this.create(providerKey);
+    return { id: session.id, resume: session.created };
+  }
+
+  async replace(providerKey: string): Promise<ProviderSessionInvocation> {
+    this.sessions.delete(providerKey);
+    const session = await this.create(providerKey);
+    return { id: session.id, resume: false };
+  }
+
   async markCreated(providerKey: string): Promise<void> {
     const session = this.sessions.get(providerKey);
     if (!session) {
-      throw new Error(`Provider session not created for current step: ${providerKey}`);
+      throw new Error(`Provider session not created for current scope: ${providerKey}`);
     }
     session.created = true;
     if (this.legacy?.providerKey === providerKey) {
@@ -60,5 +66,52 @@ export class ProviderSessionStore {
   current(providerKey: string): ProviderSession | undefined {
     const session = this.sessions.get(providerKey);
     return session ? { ...session } : undefined;
+  }
+}
+
+export class ProviderSessionStore {
+  private readonly createSessionId: () => string;
+  private readonly legacy?: LegacySessionMirror;
+  private activeStep?: ProviderSessionScope;
+
+  constructor(options: ProviderSessionStoreOptions = {}) {
+    this.createSessionId = options.createSessionId ?? uuidv4;
+    this.legacy = options.legacy;
+  }
+
+  async beginStep(_stepLabel: string): Promise<void> {
+    await this.legacy?.session.clearCompatibilityCreatedMarker();
+    this.activeStep = new ProviderSessionScope(this.createSessionId, this.legacy);
+  }
+
+  beginBranch(_stepLabel: string): ProviderSessionScope {
+    return new ProviderSessionScope(this.createSessionId);
+  }
+
+  async create(providerKey: string): Promise<ProviderSession> {
+    return this.step().create(providerKey);
+  }
+
+  async prepare(providerKey: string): Promise<ProviderSessionInvocation> {
+    return this.step().prepare(providerKey);
+  }
+
+  async replace(providerKey: string): Promise<ProviderSessionInvocation> {
+    return this.step().replace(providerKey);
+  }
+
+  async markCreated(providerKey: string): Promise<void> {
+    await this.step().markCreated(providerKey);
+  }
+
+  current(providerKey: string): ProviderSession | undefined {
+    return this.activeStep?.current(providerKey);
+  }
+
+  private step(): ProviderSessionScope {
+    if (!this.activeStep) {
+      throw new Error('ProviderSessionStore.beginStep must be called first');
+    }
+    return this.activeStep;
   }
 }

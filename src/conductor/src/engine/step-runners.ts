@@ -402,7 +402,16 @@ export class DefaultStepRunner implements StepRunner {
     // adr-2026-07-10-concurrent-group-core.md. opts.resume then drives the
     // dispatch directly instead of being derived from this.sessionStarted.
     const branchSessionId = opts?.sessionId;
-    const resume = branchSessionId !== undefined ? (opts?.resume ?? false) : this.sessionStarted;
+    let resume: boolean;
+    if (branchSessionId !== undefined) {
+      resume = opts?.resume ?? false;
+    } else if (this.sessionStore) {
+      const invocation = await this.sessionStore.prepare(this.providerKey);
+      this.sessionId = invocation.id;
+      resume = invocation.resume;
+    } else {
+      resume = this.sessionStarted;
+    }
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const baseResolved = this.resolvedConfigFor(step, state.complexity_tier);
 
@@ -456,7 +465,7 @@ export class DefaultStepRunner implements StepRunner {
     try {
       await this.provider.invokeInteractive({
         prompt,
-        sessionId: this.sessionId,
+        sessionId: branchSessionId ?? this.sessionId,
         resume,
         interactive,
         cwd: this.projectDir,
@@ -471,22 +480,28 @@ export class DefaultStepRunner implements StepRunner {
         model: effectiveModel,
         effort: resolved.effort,
       });
-      this.sessionStarted = true;
-      await this.sessionStore?.markCreated(this.providerKey);
       this.callCount++;
 
-      // Persist marker and session ID after first success
-      if (this.pipelineDir) {
-        await this.ensurePipelineDir();
-        await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-        await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
-        // After successful first marker write, we know a session has been established.
-        // Mark that for future mid-run detection.
-        this.wasSessionMarkerFoundOnInit = true;
+      if (branchSessionId === undefined) {
+        this.sessionStarted = true;
+        await this.sessionStore?.markCreated(this.providerKey);
+
+        // Persist marker and session ID after first success.
+        if (this.pipelineDir) {
+          await this.ensurePipelineDir();
+          await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
+          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
+          // After successful first marker write, we know a session has been established.
+          // Mark that for future mid-run detection.
+          this.wasSessionMarkerFoundOnInit = true;
+        }
       }
 
       return { success: true };
     } catch {
+      if (branchSessionId === undefined) {
+        await this.sessionStore?.markCreated(this.providerKey);
+      }
       this.callCount++;
       return { success: false, output: `Session for ${step} exited with error` };
     }
@@ -532,6 +547,9 @@ export class DefaultStepRunner implements StepRunner {
       effort: resolved.effort,
       cwd: this.projectDir,
     });
+    if (branchSessionId === undefined) {
+      await this.sessionStore?.markCreated(this.providerKey);
+    }
     this.callCount++;
 
     // Auth failure: operator's OAuth token is expired or invalid.
@@ -565,7 +583,6 @@ export class DefaultStepRunner implements StepRunner {
       // adr-2026-07-10-concurrent-group-core.md.
       if (branchSessionId === undefined) {
         this.sessionStarted = true;
-        await this.sessionStore?.markCreated(this.providerKey);
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
@@ -600,7 +617,13 @@ export class DefaultStepRunner implements StepRunner {
   async resetSession(step?: StepName): Promise<void> {
     if (this.sessionStore && step !== undefined) {
       await this.sessionStore.beginStep(step);
-      this.sessionId = (await this.sessionStore.create(this.providerKey)).id;
+      this.sessionId = (await this.sessionStore.prepare(this.providerKey)).id;
+      this.sessionStarted = false;
+      this.sessionStartedInitialized = true;
+      return;
+    }
+    if (this.sessionStore) {
+      this.sessionId = (await this.sessionStore.replace(this.providerKey)).id;
       this.sessionStarted = false;
       this.sessionStartedInitialized = true;
       return;
