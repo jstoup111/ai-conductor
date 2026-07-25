@@ -91,4 +91,103 @@ describe('executeFullSuite', () => {
       stderr: '',
     });
   });
+
+  it.each([
+    {
+      name: 'command-not-found shell exit',
+      failure: { exitCode: 127, stdout: '', stderr: 'suite-tool: not found' },
+      reason: 'unlaunchable',
+      exitCode: 127,
+      signal: null,
+    },
+    {
+      name: 'permission failure',
+      failure: {
+        code: 'EACCES',
+        exitCode: 7,
+        stdout: '',
+        stderr: 'permission denied',
+      },
+      reason: 'unlaunchable',
+      exitCode: null,
+      signal: null,
+    },
+    {
+      name: 'invalid working directory',
+      failure: { code: 'ENOENT', stdout: '', stderr: 'working directory missing' },
+      reason: 'unlaunchable',
+      exitCode: null,
+      signal: null,
+    },
+    {
+      name: 'signal termination',
+      failure: {
+        signal: 'SIGTERM',
+        isTerminated: true,
+        stdout: 'suite started',
+        stderr: 'terminated',
+      },
+      reason: 'signal',
+      exitCode: null,
+      signal: 'SIGTERM',
+    },
+    {
+      name: 'ordinary non-zero exit',
+      failure: { exitCode: 7, stdout: 'suite started', stderr: 'assertion failed' },
+      reason: 'nonzero_exit',
+      exitCode: 7,
+      signal: null,
+    },
+  ])('returns a typed non-passing result for $name', async (testCase) => {
+    const command = 'npm test';
+    const runner: FullSuiteCommandRunner = async () => {
+      throw Object.assign(new Error(testCase.name), testCase.failure);
+    };
+    const times = [
+      new Date('2026-07-25T13:00:00.000Z'),
+      new Date('2026-07-25T13:00:01.250Z'),
+    ];
+
+    const result = await executeFullSuite({
+      projectRoot: '/repo',
+      testSuite: { command, working_directory: 'src/conductor' },
+      runner,
+      clock: () => times.shift()!,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: testCase.reason,
+      command,
+      cwd: resolve('/repo', 'src/conductor'),
+      startedAt: '2026-07-25T13:00:00.000Z',
+      endedAt: '2026-07-25T13:00:01.250Z',
+      durationMs: 1_250,
+      exitCode: testCase.exitCode,
+      signal: testCase.signal,
+      stdout: testCase.failure.stdout,
+      stderr: testCase.failure.stderr,
+    });
+  });
+
+  it('returns a typed non-zero result from a real failing process', async () => {
+    const command =
+      "printf '%s' 'suite started'; printf '%s' 'terminal failure' >&2; exit 7";
+
+    const result = await executeFullSuite({
+      projectRoot: process.cwd(),
+      testSuite: { command },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'nonzero_exit',
+      command,
+      cwd: process.cwd(),
+      exitCode: 7,
+      signal: null,
+      stdout: 'suite started',
+      stderr: 'terminal failure',
+    });
+  });
 });

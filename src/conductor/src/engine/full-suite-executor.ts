@@ -31,6 +31,46 @@ export interface FullSuiteExecutionSuccess extends FullSuiteCommandSuccess {
   durationMs: number;
 }
 
+interface FullSuiteExecutionFailureBase {
+  ok: false;
+  command: string;
+  cwd: string;
+  startedAt: string;
+  endedAt: string;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+}
+
+type FullSuiteExecutionFailureDetails =
+  | {
+      reason: 'unlaunchable';
+      exitCode: 126 | 127 | null;
+      signal: null;
+    }
+  | {
+      reason: 'signal';
+      exitCode: null;
+      signal: NodeJS.Signals;
+    }
+  | {
+      reason: 'nonzero_exit';
+      exitCode: number;
+      signal: null;
+    }
+  | {
+      reason: 'internal_error';
+      exitCode: null;
+      signal: null;
+    };
+
+export type FullSuiteExecutionFailure =
+  FullSuiteExecutionFailureBase & FullSuiteExecutionFailureDetails;
+
+export type FullSuiteExecutionResult =
+  | FullSuiteExecutionSuccess
+  | FullSuiteExecutionFailure;
+
 export interface ExecuteFullSuiteOptions {
   projectRoot: string;
   testSuite: TestSuiteConfig;
@@ -53,9 +93,56 @@ async function runFullSuiteCommand(
   return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
 }
 
+const UNLAUNCHABLE_CODES = new Set([
+  'EACCES',
+  'ENOENT',
+  'ENOEXEC',
+  'ENOTDIR',
+  'EPERM',
+]);
+
+function errorRecord(error: unknown): Record<string, unknown> {
+  return typeof error === 'object' && error !== null
+    ? error as Record<string, unknown>
+    : {};
+}
+
+function errorOutput(error: Record<string, unknown>, stream: 'stdout' | 'stderr'): string {
+  const output = error[stream];
+  if (typeof output === 'string' && output.length > 0) return output;
+  return stream === 'stderr' && typeof error.shortMessage === 'string'
+    ? error.shortMessage
+    : '';
+}
+
+function classifyFailure(
+  error: Record<string, unknown>,
+): FullSuiteExecutionFailureDetails {
+  const signal = typeof error.signal === 'string'
+    ? error.signal as NodeJS.Signals
+    : null;
+  if (signal !== null) return { reason: 'signal', exitCode: null, signal };
+
+  const exitCode = Number.isInteger(error.exitCode) ? error.exitCode as number : null;
+  if (typeof error.code === 'string' && UNLAUNCHABLE_CODES.has(error.code)) {
+    return {
+      reason: 'unlaunchable',
+      exitCode: exitCode === 126 || exitCode === 127 ? exitCode : null,
+      signal: null,
+    };
+  }
+  if (exitCode === 126 || exitCode === 127) {
+    return { reason: 'unlaunchable', exitCode, signal: null };
+  }
+  if (exitCode !== null && exitCode !== 0) {
+    return { reason: 'nonzero_exit', exitCode, signal: null };
+  }
+  return { reason: 'internal_error', exitCode: null, signal: null };
+}
+
 export async function executeFullSuite(
   options: ExecuteFullSuiteOptions,
-): Promise<FullSuiteExecutionSuccess> {
+): Promise<FullSuiteExecutionResult> {
   const {
     projectRoot,
     testSuite,
@@ -68,12 +155,30 @@ export async function executeFullSuite(
     ? DEFAULT_FULL_SUITE_TIMEOUT_MS
     : testSuite.timeout_seconds * 1_000;
   const started = clock();
-  const result = await runner(testSuite.command, {
-    cwd,
-    env: environment,
-    shell: true,
-    timeoutMs,
-  });
+  let result: FullSuiteCommandSuccess;
+  try {
+    result = await runner(testSuite.command, {
+      cwd,
+      env: environment,
+      shell: true,
+      timeoutMs,
+    });
+  } catch (error) {
+    const failure = errorRecord(error);
+    if (failure.timedOut === true) throw error;
+    const ended = clock();
+    return {
+      ok: false,
+      ...classifyFailure(failure),
+      command: testSuite.command,
+      cwd,
+      startedAt: started.toISOString(),
+      endedAt: ended.toISOString(),
+      durationMs: ended.getTime() - started.getTime(),
+      stdout: errorOutput(failure, 'stdout'),
+      stderr: errorOutput(failure, 'stderr'),
+    };
+  }
   const ended = clock();
 
   return {
