@@ -566,6 +566,22 @@ complexity:
     });
   });
 
+  describe('test_suite config block', () => {
+    it('accepts an aggregate suite declaration with every supported field', () => {
+      const testSuite = {
+        command: 'npm test',
+        working_directory: 'src/conductor',
+        timeout_seconds: 1800,
+        inputs: ['test-support/**'],
+        environment: ['CI', 'DATABASE_URL'],
+      };
+
+      const result = validateConfig({ test_suite: testSuite });
+
+      expect(result.ok && result.config.test_suite).toEqual(testSuite);
+    });
+  });
+
   describe('model_fallback_ladder validation', () => {
     it('accepts an array of non-empty model strings', () => {
       const result = validateConfig({ model_fallback_ladder: ['fable', 'opus'] });

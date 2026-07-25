@@ -213,6 +213,7 @@ export function validateConfig(
     'mermaid_renderer',
     'assess',
     'acceptance_spec_globs',
+    'test_suite',
     // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
     'llm_provider',
     'ui_renderer',
