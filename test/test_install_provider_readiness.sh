@@ -299,6 +299,29 @@ else
   exit 1
 fi
 
+# An explicit installer readiness choice must not alter the project's execution
+# provider routing, including its configured provider order.
+PROJECT_ROUTING_DIR="$TMP_ROOT/project-routing"
+PROJECT_ROUTING_HOME="$TMP_ROOT/project-routing-home"
+mkdir -p "$PROJECT_ROUTING_DIR/.ai-conductor" "$PROJECT_ROUTING_HOME"
+printf '%s\n' 'llm_provider: [claude, codex]' > "$PROJECT_ROUTING_DIR/.ai-conductor/config.yml"
+cp "$PROJECT_ROUTING_DIR/.ai-conductor/config.yml" "$TMP_ROOT/project-routing-config.before"
+
+set +e
+PROJECT_ROUTING_OUT=$(cd "$PROJECT_ROUTING_DIR" && HOME="$PROJECT_ROUTING_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers codex --allow-worktree-root </dev/null 2>&1)
+PROJECT_ROUTING_CODE=$?
+set -e
+
+if [ "$PROJECT_ROUTING_CODE" -eq 0 ] \
+  && cmp -s "$TMP_ROOT/project-routing-config.before" "$PROJECT_ROUTING_DIR/.ai-conductor/config.yml"; then
+  echo 'PASS explicit installer readiness selection preserves existing project execution-provider routing'
+else
+  echo 'FAIL explicit installer readiness selection preserves existing project execution-provider routing'
+  printf 'exit code: %s\n' "$PROJECT_ROUTING_CODE"
+  printf '%s\n' "$PROJECT_ROUTING_OUT"
+  exit 1
+fi
+
 # A trailing comma denotes an empty provider token and must be rejected before
 # the installer reaches any setup action.
 set +e
