@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir } from 'fs/promises';
+import { mkdtemp, rm, readdir, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -151,6 +151,184 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect(stepsRun).toContain('prd');
+    });
+  });
+
+  describe('documentation delivery terminal path (issue #933)', () => {
+    const delivery = {
+      version: 1,
+      branch: 'docs/install-refresh',
+      prUrl: 'https://github.com/acme/widgets/pull/42',
+      sourceRef: 'acme/widgets#17',
+    } as const;
+
+    async function writeDocumentationDelivery(value: unknown): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'documentation-delivery.json'),
+        JSON.stringify(value),
+      );
+    }
+
+    const verifiedPr = JSON.stringify({
+      headRefName: delivery.branch,
+      body: `Documentation delivery\n\nCloses ${delivery.sourceRef}`,
+    });
+
+    it('stops after explore and records a verified documentation PR', async () => {
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          if (step === 'explore') await writeDocumentationDelivery(delivery);
+          return { success: true };
+        },
+      };
+      const gh: GhRunner = vi.fn().mockResolvedValue({ stdout: verifiedPr });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        gh,
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toEqual(['memory', 'explore']);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.feature_status).toBe('complete');
+      expect(result.ok && result.value.pr_url).toBe(delivery.prUrl);
+    });
+
+    it('writes DONE for a verified documentation PR in daemon mode', async () => {
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          if (step === 'explore') await writeDocumentationDelivery(delivery);
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        mode: 'auto',
+        daemon: true,
+        gh: vi.fn().mockResolvedValue({ stdout: verifiedPr }),
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toEqual(['memory', 'explore']);
+      await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).resolves.toMatch(/complete/i);
+    });
+
+    it('fails closed when explore leaves an invalid delivery marker', async () => {
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          if (step === 'explore') await writeDocumentationDelivery({ ...delivery, sourceRef: 'bad/ref/17' });
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        gh: vi.fn().mockResolvedValue({ stdout: verifiedPr }),
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toEqual(['memory', 'explore']);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.feature_status).not.toBe('complete');
+    });
+
+    it('fails closed when the delivery PR does not close its source issue', async () => {
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          if (step === 'explore') await writeDocumentationDelivery(delivery);
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        gh: vi.fn().mockResolvedValue({
+          stdout: JSON.stringify({
+            headRefName: delivery.branch,
+            body: 'Documentation delivery\n\nCloses acme/widgets#18',
+          }),
+        }),
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toEqual(['memory', 'explore']);
+      const result = await readState(statePath);
+      expect(result.ok && result.value.feature_status).not.toBe('complete');
+    });
+
+    it('fails closed instead of reusing a delivery marker from an earlier run', async () => {
+      await writeDocumentationDelivery(delivery);
+      await utimes(
+        join(dir, '.pipeline', 'documentation-delivery.json'),
+        new Date(0),
+        new Date(0),
+      );
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+      const gh: GhRunner = vi.fn().mockResolvedValue({ stdout: verifiedPr });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        gh,
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toEqual(['memory', 'explore']);
+      expect(gh).not.toHaveBeenCalled();
+      const result = await readState(statePath);
+      expect(result.ok && result.value.feature_status).not.toBe('complete');
+    });
+
+    it('continues normally when explore creates no delivery marker', async () => {
+      const stepsRun: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          stepsRun.push(step);
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+      });
+
+      await conductor.run();
+
+      expect(stepsRun).toContain('stories');
+      expect(stepsRun).toContain('plan');
     });
   });
 

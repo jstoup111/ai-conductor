@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
+import { findDocumentationDelivery } from './documentation-delivery.js';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
 import type {
@@ -1529,6 +1530,25 @@ export class Conductor {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** Complete a verified terminal run and leave the daemon's success marker. */
+  private async completeRun(state: ConductState, doneMarkerBody: string): Promise<void> {
+    await this.events.emit({
+      type: 'feature_complete',
+      prUrl: state.pr_url,
+      featureDesc: state.feature_desc,
+      sessionStartedAt: state.session_started_at,
+    });
+    state.feature_status = 'complete';
+    await writeState(this.stateFilePath, state);
+
+    // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
+    // Interactive runs intentionally leave no daemon marker.
+    if (this.daemon && !(await this.markerExists(DONE_MARKER))) {
+      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+      await writeFile(join(this.projectRoot, DONE_MARKER), doneMarkerBody, 'utf-8').catch(() => {});
     }
   }
 
@@ -5357,6 +5377,19 @@ export class Conductor {
             }
           }
 
+          // A documentation-only explore run delivers its work directly and
+          // writes a verifiable terminal result. Verify it before persisting
+          // explore as done: invalid delivery must remain a failed/in-progress
+          // attempt rather than becoming skippable on a later resume.
+          const documentationDelivery =
+            step.name === 'explore'
+              ? await findDocumentationDelivery({
+                  projectRoot: this.projectRoot,
+                  gh: this.gh,
+                  notBeforeMs: state.session_started_at,
+                })
+              : null;
+
           // For complexity + worktree, 'done' (and tier / worktree fields) are
           // written atomically in their engine handlers. `rebase` is also
           // written atomically in runRebaseStep via recordRebaseStepCompletion
@@ -5394,6 +5427,17 @@ export class Conductor {
                 await savePrUrl(this.stateFilePath, scraped);
               }
             }
+          }
+
+          // A verified documentation delivery intentionally bypasses the
+          // artifact, implementation, and test phases.
+          if (documentationDelivery) {
+            state.pr_url = documentationDelivery.prUrl;
+            await savePrUrl(this.stateFilePath, documentationDelivery.prUrl);
+            await this.completeRun(state, 'documentation delivery complete\n');
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           // Checkpoint handling
@@ -5466,31 +5510,7 @@ export class Conductor {
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
 
-      // All steps completed successfully
-      await this.events.emit({
-        type: 'feature_complete',
-        prUrl: state.pr_url,
-        featureDesc: state.feature_desc,
-        sessionStartedAt: state.session_started_at,
-      });
-      state.feature_status = 'complete';
-      await writeState(this.stateFilePath, state);
-
-      // Terminal-marker guarantee (success side). The daemon classifies a run
-      // solely by .pipeline/DONE vs .pipeline/HALT. advanceTail writes DONE on
-      // the converging step in the normal path, but reaching here with no DONE
-      // is possible on a resume where the loop body ran no tail step (every step
-      // already done/skipped → startIndex past the end). Without this, the
-      // finally backstop below would mis-park a genuinely-complete feature as a
-      // HALT. Daemon-only: interactive runs don't use these markers.
-      if (this.daemon && !(await this.markerExists(DONE_MARKER))) {
-        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-        await writeFile(
-          join(this.projectRoot, DONE_MARKER),
-          'gate-driven loop converged\n',
-          'utf-8',
-        ).catch(() => {});
-      }
+      await this.completeRun(state, 'gate-driven loop converged\n');
     } catch (err) {
       // Any unexpected throw inside the loop (e.g. a verdict-I/O failure in
       // the SHIP tail) must leave the feature recoverable, never silently

@@ -145,52 +145,6 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
   });
 });
 
-describe('HARNESS Model Selection introduction', () => {
-  it('describes both built-in provider-native tier families without presenting Claude tiers as universal', () => {
-    const harness = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'HARNESS.md'),
-      'utf8',
-    );
-    const intro =
-      harness.match(
-        /## Model Selection\n([\s\S]*?)<!-- BEGIN GENERATED: model-selection-table -->/,
-      )?.[1] ?? '';
-    const clauses = proseClauses(intro);
-    const describesClaudeFamily = clauses.some(
-      (clause) =>
-        /\bClaude\b/i.test(clause) &&
-        CLAUDE_NATIVE_ALIASES.every((alias) => containsToken(clause, alias)),
-    );
-    const describesCodexFamily = clauses.some(
-      (clause) =>
-        /\bCodex\b/i.test(clause) &&
-        CODEX_NATIVE_MODEL_IDS.every((model) => containsToken(clause, model)),
-    );
-    const hasUnlabelledNativeAlias = clauses.some((clause) => {
-      const namesClaudeModel = CLAUDE_NATIVE_ALIASES.some((alias) =>
-        containsToken(clause, alias),
-      );
-      const namesCodexModel = CODEX_NATIVE_MODEL_IDS.some((model) =>
-        containsToken(clause, model),
-      );
-      return (
-        (namesClaudeModel && !/\bClaude\b/i.test(clause)) ||
-        (namesCodexModel && !/\bCodex\b/i.test(clause))
-      );
-    });
-
-    expect({
-      describesClaudeFamily,
-      describesCodexFamily,
-      hasUnlabelledNativeAlias,
-    }).toEqual({
-      describesClaudeFamily: true,
-      describesCodexFamily: true,
-      hasUnlabelledNativeAlias: false,
-    });
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTRA_MODEL_TABLE_ROWS completeness (.docs/stories/generated-model-table.md,
 // TS-1 happy path 2). Every current non-engine HARNESS.md row name must

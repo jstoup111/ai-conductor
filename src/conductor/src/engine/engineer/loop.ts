@@ -567,7 +567,7 @@ async function processIdea(
     );
   }
 
-  const { branch } = await runAuthoring(target, idea, {
+  const authoring = await runAuthoring(target, idea, {
     decide,
     assessComplexity,
     recommended,
@@ -575,6 +575,13 @@ async function processIdea(
     ownerConfig,
     gh: deps.gh,
   });
+
+  if (authoring.kind === 'documentation_delivery') {
+    io.print(`Documentation PR opened: ${authoring.prUrl}`);
+    summary.ideasProcessed += 1;
+    return;
+  }
+  const { branch } = authoring;
 
   // 4e-4g. Post-authoring handoff (extracted — retro A-2): PR-open-vs-local-commit,
   //        ensure-running fire-and-forget, and the authored entry. runHandoff owns

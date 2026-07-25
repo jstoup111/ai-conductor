@@ -9,7 +9,7 @@
 // hardcode 'main'.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
@@ -222,6 +222,37 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
     expect(subject.trim()).toContain('spec: author artifacts for "CSV export"');
 
     await rm(hooksDir, { recursive: true, force: true });
+  });
+});
+
+describe('runAuthoring documentation delivery (issue #933)', () => {
+  let repoPath: string;
+
+  beforeEach(async () => {
+    ({ repoPath } = await makeGitRepo());
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('fails closed on a malformed result before complexity or artifacts', async () => {
+    const steps: string[] = [];
+    await expect(
+      runAuthoring({ name: 'alpha', canonicalPath: repoPath }, 'refresh docs', {
+        decide: async (step) => {
+          steps.push(step);
+          if (step === 'explore') {
+            await mkdir(join(repoPath, '.pipeline'), { recursive: true });
+            await writeFile(join(repoPath, '.pipeline', 'documentation-delivery.json'), '{bad');
+          }
+          return { approved: true, artifact: ACCEPTED_STORIES_UNIT };
+        },
+      }),
+    ).rejects.toThrow(/documentation delivery result is not valid JSON/i);
+
+    expect(steps).toEqual(['explore']);
+    await expect(readFile(join(repoPath, '.docs', 'stories', 'refresh-docs.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
