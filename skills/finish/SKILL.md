@@ -249,12 +249,29 @@ describe the choice):
 from the feature worktree, in order:
 
 ```
+conduct-ts finalize-changelog-pr --pr-url <PR_URL>
+if ! git diff --quiet -- CHANGELOG.md; then
+git add CHANGELOG.md
+git commit -m "docs(changelog): link implementation PR"
+git push  # focused changelog finalization push; follow §1b's safe-push rules
+git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
+fi
 conduct-ts shipped-record --slug <slug> --pr <PR_URL>
 git cat-file -e "HEAD:.docs/shipped/<slug>.md"
-git push  # follow §1b's safe-push rules if the remote branch has diverged
+git push  # durable shipped-record push; follow §1b's safe-push rules
 git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
 conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
 ```
+
+When no implementation-PR token exists, finalization is a successful no-op. `CHANGELOG.md`
+remains unchanged; do not create a changelog commit or push; continue with the existing shipped-record sequence.
+
+If finalization, the focused commit, or its push fails, **STOP immediately.**
+Do NOT run `conduct-ts shipped-record`.
+Do NOT run `conduct-ts finish-record`.
+Do NOT write `.pipeline/finish-choice` manually.
+A failed focused-push ancestry check has the same STOP contract. Do not hand-write any substitute
+shipment record.
 
 `shipped-record` is historically best-effort and may warn while exiting zero, so its exit code
 alone is not evidence. The `git cat-file` and post-push ancestry checks are mandatory. If either
