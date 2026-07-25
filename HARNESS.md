@@ -276,6 +276,27 @@ or a status line is waste.
 
 ### BUILD Phase (tdd, pipeline, debugging, writing-system-tests, code-review)
 
+**Intermediate test execution policy:** Ordinary TDD/GREEN, debugging, and
+conduct progression run the scoped union of affected tests. Pipeline batch
+boundaries, parallel joins, and evaluators use pipeline's existing named
+`BATCH_AFFECTED_TESTS` union. A known scoped failure blocks its current BUILD
+activity; it is never deferred to the aggregate gate.
+
+Broad fallback is permitted only when one of these four triggers makes the
+affected-test scope genuinely uncertain:
+
+1. A shared/core module has 3+ production importers.
+2. The diff touches config, migrations, dependency manifests, or test infrastructure.
+3. The scoped/affected set is empty.
+4. Module-to-test mapping is low-confidence and cannot be made confidently.
+
+When a trigger fires, state `Aggregate fallback: <exact trigger and reason>`
+and invoke `conduct-ts test-suite`. Do not call the project's aggregate command
+directly and do not use the legacy Bash conductor. No other intermediate
+condition authorizes a broad run. The native pre-SHIP aggregate gate, finish
+reuse/fallback, mutation-specific repair checks, and independent CI authority
+remain separate boundaries.
+
 **Rules for the orchestrator (the session running /pipeline or /tdd):**
 - Do NOT narrate what you are about to do. Just do it.
 - Do NOT explain why a test failed before fixing it. Fix it, then report the status.

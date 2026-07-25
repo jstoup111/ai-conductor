@@ -87,7 +87,8 @@ in the approved PRD (`.docs/specs/`). Ask: **is this code path supposed to exist
   hardening code slated for deletion is wasted work.
 
 This is deliberately the cheapest check (one ADR/PRD read) placed *before* the most expensive
-action (RED test → implement → full suite → commit). Do the design check first, every time.
+action (RED test → implement → affected-test verification → commit). Do the design check
+first, every time.
 
 11. **Write a failing test** that reproduces the bug (RED phase of TDD)
 
@@ -95,7 +96,13 @@ action (RED test → implement → full suite → commit). Do the design check f
 
 13. **Verify:**
     - The reproduction test passes
-    - The full test suite passes
+    - The scoped union of affected tests passes (the reproduction plus existing
+      tests covering every changed production module)
+    - A known scoped failure blocks this debugging activity and is fixed here
+      rather than deferred
+    - If one of HARNESS.md's four intermediate fallback triggers makes scope
+      genuinely unsafe, state the exact trigger and invoke
+      `conduct-ts test-suite`; never call the raw aggregate command
     - The original symptoms are gone
 
 ### The 3-Strike Rule
@@ -135,5 +142,6 @@ Skip if: the root cause was a simple typo, missing import, or other mechanical e
 - [ ] Hypothesis tested before implementing fix
 - [ ] Failing test written that reproduces the bug
 - [ ] Fix targets root cause, not symptoms
-- [ ] Full test suite passes after fix
+- [ ] Scoped union of affected tests passes after fix; any known failure blocked the activity
+- [ ] Any genuinely uncertain-scope fallback named its trigger and used `conduct-ts test-suite`
 - [ ] Non-obvious root cause persisted to `.memory/gotchas/` (if applicable)

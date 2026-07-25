@@ -12,6 +12,15 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
+SCOPE_CONTRACT_FILES=(
+  "skills/tdd/SKILL.md"
+  "skills/tdd/references/green.md"
+  "skills/debugging/SKILL.md"
+  "skills/pipeline/SKILL.md"
+  "skills/code-review/SKILL.md"
+  "skills/conduct/SKILL.md"
+  "HARNESS.md"
+)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -114,6 +123,46 @@ if grep -qiE 'non-?zero' <<<"$FINISH_SUITE_SECTION" \
   pass "finish blocks non-zero verifier results before completion choices"
 else
   fail "finish must block non-zero verifier results before choices/finish-choice"
+fi
+
+for relative_path in "${SCOPE_CONTRACT_FILES[@]}"; do
+  scope_file="${HARNESS_DIR}/${relative_path}"
+  if grep -qiE 'affected[-/ ]test|scoped (test|set)|impacted test|union[- ]of[- ]affected' "$scope_file"; then
+    pass "${relative_path} defaults intermediate verification to affected tests"
+  else
+    fail "${relative_path} must default intermediate verification to affected tests"
+  fi
+
+  if grep -qiE 'run the full test suite|full test suite passes|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)' "$scope_file"; then
+    fail "${relative_path} still mandates an unconditional aggregate run"
+  else
+    pass "${relative_path} has no unconditional aggregate-run mandate"
+  fi
+done
+
+SCOPE_CONTRACT_TEXT="$(printf '%s\n' "${SCOPE_CONTRACT_FILES[@]}" | while read -r relative_path; do cat "${HARNESS_DIR}/${relative_path}"; done)"
+
+if grep -q 'conduct-ts test-suite' <<<"$SCOPE_CONTRACT_TEXT" \
+  && grep -qiE 'shared/core.*3\+|3\+.*(importer|production module)' <<<"$SCOPE_CONTRACT_TEXT" \
+  && grep -qiE 'config.*migration.*dependenc.*test infrastructure' <<<"$SCOPE_CONTRACT_TEXT" \
+  && grep -qiE 'empty.*(scoped|affected).*(set|union)|(scoped|affected).*(set|union).*empty' <<<"$SCOPE_CONTRACT_TEXT" \
+  && grep -qiE 'low-confidence|cannot confidently map' <<<"$SCOPE_CONTRACT_TEXT" \
+  && grep -qiE 'name.*trigger|trigger.*reason' <<<"$SCOPE_CONTRACT_TEXT"; then
+  pass "aggregate fallback uses the shared CLI and names one of four explicit triggers"
+else
+  fail "aggregate fallback must use the shared CLI and name one of four explicit triggers"
+fi
+
+if grep -qiE 'scoped (test|set).*(fail|failure).*(block|stop)|(fail|failure).*scoped (test|set).*(block|stop)' <<<"$SCOPE_CONTRACT_TEXT"; then
+  pass "known scoped failures block their current BUILD activity"
+else
+  fail "known scoped failures must block their current BUILD activity"
+fi
+
+if grep -q 'skills/test-suite' <<<"$SCOPE_CONTRACT_TEXT"; then
+  fail "scope-only guidance must not require the deferred skills/test-suite surface"
+else
+  pass "scope-only guidance does not require the deferred skills/test-suite surface"
 fi
 
 echo ""

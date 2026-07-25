@@ -299,21 +299,40 @@ describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, F
 
 describe('Story 6 — scoped intermediate verification (FR-5)', () => {
   it('keeps ordinary implementation/review checks scoped and routes broad fallback through the verifier', async () => {
+    const expectedScope = new Map<string, RegExp>([
+      ['skills/tdd/SKILL.md', /affected\/scoped test set/i],
+      ['skills/tdd/references/green.md', /affected|scoped/i],
+      ['skills/debugging/SKILL.md', /affected|scoped/i],
+      ['skills/pipeline/SKILL.md', /affected-test|union[- ]of[- ]affected/i],
+      ['skills/code-review/SKILL.md', /impacted test|union[- ]of[- ]affected/i],
+      ['skills/conduct/SKILL.md', /affected-test|union[- ]of[- ]affected/i],
+      ['HARNESS.md', /union[- ]of[- ]affected/i],
+    ]);
     const files = await Promise.all(
-      [
-        'skills/tdd/SKILL.md',
-        'skills/pipeline/SKILL.md',
-        'skills/code-review/SKILL.md',
-        'skills/debugging/SKILL.md',
-      ].map(async (path) => [path, await readFile(join(REPO_ROOT, path), 'utf8')] as const),
+      [...expectedScope].map(
+        async ([path, pattern]) =>
+          [path, pattern, await readFile(join(REPO_ROOT, path), 'utf8')] as const,
+      ),
     );
 
-    for (const [path, contents] of files) {
-      expect(contents, path).toMatch(/scoped|affected|impacted/i);
-      expect(contents, path).not.toMatch(/always run (?:the )?full (?:test )?suite/i);
+    for (const [path, pattern, contents] of files) {
+      expect(contents, path).toMatch(pattern);
+      expect(contents, path).not.toMatch(
+        /run the full test suite|full test suite passes|always run full suite|pre-batch verification \(full test suite|test results \(full suite output\)/i,
+      );
     }
-    const combined = files.map(([, contents]) => contents).join('\n');
+
+    const combined = files.map(([, , contents]) => contents).join('\n');
     expect(combined).toMatch(/conduct-ts test-suite/);
+    expect(combined).toMatch(/shared\/core[^\n]*3\+|3\+[^\n]*(?:importer|production module)/i);
+    expect(combined).toMatch(/config[^\n]*migrations[^\n]*dependenc[^\n]*test infrastructure/i);
+    expect(combined).toMatch(/empty[^\n]*(?:scoped|affected)|(?:scoped|affected)[^\n]*empty/i);
+    expect(combined).toMatch(/low-confidence|cannot confidently map/i);
+    expect(combined).toMatch(/name[^\n]*trigger|trigger[^\n]*reason/i);
+    expect(combined).toMatch(
+      /scoped (?:test|set)[^\n]*(?:fail|failure)[^\n]*(?:block|stop)|(?:fail|failure)[^\n]*scoped (?:test|set)[^\n]*(?:block|stop)/i,
+    );
+    expect(combined).not.toMatch(/skills\/test-suite/);
   });
 });
 

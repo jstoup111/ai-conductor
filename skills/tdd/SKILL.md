@@ -91,7 +91,13 @@ production call site of any security/correctness derivation, with real adversari
 
 2. Write the minimum code to pass the test
 3. Run the test — **watch it pass**
-4. Run the affected/scoped test set (the task's own tests + the files this change touches) — the full suite runs at finish + CI, not per-cycle
+4. Run the affected/scoped test set (the task's own tests + the files this change touches). The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+
+A known failure in that scoped set blocks the current GREEN phase; fix it here
+rather than deferring it to a later gate. If one of HARNESS.md's four
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and invoke `conduct-ts test-suite`. Never call the project's
+aggregate command directly.
 
 **Rules:**
 - Simplest code that passes. Not the "best" code — that's for refactoring.
@@ -131,7 +137,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **Hard gate — all conditions must be met:**
 
-1. Scoped affected-test set passes (the full suite runs at the feature's final verification / finish and at CI, not per-task)
+1. Scoped affected-test set passes (the engine's dedicated aggregate gate and CI own broad verification, not each task)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
@@ -333,8 +339,8 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after RED (test reviewed for domain integrity)
 - [ ] Implementation is minimal (passes scope check)
 - [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Scoped affected-test set passes before commit (the full suite runs at the feature's
-      final verification task, not per-task)
+- [ ] Scoped affected-test set passes before commit (the engine's dedicated aggregate gate owns
+      broad pre-SHIP verification, not each task)
 - [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
       `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
 - [ ] Linter passes before commit
