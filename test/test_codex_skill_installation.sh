@@ -121,7 +121,9 @@ check 'normal installation leaves no harness-owned duplicate catalog in the lega
 # legacy duplication, and converges when repeated.
 UPDATE_HOME="$TMP_ROOT/home-update"
 OLD_CHECKOUT="$TMP_ROOT/old-checkout"
-mkdir -p "$UPDATE_HOME/.agents/skills" "$UPDATE_HOME/.codex/skills" "$OLD_CHECKOUT/skills/tdd"
+mkdir -p "$UPDATE_HOME/.agents/skills" "$UPDATE_HOME/.codex/skills" "$OLD_CHECKOUT"
+cp -r "$CHECKOUT/skills" "$OLD_CHECKOUT/skills"
+cp "$CHECKOUT/HARNESS.md" "$CHECKOUT/VERSION" "$OLD_CHECKOUT/"
 printf '%s\n' 'old workflow revision' > "$OLD_CHECKOUT/skills/tdd/SKILL.md"
 ln -s "$OLD_CHECKOUT/skills/tdd" "$UPDATE_HOME/.agents/skills/tdd"
 ln -s "$CHECKOUT/skills/tdd" "$UPDATE_HOME/.codex/skills/tdd"
