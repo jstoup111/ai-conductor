@@ -1016,7 +1016,9 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       // Not yet declared options (Task 11) — expected to be inert today.
       runGh,
       prUrl: PR_URL,
-    } as never);
+      slug: 'feature-a',
+      verifyMergedShipment: async () => ({ kind: 'verified' }),
+    });
 
     expect(res).toBe('already_shipped');
     // The advanced base must NOT have been integrated — no rebase ran.
@@ -1026,12 +1028,31 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
     void baseSha;
   });
 
+  it('recordless merged history preserves work and writes a durable-evidence HALT', async () => {
+    await initAdvancingRepo();
+    await writeSentinel();
+    const { runGh } = makeGhFake({ state: 'MERGED' });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      runGh,
+      prUrl: PR_URL,
+      slug: 'feature-a',
+      verifyMergedShipment: async () => ({ kind: 'halt', reason: 'shipped-record-missing' }),
+    });
+
+    expect(await readFile(join(dir, HALT_MARKER), 'utf-8')).toContain('shipped-record-missing');
+    expect(res).toBe('halted');
+  });
+
   it.each([
     ['OPEN', { state: 'OPEN' }],
     ['CLOSED', { state: 'CLOSED' }],
     ['NOTFOUND', { state: 'NOTFOUND' }],
     ['UNKNOWN', { state: 'UNKNOWN' }],
-    ['gh throws', { throws: true }],
   ] as const)(
     'negative: %s verdict — byte-identical pass-through to the existing gated rebase-resolution flow (rebases as today)',
     async (_label, ghOpts) => {
@@ -1046,7 +1067,8 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
         ranManualTest: true,
         runGh,
         prUrl: PR_URL,
-      } as never);
+        slug: 'feature-a',
+      });
 
       // Existing flow: the advanced base IS integrated (rebased), unchanged.
       expect(res).toBe('rebased');
@@ -1065,6 +1087,24 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
     },
   );
+
+  it('merge-state unavailability halts without rebasing', async () => {
+    await initAdvancingRepo();
+    await writeSentinel();
+    const { runGh } = makeGhFake({ throws: true });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      runGh,
+      prUrl: PR_URL,
+      slug: 'feature-a',
+    });
+
+    expect(res).toBe('halted');
+  });
 
   it('negative: no pr_url recorded — zero gh calls, existing flow proceeds unchanged', async () => {
     const { baseSha } = await initAdvancingRepo();
@@ -1096,8 +1136,8 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
     expect(branchContainsBase).toBe(true);
   });
 
-  it('negative: no runGh recorded (backward compatibility) — zero gh calls, existing flow proceeds unchanged', async () => {
-    const { baseSha } = await initAdvancingRepo();
+  it('missing feature identity halts rather than treating a merged PR as shipped', async () => {
+    await initAdvancingRepo();
     await writeSentinel();
 
     const res = await resumeRebaseFirst({
@@ -1106,24 +1146,10 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       events,
       ranManualTest: true,
       prUrl: PR_URL,
-      // runGh deliberately omitted — backward-compatible case with no new options wired.
-    } as never);
+      // No slug means durable evidence cannot be evaluated.
+    });
 
-    // Existing flow: the advanced base IS integrated (rebased), unchanged.
-    expect(res).toBe('rebased');
-    const branchContainsBase = await execFileAsync('git', [
-      '-C',
-      dir,
-      'merge-base',
-      '--is-ancestor',
-      baseSha,
-      'feature/foo',
-    ]).then(
-      () => true,
-      () => false,
-    );
-    expect(branchContainsBase).toBe(true);
-    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+    expect(res).toBe('halted');
   });
 });
 
@@ -1249,8 +1275,10 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
           ranManualTest: false,
           runGh,
           prUrl: PR_URL,
+          slug: SLUG,
+          verifyMergedShipment: async () => ({ kind: 'verified' }),
           log,
-        } as never);
+        });
         if (res === 'already_shipped') {
           await mkdir(join(wt.path, '.pipeline'), { recursive: true });
           await writeFile(join(wt.path, '.pipeline', 'finish-choice'), 'pr', 'utf-8');

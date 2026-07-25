@@ -15,7 +15,11 @@ import { mkdtemp, rm, mkdir, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { checkMergedPrGuard, writeSyntheticShipMarkers } from '../../src/engine/merged-pr-guard.js';
+import {
+  checkMergedPrGuard,
+  verifyMergedPrShipment,
+  writeSyntheticShipMarkers,
+} from '../../src/engine/merged-pr-guard.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { ConductState } from '../../src/types/index.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -37,6 +41,7 @@ function fakeGh(
     return {
       stdout: JSON.stringify({
         state: verdict,
+        mergeCommit: { oid: '1234567890abcdef1234567890abcdef12345678' },
         mergeable: 'UNKNOWN',
         statusCheckRollup: [],
         labels: [],
@@ -102,6 +107,60 @@ describe('engine/merged-pr-guard — checkMergedPrGuard', () => {
       expect(logs.length).toBeGreaterThan(0);
       expect(logs[0]).toContain('error');
     });
+  });
+});
+
+describe('engine/merged-pr-guard — verified merged shipment (Task 8)', () => {
+  it('valid merged history is eligible for normal completion', async () => {
+    const { gh } = fakeGh('MERGED');
+
+    const result = await verifyMergedPrShipment(gh, '/repo', PR_URL, 'feature-a', {
+      evaluate: async () => ({
+        kind: 'valid',
+        slug: 'feature-a',
+        pr: PR_URL,
+        recordPath: '.docs/shipped/feature-a.md',
+        hash: 'a'.repeat(64),
+        commit: '1234567890abcdef1234567890abcdef12345678',
+      }),
+    });
+
+    expect(result).toEqual({ kind: 'verified' });
+  });
+
+  it('recordless merged history refuses convergence', async () => {
+    const { gh } = fakeGh('MERGED');
+
+    const result = await verifyMergedPrShipment(gh, '/repo', PR_URL, 'feature-a', {
+      evaluate: async () => ({
+        kind: 'refusal',
+        code: 'shipped-record-missing',
+        expected: '.docs/shipped/feature-a.md',
+        observed: null,
+      }),
+    });
+
+    expect(result).toMatchObject({ kind: 'halt', reason: 'shipped-record-missing' });
+  });
+
+  it('unavailable merge state refuses convergence', async () => {
+    const { gh } = fakeGh('throw');
+
+    const result = await verifyMergedPrShipment(gh, '/repo', PR_URL, 'feature-a');
+
+    expect(result).toMatchObject({ kind: 'halt', reason: expect.stringContaining('merge-state-unavailable') });
+  });
+
+  it('unavailable merged-history evidence refuses convergence', async () => {
+    const { gh } = fakeGh('MERGED');
+
+    const result = await verifyMergedPrShipment(gh, '/repo', PR_URL, 'feature-a', {
+      evaluate: async () => {
+        throw new Error('git object unavailable');
+      },
+    });
+
+    expect(result).toMatchObject({ kind: 'halt', reason: expect.stringContaining('merged-history-unavailable') });
   });
 });
 
