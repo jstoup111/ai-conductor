@@ -21,7 +21,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
-import { normalizeProviderSelection } from './engine/provider-selection.js';
+import {
+  normalizeProviderSelection,
+  validateRegisteredProviderSelections,
+} from './engine/provider-selection.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
@@ -947,6 +950,10 @@ async function main(): Promise<void> {
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
   registerBuiltins(registry, events, renderEvent);
   registry.markInitialized();
+  validateRegisteredProviderSelections({
+    config: config ?? {},
+    registeredProviders: registry.list('llm_provider'),
+  });
 
   // Retrieve provider and subscriber from registry with defaults
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);

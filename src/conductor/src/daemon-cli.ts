@@ -26,7 +26,10 @@ import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
-import { normalizeProviderSelection } from './engine/provider-selection.js';
+import {
+  normalizeProviderSelection,
+  validateRegisteredProviderSelections,
+} from './engine/provider-selection.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -790,6 +793,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     renderDaemonEvent(event, log),
   );
   registry.markInitialized();
+  validateRegisteredProviderSelections({
+    config: config ?? {},
+    registeredProviders: registry.list('llm_provider'),
+  });
   subscriber.start();
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const selectedProviderKey = configuredProviders[0];
