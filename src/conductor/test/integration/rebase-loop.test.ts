@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
