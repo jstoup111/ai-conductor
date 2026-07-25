@@ -90,6 +90,19 @@ else
   exit 1
 fi
 
+# A Codex-only installation retains the shared conduct surface and installs
+# both built-in provider skill and harness surfaces, even without the Codex CLI.
+if [ -L "$FAKE_HOME/.local/bin/conduct" ] \
+  && [ -f "$FAKE_HOME/.claude/skills/conduct/SKILL.md" ] \
+  && [ -f "$FAKE_HOME/.claude/skills/HARNESS.md" ] \
+  && [ -f "$FAKE_HOME/.codex/skills/conduct/SKILL.md" ] \
+  && [ -f "$FAKE_HOME/.codex/skills/HARNESS.md" ]; then
+  echo 'PASS Codex installation preserves common, Claude, and Codex surfaces without the Codex CLI'
+else
+  echo 'FAIL Codex installation preserves common, Claude, and Codex surfaces without the Codex CLI'
+  exit 1
+fi
+
 # The normal install above has established both provider surfaces. Its strict
 # readiness counterpart must still fail specifically for the selected, absent
 # Codex CLI; stub the common conduct-ts check so it cannot mask that condition.
