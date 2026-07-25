@@ -14,7 +14,10 @@ import type {
   ProviderRuntime,
   ProviderRuntimeSet,
 } from './provider-runtime.js';
-import type { ProviderSessionScope } from './provider-session.js';
+import type {
+  ProviderSessionScope,
+  ProviderSessionStore,
+} from './provider-session.js';
 import {
   phaseForStep,
   resolveFallbackProviderNativeStepConfig,
@@ -79,6 +82,16 @@ export interface ExecuteProviderCandidatesInput {
     transition: ProviderTransitionWarning,
   ) => void;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+}
+
+/** Provider-aware execution state owned by one conductor/daemon feature run. */
+export interface ProviderExecutionContext {
+  configuredProviders: readonly string[];
+  runtimes: ProviderRuntimeSet;
+  sessions: ProviderSessionStore;
+  config?: HarnessConfig;
+  executor?: typeof executeProviderCandidates;
+  warn?: ExecuteProviderCandidatesInput['warn'];
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {

@@ -27,6 +27,8 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
+import { ProviderSessionStore } from './engine/provider-session.js';
+import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -804,11 +806,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   subscriber.start();
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const selectedProviderKey = configuredProviders[0];
-  // Auxiliary daemon lanes retain the selected legacy adapter until they move
-  // onto provider execution. Feature conductor runs construct fresh runtime
-  // state inside runConductorInWorktree below.
+  // Retain the first provider as the compatibility adapter for legacy/custom
+  // daemon lanes. Built-in feature and auxiliary dispatches receive a fresh
+  // provider execution context from createProviderExecution below.
   const provider = registry.get<LLMProvider>('llm_provider', selectedProviderKey);
   const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, log);
+  const createProviderExecution = (): ProviderExecutionContext => ({
+    configuredProviders: configuredProviders,
+    runtimes: createProviderRuntimeSet(registry, log),
+    sessions: new ProviderSessionStore(),
+    config: config,
+  });
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -821,13 +829,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const worktreeBase = join(projectRoot, '.worktrees');
   await mkdir(worktreeBase, { recursive: true });
 
-  const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem) => {
+  const runConductorInWorktree = async (
+    wt: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution = createProviderExecution(),
+  ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
-    const providerRuntimes = createProviderRuntimeSet(registry, log);
-    const selectedRuntime = providerRuntimes.get(selectedProviderKey);
-    const runProvider = selectedRuntime.provider;
-    const runModelPolicy = selectedRuntime.policy;
+    const selectedRuntime = providerExecution.runtimes.get(
+      providerExecution.configuredProviders[0],
+    );
 
     // Sweep stale session markers before constructing the runner. A KEPT
     // worktree (reused on a later daemon cycle after a prior halt/error —
@@ -873,13 +884,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     await writeState(stateFilePath, baseState);
 
-    const stepRunner = new DefaultStepRunner(runProvider, uuidv4(), wt.path, {
-      featureDesc: item.slug,
-      pipelineDir,
-      config,
-      modelPolicy: runModelPolicy,
-      mode: 'auto',
-    });
+    const stepRunner = new DefaultStepRunner(
+      providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider,
+      uuidv4(),
+      wt.path,
+      {
+        featureDesc: item.slug,
+        pipelineDir,
+        config,
+        modelPolicy: selectedRuntime.policy,
+        mode: 'auto',
+        providerRuntimes: providerExecution.runtimes,
+        sessionStore: providerExecution.sessions,
+        configuredProviders: providerExecution.configuredProviders,
+      },
+    );
 
     // Wire AuditTrailWriter: appends friction/positive-evidence records to
     // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
@@ -896,7 +915,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       events,
       mode: 'auto',
       config,
-      modelPolicy: runModelPolicy,
+      modelPolicy: selectedRuntime.policy,
       projectRoot: wt.path,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
@@ -1005,6 +1024,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     error: any, // SetupFailureError
     worktree: FeatureWorktree,
     item: BacklogItem,
+    providerExecution = createProviderExecution(),
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1045,12 +1065,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const dispatchFixSession = async () => {
       // Construct a fresh DefaultStepRunner for this fix session
       const sessionId = uuidv4();
-      const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
-        featureDesc: `setup-fix-${item.slug}`,
-        config,
-        modelPolicy,
-        mode: 'auto',
-      });
+      const stepRunner = new DefaultStepRunner(
+        providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider,
+        sessionId,
+        worktree.path,
+        {
+          featureDesc: `setup-fix-${item.slug}`,
+          config,
+          modelPolicy: providerExecution.runtimes.get(
+            providerExecution.configuredProviders[0],
+          ).policy,
+          mode: 'auto',
+          providerRuntimes: providerExecution.runtimes,
+          sessionStore: providerExecution.sessions,
+          configuredProviders: providerExecution.configuredProviders,
+        },
+      );
       log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
       await stepRunner.resolveSetupFailure({
         worktreePath: worktree.path,
@@ -1078,6 +1108,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     baseBranch,
     runConductorInWorktree,
     provider,
+    providerExecution: createProviderExecution,
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,
@@ -1672,12 +1703,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
-                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.worktreePath, {
-                      featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
-                      config,
-                      modelPolicy,
-                      mode: 'auto',
-                    });
+                    const providerExecution = createProviderExecution();
+                    const stepRunner = new DefaultStepRunner(
+                      providerExecution.runtimes.get(providerExecution.configuredProviders[0]).provider,
+                      sessionId,
+                      ctx.worktreePath,
+                      {
+                        featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                        config,
+                        modelPolicy: providerExecution.runtimes.get(
+                          providerExecution.configuredProviders[0],
+                        ).policy,
+                        mode: 'auto',
+                        providerRuntimes: providerExecution.runtimes,
+                        sessionStore: providerExecution.sessions,
+                        configuredProviders: providerExecution.configuredProviders,
+                      },
+                    );
                     await stepRunner.resolveCiFailure({
                       worktreePath: ctx.worktreePath,
                       prUrl: ctx.entry.prUrl,

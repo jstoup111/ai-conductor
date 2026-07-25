@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
+import type { ProviderExecutionContext } from './provider-execution.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engineer-store.js';
 import {
   enrollWatch as enrollWatchImpl,
@@ -74,7 +75,11 @@ export interface FeatureRunnerDeps {
    */
   prepareWorktree?: (worktree: FeatureWorktree) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
-  runConductor: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
+  runConductor: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
+  ) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /** Remove the worktree (keep=true leaves it for inspection after halt/error). */
@@ -90,6 +95,8 @@ export interface FeatureRunnerDeps {
   daemon: boolean;
   /** LLM provider used to produce the `done`-feature retro narrative. */
   provider: LLMProvider;
+  /** Fresh provider routing state allocated once for each feature run. */
+  providerExecution?: () => ProviderExecutionContext;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection).
    * Computed once at run start via `resolveMemoryProvider` — all memory-using
@@ -148,7 +155,12 @@ export interface FeatureRunnerDeps {
    * enabled, route it here for classification. Returns 'park' to error the
    * feature, or 'quarantined-pass' to continue to runConductor.
    */
-  runSetupTriage?: (error: SetupFailureError, worktree: FeatureWorktree, item: BacklogItem) => Promise<TriageOutcome>;
+  runSetupTriage?: (
+    error: SetupFailureError,
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
+  ) => Promise<TriageOutcome>;
   /**
    * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
    * Called once triage settles on a non-park outcome, BEFORE the worktree is
@@ -222,6 +234,7 @@ export function makeRunFeature(
 
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
     let worktree: FeatureWorktree | null = null;
+    const providerExecution = deps.providerExecution?.();
     try {
       // The worktree is cut from the fast-forwarded default branch, so the vetted
       // stories+plan are already committed in it — no materialization/copy needed.
@@ -244,7 +257,12 @@ export function makeRunFeature(
             deps.runSetupTriage
           ) {
             // Daemon mode with triage handler: classify and route the failure
-            const triageOutcome = await deps.runSetupTriage(prepareErr as SetupFailureError, worktree, item);
+            const triageOutcome = await deps.runSetupTriage(
+              prepareErr as SetupFailureError,
+              worktree,
+              item,
+              providerExecution,
+            );
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
               log(
@@ -279,7 +297,7 @@ export function makeRunFeature(
           }
         }
       }
-      await deps.runConductor(worktree, item);
+      await deps.runConductor(worktree, item, providerExecution);
       const outcome = await deps.readOutcome(worktree);
 
       // Phase 9.1: on daemon completion, emit a structured signal + narrative to
@@ -289,7 +307,7 @@ export function makeRunFeature(
       // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
       // the feature outcome or teardown discipline below.
       if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome);
+        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution);
       }
 
       if (outcome.done) {
@@ -501,6 +519,7 @@ async function emitDaemonSignal(
   worktree: FeatureWorktree,
   item: BacklogItem,
   outcome: WorktreeOutcome,
+  providerExecution?: ProviderExecutionContext,
 ): Promise<void> {
   const featureOutcome: FeatureOutcome = {
     slug: item.slug,
@@ -520,6 +539,7 @@ async function emitDaemonSignal(
     runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
     worktreePath: worktree.path,
     provider: deps.provider,
+    providerExecution,
     tierSkippedRetro,
     log: deps.log,
   });
