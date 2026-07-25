@@ -803,7 +803,7 @@ export class DefaultStepRunner implements StepRunner {
     return { success: false, output: result.output, model: effectiveModel };
   }
 
-  async resetSession(step?: StepName): Promise<void> {
+  async resetSession(step?: StepName, providerKey = this.providerKey): Promise<void> {
     if (this.sessionStore && step !== undefined) {
       await this.sessionStore.beginStep(step);
       if (!this.providerRuntimes) {
@@ -816,7 +816,7 @@ export class DefaultStepRunner implements StepRunner {
       return;
     }
     if (this.sessionStore) {
-      this.sessionId = (await this.sessionStore.replace(this.providerKey)).id;
+      this.sessionId = (await this.sessionStore.replace(providerKey)).id;
       this.sessionStarted = false;
       this.sessionStartedInitialized = true;
       return;

@@ -434,8 +434,10 @@ export interface StepRunner {
   /**
    * Drop session state so the next invocation creates a fresh provider session.
    * Called by the conductor when `sessionExpired` is reported.
+   * `providerKey` targets the provider that reported expiry; absent metadata
+   * preserves the legacy runner's captured-provider reset.
    */
-  resetSession?(step?: StepName): Promise<void>;
+  resetSession?(step?: StepName, providerKey?: string): Promise<void>;
   /**
    * Attempt to resolve a paused rebase conflict in the feature worktree.
    * Called by the conductor's engine-native rebase step (daemon only) when
@@ -3458,7 +3460,14 @@ export class Conductor {
               reason: 'session unavailable (expired or in use) — resetting to a fresh session',
             });
             if (this.stepRunner.resetSession) {
-              await this.stepRunner.resetSession();
+              if (result.actualProvider !== undefined) {
+                await this.stepRunner.resetSession(
+                  undefined,
+                  result.actualProvider,
+                );
+              } else {
+                await this.stepRunner.resetSession();
+              }
             }
             attempt--;
             continue;
