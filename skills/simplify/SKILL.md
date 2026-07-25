@@ -27,7 +27,8 @@ Identify files changed in the current batch:
 git diff <batch-start-commit>..HEAD --name-only
 ```
 
-Only analyze these files. Do not scan the full codebase — that would be slow and noisy.
+Keep non-test analysis limited to these files. For each changed or added test, additionally
+inspect existing tests at the same production seam; do not scan unrelated code or tests.
 The batch-start commit is available from `.pipeline/audit-trail/batch-N/` or from the
 pipeline's progress log.
 
@@ -175,14 +176,14 @@ If the rework budget is exhausted, escalate to user.
 
 ## Verification
 
-- [ ] Scope limited to current batch files only (not full codebase)
+- [ ] Non-test analysis limited to current batch files (not the full codebase)
 - [ ] Duplication checked across batch-changed files (behavior, not shape)
 - [ ] Complexity thresholds applied (>4 branches, >25 lines, >3 nesting, >4 params)
 - [ ] Extract-worthy patterns identified (3+ similar blocks)
 - [ ] Over-engineering flagged (single-caller abstractions, unnecessary indirection)
 - [ ] ADR exceptions respected (documented abstractions not flagged)
 - [ ] Dead code in batch detected
-- [ ] Changed/added tests compared with existing tests at the same production seam
+- [ ] Changed/added tests compared only with existing tests at the same production seam, including outside the batch when needed
 - [ ] Distinct failure boundaries stated for any intentionally overlapping tests
 - [ ] Tests can plausibly fail on production regressions; no tautology, mock-only, type-only, or documentation-layout assertions
 - [ ] Implementations trace to an operator outcome or acceptance criterion
