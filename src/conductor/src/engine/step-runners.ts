@@ -591,6 +591,8 @@ export class DefaultStepRunner implements StepRunner {
         sessions: this.sessionStore,
         config: this.config,
         tier: state.complexity_tier,
+        attempt: opts?.attempt ?? 1,
+        escalate: opts?.escalate ?? true,
         modelOverride: opts?.modelOverride ?? this.modelOverride,
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         warn: this.providerWarn,

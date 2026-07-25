@@ -3,6 +3,18 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
 
+it('does not retain run-global model-policy authority in the conductor', async () => {
+  const source = await readFile(
+    new URL('../../src/engine/conductor.ts', import.meta.url),
+    'utf8',
+  );
+
+  expect(source).not.toMatch(/\bthis\.modelPolicy\b/);
+  expect(source).toMatch(
+    /resolveGroupMembership\([\s\S]*?this\.modelPolicyForStep\(step\.name\),[\s\S]*?this\.config,[\s\S]*?\)/,
+  );
+});
+
 function isConstBinding(
   declaration: ts.VariableDeclaration | undefined,
 ): declaration is ts.VariableDeclaration {
@@ -774,8 +786,25 @@ it('binds every production step-resolution call to the policy owned by its execu
           return parameter !== undefined && canonicalClaudeDefault === true;
         },
       );
-      return optionBinding && type === 'ProviderModelPolicy'
-        ? `option:${expression.text}:${type}`
+      if (optionBinding && type === 'ProviderModelPolicy') {
+        return `option:${expression.text}:${type}`;
+      }
+
+      const stepPolicyBinding = symbol?.declarations?.find(
+        (candidate): candidate is ts.VariableDeclaration => {
+          if (
+            !ts.isVariableDeclaration(candidate) ||
+            !candidate.initializer ||
+            !ts.isCallExpression(candidate.initializer)
+          ) return false;
+          const callee = unwrapExpression(candidate.initializer.expression);
+          return ts.isPropertyAccessExpression(callee) &&
+            callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
+            callee.name.text === 'modelPolicyForStep';
+        },
+      );
+      return stepPolicyBinding && type === 'ProviderModelPolicy'
+        ? `step-resolver:Conductor.modelPolicyForStep:${type}`
         : `unproven:${expression.getText()}:${type}`;
     }
     if (
@@ -927,7 +956,8 @@ it('binds every production step-resolution call to the policy owned by its execu
         file: 'engine/conductor.ts',
         scope: 'run',
         argumentCount: 5,
-        policyProvenance: 'property:Conductor.modelPolicy:ProviderModelPolicy',
+        policyProvenance:
+          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/step-runners.ts',

@@ -40,7 +40,12 @@ import {
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { escalateAttempt } from './escalation.js';
-import { CLAUDE_MODEL_POLICY, type ProviderModelPolicy } from './provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
+import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
@@ -399,6 +404,17 @@ export interface StepRunOptions {
    * steps, where resume is derived from the runner's own session state.
    */
   resume?: boolean;
+  /**
+   * The Conductor-owned, 1-based retry attempt. Provider-aware runners forward
+   * this unchanged so a fallback provider can resolve its own native escalation
+   * rung without deriving retry state from invocation/session counters.
+   */
+  attempt?: number;
+  /**
+   * Whether the current step's retry ladder is enabled. Forwarded with
+   * `attempt` so fallback providers preserve `escalate:false`.
+   */
+  escalate?: boolean;
   /**
    * Retry-as-escalation per-attempt overrides (#188). When set, the runner
    * dispatches at this model/effort instead of the step's resolved base. The
@@ -832,7 +848,7 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
-  private readonly modelPolicy: ProviderModelPolicy;
+  private readonly legacyModelPolicy?: ProviderModelPolicy;
   private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
@@ -1064,7 +1080,7 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
-    this.modelPolicy = opts.modelPolicy ?? CLAUDE_MODEL_POLICY;
+    this.legacyModelPolicy = opts.modelPolicy;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
@@ -1100,6 +1116,25 @@ export class Conductor {
     this.runGh = opts.runGh ?? makeProductionGh();
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
+  }
+
+  /**
+   * Resolve retry/model defaults from the provider preferred by this step.
+   * `modelPolicy` remains a compatibility adapter only for callers that have
+   * not configured provider selection yet; it is never captured as run-wide
+   * authority over explicitly routed steps.
+   */
+  private modelPolicyForStep(step: StepName): ProviderModelPolicy {
+    const selection =
+      this.config.steps?.[step]?.llm_provider ?? this.config.llm_provider;
+    if (selection === undefined) {
+      return this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY;
+    }
+
+    const preferredProvider = normalizeProviderSelection(selection)[0];
+    return preferredProvider === undefined
+      ? this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY
+      : resolveProviderModelPolicy(preferredProvider);
   }
 
   /**
@@ -2219,10 +2254,11 @@ export class Conductor {
         // Resolve per-step config (model, effort, retries, review…). Tier is
         // threaded in so `by_tier` overrides apply when the feature's complexity
         // is known (post-complexity step).
+        const stepModelPolicy = this.modelPolicyForStep(step.name);
         const resolved = resolveStepConfig(
           step.name,
           step.phase,
-          this.modelPolicy,
+          stepModelPolicy,
           this.config,
           {
             tier: state.complexity_tier,
@@ -2319,7 +2355,7 @@ export class Conductor {
             builtinGroup,
             state,
             groupTrack,
-            this.modelPolicy,
+            this.modelPolicyForStep(step.name),
             this.config,
           );
           // Engagement is keyed to the group's first NON-SKIPPED member, not
@@ -3205,7 +3241,7 @@ export class Conductor {
             resolved.effort,
             attempt,
             resolved.escalate,
-            this.modelPolicy,
+            stepModelPolicy,
           );
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
@@ -3312,6 +3348,8 @@ export class Conductor {
                       ? await this.runSelfBuildDispatch(step.name, state, retryHint)
                       : await this.stepRunner.run(step.name, state, {
                           retryReason: retryHint,
+                          attempt,
+                          escalate: resolved.escalate,
                           modelOverride: esc.model,
                           effortOverride: esc.effort,
                         });
@@ -3613,7 +3651,7 @@ export class Conductor {
                 resolved.effort,
                 attempt + 1,
                 resolved.escalate,
-                this.modelPolicy,
+                stepModelPolicy,
               );
               await emitTracked({
                 type: 'step_retry',
@@ -4272,7 +4310,7 @@ export class Conductor {
                   resolved.effort,
                   attempt + 1,
                   resolved.escalate,
-                  this.modelPolicy,
+                  stepModelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',
