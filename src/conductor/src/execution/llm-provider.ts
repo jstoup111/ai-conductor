@@ -10,6 +10,27 @@ export interface TokenUsage {
 
 export type ProviderUnavailableScope = 'run';
 
+/** The credential mechanism selected by the Codex provider for a run. */
+export type AuthenticationSource = 'api-key' | 'cached-login';
+
+/** A conclusive provider-owned authentication readiness outcome. */
+export type AuthenticationReadinessState =
+  | 'ready'
+  | 'missing'
+  | 'unusable'
+  | 'unverifiable';
+
+/**
+ * Safe metadata a provider may return for authentication recovery. Diagnostic
+ * output and credential material deliberately have no representation here.
+ */
+export interface AuthenticationReadiness {
+  provider: 'codex';
+  source: AuthenticationSource;
+  state: AuthenticationReadinessState;
+  remediation?: string;
+}
+
 export interface InvokeResult {
   success: boolean;
   output: string;
@@ -51,6 +72,8 @@ export interface InvokeResult {
   providerUnavailableReason?: string;
   /** Set by the execution layer when a cached unavailable provider is skipped. */
   providerInvocationSkipped?: boolean;
+  /** Provider-owned, safe authentication source/readiness metadata. */
+  authentication?: AuthenticationReadiness;
 }
 
 export interface InvokeOptions {
@@ -85,6 +108,8 @@ export interface InvokeOptions {
 
 export interface LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult>;
+  /** Optional so legacy and custom providers need not implement auth recovery. */
+  readiness?(): Promise<AuthenticationReadiness>;
   /**
    * Built-in providers return classified completion after their streamed
    * process exits. Legacy custom providers may keep returning void; absence of
