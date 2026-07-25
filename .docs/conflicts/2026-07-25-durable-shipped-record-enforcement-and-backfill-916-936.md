@@ -11,6 +11,12 @@ unaccepted degrading conflicts.
 
 ## Inventory and Scan
 
+**Current-main amendment:** PR #937 already enforces the normal skill-driven producer ordering and
+PR #943 proves that path can land implementation plus record atomically. The amended stories treat
+that behavior as an existing prerequisite, not new implementation scope. This creates no
+contradiction with the strict engine backstop: the producer writes evidence; the engine and GitHub
+boundaries independently refuse to claim or merge shipment when evidence is absent.
+
 The scan indexed all 196 files under `.docs/stories/`, all 35 files under `.docs/specs/`, and all 118
 prior reports under `.docs/conflicts/`. Every pair type was evaluated: contradiction, behavioral
 overlap, state conflict, resource contention, and sequencing conflict. The focused interaction set
@@ -173,3 +179,6 @@ Every terminal success now requires strict-valid durable evidence; historical wr
 association; existing discovery/cost/presentation behavior remains scoped; required checks compose.
 
 **Final:** zero blocking conflicts, zero unaccepted degrading conflicts, no ADR amendment required.
+The #937/#943 scope reduction was also checked across contradiction, overlap, state, resource, and
+sequencing categories; it removes duplicate producer work without weakening any accepted negative
+path.

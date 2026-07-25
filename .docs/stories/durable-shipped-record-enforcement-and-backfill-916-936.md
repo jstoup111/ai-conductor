@@ -14,6 +14,18 @@ These stories supersede only two conflicting clauses in
 degrade to cache and historical backfill may no longer use an unknown PR or hash. Its canonical hash,
 record-on-branch, stem/hash discovery dedup, and cache-repair behavior remain accepted.
 
+## Verified Existing Foundation and Scope Boundary
+
+- PR #937 already changed the normal skill-driven `/finish` sequence to create, commit, verify, and
+  push the shipped record before it records local terminal state.
+- PR #943 exercised that sequence successfully: its record commit was present on the PR head and
+  landed atomically with the implementation on `main`.
+- This feature does **not** rebuild that producer sequence. It adds engine-owned validation as a
+  backstop, a required merge check, human-reviewed recovery, and the bounded historical backfill.
+- The existing record schema and hash/story-resolution semantics remain unchanged. Strict evidence
+  recomputes the same digest the current writer and discovery path use; changing which story links
+  participate in historical hashes is a separate migration concern.
+
 ## Traceability
 
 | Story | Approved technical intent |
@@ -37,9 +49,9 @@ completion path agrees whether durable evidence is valid.
 #### Happy Path
 
 - **AC1:** Given exactly one shipped record at the expected plan stem whose slug, implementation PR,
-  and canonical plan-plus-stories hash match the candidate commit, and the record is contained in the
-  pushed implementation head, when shipment evidence is evaluated, then the verdict is `valid` and
-  identifies the checked slug, PR, record path, hash, and commit.
+  and existing canonical plan/resolved-stories hash match the candidate commit, and the record is
+  contained in the pushed implementation head, when shipment evidence is evaluated, then the verdict
+  is `valid` and identifies the checked slug, PR, record path, hash, and commit.
 - **AC2:** Given evidence that already returned `valid`, when the same candidate commit is evaluated
   again, then it returns the same `valid` verdict without changing the record or repository state.
 
@@ -85,8 +97,9 @@ durable evidence so that local terminal state cannot falsely report a shipment.
 
 #### Happy Path
 
-- **AC1:** Given a daemon, inline-auto, inline-default, or inline-interactive PR finish with a `valid`
-  evidence verdict, when completion converges, then the PR URL, finish choice, DONE state, processed
+- **AC1:** Given the existing #937 producer sequence has placed a record on the PR head and a daemon,
+  inline-auto, inline-default, or inline-interactive PR finish receives a `valid` evidence verdict,
+  when completion converges, then the PR URL, finish choice, DONE state, processed
   cache entry, successful teardown, and downstream ship side effects are allowed exactly once.
 - **AC2:** Given an already-merged recorded PR whose matching durable record is valid on the merged
   history, when the merged-PR guard runs, then it may converge through the normal verified-ship
@@ -117,6 +130,7 @@ durable evidence so that local terminal state cannot falsely report a shipment.
 
 ### Done When
 
+- [ ] Existing #937/#943 behavior is retained and verified rather than reimplemented.
 - [ ] An acceptance matrix covers daemon, inline-auto, inline-default, and inline-interactive PR
       finishes with valid evidence and every strict refusal class.
 - [ ] Each refusal assertion proves success markers and ship side effects are absent while HALT and
@@ -300,6 +314,9 @@ false shipment facts.
 As a daemon operator, I want merged durable evidence to prevent redispatch from any checkout while
 retaining existing content-aware discovery behavior so that enforcement closes the durability gap
 without reopening shipped work.
+
+This is a regression boundary over existing discovery behavior, not a request to redesign or
+replace `shipped-record.ts` dedup.
 
 ### Acceptance Criteria
 

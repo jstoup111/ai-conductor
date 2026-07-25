@@ -20,6 +20,7 @@ sequenceDiagram
   participant O as Operator
   participant M as Protected main
 
+  Note over F,R: Existing #937 producer path, verified by merged PR #943
   F->>R: generate + commit .docs/shipped/«slug».md
   R->>PR: push feature HEAD carrying code + record
   F->>V: finalize PR shipment «slug», «prUrl»
@@ -59,6 +60,8 @@ sequenceDiagram
 - The drift-safe cutover observes the bootstrap context before requiring it and rejects any
   unexpected live ruleset change.
 - Keep/discard outcomes do not claim shipment and do not require or create shipped records.
+- The producer sequence is existing behavior; the new work begins at the shared verifier and merge
+  check, which backstop rather than duplicate `/finish`.
 
 ## Change Log
 
@@ -66,3 +69,4 @@ sequenceDiagram
 |------|--------|--------|
 | 2026-07-25 | Initial generation | Prevent engine and GitHub merge paths from completing without durable evidence |
 | 2026-07-25 | Added CLI and protection-cutover sequence | `/plan` established immutable-head dispatch and exact post-observation ruleset activation |
+| 2026-07-25 | Marked #937/#943 as the existing producer baseline | Scope verification removed duplicate finish-producer work |

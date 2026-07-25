@@ -65,6 +65,8 @@ sequenceDiagram
 - Historical backfill is broader than the local processed ledger: it begins with every plan/spec,
   then writes only where the merged implementation association is proven.
 - A failed/ambiguous reconciliation is observable but non-destructive.
+- Record rendering keeps the current schema and hash/story-resolution semantics; historical identity
+  migration is not part of repair or backfill.
 
 ## Change Log
 
@@ -72,3 +74,4 @@ sequenceDiagram
 |------|--------|--------|
 | 2026-07-25 | Initial generation | Automate detection and PR authoring while preserving human merge approval |
 | 2026-07-25 | Added repair-head status and durable audit report | `/plan` fixed retry/status behavior and complete-history proof before backfill success |
+| 2026-07-25 | Preserved current record identity semantics | Scope reduction treats #943 as valid and avoids an unrelated historical hash migration |

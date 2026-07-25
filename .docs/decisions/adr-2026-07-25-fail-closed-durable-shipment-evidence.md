@@ -24,8 +24,12 @@ work. Issues #916 and #936 define the failure case: a plan/spec has a provably a
 implementation PR, but no valid shipped record.
 
 The implementation already contains the record hash, renderer, parser, writer, finish recorder,
-completion predicates, daemon teardown boundary, merged-PR guard, and mergeable watch. The smallest
-coherent change is to add one fail-closed policy verifier and reuse those seams.
+completion predicates, daemon teardown boundary, merged-PR guard, and mergeable watch. PR #937 also
+made the skill-driven `/finish` sequence create, verify, and push the record before local completion;
+PR #943 subsequently exercised that path successfully on `main`. The remaining failure is not the
+normal producer sequence but the absence of engine-owned validation, protected-merge enforcement,
+and automatic detection/recovery when that sequence is bypassed or fails. The smallest coherent
+change is to add one fail-closed policy verifier and reuse the existing seams.
 
 `main` is already protected by active repository ruleset `15933604`; the missing protection is a
 required durable-evidence status check. Actions currently default to read-only, cannot create or
@@ -37,14 +41,16 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    Given a plan slug and implementation PR identity, it requires:
    - exactly one `.docs/shipped/<slug>.md` record;
    - parseable frontmatter whose `slug` and `pr` exactly match the expected values;
-   - `spec_hash` equal to the existing canonical hash of the committed plan and resolved stories;
+   - `spec_hash` equal to the existing canonical hash of the committed plan and any stories resolved
+     by the current writer/discovery semantics;
    - the record path included in the candidate Git commit; and
    - for engine completion, that commit verified on the implementation PR head/upstream.
    The verifier returns a closed result (`valid`, `not-applicable`, or a typed refusal); callers do
    not reinterpret partial evidence. Existing parsing remains permissive for discovery dedup, but
    completion verification is strict.
 
-2. **Fail closed at every terminal boundary.** For PR finishes, `finish-record`, the finish
+2. **Fail closed at every terminal boundary without replacing #937.** The skill remains the normal
+   record producer. For PR finishes, `finish-record`, the finish
    completion predicate, `complete-verifier`, daemon verified-ship/teardown, rekick recovery, and the
    merged-PR guard must all receive `valid` before writing or accepting terminal ship state. Missing,
    malformed, mismatched, uncommitted, or unpushed evidence HALTs with remediation details. Local
@@ -88,9 +94,10 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    are discovery hints only. The audit is idempotent and never rewrites a valid record.
 
 8. **Carry forward stable behavior.** Records still land on implementation branches before human
-   merge; canonical hashing, stem/hash discovery dedup, local cache repair, and main-advance rekick
-   behavior remain unchanged except that no terminal completion can be synthesized without valid
-   durable evidence.
+   merge through the #937 sequence; canonical hashing and story resolution, stem/hash discovery
+   dedup, local cache repair, and main-advance rekick behavior remain unchanged except that no
+   terminal completion can be synthesized without valid durable evidence. Changing the record
+   schema or which historical story-link forms participate in the digest is out of scope.
 
 ## Consequences
 
@@ -131,6 +138,8 @@ primitive, daemon false-ship guard, ship-CI feedback loop, and ADR-005 human-con
 
 - Repository/code observations and confidence are recorded in
   `.pipeline/verify-claims-architecture-review.md`.
+- PR #937, merged 2026-07-25, is the skill-level prerequisite; PR #943 is the verified production
+  example whose implementation and shipped record landed together.
 - GitHub protected-branch and status-check behavior:
   <https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches>
 - GitHub `GITHUB_TOKEN` permissions and event recursion behavior:
