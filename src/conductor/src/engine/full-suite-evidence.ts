@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
+import {
+  FULL_SUITE_FINGERPRINT_CATEGORIES,
+  type FullSuiteCategoryFingerprints,
+} from './full-suite-fingerprint.js';
 
-export const FULL_SUITE_EVIDENCE_VERSION = 1 as const;
+export const FULL_SUITE_EVIDENCE_VERSION = 2 as const;
 export const FULL_SUITE_EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
 export const FULL_SUITE_DIAGNOSTIC_LIMIT = 16_384;
 export const FULL_SUITE_TRUNCATION_MARKER = '\n...[output truncated]...\n';
@@ -26,6 +30,7 @@ export interface FullSuitePassEvidence {
   outcome: 'PASS';
   reason: 'exit_zero';
   fingerprint: string;
+  categoryFingerprints: FullSuiteCategoryFingerprints;
   provenanceHeadSha: string;
   command: string;
   workingDirectory: string;
@@ -198,6 +203,14 @@ function isNullableNonEmptyString(value: unknown): value is string | null {
   return value === null || isNonEmptyString(value);
 }
 
+function isCategoryFingerprints(value: unknown): value is FullSuiteCategoryFingerprints {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === FULL_SUITE_FINGERPRINT_CATEGORIES.length &&
+    FULL_SUITE_FINGERPRINT_CATEGORIES.every((category) =>
+      isNonEmptyString(value[category]));
+}
+
 function isPassEvidence(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & FullSuitePassEvidence {
@@ -206,6 +219,7 @@ function isPassEvidence(
     value.outcome === 'PASS' &&
     value.reason === 'exit_zero' &&
     isNonEmptyString(value.fingerprint) &&
+    isCategoryFingerprints(value.categoryFingerprints) &&
     isNonEmptyString(value.provenanceHeadSha) &&
     isNonEmptyString(value.command) &&
     isNonEmptyString(value.workingDirectory) &&

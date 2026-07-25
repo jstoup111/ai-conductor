@@ -15,7 +15,9 @@ import {
   type FullSuitePassEvidence,
 } from './full-suite-evidence.js';
 import {
+  FULL_SUITE_FINGERPRINT_CATEGORIES,
   fingerprintFullSuiteInputs,
+  type FullSuiteFingerprintCategory,
   type FullSuiteFingerprint,
   type FullSuiteFingerprintOptions,
   type FullSuiteFingerprintResult,
@@ -30,11 +32,21 @@ import type { TestSuiteConfig } from '../types/config.js';
 
 export type FullSuiteStaleReason =
   | Exclude<FullSuiteEvidenceUnusableReason, 'io_error'>
-  | 'fingerprint_mismatch';
+  | 'fingerprint_mismatch'
+  | 'additional_inputs_changed'
+  | 'dependencies_changed'
+  | 'environment_changed'
+  | 'migrations_changed'
+  | 'multiple_categories_changed'
+  | 'project_config_changed'
+  | 'source_changed'
+  | 'test_infrastructure_changed'
+  | 'tests_changed';
 
 export interface FullSuiteStaleInspection {
   status: 'STALE';
   reason: FullSuiteStaleReason;
+  changedCategories?: FullSuiteFingerprintCategory[];
 }
 
 export type FullSuiteVerifierResult =
@@ -547,6 +559,7 @@ export class FullSuiteVerifier {
         outcome: 'PASS',
         reason: 'exit_zero',
         fingerprint: fingerprint.digest,
+        categoryFingerprints: fingerprint.categoryFingerprints,
         provenanceHeadSha: fingerprint.headSha,
         command: execution.command,
         workingDirectory: execution.cwd,
@@ -666,7 +679,11 @@ export class FullSuiteVerifier {
       }
       if (persisted.evidence.fingerprint !== fingerprintResult.fingerprint.digest) {
         return {
-          inspection: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          inspection: changedFingerprintInspection(
+            persisted.evidence,
+            fingerprintResult.fingerprint,
+            (testSuite.environment?.length ?? 0) > 0,
+          ),
           context,
         };
       }
@@ -750,4 +767,47 @@ function declaredEnvironmentValues(
   return (testSuite.environment ?? [])
     .map((name) => environment[name])
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+const CATEGORY_STALE_REASONS: Record<
+  FullSuiteFingerprintCategory,
+  FullSuiteStaleReason
+> = {
+  additional_inputs: 'additional_inputs_changed',
+  dependencies: 'dependencies_changed',
+  environment: 'environment_changed',
+  migrations: 'migrations_changed',
+  project_config: 'project_config_changed',
+  source: 'source_changed',
+  test_infrastructure: 'test_infrastructure_changed',
+  tests: 'tests_changed',
+};
+
+function changedFingerprintInspection(
+  persisted: FullSuitePassEvidence,
+  current: FullSuiteFingerprint,
+  hasDeclaredEnvironment: boolean,
+): FullSuiteStaleInspection {
+  const changedCategories = FULL_SUITE_FINGERPRINT_CATEGORIES.filter(
+    (category) =>
+      persisted.categoryFingerprints[category] !==
+      current.categoryFingerprints[category],
+  );
+  if (changedCategories.length === 1) {
+    return {
+      status: 'STALE',
+      reason: CATEGORY_STALE_REASONS[changedCategories[0]],
+    };
+  }
+  if (changedCategories.length > 1) {
+    return {
+      status: 'STALE',
+      reason: 'multiple_categories_changed',
+      changedCategories,
+    };
+  }
+  if (hasDeclaredEnvironment) {
+    return { status: 'STALE', reason: 'environment_changed' };
+  }
+  return { status: 'STALE', reason: 'fingerprint_mismatch' };
 }

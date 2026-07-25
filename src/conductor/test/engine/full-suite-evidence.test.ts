@@ -13,11 +13,22 @@ import {
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
 
+const CATEGORY_FINGERPRINTS = {
+  additional_inputs: 'category:additional_inputs',
+  dependencies: 'category:dependencies',
+  migrations: 'category:migrations',
+  project_config: 'category:project_config',
+  source: 'category:source',
+  test_infrastructure: 'category:test_infrastructure',
+  tests: 'category:tests',
+};
+
 const PASS_EVIDENCE: FullSuitePassEvidence = {
   version: FULL_SUITE_EVIDENCE_VERSION,
   outcome: 'PASS',
   reason: 'exit_zero',
   fingerprint: 'sha256:content-fingerprint',
+  categoryFingerprints: CATEGORY_FINGERPRINTS,
   provenanceHeadSha: '0123456789abcdef',
   command: 'npm test',
   workingDirectory: 'src/conductor',
@@ -105,6 +116,16 @@ describe('full-suite evidence', () => {
     });
   });
 
+  it('treats legacy v1 PASS evidence as unsupported rather than reusable', async () => {
+    const projectRoot = await makeProject();
+    await writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 1 });
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: false,
+      reason: 'unsupported_version',
+    });
+  });
+
   it('never removes another active writer temporary file', async () => {
     const projectRoot = await makeProject();
     const activeTemporary = join(
@@ -133,7 +154,10 @@ describe('full-suite evidence', () => {
     {
       name: 'the wrong contract shape',
       arrange: async (projectRoot: string) =>
-        writePersisted(projectRoot, { version: 1, outcome: 'PASS' }),
+        writePersisted(projectRoot, {
+          version: FULL_SUITE_EVIDENCE_VERSION,
+          outcome: 'PASS',
+        }),
       expected: { usable: false, reason: 'corrupt' },
     },
     {

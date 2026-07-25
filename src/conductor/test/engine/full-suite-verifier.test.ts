@@ -20,6 +20,15 @@ const CONCURRENT_ENSURE_FIXTURE = join(
   CONDUCTOR_ROOT,
   'test/fixtures/full-suite-concurrent-ensure.mjs',
 );
+const CATEGORY_FINGERPRINTS = {
+  additional_inputs: 'category:additional_inputs',
+  dependencies: 'category:dependencies',
+  migrations: 'category:migrations',
+  project_config: 'category:project_config',
+  source: 'category:source',
+  test_infrastructure: 'category:test_infrastructure',
+  tests: 'category:tests',
+};
 
 async function writeProjectFile(
   projectRoot: string,
@@ -113,6 +122,7 @@ describe('FullSuiteVerifier', () => {
       outcome: 'PASS',
       reason: 'exit_zero',
       fingerprint: 'sha256:current-inputs',
+      categoryFingerprints: CATEGORY_FINGERPRINTS,
       provenanceHeadSha: '0123456789abcdef',
       command: 'node suite.mjs --all',
       workingDirectory,
@@ -134,6 +144,7 @@ describe('FullSuiteVerifier', () => {
           fingerprint: {
             digest: expectedEvidence.fingerprint,
             headSha: expectedEvidence.provenanceHeadSha,
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
           },
         };
       },
@@ -224,6 +235,7 @@ describe('FullSuiteVerifier', () => {
     const environment = { PATH: '/fixture/bin' };
     const originalHeadSha = '1111111111111111';
     let currentHeadSha = originalHeadSha;
+    let currentCategoryFingerprints = CATEGORY_FINGERPRINTS;
     let executionCount = 0;
     let fingerprintCount = 0;
     const expectedEvidence: FullSuitePassEvidence = {
@@ -231,6 +243,7 @@ describe('FullSuiteVerifier', () => {
       outcome: 'PASS',
       reason: 'exit_zero',
       fingerprint: 'sha256:byte-identical-content',
+      categoryFingerprints: CATEGORY_FINGERPRINTS,
       provenanceHeadSha: originalHeadSha,
       command: 'node suite.mjs --all',
       workingDirectory,
@@ -251,6 +264,7 @@ describe('FullSuiteVerifier', () => {
           fingerprint: {
             digest: expectedEvidence.fingerprint,
             headSha: currentHeadSha,
+            categoryFingerprints: currentCategoryFingerprints,
           },
         };
       },
@@ -282,6 +296,10 @@ describe('FullSuiteVerifier', () => {
     const laterCaller = await verifier().ensure();
     const sameHeadInspection = await inspect();
     currentHeadSha = '2222222222222222';
+    currentCategoryFingerprints = {
+      ...CATEGORY_FINGERPRINTS,
+      source: 'diagnostic-category-metadata-does-not-change-reuse',
+    };
     const reconstructedCaller = await verifier().ensure();
     const changedHeadInspection = await inspect();
     const persisted = await readFullSuiteEvidence(projectRoot);
@@ -316,17 +334,21 @@ describe('FullSuiteVerifier', () => {
       name: string;
       mutate: (projectRoot: string) => Promise<void>;
       environment?: NodeJS.ProcessEnv;
+      reason?: string;
     }> = [
       {
         name: 'source',
+        reason: 'source_changed',
         mutate: (root) => writeProjectFile(root, 'src/app.ts', 'export const value = 2;\n'),
       },
       {
         name: 'tests',
+        reason: 'tests_changed',
         mutate: (root) => writeProjectFile(root, 'test/app.test.ts', 'test("changed", () => {});\n'),
       },
       {
         name: 'project config',
+        reason: 'project_config_changed',
         mutate: async (root) => {
           const path = join(root, '.ai-conductor/config.yml');
           await writeFile(path, `${await readFile(path, 'utf8')}# changed\n`, 'utf8');
@@ -334,31 +356,38 @@ describe('FullSuiteVerifier', () => {
       },
       {
         name: 'package lock',
+        reason: 'dependencies_changed',
         mutate: (root) => writeProjectFile(root, 'package-lock.json', '{"lockfileVersion":4}\n'),
       },
       {
         name: 'requirements.txt',
+        reason: 'dependencies_changed',
         mutate: (root) => writeProjectFile(root, 'requirements.txt', 'pytest==8.1.0\n'),
       },
       {
         name: 'migration',
+        reason: 'migrations_changed',
         mutate: (root) => writeProjectFile(root, 'db/migrations/001.sql', 'CREATE TABLE two;\n'),
       },
       {
         name: 'test infrastructure',
+        reason: 'test_infrastructure_changed',
         mutate: (root) => writeProjectFile(root, 'test/setup.ts', 'export const setup = 2;\n'),
       },
       {
         name: 'declared ignored input',
+        reason: 'additional_inputs_changed',
         mutate: (root) => writeProjectFile(root, 'private/state.bin', 'private state two\n'),
       },
       {
         name: 'declared environment',
+        reason: 'environment_changed',
         environment: { PATH: '/fixture/bin', SUITE_MODE: 'second' },
         mutate: async () => undefined,
       },
       {
         name: 'mixed docs and code',
+        reason: 'source_changed',
         mutate: async (root) => {
           await writeProjectFile(root, 'README.md', '# changed docs\n');
           await writeProjectFile(root, 'src/app.ts', 'export const value = 3;\n');
@@ -424,11 +453,60 @@ describe('FullSuiteVerifier', () => {
       : {
           name: testCase.name,
           baseline: 'EXECUTED',
-          inspection: 'STALE:fingerprint_mismatch',
+          inspection: `STALE:${testCase.reason}`,
           ensured: 'EXECUTED',
-          freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+          freshness: { status: 'STALE', reason: testCase.reason },
           launches: 2,
         }));
+  });
+
+  it('reports multiple changed input categories in deterministic order', async () => {
+    const projectRoot = await makeFingerprintProject();
+    let launches = 0;
+    const createVerifier = () => new FullSuiteVerifier({
+      projectRoot,
+      environment: { SUITE_MODE: 'first' },
+      execute: async () => {
+        launches += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T17:00:00.000Z',
+          endedAt: '2026-07-25T17:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+    });
+    await createVerifier().ensure();
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const value = 4;\n');
+    await writeProjectFile(projectRoot, 'requirements.txt', 'pytest==9.0.0\n');
+
+    const inspection = await createVerifier().inspect();
+    const ensured = await createVerifier().ensure();
+
+    expect({
+      inspection,
+      ensured: ensured.status,
+      freshness: 'freshness' in ensured ? ensured.freshness : undefined,
+      launches,
+    }).toEqual({
+      inspection: {
+        status: 'STALE',
+        reason: 'multiple_categories_changed',
+        changedCategories: ['dependencies', 'source'],
+      },
+      ensured: 'EXECUTED',
+      freshness: {
+        status: 'STALE',
+        reason: 'multiple_categories_changed',
+        changedCategories: ['dependencies', 'source'],
+      },
+      launches: 2,
+    });
   });
 
   it('reruns once and replaces every computable unusable evidence state', async () => {
@@ -492,7 +570,11 @@ describe('FullSuiteVerifier', () => {
         projectRoot,
         fingerprint: async () => ({
           ok: true,
-          fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+          fingerprint: {
+            digest: 'sha256:current',
+            headSha: 'head-current',
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
+          },
         }),
         execute: async () => {
           launches += 1;
@@ -570,7 +652,11 @@ describe('FullSuiteVerifier', () => {
       execute: execution,
       fingerprint: async () => ({
         ok: true,
-        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
       }),
       readEvidence: async () => ({ usable: false, reason: 'io_error' }),
     } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
@@ -582,7 +668,11 @@ describe('FullSuiteVerifier', () => {
       execute: execution,
       fingerprint: async () => ({
         ok: true,
-        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
       }),
       writeEvidence: async () => {
         throw new Error('fixture write failure');
@@ -598,8 +688,33 @@ describe('FullSuiteVerifier', () => {
       projectRoot: invalidConfigRoot,
       execute: execution,
     }).ensure();
+    const preflightWriteRoot = await mkdtemp(join(tmpdir(), 'full-suite-preflight-write-'));
+    scratches.push(preflightWriteRoot);
+    const preflightWriteFailure = await new FullSuiteVerifier({
+      projectRoot: preflightWriteRoot,
+      writeEvidence: async () => {
+        throw new Error('fixture preflight write failure');
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+    const preflightReadRoot = await mkdtemp(join(tmpdir(), 'full-suite-preflight-read-'));
+    scratches.push(preflightReadRoot);
+    const preflightReadFailure = await new FullSuiteVerifier({
+      projectRoot: preflightReadRoot,
+      writeEvidence: async () => undefined,
+      readEvidence: async () => {
+        throw new Error('fixture preflight read failure');
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
 
-    expect({ fingerprintFailure, readFailure, writeFailure, invalidConfig, launches }).toEqual({
+    expect({
+      fingerprintFailure,
+      readFailure,
+      writeFailure,
+      invalidConfig,
+      preflightWriteFailure,
+      preflightReadFailure,
+      launches,
+    }).toEqual({
       fingerprintFailure: {
         status: 'FAILED',
         reason: 'preflight_failed',
@@ -630,6 +745,16 @@ describe('FullSuiteVerifier', () => {
           reason: 'invalid_config',
           stderr: expect.stringMatching(/test_suite|command/i),
         }),
+      },
+      preflightWriteFailure: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to persist full-suite preflight FAIL evidence',
+      },
+      preflightReadFailure: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to read persisted full-suite preflight FAIL evidence',
       },
       launches: 1,
     });
@@ -778,7 +903,11 @@ describe('FullSuiteVerifier', () => {
         environment: { SUITE_SECRET: secret },
         fingerprint: async () => ({
           ok: true,
-          fingerprint: { digest: 'sha256:failing', headSha: 'head-failing' },
+          fingerprint: {
+            digest: 'sha256:failing',
+            headSha: 'head-failing',
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
+          },
         }),
         execute: async () => {
           launches += 1;
@@ -925,7 +1054,11 @@ describe('FullSuiteVerifier', () => {
       projectRoot,
       fingerprint: async () => ({
         ok: true,
-        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
       }),
       execute: async () => {
         executions += 1;

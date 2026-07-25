@@ -28,7 +28,30 @@ export interface FullSuiteFingerprintIndeterminate {
 export interface FullSuiteFingerprint {
   digest: string;
   headSha: string;
+  categoryFingerprints: FullSuiteCategoryFingerprints;
 }
+
+export const FULL_SUITE_FINGERPRINT_CATEGORIES = [
+  'additional_inputs',
+  'dependencies',
+  'migrations',
+  'project_config',
+  'source',
+  'test_infrastructure',
+  'tests',
+] as const;
+
+export type FullSuitePersistedFingerprintCategory =
+  (typeof FULL_SUITE_FINGERPRINT_CATEGORIES)[number];
+
+export type FullSuiteFingerprintCategory =
+  | FullSuitePersistedFingerprintCategory
+  | 'environment';
+
+export type FullSuiteCategoryFingerprints = Record<
+  FullSuitePersistedFingerprintCategory,
+  string
+>;
 
 export type FullSuiteFingerprintResult =
   | { ok: true; fingerprint: FullSuiteFingerprint }
@@ -104,6 +127,54 @@ function updateField(hash: Hash, name: string, value: string | Buffer): void {
   hash.update('\0');
   hash.update(bytes);
   hash.update('\0');
+}
+
+function updateFields(
+  hashes: readonly Hash[],
+  name: string,
+  value: string | Buffer,
+): void {
+  for (const hash of hashes) updateField(hash, name, value);
+}
+
+function fingerprintCategory(
+  path: string,
+  explicitlyDeclared: boolean,
+): FullSuitePersistedFingerprintCategory {
+  if (explicitlyDeclared) return 'additional_inputs';
+  const normalized = path.toLowerCase();
+  const base = posix.basename(normalized);
+  if (normalized.startsWith('.ai-conductor/')) return 'project_config';
+  if (
+    /(^|\/)(db\/migrate|migrations?)(\/|$)/.test(normalized) ||
+    /(^|\/)schema\.(rb|sql)$/.test(normalized)
+  ) {
+    return 'migrations';
+  }
+  if (
+    /^(package(-lock)?\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json)$/.test(base) ||
+    /^(requirements.*\.txt|pyproject\.toml|poetry\.lock|pipfile(\.lock)?)$/.test(base) ||
+    /^(gemfile(\.lock)?|cargo\.(toml|lock)|go\.(mod|sum))$/.test(base) ||
+    /^(composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|gradle\.properties)$/.test(base)
+  ) {
+    return 'dependencies';
+  }
+  if (
+    /^(vitest|jest|playwright|cypress)\.config\.[^.]+$/.test(base) ||
+    /^(pytest\.ini|tox\.ini|conftest\.py)$/.test(base) ||
+    /(^|\/)(test|tests|spec|__tests__)\/(setup|support|helpers?|fixtures?)(\/|\.|$)/.test(
+      normalized,
+    )
+  ) {
+    return 'test_infrastructure';
+  }
+  if (
+    /(^|\/)(test|tests|spec|__tests__)(\/|$)/.test(normalized) ||
+    /\.(test|spec)\.[^/]+$/.test(base)
+  ) {
+    return 'tests';
+  }
+  return 'source';
 }
 
 async function streamedFileDigest(path: string): Promise<string> {
@@ -335,13 +406,13 @@ function normalizeSuiteConfig(
 }
 
 async function updatePathIdentity(
-  hash: Hash,
+  hashes: readonly Hash[],
   projectRoot: string,
   relativePath: string,
   required: boolean,
   fileHasher: FullSuiteFileHasher,
 ): Promise<void> {
-  updateField(hash, 'path', relativePath);
+  updateFields(hashes, 'path', relativePath);
   const absolutePath = join(projectRoot, relativePath);
 
   let stats;
@@ -349,15 +420,15 @@ async function updatePathIdentity(
     stats = await lstat(absolutePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !required) {
-      updateField(hash, 'state', 'deleted');
+      updateFields(hashes, 'state', 'deleted');
       return;
     }
     return fail('input_read_failed', 'Unable to inspect verification input', relativePath);
   }
 
-  updateField(hash, 'state', 'present');
+  updateFields(hashes, 'state', 'present');
   if (stats.isDirectory()) {
-    updateField(hash, 'mode', '040000');
+    updateFields(hashes, 'mode', '040000');
     return;
   }
   if (stats.isSymbolicLink()) {
@@ -368,9 +439,9 @@ async function updatePathIdentity(
         relativePath,
       );
     }
-    updateField(hash, 'mode', '120000');
+    updateFields(hashes, 'mode', '120000');
     try {
-      updateField(hash, 'content', await readlink(absolutePath));
+      updateFields(hashes, 'content', await readlink(absolutePath));
       return;
     } catch {
       return fail('input_read_failed', 'Unable to read verification input', relativePath);
@@ -380,9 +451,9 @@ async function updatePathIdentity(
     return fail('input_read_failed', 'Verification input is not a regular file', relativePath);
   }
 
-  updateField(hash, 'mode', stats.mode & 0o111 ? '100755' : '100644');
+  updateFields(hashes, 'mode', stats.mode & 0o111 ? '100755' : '100644');
   try {
-    updateField(hash, 'content', await fileHasher(absolutePath));
+    updateFields(hashes, 'content', await fileHasher(absolutePath));
   } catch {
     return fail('input_read_failed', 'Unable to hash verification input', relativePath);
   }
@@ -418,9 +489,17 @@ async function calculateFingerprint(
   const paths = sortedUnique([...broadPaths, ...requiredPaths]);
 
   const hash = createHash('sha256');
+  const categoryHashes = Object.fromEntries(
+    FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => {
+      const categoryHash = createHash('sha256');
+      updateField(categoryHash, 'schema', 'full-suite-category-v1');
+      updateField(categoryHash, 'category', category);
+      return [category, categoryHash];
+    }),
+  ) as Record<FullSuitePersistedFingerprintCategory, Hash>;
   updateField(hash, 'schema', 'full-suite-working-tree-v2');
-  updateField(
-    hash,
+  updateFields(
+    [hash, categoryHashes.project_config],
     'test_suite',
     normalizeSuiteConfig(testSuite, normalizedInputs, workingDirectory),
   );
@@ -435,12 +514,28 @@ async function calculateFingerprint(
   }
 
   for (const path of paths) {
-    await updatePathIdentity(hash, projectRoot, path, requiredPaths.has(path), fileHasher);
+    const required = requiredPaths.has(path);
+    const category = fingerprintCategory(path, required);
+    await updatePathIdentity(
+      [hash, categoryHashes[category]],
+      projectRoot,
+      path,
+      required,
+      fileHasher,
+    );
   }
+
+  const categoryFingerprints = Object.fromEntries(
+    FULL_SUITE_FINGERPRINT_CATEGORIES.map((category) => [
+      category,
+      categoryHashes[category].digest('hex'),
+    ]),
+  ) as FullSuiteCategoryFingerprints;
 
   return {
     digest: hash.digest('hex'),
     headSha: headSha.trim(),
+    categoryFingerprints,
   };
 }
 
