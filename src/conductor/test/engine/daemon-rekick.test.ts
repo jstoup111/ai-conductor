@@ -1250,7 +1250,7 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
     await rm(processedDir, { recursive: true, force: true });
   });
 
-  it("happy: MERGED verdict — sweep writes .daemon/processed/<slug> with prUrl, skips re-dispatch, logs 'already shipped out-of-band'", async () => {
+  it('verified merged history continues through the ordinary completion boundary without synthetic markers', async () => {
     await initAdvancingRepo();
     await writeSentinel();
     const branchBefore = await git('rev-parse', 'feature/foo');
@@ -1262,11 +1262,9 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
 
     const deps: FeatureRunnerDeps = {
       createWorktree: async () => ({ path: dir, branch: 'feature/foo' }),
-      // The exact sequence plan Task 11 specifies for daemon-cli.ts's
-      // runConductorInWorktree once wired: check the guard via
-      // resumeRebaseFirst BEFORE performRebase/conductor.run(); on
-      // 'already_shipped' write the synthetic ship markers and return —
-      // no real conductor dispatch.
+      // A valid merged record allows the normal conductor path to continue;
+      // it must not manufacture finish-choice/DONE markers or process-cache
+      // state before that ordinary completion boundary verifies the result.
       runConductor: async (wt) => {
         const res = await resumeRebaseFirst({
           worktreePath: wt.path,
@@ -1280,14 +1278,8 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
           log,
         });
         if (res === 'already_shipped') {
-          await mkdir(join(wt.path, '.pipeline'), { recursive: true });
-          await writeFile(join(wt.path, '.pipeline', 'finish-choice'), 'pr', 'utf-8');
-          await writeFile(join(wt.path, '.pipeline', 'DONE'), '', 'utf-8');
-          log(`already shipped out-of-band; local branch retained at ${branchBefore}`);
-          return;
+          log(`merged shipment evidence verified; continuing normal completion from ${branchBefore}`);
         }
-        // Any non-'already_shipped' outcome means the feature is re-dispatched
-        // through the normal gate loop (today's behavior).
         realConductorInvoked = true;
       },
       readOutcome: async (wt): Promise<WorktreeOutcome> => {
@@ -1322,17 +1314,12 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
     const item: BacklogItem = { slug: SLUG };
     const outcome = await run(item);
 
-    // Sweep-level side effect 1: the feature is NOT re-dispatched.
-    expect(realConductorInvoked).toBe(false);
-    // Sweep-level side effect 2: the processed marker is written with the
-    // recorded prUrl.
-    expect(await fileExists(join(processedDir, SLUG))).toBe(true);
-    const processedContent = JSON.parse(await readFile(join(processedDir, SLUG), 'utf-8'));
-    expect(processedContent.prUrl).toBe(PR_URL);
-    // Sweep-level side effect 3: the log carries the out-of-band line.
-    expect(logs.some((l) => /already shipped out-of-band/.test(l))).toBe(true);
-    // The daemon-runner's outcome status reflects a verified ship.
-    expect(outcome.status).toBe('done');
+    expect(realConductorInvoked).toBe(true);
+    expect(await fileExists(join(processedDir, SLUG))).toBe(false);
+    expect(await fileExists(join(dir, '.pipeline', 'finish-choice'))).toBe(false);
+    expect(await fileExists(join(dir, '.pipeline', 'DONE'))).toBe(false);
+    expect(logs.some((l) => /merged shipment evidence verified/.test(l))).toBe(true);
+    expect(outcome.status).toBe('error');
   });
 });
 
