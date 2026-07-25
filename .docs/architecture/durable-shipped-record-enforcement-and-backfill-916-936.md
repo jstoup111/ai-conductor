@@ -19,11 +19,14 @@ graph TD
 
   subgraph ENGINE["Conductor engine"]
     GENERATE["Existing record generator<br/>hash + render + write + commit"]
-    VERIFY["Shared durable-evidence verifier (NEW)<br/>slug + PR + hash + committed HEAD<br/>+ pushed PR-head ancestry"]
+    VERIFY["shipment-evidence policy (NEW)<br/>strict parse + slug + PR + hash<br/>+ candidate-tree/head reachability"]
+    ASSOC["shipment-association policy (NEW)<br/>exact plan stem + PR metadata<br/>+ non-spec implementation diff"]
+    CLI["shipment-evidence CLI (NEW)<br/>check-pr + reconcile + audit<br/>+ configure-protection"]
     FINISH["Finish convergence seams<br/>finish-record + finish predicate<br/>+ complete-state verifier"]
     OUTCOME["Daemon outcome boundary<br/>mark processed + teardown"]
     MERGED["Merged-PR guard<br/>MERGED without durable evidence → HALT"]
-    AUDIT["Audit/reconcile entry point (NEW)<br/>candidate discovery + proven PR association<br/>ambiguous → report only"]
+    AUDIT["Audit/reconcile adapters (NEW)<br/>deterministic repair + paginated history<br/>+ complete/incomplete machine report"]
+    PROTECT["Drift-safe protection adapter (NEW)<br/>exact ruleset read-modify-write<br/>+ Actions PR setting"]
   end
 
   subgraph GH["GitHub"]
@@ -38,6 +41,10 @@ graph TD
   GENERATE --> RECORD
   RECORD --> VERIFY
   PLAN --> VERIFY
+  ASSOC --> VERIFY
+  CLI --> ASSOC
+  CLI --> AUDIT
+  CLI --> PROTECT
   FINISH --> VERIFY
   VERIFY -->|"pass before terminal writes"| LOCAL
   VERIFY -->|"pass"| OUTCOME
@@ -48,16 +55,18 @@ graph TD
 
   RECORD --> FEATUREPR
   FEATUREPR --> CHECK
-  CHECK --> VERIFY
+  CHECK --> CLI
   CHECK -->|"required success"| MAIN
   OP -->|"review + merge"| MAIN
   MAIN --> RECON
-  RECON --> AUDIT
+  RECON --> CLI
   AUDIT -->|"proven missing record"| REPAIR
+  REPAIR -->|"creator verifies exact head<br/>and posts stable status"| CHECK
   OP -->|"review + merge"| REPAIR
   REPAIR --> MAIN
 
   AUDIT -->|"one-time full-history run<br/>writes verified records on this feature branch"| RECORD
+  PROTECT -->|"after observed bootstrap context<br/>add one required check; preserve all rules"| MAIN
 ```
 
 ## Legend
@@ -72,6 +81,8 @@ graph TD
   `main` and never auto-merges, preserving the existing non-autonomy boundary.
 - **Proven association** means repository/GitHub evidence identifies both a plan/spec and its
   merged implementation PR. A local processed marker is corroborating evidence, not authority.
+- **Protection cutover** occurs only after the bootstrap PR emits the stable context. The adapter
+  refuses live-rule drift instead of reconstructing or weakening ruleset `15933604`.
 - Dotted edges are blocking or recovery paths. `«»` denotes variable values.
 
 ## Change Log
@@ -80,3 +91,4 @@ graph TD
 |------|--------|--------|
 | 2026-07-25 | Initial generation | DECIDE architecture for issues #916/#936 and repaired example PR #877 |
 | 2026-07-25 | Corrected `main` protection baseline | Ruleset inspection showed active PR/review protection; only the required evidence check is missing |
+| 2026-07-25 | Added planned policy, CLI, audit, and protection seams | `/plan` fixed the module boundaries, call paths, repair-head status, and safe cutover sequence |
