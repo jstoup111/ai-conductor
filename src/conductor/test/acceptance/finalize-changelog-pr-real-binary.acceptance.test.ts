@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -64,5 +64,16 @@ describe('conduct-ts finalize-changelog-pr — real-binary flow', () => {
 
     expect(result.exitCode).not.toBe(0);
     expect(await readFile(join(cwd, 'CHANGELOG.md'), 'utf-8')).toBe(changelog);
+  }, 20_000);
+
+  it('refuses malformed use without launching a feature pipeline', async () => {
+    const result = await execa(REAL_CONDUCT_TS, ['finalize-changelog-pr'], {
+      cwd,
+      reject: false,
+      timeout: 10_000,
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(await readdir(cwd)).toEqual([]);
   }, 20_000);
 });

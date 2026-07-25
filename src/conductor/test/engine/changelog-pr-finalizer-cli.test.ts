@@ -1,8 +1,63 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  detectFinalizeChangelogPrCommand,
+  dispatchFinalizeChangelogPr,
+  FINALIZE_CHANGELOG_PR_USAGE,
   finalizeChangelogPr,
   type ChangelogPrFinalizerRunners,
 } from '../../src/engine/changelog-pr-finalizer-cli.js';
+
+describe('detectFinalizeChangelogPrCommand', () => {
+  const argv = (...rest: string[]) => ['node', 'conduct-ts', ...rest];
+
+  it('parses the exact implementation PR URL option', () => {
+    expect(
+      detectFinalizeChangelogPrCommand(
+        argv(
+          'finalize-changelog-pr',
+          '--pr-url',
+          'https://github.com/octo/widgets/pull/456',
+        ),
+      ),
+    ).toEqual({
+      kind: 'finalize',
+      prUrl: 'https://github.com/octo/widgets/pull/456',
+    });
+  });
+
+  it('recognizes malformed use as a guide command instead of pipeline input', () => {
+    expect(detectFinalizeChangelogPrCommand(argv('finalize-changelog-pr'))).toEqual({
+      kind: 'guide',
+    });
+  });
+});
+
+describe('dispatchFinalizeChangelogPr', () => {
+  it('prints usage and refuses malformed command input without touching the filesystem', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runners: ChangelogPrFinalizerRunners = {
+      readFile: vi.fn(),
+      writeFile: vi.fn(),
+      rename: vi.fn(),
+      rm: vi.fn(),
+    };
+
+    const code = await dispatchFinalizeChangelogPr({ kind: 'guide' }, '/repo', runners);
+
+    expect({
+      code,
+      diagnostics: errorSpy.mock.calls,
+      filesystemCalls: Object.values(runners).flatMap((runner) =>
+        (runner as ReturnType<typeof vi.fn>).mock.calls.map((call) => call),
+      ),
+    }).toEqual({
+      code: 1,
+      diagnostics: [[FINALIZE_CHANGELOG_PR_USAGE]],
+      filesystemCalls: [],
+    });
+    errorSpy.mockRestore();
+  });
+});
 
 describe('finalizeChangelogPr', () => {
   it('cleans up the temporary file when the atomic rename fails', async () => {

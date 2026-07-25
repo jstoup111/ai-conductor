@@ -1,6 +1,26 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const IMPLEMENTATION_PR_TOKEN = '{{IMPLEMENTATION_PR}}';
+
+export const FINALIZE_CHANGELOG_PR_USAGE =
+  'Usage: conduct-ts finalize-changelog-pr --pr-url <canonical-github-pr-url>';
+
+export type ChangelogPrFinalizerDispatch =
+  | { kind: 'finalize'; prUrl: string }
+  | { kind: 'guide' };
+
+export function detectFinalizeChangelogPrCommand(
+  argv: string[],
+): ChangelogPrFinalizerDispatch | null {
+  if (argv[2] !== 'finalize-changelog-pr') return null;
+
+  const rest = argv.slice(3);
+  if (rest.length !== 2 || rest[0] !== '--pr-url' || rest[1].length === 0) {
+    return { kind: 'guide' };
+  }
+  return { kind: 'finalize', prUrl: rest[1] };
+}
 
 export type ChangelogPrFinalizationState = 'changed' | 'no-op';
 
@@ -41,4 +61,25 @@ export async function finalizeChangelogPr(
     throw error;
   }
   return 'changed';
+}
+
+export async function dispatchFinalizeChangelogPr(
+  command: ChangelogPrFinalizerDispatch,
+  cwd: string,
+  runners?: ChangelogPrFinalizerRunners,
+): Promise<number> {
+  if (command.kind === 'guide') {
+    console.error(FINALIZE_CHANGELOG_PR_USAGE);
+    return 1;
+  }
+
+  try {
+    await finalizeChangelogPr(join(cwd, 'CHANGELOG.md'), command.prUrl, runners);
+    return 0;
+  } catch (error) {
+    console.error(
+      `finalize-changelog-pr: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
 }
