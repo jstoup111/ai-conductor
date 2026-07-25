@@ -3,6 +3,7 @@ import { execa } from 'execa';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
   readFullSuiteEvidence,
@@ -13,6 +14,12 @@ import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-execu
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 
 const scratches: string[] = [];
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const TSX_LOADER = join(CONDUCTOR_ROOT, 'node_modules/tsx/dist/loader.mjs');
+const CONCURRENT_ENSURE_FIXTURE = join(
+  CONDUCTOR_ROOT,
+  'test/fixtures/full-suite-concurrent-ensure.mjs',
+);
 
 async function writeProjectFile(
   projectRoot: string,
@@ -696,5 +703,149 @@ describe('FullSuiteVerifier', () => {
       launches: 2,
       leaked: false,
     })));
+  });
+
+  it('executes exactly once across concurrent verifier processes for one worktree', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-verifier-processes-'));
+    scratches.push(projectRoot);
+    await writeProjectFile(projectRoot, '.gitignore', '.pipeline/\n');
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      'test_suite:\n  command: node suite.mjs\n  timeout_seconds: 10\n',
+    );
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const value = 1;\n');
+    await writeProjectFile(
+      projectRoot,
+      'suite.mjs',
+      [
+        "import { mkdir, writeFile } from 'node:fs/promises';",
+        "import { setTimeout as delay } from 'node:timers/promises';",
+        "await mkdir('.pipeline/launches', { recursive: true });",
+        "await writeFile(`.pipeline/launches/${process.pid}`, 'launched');",
+        'await delay(250);',
+        "console.log('all suites passed');",
+        '',
+      ].join('\n'),
+    );
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: projectRoot });
+
+    const resultPaths = [
+      join(projectRoot, '.pipeline/caller-1.json'),
+      join(projectRoot, '.pipeline/caller-2.json'),
+    ];
+    const invoke = (resultPath: string) => execa(
+      process.execPath,
+      [
+        '--import',
+        TSX_LOADER,
+        CONCURRENT_ENSURE_FIXTURE,
+        projectRoot,
+        resultPath,
+      ],
+      { cwd: CONDUCTOR_ROOT },
+    );
+    await Promise.all(resultPaths.map(invoke));
+    const results = await Promise.all(resultPaths.map(async (path) =>
+      JSON.parse(await readFile(path, 'utf8')) as { status: string }));
+    const launches = await readdir(join(projectRoot, '.pipeline/launches'));
+
+    expect({
+      statuses: results.map(({ status }) => status).sort(),
+      launches: launches.length,
+      persisted: await readFullSuiteEvidence(projectRoot),
+    }).toMatchObject({
+      statuses: ['EXECUTED', 'REUSED'],
+      launches: 1,
+      persisted: { usable: true, evidence: { outcome: 'PASS' } },
+    });
+  }, 20_000);
+
+  it('recovers a provably dead owner but refuses a live verification lock', async () => {
+    const makeLockedProject = async (pid: number, token: string) => {
+      const projectRoot = await makeConfiguredProject('full-suite-verifier-lock-');
+      await writeProjectFile(
+        projectRoot,
+        '.pipeline/test-suite.lock/owner.json',
+        JSON.stringify({
+          version: 1,
+          pid,
+          token,
+          acquiredAt: '2026-07-25T12:00:00.000Z',
+        }),
+      );
+      return projectRoot;
+    };
+    let executions = 0;
+    const verifier = (projectRoot: string) => new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: { digest: 'sha256:current', headSha: 'head-current' },
+      }),
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T18:00:00.000Z',
+          endedAt: '2026-07-25T18:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        wait: async () => undefined,
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]);
+    const staleRoot = await makeLockedProject(2_147_483_647, 'stale-owner');
+    const staleResult = await verifier(staleRoot).ensure();
+    const staleLockEntries = await readdir(join(staleRoot, '.pipeline'));
+    const liveRoot = await makeLockedProject(process.pid, 'live-owner');
+    const liveResult = await verifier(liveRoot).ensure();
+    const uncertainRoot = await makeLockedProject(process.pid, 'uncertain-owner');
+    const uncertainResult = await new FullSuiteVerifier({
+      projectRoot: uncertainRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while lock ownership is uncertain');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        processIsLive: () => {
+          throw new Error('liveness probe denied');
+        },
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+
+    expect({
+      staleResult: staleResult.status,
+      staleLockRemains: staleLockEntries.includes('test-suite.lock'),
+      liveResult,
+      uncertainResult,
+      executions,
+    }).toEqual({
+      staleResult: 'EXECUTED',
+      staleLockRemains: false,
+      liveResult: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      uncertainResult: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to verify full-suite lock owner liveness: liveness probe denied',
+      },
+      executions: 1,
+    });
   });
 });

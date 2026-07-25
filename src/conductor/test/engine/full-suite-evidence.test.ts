@@ -105,6 +105,20 @@ describe('full-suite evidence', () => {
     });
   });
 
+  it('never removes another active writer temporary file', async () => {
+    const projectRoot = await makeProject();
+    const activeTemporary = join(
+      projectRoot,
+      '.pipeline/.test-suite-evidence.other-writer.tmp',
+    );
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(activeTemporary, 'active writer', 'utf8');
+
+    await writeFullSuiteEvidence(projectRoot, PASS_EVIDENCE);
+
+    await expect(readFile(activeTemporary, 'utf8')).resolves.toBe('active writer');
+  });
+
   it.each([
     {
       name: 'a missing target',

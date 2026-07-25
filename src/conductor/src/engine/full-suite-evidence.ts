@@ -87,8 +87,17 @@ function isIncompleteEvidenceWrite(entry: string): boolean {
   return entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp');
 }
 
-async function removeIncompleteEvidenceWrites(directory: string): Promise<void> {
-  const entries = await readdir(directory);
+export async function discardIncompleteFullSuiteEvidenceWrites(
+  projectRoot: string,
+): Promise<void> {
+  const directory = join(projectRoot, '.pipeline');
+  let entries: string[];
+  try {
+    entries = await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
   await Promise.all(
     entries
       .filter(isIncompleteEvidenceWrite)
@@ -242,7 +251,6 @@ export async function writeFullSuiteEvidence(
     `.test-suite-evidence.${process.pid}.${randomUUID()}.tmp`,
   );
   await mkdir(directory, { recursive: true });
-  await removeIncompleteEvidenceWrites(directory);
   try {
     const persisted: FullSuiteEvidence = {
       ...evidence,
