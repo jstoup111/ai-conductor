@@ -25,6 +25,11 @@ UPDATE_MODE=false
 # mode dispatch so it composes with any mode (e.g. --update).
 ALLOW_WORKTREE_ROOT=false
 
+# PROVIDER_SELECTION records the optional, comma-separated built-in provider
+# selection supplied to install. Readiness behavior will consume it separately;
+# validate it here so an invalid selection never begins a global installation.
+PROVIDER_SELECTION=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -97,13 +102,33 @@ check_installation() {
 
   local all_ok=true
 
-  # Check Claude Code
-  if command -v claude &>/dev/null; then
-    ok "Claude Code installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
-  else
-    fail "Claude Code not found on PATH"
-    all_ok=false
-  fi
+  # Check every selected built-in CLI. Unlike normal installation, --check is
+  # strict: every unavailable selected provider makes the readiness result
+  # fail, while an unselected provider does not affect it.
+  local selected="${PROVIDER_SELECTION:-claude}"
+  local provider
+  local -a providers
+  IFS=',' read -r -a providers <<< "$selected"
+  for provider in "${providers[@]}"; do
+    case "$provider" in
+      claude)
+        if command -v claude &>/dev/null; then
+          ok "Claude Code installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
+        else
+          fail "Claude Code CLI not found on PATH — install it from https://docs.anthropic.com/en/docs/claude-code"
+          all_ok=false
+        fi
+        ;;
+      codex)
+        if command -v codex &>/dev/null; then
+          ok "Codex CLI installed ($(codex --version 2>/dev/null || echo 'unknown version'))"
+        else
+          fail "Codex CLI not found on PATH — install it with: npm install -g @openai/codex"
+          all_ok=false
+        fi
+        ;;
+    esac
+  done
 
   # Check user-level skill directories. Do not use project-local skill paths as
   # the install target: both clients discover these skills from their own user
@@ -992,12 +1017,67 @@ build_conduct_ts() {
 
 # ─── Install ──────────────────────────────────────────────────────────────────
 
+choose_builtin_provider() {
+  [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
+
+  echo ""
+  info "Built-in provider — choose the CLI you plan to use:"
+  echo "    1) Claude"
+  echo "    2) Codex"
+  echo "    3) Both Claude and Codex"
+  local choice
+  read -r -p "  Choice [1]: " choice || choice=1
+
+  case "$choice" in
+    ""|1) PROVIDER_SELECTION="claude" ;;
+    2)    PROVIDER_SELECTION="codex" ;;
+    3)    PROVIDER_SELECTION="claude,codex" ;;
+    *)
+      warn "Unrecognized provider choice '${choice}' — using Claude"
+      PROVIDER_SELECTION="claude"
+      ;;
+  esac
+}
+
+# Report whether the built-in CLI choices selected for this installation are
+# ready to use. This is deliberately advisory: installing the harness must
+# still establish both provider surfaces when an external CLI is absent.
+report_selected_provider_readiness() {
+  local selected="${PROVIDER_SELECTION:-claude}"
+  local provider
+  local -a providers
+  IFS=',' read -r -a providers <<< "$selected"
+
+  echo ""
+  info "Built-in provider readiness:"
+  for provider in "${providers[@]}"; do
+    case "$provider" in
+      claude)
+        if command -v claude &>/dev/null; then
+          ok "Claude Code CLI found"
+        else
+          warn "Claude Code CLI not found — install it from https://docs.anthropic.com/en/docs/claude-code"
+        fi
+        ;;
+      codex)
+        if command -v codex &>/dev/null; then
+          ok "Codex CLI found"
+        else
+          warn "Codex CLI not found — install it with: npm install -g @openai/codex"
+        fi
+        ;;
+    esac
+  done
+}
+
 install() {
   guard_worktree_root
 
   echo -e "${BOLD}${CYAN}Installing James Stoup Agents Harness${NC}"
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
+
+  choose_builtin_provider
 
   # 1. Ensure directories exist
   mkdir -p "$CLAUDE_SKILLS_DIR" || warn "Could not create $CLAUDE_SKILLS_DIR"
@@ -1062,6 +1142,8 @@ install() {
   else
     ok "Skills: all ${#SKILLS[@]} already current for Claude Code and Codex"
   fi
+
+  report_selected_provider_readiness
 
   # 3. Symlink conduct script
   local conduct_source="${HARNESS_DIR}/bin/conduct"
@@ -1227,18 +1309,59 @@ uninstall() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-# Strip --allow-worktree-root from "$@" before the mode dispatch so it can be
+# Strip install-wide options from "$@" before the mode dispatch so they can be
 # combined with any mode (e.g. `--update --allow-worktree-root`).
 _filtered_args=()
-for _arg in "$@"; do
-  if [ "$_arg" = "--allow-worktree-root" ]; then
-    ALLOW_WORKTREE_ROOT=true
-  else
-    _filtered_args+=("$_arg")
-  fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-worktree-root)
+      ALLOW_WORKTREE_ROOT=true
+      ;;
+    --providers)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      PROVIDER_SELECTION="$1"
+      ;;
+    --providers=*)
+      PROVIDER_SELECTION="${1#--providers=}"
+      if [ -z "$PROVIDER_SELECTION" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      ;;
+    *)
+      _filtered_args+=("$1")
+      ;;
+  esac
+  shift
 done
+
+if [ -n "$PROVIDER_SELECTION" ]; then
+  case ",${PROVIDER_SELECTION}," in
+    *,,*)
+      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex"
+      exit 1
+      ;;
+  esac
+
+  IFS=',' read -r -a _selected_providers <<< "$PROVIDER_SELECTION"
+  for _provider in "${_selected_providers[@]}"; do
+    case "$_provider" in
+      claude|codex) ;;
+      *)
+        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex"
+        exit 1
+        ;;
+    esac
+  done
+  unset _selected_providers _provider
+fi
+
 set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
-unset _filtered_args _arg
+unset _filtered_args
 
 case "${1:-}" in
   --check)     check_installation; exit $? ;;
