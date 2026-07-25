@@ -61,6 +61,7 @@ function preBuildDoneState(): ConductState {
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
+    test_suite: 'done',
     complexity_tier: 'M',
     track: 'technical',
     feature_desc: 'self-build-feat',

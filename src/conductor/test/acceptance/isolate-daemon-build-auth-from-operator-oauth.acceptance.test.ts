@@ -56,6 +56,7 @@ const READY_STATE: ConductState = {
   architecture_diagram: 'done',
   architecture_review: 'done',
   acceptance_specs: 'done',
+  test_suite: 'done',
 } as ConductState;
 
 describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-from-operator-oauth)', () => {

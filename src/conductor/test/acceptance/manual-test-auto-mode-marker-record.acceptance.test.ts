@@ -254,6 +254,10 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
           verifyArtifacts: true,
           maxRetries: 1,
           fromStep: 'manual_test',
+          fullSuiteVerifier: {
+            ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+            inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+          },
         });
 
         await conductor.run();
@@ -330,6 +334,10 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
           verifyArtifacts: true,
           maxRetries: 1,
           fromStep: 'manual_test',
+          fullSuiteVerifier: {
+            ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+            inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+          },
         });
 
         await conductor.run();

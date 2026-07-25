@@ -51,7 +51,7 @@ describe('Integration: config flow', () => {
   });
 
   it('Conductor with config disabling steps skips them', async () => {
-    await writeState(statePath, { complexity_tier: 'L' } as ConductState);
+    await writeState(statePath, { complexity_tier: 'L', test_suite: 'done' } as ConductState);
 
     const config: HarnessConfig = {
       steps: {
@@ -130,8 +130,8 @@ describe('Integration: config flow', () => {
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
     expect(customIdx).toBe(buildIdx + 1);
-    // build_review and wiring_check are steps between custom step and manual_test
-    expect(manualTestIdx).toBe(customIdx + 3);
+    // build_review, wiring_check, and test_suite are between custom step and manual_test.
+    expect(manualTestIdx).toBe(customIdx + 4);
 
     const customStep = registry[customIdx];
     expect(customStep.phase).toBe('BUILD');

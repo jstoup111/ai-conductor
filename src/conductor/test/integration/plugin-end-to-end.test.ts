@@ -156,7 +156,7 @@ export default {
   });
 
   it('conductor session with EchoProvider uses the loaded plugin', async () => {
-    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
+    await writeState(statePath, { complexity_tier: 'S', test_suite: 'done' } as ConductState);
 
     const registry = new PluginRegistry();
     await discoverPlugins(pluginDir, '', registry);

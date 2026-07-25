@@ -69,6 +69,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -85,6 +86,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: { satisfied: false, checkedAt: 2, reason: 'FR-3 MISSING' },
       architecture_review_as_built: VSAT,
@@ -102,6 +104,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -118,6 +121,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       // manual_test has no verdict and is pending, but is skippable for Small
     };
     const d = selectNextGate(input(state, verdicts));
@@ -134,12 +138,14 @@ describe('engine/selector — selectNextGate', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
       manual_test: 'skipped',
     };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
     };
     const d = selectNextGate(input(state, verdicts));
     expect(d).toMatchObject({ kind: 'run', step: 'prd_audit' });
@@ -152,6 +158,7 @@ describe('engine/selector — selectNextGate', () => {
         build: VSAT,
         build_review: VSAT,
         wiring_check: VSAT,
+        test_suite: VSAT,
       };
       const d = selectNextGate(input(state, verdicts));
       expect(d).toMatchObject({ kind: 'run', step: 'manual_test' });
@@ -164,6 +171,7 @@ describe('engine/selector — selectNextGate', () => {
       build: 'skipped',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'skipped',
       manual_test: 'skipped',
       retro: 'skipped',
     };
@@ -190,6 +198,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       rebase: VSAT,
@@ -212,6 +221,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       retro: VSAT,
@@ -232,6 +242,7 @@ describe('engine/selector — selectNextGate', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       // as-built pending, review ran → as-built must run
@@ -298,6 +309,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -315,6 +327,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,
@@ -353,6 +366,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       build: 'skipped',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'skipped',
       manual_test: 'skipped',
       retro: 'skipped',
       // prd_audit is pending and unsatisfied
@@ -418,6 +432,7 @@ describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
       build: VSAT,
       build_review: VSAT,
       wiring_check: VSAT,
+      test_suite: VSAT,
       manual_test: VSAT,
       prd_audit: VSAT,
       architecture_review_as_built: VSAT,

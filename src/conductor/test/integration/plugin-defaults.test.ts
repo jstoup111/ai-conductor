@@ -186,7 +186,7 @@ describe('Integration: plugin defaults', () => {
     );
 
     // Create a minimal conductor state
-    const initialState: ConductState = { complexity_tier: 'S' };
+    const initialState: ConductState = { complexity_tier: 'S', test_suite: 'done' };
     await writeState(statePath, initialState);
 
     // Create conductor

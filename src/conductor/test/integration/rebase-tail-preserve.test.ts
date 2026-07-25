@@ -120,6 +120,10 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
       fromStep: 'build',
       maxRetries: 1,
       git: fakeGit,
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     });
   }
 

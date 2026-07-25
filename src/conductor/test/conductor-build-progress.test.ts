@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -58,6 +58,7 @@ describe('conductor/build-progress-watcher wiring', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-build-progress-'));
     statePath = join(dir, 'conduct-state.json');
+    await writeFile(statePath, JSON.stringify({ test_suite: 'done' }));
     events = new ConductorEventEmitter();
     starts.length = 0;
     stops.length = 0;

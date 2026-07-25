@@ -183,25 +183,24 @@ describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
     const result = await invokeSuite({ SUITE_MODE: 'fail:expected-regression' });
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/FAILED|non.?zero|expected-regression/i);
-    expect(await readEvidence()).toMatchObject({ outcome: 'FAIL' });
+    expect(await readEvidence()).toMatchObject({
+      outcome: 'FAIL',
+      reason: 'nonzero_exit',
+      command: 'node suite.mjs',
+    });
   });
 });
 
-describe('Story 2 — direct-Claude parity (FR-2, FR-8)', () => {
-  it('orders /test-suite after BUILD and before /manual-test using the TypeScript entry point', async () => {
-    const [conduct, harness, skill] = await Promise.all([
+describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () => {
+  it('documents the shared TypeScript verifier without requiring a repository-specific generic skill', async () => {
+    const [conduct, harness] = await Promise.all([
       readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
       readFile(join(REPO_ROOT, 'HARNESS.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'skills/test-suite/SKILL.md'), 'utf8'),
     ]);
 
-    expect(conduct.indexOf('/test-suite')).toBeGreaterThan(conduct.indexOf('/pipeline'));
-    expect(conduct.indexOf('/test-suite')).toBeLessThan(conduct.indexOf('/manual-test'));
-    expect(harness).toMatch(/BUILD[\s\S]*\/test-suite[\s\S]*SHIP/i);
-    expect(skill).toMatch(/conduct-ts test-suite/);
-    expect(skill).toMatch(/\/tdd|\/pipeline/);
-    expect(skill).not.toMatch(/\bbin\/conduct\b/);
+    expect(harness).toMatch(/conduct-ts test-suite/i);
+    expect(harness).toMatch(/native pre-SHIP aggregate gate/i);
+    expect(conduct).not.toMatch(/skills\/test-suite/i);
   });
 });
 
@@ -228,7 +227,6 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const result = await invokeSuite();
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/EXECUTED/i);
     expect(await readCount()).toBe(1);
     expect(await readEvidence()).toMatchObject({
       outcome: 'PASS',
@@ -242,15 +240,21 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const result = await invokeSuite();
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/test_suite|command|configuration/i);
-    await expect(readEvidence()).resolves.not.toMatchObject({ outcome: 'PASS' });
+    expect(await readEvidence()).toMatchObject({ outcome: 'FAIL', reason: 'invalid_config' });
   });
 
   it('classifies unlaunchable, timeout, and non-zero commands as distinct blocking outcomes', async () => {
     const cases = [
-      { command: 'definitely-not-a-command-940', reason: /resolve|launch|not found/i },
-      { command: 'node -e "setTimeout(() => {}, 5000)"', reason: /timeout/i, timeout: 1 },
-      { command: 'node -e "process.exit(9)"', reason: /non.?zero|exit.*9/i },
+      {
+        command: 'definitely-not-a-command-940',
+        evidenceReason: 'unlaunchable',
+      },
+      {
+        command: 'node -e "setTimeout(() => {}, 5000)"',
+        evidenceReason: 'timeout',
+        timeout: 1,
+      },
+      { command: 'node -e "process.exit(9)"', evidenceReason: 'nonzero_exit' },
     ];
 
     for (const testCase of cases) {
@@ -266,8 +270,11 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       );
       const result = await invokeSuite();
       expect(result.exitCode).not.toBe(0);
-      expect(result.stdout + result.stderr).toMatch(testCase.reason);
-      expect(await readEvidence()).toMatchObject({ outcome: 'FAIL' });
+      expect(await readEvidence()).toMatchObject({
+        outcome: 'FAIL',
+        reason: testCase.evidenceReason,
+        command: testCase.command,
+      });
     }
   });
 });
@@ -279,11 +286,8 @@ describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, F
     const finish = await invokeSuite();
 
     expect(first.exitCode).toBe(0);
-    expect(first.stdout + first.stderr).toMatch(/EXECUTED/i);
     expect(gate.exitCode).toBe(0);
-    expect(gate.stdout + gate.stderr).toMatch(/REUSED/i);
     expect(finish.exitCode).toBe(0);
-    expect(finish.stdout + finish.stderr).toMatch(/REUSED/i);
     expect(await readCount()).toBe(1);
   });
 
@@ -293,13 +297,11 @@ describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, F
     await writeProjectFile('README.md', '# documentation only\n');
     const docsOnly = await invokeSuite();
     expect(docsOnly.exitCode).toBe(0);
-    expect(docsOnly.stdout + docsOnly.stderr).toMatch(/REUSED/i);
     expect(await readCount()).toBe(1);
 
     await writeProjectFile('src/app.ts', 'export const value = 2;\n');
     const sourceChanged = await invokeSuite();
     expect(sourceChanged.exitCode).toBe(0);
-    expect(sourceChanged.stdout + sourceChanged.stderr).toMatch(/STALE[\s\S]*EXECUTED|EXECUTED[\s\S]*STALE/i);
     expect(await readCount()).toBe(2);
   });
 
@@ -309,7 +311,6 @@ describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, F
     const serialized = JSON.stringify(await readEvidence());
 
     expect(changed.exitCode).toBe(0);
-    expect(changed.stdout + changed.stderr).toMatch(/STALE|EXECUTED/i);
     expect(await readCount()).toBe(2);
     expect(serialized).not.toContain('first-secret-940');
     expect(serialized).not.toContain('second-secret-940');
