@@ -276,6 +276,115 @@ describe('CodexProvider', () => {
     expect(mockExeca).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'cached-login',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'Codex credentials are available' } },
+      },
+      0,
+      'ready',
+    ],
+    [
+      'API key',
+      'sk-905-readiness-key',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'Codex credentials are available' } },
+      },
+      0,
+      'ready',
+    ],
+    [
+      'no credentials',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'no Codex credentials were found' } },
+      },
+      1,
+      'missing',
+    ],
+    [
+      'explicitly rejected credentials',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'invalid API key' } },
+      },
+      1,
+      'unusable',
+    ],
+  ] as const)(
+    'classifies the documented doctor envelope for %s without exposing diagnostics',
+    async (_name, apiKey, evidence, exitCode, state) => {
+      const priorKey = process.env.CODEX_API_KEY;
+      if (apiKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = apiKey;
+
+      try {
+        const runDoctor = vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode });
+
+        const readiness = await new CodexProvider(runDoctor).readiness();
+
+        expect(readiness).toMatchObject({
+          provider: 'codex',
+          source: apiKey === undefined ? 'cached-login' : 'api-key',
+          state,
+        });
+        expect(JSON.stringify(readiness)).not.toContain('credentials');
+      } finally {
+        if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+        else process.env.CODEX_API_KEY = priorKey;
+      }
+    },
+  );
+
+  it.each([
+    [
+      'missing auth check',
+      { schemaVersion: 1, overallStatus: 'ok', checks: {} },
+    ],
+    [
+      'unknown check status',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'warning', summary: 'maybe ready' } },
+      },
+    ],
+    [
+      'overall failure despite an otherwise-ready credential check',
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+      },
+    ],
+    [
+      'conflicting documented and legacy evidence',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      },
+    ],
+  ] as const)('fails closed for %s documented doctor evidence', async (_name, evidence) => {
+    const readiness = await new CodexProvider(
+      vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
+    ).readiness();
+
+    expect(readiness).toMatchObject({ source: 'cached-login', state: 'unverifiable' });
+  });
+
   it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
     const runDoctor = vi.fn().mockResolvedValue({
       stdout: JSON.stringify({

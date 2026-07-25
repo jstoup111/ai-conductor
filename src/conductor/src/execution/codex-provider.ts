@@ -36,6 +36,19 @@ interface DoctorCommandResult {
   exitCode?: number | null;
 }
 
+type DoctorEvidence =
+  | {
+    kind: 'documented';
+    state: AuthenticationReadiness['state'];
+  }
+  | {
+    kind: 'legacy';
+    source: AuthenticationSource;
+    configured: boolean;
+    authenticated: boolean;
+    rejected?: boolean;
+  };
+
 export interface CodexDoctorRunnerOptions {
   reject: false;
   timeout: number;
@@ -271,11 +284,20 @@ export class CodexProvider implements LLMProvider {
     authentication: SelectedAuthentication,
   ): AuthenticationReadiness {
     const evidence = this.parseDoctorEvidence(result.stdout);
-    if (!evidence || evidence.source !== authentication.source) {
+    if (!evidence || (evidence.kind === 'legacy' && evidence.source !== authentication.source)) {
       return this.nonReadyReadiness(authentication.source, 'unverifiable');
     }
 
     const exitCode = result.exitCode ?? 1;
+    if (evidence.kind === 'documented') {
+      if (evidence.state === 'ready') {
+        return exitCode === 0
+          ? { provider: 'codex', source: authentication.source, state: 'ready' }
+          : this.nonReadyReadiness(authentication.source, 'unverifiable');
+      }
+      return this.nonReadyReadiness(authentication.source, evidence.state);
+    }
+
     if (
       evidence.configured === true &&
       evidence.authenticated === true &&
@@ -303,20 +325,47 @@ export class CodexProvider implements LLMProvider {
     return this.nonReadyReadiness(authentication.source, 'unverifiable');
   }
 
-  private parseDoctorEvidence(stdout: unknown): {
-    source: AuthenticationSource;
-    configured: boolean;
-    authenticated: boolean;
-    rejected?: boolean;
-  } | undefined {
+  private parseDoctorEvidence(stdout: unknown): DoctorEvidence | undefined {
     if (typeof stdout !== 'string') return undefined;
     try {
       const parsed: unknown = JSON.parse(stdout);
       if (!parsed || typeof parsed !== 'object') return undefined;
-      const { schemaVersion, auth, transport } = parsed as Record<string, unknown>;
-      if (schemaVersion !== 1 || !auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') {
+      const record = parsed as Record<string, unknown>;
+      if (record.schemaVersion !== 1) return undefined;
+
+      const hasDocumentedShape = 'overallStatus' in record || 'checks' in record;
+      const hasLegacyShape = 'auth' in record || 'transport' in record;
+      if (hasDocumentedShape && hasLegacyShape) return undefined;
+
+      if (hasDocumentedShape) {
+        const { overallStatus, checks } = record;
+        if (
+          (overallStatus !== 'ok' && overallStatus !== 'fail') ||
+          !checks ||
+          typeof checks !== 'object' ||
+          Array.isArray(checks)
+        ) {
+          return undefined;
+        }
+        const credentials = (checks as Record<string, unknown>)['auth.credentials'];
+        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) return undefined;
+        const { status, summary } = credentials as Record<string, unknown>;
+        if (typeof summary !== 'string') return undefined;
+        if (status === 'ok') {
+          return overallStatus === 'ok' ? { kind: 'documented', state: 'ready' } : undefined;
+        }
+        if (status !== 'fail' || overallStatus !== 'fail') return undefined;
+        if (/no codex credentials were found/i.test(summary)) {
+          return { kind: 'documented', state: 'missing' };
+        }
+        if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
+          return { kind: 'documented', state: 'unusable' };
+        }
         return undefined;
       }
+
+      const { auth, transport } = record;
+      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') return undefined;
       const { selectedMode, configured, rejected } = auth as Record<string, unknown>;
       const { authenticated } = transport as Record<string, unknown>;
       if (
@@ -327,7 +376,7 @@ export class CodexProvider implements LLMProvider {
       ) {
         return undefined;
       }
-      return { source: selectedMode, configured, authenticated, rejected };
+      return { kind: 'legacy', source: selectedMode, configured, authenticated, rejected };
     } catch {
       return undefined;
     }
