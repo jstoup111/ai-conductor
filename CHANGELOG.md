@@ -25,6 +25,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Document the per-step provider routing (#927) retrospective, its accepted
+  telemetry and provider-executor follow-up stories, and their clear conflict
+  review.
 - Per-step provider routing (#927) preserves scalar `llm_provider` configuration
   while accepting an ordered provider array and explicit per-step scalar/array
   selections. The first configured provider remains the inherited default;
