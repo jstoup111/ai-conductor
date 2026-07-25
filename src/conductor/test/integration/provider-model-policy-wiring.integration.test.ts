@@ -57,49 +57,56 @@ it('resolves one selected inline provider key to both its provider and immutable
     if (
       !ts.isIdentifier(declaration.name) ||
       !declaration.initializer ||
-      !ts.isCallExpression(declaration.initializer)
+      !ts.isPropertyAccessExpression(declaration.initializer)
     ) return false;
-    const call = declaration.initializer;
-    return call.expression.getText(sourceFile) === 'registry.get' &&
-      call.typeArguments?.length === 1 &&
-      call.typeArguments[0].getText(sourceFile) === 'LLMProvider' &&
-      call.arguments.length === 2 &&
-      ts.isStringLiteral(call.arguments[0]) &&
-      call.arguments[0].text === 'llm_provider' &&
-      ts.isIdentifier(call.arguments[1]);
+    return declaration.initializer.name.text === 'provider' &&
+      ts.isIdentifier(declaration.initializer.expression);
   });
   const providerName = providerBinding && ts.isIdentifier(providerBinding.name)
     ? providerBinding.name.text
     : undefined;
-  const selectedKey =
+  const selectedRuntimeName =
     providerBinding?.initializer &&
-    ts.isCallExpression(providerBinding.initializer) &&
-    ts.isIdentifier(providerBinding.initializer.arguments[1])
-      ? providerBinding.initializer.arguments[1].text
+    ts.isPropertyAccessExpression(providerBinding.initializer) &&
+    ts.isIdentifier(providerBinding.initializer.expression)
+      ? providerBinding.initializer.expression.text
+      : undefined;
+  const selectedRuntimeBinding = declarations.find(
+    (declaration) =>
+      selectedRuntimeName !== undefined &&
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === selectedRuntimeName &&
+      declaration.initializer !== undefined &&
+      ts.isCallExpression(declaration.initializer) &&
+      declaration.initializer.expression.getText(sourceFile) ===
+        'providerRuntimes.get',
+  );
+  const selectedKey =
+    selectedRuntimeBinding?.initializer &&
+    ts.isCallExpression(selectedRuntimeBinding.initializer) &&
+    ts.isIdentifier(selectedRuntimeBinding.initializer.arguments[0])
+      ? selectedRuntimeBinding.initializer.arguments[0].text
       : undefined;
   const selectedKeyBindings = declarations.filter(
     (declaration) =>
       ts.isIdentifier(declaration.name) &&
       declaration.name.text === selectedKey,
   );
-  const policyLookups = calls.filter((call) =>
-    selectedKey !== undefined &&
-    call.expression.getText(sourceFile) ===
-      'resolveProviderModelPolicy' &&
+  const runtimeSetCalls = calls.filter((call) =>
+    call.expression.getText(sourceFile) === 'createProviderRuntimeSet' &&
     call.arguments.length === 2 &&
-    ts.isIdentifier(call.arguments[0]) &&
-    call.arguments[0].text === selectedKey &&
+    call.arguments[0].getText(sourceFile) === 'registry' &&
     call.arguments[1].getText(sourceFile) === 'console.warn'
   );
-  const solePolicyLookup = policyLookups.length === 1
-    ? policyLookups[0]
-    : undefined;
-  const policyBinding =
-    solePolicyLookup &&
-    ts.isVariableDeclaration(solePolicyLookup.parent) &&
-    solePolicyLookup.parent.initializer === solePolicyLookup
-      ? solePolicyLookup.parent
-      : undefined;
+  const policyBinding = declarations.find(
+    (declaration) =>
+      ts.isIdentifier(declaration.name) &&
+      declaration.initializer !== undefined &&
+      ts.isPropertyAccessExpression(declaration.initializer) &&
+      declaration.initializer.name.text === 'policy' &&
+      ts.isIdentifier(declaration.initializer.expression) &&
+      declaration.initializer.expression.text === selectedRuntimeName,
+  );
   const policyName = policyBinding && ts.isIdentifier(policyBinding.name)
     ? policyBinding.name.text
     : undefined;
@@ -118,7 +125,7 @@ it('resolves one selected inline provider key to both its provider and immutable
       isConstBinding(providerBinding) && providerName !== undefined,
     immutablePolicyBoundFromSelectedKey:
       isConstBinding(policyBinding) && policyName !== undefined,
-    exactPolicyLookupCount: policyLookups.length,
+    runtimeSetConstructionCount: runtimeSetCalls.length,
     bothResolveBeforeConstruction:
       providerBinding !== undefined &&
       policyBinding !== undefined &&
@@ -142,7 +149,7 @@ it('resolves one selected inline provider key to both its provider and immutable
     selectedKeyDeclaredOnce: true,
     providerBoundFromSelectedKey: true,
     immutablePolicyBoundFromSelectedKey: true,
-    exactPolicyLookupCount: 1,
+    runtimeSetConstructionCount: 1,
     bothResolveBeforeConstruction: true,
     runnerReceivesExactProviderAndPolicy: true,
     conductorReceivesExactPolicy: true,
@@ -366,22 +373,54 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
   const conductorConstructions = constructions.filter(
     (node) => node.expression.getText(sourceFile) === 'Conductor',
   );
-  const runnerKinds = runnerConstructions.flatMap((construction) => {
+  const runtimeSetCalls = calls.filter(
+    (call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet',
+  );
+  const runtimeSetCall = runtimeSetCalls.length === 1
+    ? runtimeSetCalls[0]
+    : undefined;
+  const runProviderBinding = declarations.find(
+    (declaration) =>
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === 'runProvider' &&
+      declaration.initializer !== undefined &&
+      declaration.initializer.getText(sourceFile) ===
+        'selectedRuntime.provider',
+  );
+  const runPolicyBinding = declarations.find(
+    (declaration) =>
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === 'runModelPolicy' &&
+      declaration.initializer !== undefined &&
+      declaration.initializer.getText(sourceFile) ===
+        'selectedRuntime.policy',
+  );
+  const runnerKind = (construction: ts.NewExpression): string | undefined => {
     const options = construction.arguments[3];
-    if (!options || !ts.isObjectLiteralExpression(options)) return [];
+    if (!options || !ts.isObjectLiteralExpression(options)) return undefined;
     const featureDesc = options.properties.find(
       (property): property is ts.PropertyAssignment =>
         ts.isPropertyAssignment(property) &&
         property.name.getText(sourceFile) === 'featureDesc',
     );
-    if (!featureDesc) return [];
+    if (!featureDesc) return undefined;
     const text = featureDesc.initializer.getText(sourceFile);
-    if (text === 'item.slug') return ['main'];
-    if (text.includes('setup-fix')) return ['setup-fix'];
-    if (text.includes('rebase-resolution')) return ['rebase-resolution'];
-    if (text.includes('ci-fix-resolution')) return ['ci-fix-resolution'];
-    return [];
+    if (text === 'item.slug') return 'main';
+    if (text.includes('setup-fix')) return 'setup-fix';
+    if (text.includes('rebase-resolution')) return 'rebase-resolution';
+    if (text.includes('ci-fix-resolution')) return 'ci-fix-resolution';
+    return undefined;
+  };
+  const runnerKinds = runnerConstructions.flatMap((construction) => {
+    const kind = runnerKind(construction);
+    return kind ? [kind] : [];
   });
+  const mainRunner = runnerConstructions.find(
+    (construction) => runnerKind(construction) === 'main',
+  );
+  const auxiliaryRunners = runnerConstructions.filter(
+    (construction) => runnerKind(construction) !== 'main',
+  );
   const allConstructions = [
     ...runnerConstructions,
     ...conductorConstructions,
@@ -459,9 +498,9 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
           construction.getStart(sourceFile),
       ),
     runnerConstructionCount: runnerConstructions.length,
-    allRunnersReceiveExactProviderAndPolicy:
-      runnerConstructions.length === 4 &&
-      runnerConstructions.every(
+    auxiliaryRunnersRetainLegacyProviderAndPolicy:
+      auxiliaryRunners.length === 3 &&
+      auxiliaryRunners.every(
         (construction) =>
           providerName !== undefined &&
           construction.arguments[0] !== undefined &&
@@ -469,11 +508,24 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
           construction.arguments[0].text === providerName &&
           objectBindsPolicy(construction.arguments[3], policyName),
       ),
+    mainRunnerReceivesFreshRuntime:
+      runtimeSetCalls.length === 1 &&
+      runtimeSetCall !== undefined &&
+      isConstBinding(runProviderBinding) &&
+      isConstBinding(runPolicyBinding) &&
+      mainRunner !== undefined &&
+      runtimeSetCall.getStart(sourceFile) < mainRunner.getStart(sourceFile) &&
+      ts.isIdentifier(mainRunner.arguments[0]) &&
+      mainRunner.arguments[0].text === 'runProvider' &&
+      objectBindsPolicy(mainRunner.arguments[3], 'runModelPolicy'),
     runnerKinds: runnerKinds.sort(),
     conductorConstructionCount: conductorConstructions.length,
-    conductorReceivesExactPolicy:
+    conductorReceivesFreshRuntimePolicy:
       conductorConstructions.length === 1 &&
-      objectBindsPolicy(conductorConstructions[0].arguments[0], policyName),
+      objectBindsPolicy(
+        conductorConstructions[0].arguments[0],
+        'runModelPolicy',
+      ),
   }).toEqual({
     registryConstructedOnceWithoutShadowing: true,
     pluginDiscoveryCount: 1,
@@ -495,7 +547,8 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
     immutablePolicyBound: true,
     bindingsLexicallyPrecedeEveryConsumer: true,
     runnerConstructionCount: 4,
-    allRunnersReceiveExactProviderAndPolicy: true,
+    auxiliaryRunnersRetainLegacyProviderAndPolicy: true,
+    mainRunnerReceivesFreshRuntime: true,
     runnerKinds: [
       'ci-fix-resolution',
       'main',
@@ -503,7 +556,7 @@ it('reuses one daemon provider policy for the conductor and every main or auxili
       'setup-fix',
     ],
     conductorConstructionCount: 1,
-    conductorReceivesExactPolicy: true,
+    conductorReceivesFreshRuntimePolicy: true,
   });
 });
 

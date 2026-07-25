@@ -20,7 +20,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
+import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -51,7 +51,6 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
@@ -958,11 +957,10 @@ async function main(): Promise<void> {
   // Retrieve provider and subscriber from registry with defaults
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const selectedProviderKey = configuredProviders[0];
-  const provider = registry.get<LLMProvider>(
-    'llm_provider',
-    selectedProviderKey
-  );
-  const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, console.warn);
+  const providerRuntimes = createProviderRuntimeSet(registry, console.warn);
+  const selectedRuntime = providerRuntimes.get(selectedProviderKey);
+  const provider = selectedRuntime.provider;
+  const modelPolicy = selectedRuntime.policy;
 
   // Select UI subscriber based on config (default: 'terminal')
   const subscriber = registry.get<UISubscriber>(

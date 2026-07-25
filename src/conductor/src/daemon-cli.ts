@@ -26,6 +26,7 @@ import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
+import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -803,6 +804,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   subscriber.start();
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const selectedProviderKey = configuredProviders[0];
+  // Auxiliary daemon lanes retain the selected legacy adapter until they move
+  // onto provider execution. Feature conductor runs construct fresh runtime
+  // state inside runConductorInWorktree below.
   const provider = registry.get<LLMProvider>('llm_provider', selectedProviderKey);
   const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, log);
   // Resolve the active memory provider once at run start so all steps see the
@@ -820,6 +824,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
+    const providerRuntimes = createProviderRuntimeSet(registry, log);
+    const selectedRuntime = providerRuntimes.get(selectedProviderKey);
+    const runProvider = selectedRuntime.provider;
+    const runModelPolicy = selectedRuntime.policy;
 
     // Sweep stale session markers before constructing the runner. A KEPT
     // worktree (reused on a later daemon cycle after a prior halt/error —
@@ -865,11 +873,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     await writeState(stateFilePath, baseState);
 
-    const stepRunner = new DefaultStepRunner(provider, uuidv4(), wt.path, {
+    const stepRunner = new DefaultStepRunner(runProvider, uuidv4(), wt.path, {
       featureDesc: item.slug,
       pipelineDir,
       config,
-      modelPolicy,
+      modelPolicy: runModelPolicy,
       mode: 'auto',
     });
 
@@ -888,7 +896,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       events,
       mode: 'auto',
       config,
-      modelPolicy,
+      modelPolicy: runModelPolicy,
       projectRoot: wt.path,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
