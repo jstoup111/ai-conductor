@@ -25,6 +25,7 @@ import type {
   RecoveryContext,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
+import type { ProviderSessionScope } from './provider-session.js';
 import type {
   ProviderAttemptMetadata,
   ProviderAttributionMetadata,
@@ -412,6 +413,12 @@ export interface StepRunOptions {
    */
   resume?: boolean;
   /**
+   * Concurrent-group provider-aware dispatch only: a detached session scope
+   * owned by this member execution. It keeps provider sessions isolated from
+   * both sibling branches and the serial conductor session.
+   */
+  providerSessions?: ProviderSessionScope;
+  /**
    * The Conductor-owned, 1-based retry attempt. Provider-aware runners forward
    * this unchanged so a fallback provider can resolve its own native escalation
    * rung without deriving retry state from invocation/session counters.
@@ -436,6 +443,11 @@ export interface StepRunOptions {
 
 export interface StepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  /**
+   * Create a detached provider-session scope for one concurrent-group member.
+   * Legacy runners omit this seam and continue using scalar branch sessions.
+   */
+  beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
   runInteractive?(step: StepName): Promise<void>;
   assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
   /**

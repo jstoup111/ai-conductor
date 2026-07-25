@@ -34,7 +34,10 @@ import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
-import type { ProviderSessionStore } from './provider-session.js';
+import type {
+  ProviderSessionScope,
+  ProviderSessionStore,
+} from './provider-session.js';
 import {
   executeProviderCandidates,
   type ExecuteProviderCandidatesInput,
@@ -399,6 +402,11 @@ export class DefaultStepRunner implements StepRunner {
     return this.resolvedConfigFor(step).model;
   }
 
+  beginProviderBranch(step: StepName): ProviderSessionScope | undefined {
+    if (!this.providerRuntimes || !this.sessionStore) return undefined;
+    return this.sessionStore.beginBranch(step);
+  }
+
   async run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'complexity') {
       throw new Error(
@@ -604,7 +612,8 @@ export class DefaultStepRunner implements StepRunner {
     streaming: boolean,
     interactive = false,
   ): Promise<StepRunResult> {
-    if (!this.providerRuntimes || !this.sessionStore) {
+    const sessions = opts?.providerSessions ?? this.sessionStore;
+    if (!this.providerRuntimes || !sessions) {
       throw new Error(
         'Provider-aware normal dispatch requires runtimes and a session store',
       );
@@ -619,7 +628,7 @@ export class DefaultStepRunner implements StepRunner {
         configuredProviders: this.configuredProviders,
         preferredProvider: this.config?.steps?.[step]?.llm_provider,
         runtimes,
-        sessions: this.sessionStore,
+        sessions,
         config: this.config,
         tier: state.complexity_tier,
         attempt: opts?.attempt ?? 1,
@@ -638,7 +647,9 @@ export class DefaultStepRunner implements StepRunner {
         },
       });
       this.callCount++;
-      await this.persistProviderAwareSuccess(result);
+      if (!opts?.providerSessions) {
+        await this.persistProviderAwareSuccess(result);
+      }
       return this.toStepRunResult(result);
     } catch {
       this.callCount++;
