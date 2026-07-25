@@ -998,7 +998,7 @@ build_conduct_ts() {
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 choose_builtin_provider() {
-  [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
+  [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
 
   echo ""
   info "Built-in provider — choose the CLI you plan to use:"
@@ -1007,6 +1007,47 @@ choose_builtin_provider() {
   echo "    3) Both Claude and Codex"
   local choice
   read -r -p "  Choice [1]: " choice || choice=1
+
+  case "$choice" in
+    ""|1) PROVIDER_SELECTION="claude" ;;
+    2)    PROVIDER_SELECTION="codex" ;;
+    3)    PROVIDER_SELECTION="claude,codex" ;;
+    *)
+      warn "Unrecognized provider choice '${choice}' — using Claude"
+      PROVIDER_SELECTION="claude"
+      ;;
+  esac
+}
+
+# Report whether the built-in CLI choices selected for this installation are
+# ready to use. This is deliberately advisory: installing the harness must
+# still establish both provider surfaces when an external CLI is absent.
+report_selected_provider_readiness() {
+  local selected="${PROVIDER_SELECTION:-claude}"
+  local provider
+  local -a providers
+  IFS=',' read -r -a providers <<< "$selected"
+
+  echo ""
+  info "Built-in provider readiness:"
+  for provider in "${providers[@]}"; do
+    case "$provider" in
+      claude)
+        if command -v claude &>/dev/null; then
+          ok "Claude Code CLI found"
+        else
+          warn "Claude Code CLI not found — install it from https://docs.anthropic.com/en/docs/claude-code"
+        fi
+        ;;
+      codex)
+        if command -v codex &>/dev/null; then
+          ok "Codex CLI found"
+        else
+          warn "Codex CLI not found — install it with: npm install -g @openai/codex"
+        fi
+        ;;
+    esac
+  done
 }
 
 install() {
@@ -1081,6 +1122,8 @@ install() {
   else
     ok "Skills: all ${#SKILLS[@]} already current for Claude Code and Codex"
   fi
+
+  report_selected_provider_readiness
 
   # 3. Symlink conduct script
   local conduct_source="${HARNESS_DIR}/bin/conduct"

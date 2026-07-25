@@ -66,6 +66,30 @@ else
   exit 1
 fi
 
+# A normal scripted install must still finish when a selected built-in CLI is
+# absent, while making the Codex-specific remedy visible to the operator.
+MISSING_CODEX_STUBS="$TMP_ROOT/stubs-without-codex"
+mkdir -p "$MISSING_CODEX_STUBS"
+for tool in rtk npm node claude uv python3; do
+  ln -s "$STUBS/$tool" "$MISSING_CODEX_STUBS/$tool"
+done
+
+set +e
+MISSING_CODEX_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_CODEX_STUBS:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --providers codex --allow-worktree-root </dev/null 2>&1)
+MISSING_CODEX_CODE=$?
+set -e
+
+if [ "$MISSING_CODEX_CODE" -eq 0 ] \
+  && printf '%s' "$MISSING_CODEX_OUT" | grep -qiE 'codex.*(not found|missing|not installed)' \
+  && printf '%s' "$MISSING_CODEX_OUT" | grep -qi 'install'; then
+  echo 'PASS missing selected Codex CLI warns with an actionable remedy without blocking install'
+else
+  echo 'FAIL missing selected Codex CLI warns with an actionable remedy without blocking install'
+  printf 'exit code: %s\n' "$MISSING_CODEX_CODE"
+  printf '%s\n' "$MISSING_CODEX_OUT"
+  exit 1
+fi
+
 # A trailing comma denotes an empty provider token and must be rejected before
 # the installer reaches any setup action.
 set +e
