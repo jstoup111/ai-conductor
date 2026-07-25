@@ -321,7 +321,16 @@ async function auditSource(
   );
   if (verdict.kind === 'valid') return { ...row(source, 'aligned', 'strict evidence is valid'), implementationPr: pr, verdict };
   if (verdict.kind === 'refusal' && verdict.code === 'shipped-record-missing') {
-    const proposal = await expectedProposal(options, source.plan, implementationPr);
+    let proposal: { path: string; content: string };
+    try {
+      proposal = await expectedProposal(options, source.plan, implementationPr);
+    } catch (error) {
+      return {
+        ...row(source, 'unresolved', `implementation head cannot prove record proposal: ${errorMessage(error)}`),
+        implementationPr: pr,
+        verdict,
+      };
+    }
     return {
       ...row(source, 'backfilled', 'proven missing shipped record; proposal only'),
       implementationPr: pr,
