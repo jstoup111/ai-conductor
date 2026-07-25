@@ -7,6 +7,7 @@ import {
   FULL_SUITE_EVIDENCE_VERSION,
   FULL_SUITE_TRUNCATION_MARKER,
   readFullSuiteEvidence,
+  sanitizeFullSuiteDiagnosticOutput,
   writeFullSuiteEvidence,
   type FullSuiteFailEvidence,
   type FullSuitePassEvidence,
@@ -40,8 +41,16 @@ const FAIL_EVIDENCE: FullSuiteFailEvidence = {
   endedAt: '2026-07-25T12:00:03.000Z',
   durationMs: 3_000,
   exitCode: 7,
+  signal: null,
   stdout: 'tests started\n',
   stderr: 'terminal failure\n',
+};
+
+const SIGNAL_EVIDENCE: FullSuiteFailEvidence = {
+  ...FAIL_EVIDENCE,
+  reason: 'signal',
+  exitCode: null,
+  signal: 'SIGTERM',
 };
 
 const scratches: string[] = [];
@@ -123,6 +132,24 @@ describe('full-suite evidence', () => {
       expected: { usable: false, reason: 'corrupt' },
     },
     {
+      name: 'persisted non-ASCII diagnostics over the UTF-8 byte limit',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, {
+          ...PASS_EVIDENCE,
+          stdout: '界'.repeat(6_000),
+        }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'persisted emoji diagnostics over the UTF-8 byte limit',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, {
+          ...PASS_EVIDENCE,
+          stdout: '🙂'.repeat(5_000),
+        }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
       name: 'an unknown contract version',
       arrange: async (projectRoot: string) =>
         writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 99 }),
@@ -149,6 +176,30 @@ describe('full-suite evidence', () => {
       name: 'a FAIL result with a successful exit code',
       arrange: async (projectRoot: string) =>
         writePersisted(projectRoot, { ...FAIL_EVIDENCE, exitCode: 0 }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'a non-signal FAIL result carrying a signal',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...FAIL_EVIDENCE, signal: 'SIGTERM' }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'a signal FAIL result without a signal',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...SIGNAL_EVIDENCE, signal: null }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'a signal FAIL result with an exit code',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...SIGNAL_EVIDENCE, exitCode: 143 }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'a signal FAIL result with an unknown signal',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...SIGNAL_EVIDENCE, signal: 'NOT_A_SIGNAL' }),
       expected: { usable: false, reason: 'corrupt' },
     },
     {
@@ -189,13 +240,47 @@ describe('full-suite evidence', () => {
     });
   });
 
+  it('round-trips signal failure evidence without losing its signal', async () => {
+    const projectRoot = await makeProject();
+
+    await writeFullSuiteEvidence(projectRoot, SIGNAL_EVIDENCE);
+
+    expect(await readFullSuiteEvidence(projectRoot)).toEqual({
+      usable: false,
+      reason: 'not_pass',
+      evidence: SIGNAL_EVIDENCE,
+    });
+  });
+
+  it.each([
+    {
+      name: 'a secret equal to the old replacement marker',
+      output: 'before [REDACTED] after',
+      secrets: ['[REDACTED]'],
+    },
+    {
+      name: 'replacement order creating an earlier secret',
+      output: 'abcx',
+      secrets: ['[REDACTED]x', 'abc'],
+    },
+    {
+      name: 'a secret equal to the truncation marker',
+      output: `head${'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}tail`,
+      secrets: [FULL_SUITE_TRUNCATION_MARKER],
+    },
+  ])('never leaves $name', ({ output, secrets }) => {
+    const sanitized = sanitizeFullSuiteDiagnosticOutput(output, secrets);
+
+    expect(secrets.filter((secret) => sanitized.includes(secret))).toEqual([]);
+  });
+
   it('redacts secrets and bounds both diagnostic streams while retaining their ends', async () => {
     const projectRoot = await makeProject();
     const secrets = ['stdout-secret-940', 'stderr-secret-940'];
     const evidence: FullSuiteFailEvidence = {
       ...FAIL_EVIDENCE,
-      stdout: `stdout beginning\n${secrets[0]}\n${'o'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}\n${secrets[1]}\nstdout terminal failure`,
-      stderr: `stderr beginning\n${secrets[1]}\n${'e'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}\n${secrets[0]}\nstderr terminal error`,
+      stdout: `stdout beginning 测试🧪\n${secrets[0]}\n${'🙂'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT)}\n${secrets[1]}\nstdout terminal failure 🚨`,
+      stderr: `stderr beginning 界\n${secrets[1]}\n${'界'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT)}\n${secrets[0]}\nstderr terminal error 🚨`,
     };
 
     await writeFullSuiteEvidence(projectRoot, evidence, secrets);
@@ -207,18 +292,22 @@ describe('full-suite evidence', () => {
     const persisted = JSON.parse(serialized) as FullSuiteFailEvidence;
     expect({
       secretResidue: secrets.filter((secret) => serialized.includes(secret)),
-      stdoutWithinLimit: persisted.stdout.length <= FULL_SUITE_DIAGNOSTIC_LIMIT,
+      invalidUtf8Replacement: `${persisted.stdout}${persisted.stderr}`.includes('\uFFFD'),
+      stdoutWithinLimit:
+        Buffer.byteLength(persisted.stdout, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT,
       stdoutRetainsEnds:
-        persisted.stdout.startsWith('stdout beginning') &&
-        persisted.stdout.endsWith('stdout terminal failure'),
+        persisted.stdout.startsWith('stdout beginning 测试🧪') &&
+        persisted.stdout.endsWith('stdout terminal failure 🚨'),
       stdoutMarked: persisted.stdout.includes(FULL_SUITE_TRUNCATION_MARKER),
-      stderrWithinLimit: persisted.stderr.length <= FULL_SUITE_DIAGNOSTIC_LIMIT,
+      stderrWithinLimit:
+        Buffer.byteLength(persisted.stderr, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT,
       stderrRetainsEnds:
-        persisted.stderr.startsWith('stderr beginning') &&
-        persisted.stderr.endsWith('stderr terminal error'),
+        persisted.stderr.startsWith('stderr beginning 界') &&
+        persisted.stderr.endsWith('stderr terminal error 🚨'),
       stderrMarked: persisted.stderr.includes(FULL_SUITE_TRUNCATION_MARKER),
     }).toEqual({
       secretResidue: [],
+      invalidUtf8Replacement: false,
       stdoutWithinLimit: true,
       stdoutRetainsEnds: true,
       stdoutMarked: true,

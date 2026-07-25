@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { constants as osConstants } from 'node:os';
 import { join } from 'node:path';
 
 export const FULL_SUITE_EVIDENCE_VERSION = 1 as const;
@@ -13,9 +14,12 @@ export type FullSuiteFailureReason =
   | 'invalid_input'
   | 'unlaunchable'
   | 'timeout'
+  | 'signal'
   | 'nonzero_exit'
   | 'preflight_failed'
   | 'internal_error';
+
+type FullSuiteNonSignalFailureReason = Exclude<FullSuiteFailureReason, 'signal'>;
 
 export interface FullSuitePassEvidence {
   version: typeof FULL_SUITE_EVIDENCE_VERSION;
@@ -33,10 +37,9 @@ export interface FullSuitePassEvidence {
   stderr: string;
 }
 
-export interface FullSuiteFailEvidence {
+interface FullSuiteFailEvidenceBase {
   version: typeof FULL_SUITE_EVIDENCE_VERSION;
   outcome: 'FAIL';
-  reason: FullSuiteFailureReason;
   fingerprint: string | null;
   provenanceHeadSha: string | null;
   command: string | null;
@@ -44,10 +47,23 @@ export interface FullSuiteFailEvidence {
   startedAt: string;
   endedAt: string;
   durationMs: number;
-  exitCode: number | null;
   stdout: string;
   stderr: string;
 }
+
+export type FullSuiteFailEvidence = FullSuiteFailEvidenceBase &
+  (
+    | {
+        reason: 'signal';
+        exitCode: null;
+        signal: NodeJS.Signals;
+      }
+    | {
+        reason: FullSuiteNonSignalFailureReason;
+        exitCode: number | null;
+        signal: null;
+      }
+  );
 
 export type FullSuiteEvidence = FullSuitePassEvidence | FullSuiteFailEvidence;
 
@@ -73,10 +89,12 @@ const FAILURE_REASONS = new Set<FullSuiteFailureReason>([
   'invalid_input',
   'unlaunchable',
   'timeout',
+  'signal',
   'nonzero_exit',
   'preflight_failed',
   'internal_error',
 ]);
+const VALID_SIGNALS = new Set<string>(Object.keys(osConstants.signals));
 
 function normalizedSecrets(secretValues: readonly string[]): string[] {
   return [...new Set(secretValues.filter((value) => value.length > 0))].sort(
@@ -84,20 +102,45 @@ function normalizedSecrets(secretValues: readonly string[]): string[] {
   );
 }
 
+function removeSecretsToFixedPoint(output: string, secrets: readonly string[]): string {
+  let sanitized = output;
+  while (true) {
+    const previousLength = sanitized.length;
+    for (const secret of secrets) sanitized = sanitized.replaceAll(secret, '');
+    if (sanitized.length === previousLength) return sanitized;
+  }
+}
+
+function utf8Prefix(buffer: Buffer, maximumBytes: number): string {
+  let end = Math.min(maximumBytes, buffer.length);
+  while (end > 0 && end < buffer.length && (buffer[end]! & 0xc0) === 0x80) end--;
+  return buffer.subarray(0, end).toString('utf8');
+}
+
+function utf8Suffix(buffer: Buffer, maximumBytes: number): string {
+  let start = Math.max(0, buffer.length - maximumBytes);
+  while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start++;
+  return buffer.subarray(start).toString('utf8');
+}
+
 export function sanitizeFullSuiteDiagnosticOutput(
   output: string,
   secretValues: readonly string[] = [],
 ): string {
-  const redacted = normalizedSecrets(secretValues).reduce(
-    (value, secret) => value.replaceAll(secret, '[REDACTED]'),
-    output,
-  );
-  if (redacted.length <= FULL_SUITE_DIAGNOSTIC_LIMIT) return redacted;
+  const secrets = normalizedSecrets(secretValues);
+  const redacted = removeSecretsToFixedPoint(output, secrets);
+  const redactedBytes = Buffer.from(redacted, 'utf8');
+  let bounded = redacted;
+  if (redactedBytes.length > FULL_SUITE_DIAGNOSTIC_LIMIT) {
+    const retainedBytes =
+      FULL_SUITE_DIAGNOSTIC_LIMIT -
+      Buffer.byteLength(FULL_SUITE_TRUNCATION_MARKER, 'utf8');
+    const headBytes = Math.ceil(retainedBytes / 2);
+    const tailBytes = retainedBytes - headBytes;
+    bounded = `${utf8Prefix(redactedBytes, headBytes)}${FULL_SUITE_TRUNCATION_MARKER}${utf8Suffix(redactedBytes, tailBytes)}`;
+  }
 
-  const retainedLength = FULL_SUITE_DIAGNOSTIC_LIMIT - FULL_SUITE_TRUNCATION_MARKER.length;
-  const headLength = Math.ceil(retainedLength / 2);
-  const tailLength = retainedLength - headLength;
-  return `${redacted.slice(0, headLength)}${FULL_SUITE_TRUNCATION_MARKER}${redacted.slice(-tailLength)}`;
+  return removeSecretsToFixedPoint(bounded, secrets);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -119,9 +162,9 @@ function hasValidCommonFields(value: Record<string, unknown>): boolean {
     Number.isFinite(value.durationMs) &&
     value.durationMs >= 0 &&
     typeof value.stdout === 'string' &&
-    value.stdout.length <= FULL_SUITE_DIAGNOSTIC_LIMIT &&
+    Buffer.byteLength(value.stdout, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT &&
     typeof value.stderr === 'string' &&
-    value.stderr.length <= FULL_SUITE_DIAGNOSTIC_LIMIT
+    Buffer.byteLength(value.stderr, 'utf8') <= FULL_SUITE_DIAGNOSTIC_LIMIT
   );
 }
 
@@ -152,17 +195,24 @@ function isPassEvidence(
 function isFailEvidence(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & FullSuiteFailEvidence {
+  const reason = value.reason;
+  const hasValidTermination = reason === 'signal'
+    ? value.exitCode === null &&
+      typeof value.signal === 'string' &&
+      VALID_SIGNALS.has(value.signal)
+    : value.signal === null &&
+      (value.exitCode === null ||
+        (Number.isInteger(value.exitCode) && value.exitCode !== 0));
   return (
     value.version === FULL_SUITE_EVIDENCE_VERSION &&
     value.outcome === 'FAIL' &&
-    typeof value.reason === 'string' &&
-    FAILURE_REASONS.has(value.reason as FullSuiteFailureReason) &&
+    typeof reason === 'string' &&
+    FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
     isNullableNonEmptyString(value.fingerprint) &&
     isNullableNonEmptyString(value.provenanceHeadSha) &&
     isNullableNonEmptyString(value.command) &&
     isNullableNonEmptyString(value.workingDirectory) &&
-    (value.exitCode === null ||
-      (Number.isInteger(value.exitCode) && value.exitCode !== 0)) &&
+    hasValidTermination &&
     hasValidCommonFields(value)
   );
 }
