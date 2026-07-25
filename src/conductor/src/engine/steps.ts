@@ -289,6 +289,26 @@ export const ALL_STEPS: StepDefinition[] = [
  * daemon catches and turns into a `.pipeline/HALT`.
  */
 export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
+  bootstrap: {
+    name: 'bootstrap',
+    label: 'Bootstrap',
+    phase: 'UNDERSTAND',
+    enforcement: 'advisory',
+    prerequisites: [],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'bootstrap',
+  },
+  assess: {
+    name: 'assess',
+    label: 'Assess',
+    phase: 'UNDERSTAND',
+    enforcement: 'advisory',
+    prerequisites: [],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    skillName: 'assess',
+  },
   remediate: {
     name: 'remediate',
     label: 'Remediate',

@@ -17,6 +17,13 @@ import { promisify } from 'util';
 import { load as loadYaml, dump as dumpYaml } from 'js-yaml';
 import type { HarnessConfig } from '../types/config.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
+import type { StepName } from '../types/index.js';
+import type { ProviderRuntimeSet } from './provider-runtime.js';
+import type { ProviderSessionStore } from './provider-session.js';
+import {
+  executeProviderCandidates,
+  type ExecuteProviderCandidatesInput,
+} from './provider-execution.js';
 
 const exec = promisify(execCb);
 
@@ -65,6 +72,15 @@ export interface PreludeOptions {
    * assessments are skipped (nudge-only behavior in auto mode).
    */
   onAssessStalePrompt?: (reason: { days: number; commits: number }) => Promise<boolean>;
+  /** Optional provider-aware routing context for project-scoped steps. */
+  providerExecution?: {
+    configuredProviders: readonly string[];
+    runtimes: ProviderRuntimeSet;
+    sessions: ProviderSessionStore;
+    providerExecutor?: typeof executeProviderCandidates;
+    modelOverride?: string;
+    warn?: ExecuteProviderCandidatesInput['warn'];
+  };
 }
 
 interface BootstrapMarker {
@@ -102,7 +118,8 @@ export async function runProjectPrelude(
   if (bootstrapReason) {
     result.bootstrapExecuted = true;
     result.bootstrapReason = bootstrapReason;
-    const skillResult = await invokeSkill(provider, sessionId, '/bootstrap',
+    const skillResult = await invokePreludeSkill('bootstrap', projectRoot,
+      provider, sessionId, config, options, '/bootstrap',
       'Run the bootstrap skill for this project. It is safe to re-run: detect ' +
       'current state, refresh artifacts, apply any harness migrations.');
     result.bootstrapSuccess = skillResult.success;
@@ -118,7 +135,8 @@ export async function runProjectPrelude(
   } else {
     result.assessExecuted = true;
     result.assessReason = assessResult.reason;
-    const skillResult = await invokeSkill(provider, sessionId, '/assess',
+    const skillResult = await invokePreludeSkill('assess', projectRoot,
+      provider, sessionId, config, options, '/assess',
       'Run the assess skill. Produce or refresh technical-assessment docs and ' +
       'architecture decision records based on current project state.');
     result.assessSuccess = skillResult.success;
@@ -129,6 +147,45 @@ export async function runProjectPrelude(
   }
 
   return result;
+}
+
+async function invokePreludeSkill(
+  step: Extract<StepName, 'bootstrap' | 'assess'>,
+  projectRoot: string,
+  provider: LLMProvider,
+  sessionId: string,
+  config: HarnessConfig,
+  options: PreludeOptions,
+  prompt: string,
+  systemPrompt: string,
+): Promise<InvokeSkillResult> {
+  const execution = options.providerExecution;
+  if (!execution) {
+    return invokeSkill(provider, sessionId, prompt, systemPrompt);
+  }
+
+  const result = await (
+    execution.providerExecutor ?? executeProviderCandidates
+  )({
+    step,
+    configuredProviders: execution.configuredProviders,
+    preferredProvider: config.steps?.[step]?.llm_provider,
+    runtimes: execution.runtimes,
+    sessions: execution.sessions.beginBranch(step),
+    config,
+    modelOverride: execution.modelOverride,
+    warn: execution.warn,
+    options: {
+      prompt,
+      cwd: projectRoot,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+    },
+  });
+  return {
+    success: result.success,
+    rateLimited: result.rateLimited,
+  };
 }
 
 export async function invokeSkill(

@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
+import { ProviderSessionStore } from './engine/provider-session.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -1030,7 +1031,17 @@ async function main(): Promise<void> {
     provider,
     sessionId,
     config ?? {},
-    { harnessVersion, onAssessStalePrompt: interactivePrompt },
+    {
+      harnessVersion,
+      onAssessStalePrompt: interactivePrompt,
+      providerExecution: {
+        configuredProviders,
+        runtimes: providerRuntimes,
+        sessions: new ProviderSessionStore(),
+        modelOverride: opts.model,
+        warn: console.warn,
+      },
+    },
   );
   if (prelude.bootstrapExecuted) {
     console.log(
