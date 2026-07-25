@@ -6,6 +6,11 @@ Technical track (no PRD). Source: intake jstoup111/ai-conductor#245. Approved ap
 `.memory/decisions/pipeline-scoped-per-task-verify-approach.md` (skill-level judgment
 scoping with explicit full-suite fallback triggers; no engine code).
 
+> **Amended 2026-07-25 by issue #940:** batch boundaries and joins now run the
+> union of affected tests rather than the full suite. When any fallback trigger
+> requires the aggregate operation, it must run through the shared full-suite
+> verifier so the later `test_suite` gate can reuse the proof.
+
 ---
 
 ## Story: Per-task VERIFY runs the scoped affected-test set
@@ -29,8 +34,8 @@ boundary re-runs everything anyway.
 
 #### Negative Paths
 - Given a task whose scoped set comes back **empty** (no new/changed test files and no
-  covering tests found), when the conductor reaches VERIFY, then it runs the **full
-  test suite** for that task instead of skipping verification.
+  covering tests found), when the conductor reaches VERIFY, then it runs the aggregate
+  operation through the shared full-suite verifier instead of skipping verification.
 - Given a scoped VERIFY run fails, when step 4 FIX re-verifies before re-dispatch,
   then the failure-verification re-run uses the **same scoped set** (not the full
   suite, and not zero tests) so the failure signal is comparable.
@@ -80,30 +85,31 @@ gate.
 
 ---
 
-## Story: Batch boundaries and the TDD cycle are untouched
+## Story: Batch boundaries retain quality checks while test execution is scoped
 
-As a harness operator, I want the batch-boundary gates and per-task TDD cycle to stay
-byte-identical in meaning so that the only thing that narrows is the per-task VERIFY
-run.
+As a harness operator, I want batch-boundary quality checks retained while their
+test run uses the union of affected tests, so `/simplify`, linting, and review
+remain strong without duplicating the aggregate gate.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a batch boundary is reached, when pre-batch verification runs, then it still
-  runs the **full test suite, linter, and `/simplify`** unconditionally, and the
-  evaluator dispatch rules (tier table, fresh scoped context) are unchanged.
+- Given a batch boundary is reached, when pre-batch verification runs, then it
+  runs the union of tests affected by that batch plus the linter and
+  `/simplify`, and the evaluator dispatch rules remain unchanged.
 - Given a task is dispatched, when the TDD subagent runs, then its
   RED → DOMAIN → GREEN → DOMAIN → COMMIT cycle — including per-task domain reviews —
   is unchanged by this feature.
 
 #### Negative Paths
-- Given the amended skill text, when validated, then no wording permits a scoped or
-  skipped test run at a batch boundary — the boundary full-suite sentence remains
-  unconditional ("at EVERY boundary regardless of tier" or equivalent).
+- Given affected-test selection at a boundary is unsafe or empty, when a
+  documented fallback trigger fires, then the aggregate operation runs through
+  the shared verifier and the trigger is reported; the boundary never silently
+  skips tests.
 
 ### Done When
-- [ ] The batch-boundary section of `skills/pipeline/SKILL.md` still mandates the full
-      suite + linter + `/simplify` at every boundary, unmodified in meaning.
+- [ ] The batch-boundary section mandates the affected-test union + linter +
+      `/simplify`, with aggregate fallback through the shared verifier.
 - [ ] No diff hunk touches the TDD cycle description, domain-review requirements, or
       evaluator frequency/model table.
 - [ ] `CHANGELOG.md` gains an `[Unreleased]` → Changed entry describing the scoped

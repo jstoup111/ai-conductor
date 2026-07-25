@@ -1,0 +1,311 @@
+/**
+ * Product acceptance specs for issue #940.
+ *
+ * Covers: FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-10,
+ * FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-17.
+ *
+ * These specs drive the real TypeScript entry point with a real Git worktree,
+ * project-owned suite process, YAML configuration, and filesystem evidence.
+ * They deliberately do not import the not-yet-existing verifier internals.
+ * Workflow-surface assertions read the production skill/config files that a
+ * direct operator or CI actually consumes.
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { execa, type ResultPromise } from 'execa';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
+
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const SOURCE_INDEX = join(CONDUCTOR_ROOT, 'src', 'index.ts');
+const TSX_LOADER = join(CONDUCTOR_ROOT, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+const EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
+const COUNTER_PATH = '.pipeline/test-suite-count';
+
+type CliResult = Awaited<ResultPromise>;
+
+let scratchParent: string;
+let repo: string;
+
+async function git(args: string[]): Promise<void> {
+  await execa('git', args, { cwd: repo });
+}
+
+async function writeProjectFile(path: string, contents: string): Promise<void> {
+  const absolute = join(repo, path);
+  await mkdir(dirname(absolute), { recursive: true });
+  await writeFile(absolute, contents, 'utf8');
+}
+
+async function writeSuiteConfig(overrides = ''): Promise<void> {
+  await writeProjectFile(
+    '.ai-conductor/config.yml',
+    [
+      'test_suite:',
+      '  command: "node suite.mjs"',
+      '  working_directory: "."',
+      '  timeout_seconds: 10',
+      '  environment:',
+      '    - SUITE_MODE',
+      overrides,
+      '',
+    ].join('\n'),
+  );
+}
+
+async function invokeSuite(
+  env: Record<string, string | undefined> = {},
+): Promise<CliResult> {
+  return execa(
+    process.execPath,
+    ['--import', TSX_LOADER, SOURCE_INDEX, 'test-suite'],
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        AI_CONDUCTOR_NO_REAL_EXEC: '1',
+        ...env,
+      },
+      reject: false,
+      timeout: 20_000,
+    },
+  );
+}
+
+async function readCount(): Promise<number> {
+  const raw = await readFile(join(repo, COUNTER_PATH), 'utf8');
+  return Number.parseInt(raw.trim(), 10);
+}
+
+async function readEvidence(): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(repo, EVIDENCE_PATH), 'utf8')) as Record<string, unknown>;
+}
+
+beforeEach(async () => {
+  scratchParent = await mkdtemp(join(tmpdir(), 'full-suite-gate-940-'));
+  repo = join(scratchParent, 'repo');
+  await mkdir(repo);
+  await writeProjectFile('.gitignore', '.pipeline/\n');
+  await writeProjectFile('src/app.ts', 'export const value = 1;\n');
+  await writeProjectFile('README.md', '# fixture\n');
+  await writeProjectFile(
+    'suite.mjs',
+    [
+      "import { mkdir, readFile, writeFile } from 'node:fs/promises';",
+      "await mkdir('.pipeline', { recursive: true });",
+      "let count = 0;",
+      "try { count = Number.parseInt(await readFile('.pipeline/test-suite-count', 'utf8'), 10); } catch {}",
+      "await writeFile('.pipeline/test-suite-count', String(count + 1));",
+      "if (process.env.SUITE_MODE?.startsWith('fail:')) {",
+      "  console.error(`aggregate failure ${process.env.SUITE_MODE}`);",
+      '  process.exit(7);',
+      '}',
+      "console.log('unit: pass');",
+      "console.log('acceptance: pass');",
+      '',
+    ].join('\n'),
+  );
+  await writeSuiteConfig();
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await git(['add', '.']);
+  await git(['commit', '-q', '-m', 'fixture']);
+});
+
+afterEach(async () => {
+  await rm(scratchParent, { recursive: true, force: true });
+});
+
+describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
+  it('places one non-disableable BUILD gate after wiring_check and before every SHIP validator', () => {
+    const names = ALL_STEPS.map((step) => step.name as string);
+    const suiteIndex = names.indexOf('test_suite');
+
+    expect(suiteIndex).toBe(names.indexOf('wiring_check') + 1);
+    expect(suiteIndex).toBeLessThan(names.indexOf('manual_test'));
+    expect(ALL_STEPS[suiteIndex]).toMatchObject({
+      name: 'test_suite',
+      phase: 'BUILD',
+      enforcement: 'gating',
+      prerequisites: ['wiring_check'],
+      skippableForTiers: [],
+    });
+    expect(VALIDATION_GROUP.members).not.toContain('test_suite');
+  });
+
+  it('fails the public gate non-zero with actionable evidence, never a passing proof', async () => {
+    const result = await invokeSuite({ SUITE_MODE: 'fail:expected-regression' });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/FAILED|non.?zero|expected-regression/i);
+    expect(await readEvidence()).toMatchObject({ outcome: 'FAIL' });
+  });
+});
+
+describe('Story 2 — direct-Claude parity (FR-2, FR-8)', () => {
+  it('orders /test-suite after BUILD and before /manual-test using the TypeScript entry point', async () => {
+    const [conduct, harness, skill] = await Promise.all([
+      readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'HARNESS.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'skills/test-suite/SKILL.md'), 'utf8'),
+    ]);
+
+    expect(conduct.indexOf('/test-suite')).toBeGreaterThan(conduct.indexOf('/pipeline'));
+    expect(conduct.indexOf('/test-suite')).toBeLessThan(conduct.indexOf('/manual-test'));
+    expect(harness).toMatch(/BUILD[\s\S]*\/test-suite[\s\S]*SHIP/i);
+    expect(skill).toMatch(/conduct-ts test-suite/);
+    expect(skill).toMatch(/\/tdd|\/pipeline/);
+    expect(skill).not.toMatch(/\bbin\/conduct\b/);
+  });
+});
+
+describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
+  it('executes the declared command in its working directory and records one PASS', async () => {
+    const result = await invokeSuite();
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/EXECUTED/i);
+    expect(await readCount()).toBe(1);
+    expect(await readEvidence()).toMatchObject({
+      outcome: 'PASS',
+      command: 'node suite.mjs',
+    });
+  });
+
+  it('fails closed for missing or malformed declaration without writing PASS evidence', async () => {
+    await writeProjectFile('.ai-conductor/config.yml', 'test_suite:\n  command: ""\n');
+
+    const result = await invokeSuite();
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/test_suite|command|configuration/i);
+    await expect(readEvidence()).resolves.not.toMatchObject({ outcome: 'PASS' });
+  });
+
+  it('classifies unlaunchable, timeout, and non-zero commands as distinct blocking outcomes', async () => {
+    const cases = [
+      { command: 'definitely-not-a-command-940', reason: /resolve|launch|not found/i },
+      { command: 'node -e "setTimeout(() => {}, 5000)"', reason: /timeout/i, timeout: 1 },
+      { command: 'node -e "process.exit(9)"', reason: /non.?zero|exit.*9/i },
+    ];
+
+    for (const testCase of cases) {
+      await writeProjectFile(
+        '.ai-conductor/config.yml',
+        [
+          'test_suite:',
+          `  command: '${testCase.command.replaceAll("'", "''")}'`,
+          '  working_directory: "."',
+          `  timeout_seconds: ${testCase.timeout ?? 10}`,
+          '',
+        ].join('\n'),
+      );
+      const result = await invokeSuite();
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout + result.stderr).toMatch(testCase.reason);
+      expect(await readEvidence()).toMatchObject({ outcome: 'FAIL' });
+    }
+  });
+});
+
+describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, FR-12, FR-16)', () => {
+  it('launches once across unchanged fallback, gate, and finish-style checks', async () => {
+    const first = await invokeSuite();
+    const gate = await invokeSuite();
+    const finish = await invokeSuite();
+
+    expect(first.exitCode).toBe(0);
+    expect(first.stdout + first.stderr).toMatch(/EXECUTED/i);
+    expect(gate.exitCode).toBe(0);
+    expect(gate.stdout + gate.stderr).toMatch(/REUSED/i);
+    expect(finish.exitCode).toBe(0);
+    expect(finish.stdout + finish.stderr).toMatch(/REUSED/i);
+    expect(await readCount()).toBe(1);
+  });
+
+  it('reruns for relevant dirty content while a documentation-only edit remains reusable', async () => {
+    expect((await invokeSuite()).exitCode).toBe(0);
+
+    await writeProjectFile('README.md', '# documentation only\n');
+    const docsOnly = await invokeSuite();
+    expect(docsOnly.exitCode).toBe(0);
+    expect(docsOnly.stdout + docsOnly.stderr).toMatch(/REUSED/i);
+    expect(await readCount()).toBe(1);
+
+    await writeProjectFile('src/app.ts', 'export const value = 2;\n');
+    const sourceChanged = await invokeSuite();
+    expect(sourceChanged.exitCode).toBe(0);
+    expect(sourceChanged.stdout + sourceChanged.stderr).toMatch(/STALE[\s\S]*EXECUTED|EXECUTED[\s\S]*STALE/i);
+    expect(await readCount()).toBe(2);
+  });
+
+  it('invalidates on declared environment changes without exposing the environment value', async () => {
+    expect((await invokeSuite({ SUITE_MODE: 'first-secret-940' })).exitCode).toBe(0);
+    const changed = await invokeSuite({ SUITE_MODE: 'second-secret-940' });
+    const serialized = JSON.stringify(await readEvidence());
+
+    expect(changed.exitCode).toBe(0);
+    expect(changed.stdout + changed.stderr).toMatch(/STALE|EXECUTED/i);
+    expect(await readCount()).toBe(2);
+    expect(serialized).not.toContain('first-secret-940');
+    expect(serialized).not.toContain('second-secret-940');
+  });
+});
+
+describe('Story 6 — scoped intermediate verification (FR-5)', () => {
+  it('keeps ordinary implementation/review checks scoped and routes broad fallback through the verifier', async () => {
+    const files = await Promise.all(
+      [
+        'skills/tdd/SKILL.md',
+        'skills/pipeline/SKILL.md',
+        'skills/code-review/SKILL.md',
+        'skills/debugging/SKILL.md',
+      ].map(async (path) => [path, await readFile(join(REPO_ROOT, path), 'utf8')] as const),
+    );
+
+    for (const [path, contents] of files) {
+      expect(contents, path).toMatch(/scoped|affected|impacted/i);
+      expect(contents, path).not.toMatch(/always run (?:the )?full (?:test )?suite/i);
+    }
+    const combined = files.map(([, contents]) => contents).join('\n');
+    expect(combined).toMatch(/conduct-ts test-suite/);
+  });
+});
+
+describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, FR-15, FR-17)', () => {
+  it('makes finish reuse or supply the only fallback and removes a local suite run from /pr', async () => {
+    const [finish, pr] = await Promise.all([
+      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
+    ]);
+
+    expect(finish).toMatch(/conduct-ts test-suite/);
+    expect(finish).toMatch(/REUSED|missing|stale/i);
+    expect(pr).not.toMatch(/(?:npm test|conduct-ts test-suite|full (?:test )?suite)/i);
+  });
+
+  it('preserves independent CI, autoresolve, and CI-repair suite execution', async () => {
+    const [workflow, autoresolve, ciFix] = await Promise.all([
+      readFile(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8'),
+      readFile(join(CONDUCTOR_ROOT, 'src/engine/autoresolve.ts'), 'utf8'),
+      readFile(join(CONDUCTOR_ROOT, 'src/engine/ci-fix.ts'), 'utf8'),
+    ]);
+
+    expect(workflow).toMatch(/npm test/);
+    expect(autoresolve).toMatch(/suiteCommand|suite command/i);
+    expect(ciFix).toMatch(/suite|test/i);
+    expect(autoresolve).not.toMatch(/test-suite-evidence\.json/);
+    expect(ciFix).not.toMatch(/test-suite-evidence\.json/);
+  });
+});
