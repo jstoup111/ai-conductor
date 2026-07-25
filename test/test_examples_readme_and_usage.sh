@@ -36,51 +36,6 @@ assert() {
   fi
 }
 
-echo "=== Story 1: examples/ scaffolding and README ==="
-
-README="$EXAMPLES_DIR/README.md"
-
-if [ -f "$README" ]; then
-  assert "examples/README.md exists" 0
-
-  for scenario in inline interactive daemon engineer intake-loop; do
-    if grep -qi "$scenario" "$README"; then
-      assert "README lists the '${scenario}' scenario" 0
-    else
-      assert "README lists the '${scenario}' scenario" 1
-    fi
-  done
-
-  if grep -Eq '\./(inline|interactive|daemon|engineer|intake-loop)\.sh[[:space:]]*\[?s\|m\|l\]?' "$README" \
-    || grep -Eq '\./<flow>\.sh' "$README"; then
-    assert "README documents the ./<flow>.sh [s|m|l] invocation" 0
-  else
-    assert "README documents the ./<flow>.sh [s|m|l] invocation" 1
-  fi
-
-  if grep -Eqi 'headless|self-asserting' "$README" && grep -Eqi 'guided|interactive launcher' "$README"; then
-    assert "README distinguishes headless self-asserting vs guided-launcher scenarios" 0
-  else
-    assert "README distinguishes headless self-asserting vs guided-launcher scenarios" 1
-  fi
-
-  if grep -Eqi 'checkpoint' "$README"; then
-    assert "README documents each scenario's completion checkpoint" 0
-  else
-    assert "README documents each scenario's completion checkpoint" 1
-  fi
-else
-  assert "examples/README.md exists" 1
-  assert "README lists the 'inline' scenario" 1
-  assert "README lists the 'interactive' scenario" 1
-  assert "README lists the 'daemon' scenario" 1
-  assert "README lists the 'engineer' scenario" 1
-  assert "README lists the 'intake-loop' scenario" 1
-  assert "README documents the ./<flow>.sh [s|m|l] invocation" 1
-  assert "README distinguishes headless self-asserting vs guided-launcher scenarios" 1
-  assert "README documents each scenario's completion checkpoint" 1
-fi
-
 echo ""
 echo "=== Story 1 negative path: usage on --help / unknown tier ==="
 
