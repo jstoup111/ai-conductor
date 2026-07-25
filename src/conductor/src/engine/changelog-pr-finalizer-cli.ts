@@ -41,7 +41,10 @@ export async function finalizeChangelogPr(
     rm: (path) => rm(path, { force: true }).then(() => undefined),
   },
 ): Promise<ChangelogPrFinalizationState> {
-  const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/([1-9]\d*)$/.exec(prUrl);
+  const match =
+    /^https:\/\/github\.com\/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[A-Za-z0-9._-]+\/pull\/([1-9]\d*)$/.exec(
+      prUrl,
+    );
   if (match === null) throw new Error('invalid canonical GitHub pull request URL');
 
   const changelog = await runners.readFile(changelogPath);

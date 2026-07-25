@@ -217,37 +217,68 @@ describe('finalizeChangelogPr', () => {
     });
   });
 
-  it('refuses an invalid PR URL without reading or changing the changelog', async () => {
+  it('refuses non-canonical PR URL forms before reading or changing the changelog', async () => {
+    const changelogPath = '/repo/CHANGELOG.md';
     const changelog = '## [Unreleased]\n\n- Add widget support ({{IMPLEMENTATION_PR}}).\n';
-    const readFile = vi.fn<ChangelogPrFinalizerRunners['readFile']>();
-    const writeFile = vi.fn<ChangelogPrFinalizerRunners['writeFile']>();
-    const rename = vi.fn<ChangelogPrFinalizerRunners['rename']>();
-    let error: unknown;
+    const invalidUrls = [
+      ['external host', 'https://example.com/org/repo/pull/42'],
+      ['query-shaped repository', 'https://github.com/org/repo?fake/pull/42'],
+      ['fragment-shaped repository', 'https://github.com/org/repo#fake/pull/42'],
+      ['query suffix', 'https://github.com/org/repo/pull/42?fake=true'],
+      ['fragment suffix', 'https://github.com/org/repo/pull/42#fake'],
+      ['userinfo', 'https://user@github.com/org/repo/pull/42'],
+      ['port', 'https://github.com:443/org/repo/pull/42'],
+    ] as const;
+    const outcomes = [];
 
-    try {
-      await finalizeChangelogPr('/repo/CHANGELOG.md', 'https://example.com/pull/456', {
-        readFile,
-        writeFile,
-        rename,
-        rm: vi.fn(),
+    for (const [label, prUrl] of invalidUrls) {
+      const files = new Map([[changelogPath, changelog]]);
+      const readFile = vi.fn(async (path: string) => files.get(path) ?? '');
+      const writeFile = vi.fn(async (path: string, contents: string) => {
+        files.set(path, contents);
       });
-    } catch (caught) {
-      error = caught;
+      const rename = vi.fn(async (from: string, to: string) => {
+        files.set(to, files.get(from) ?? '');
+        files.delete(from);
+      });
+      const rm = vi.fn(async (path: string) => {
+        files.delete(path);
+      });
+      let error: unknown;
+
+      try {
+        await finalizeChangelogPr(changelogPath, prUrl, {
+          readFile,
+          writeFile,
+          rename,
+          rm,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      outcomes.push({
+        label,
+        error: error instanceof Error ? error.message : undefined,
+        changelog: files.get(changelogPath),
+        reads: readFile.mock.calls.length,
+        writes: writeFile.mock.calls.length,
+        renames: rename.mock.calls.length,
+        cleanups: rm.mock.calls.length,
+      });
     }
 
-    expect({
-      error: error instanceof Error ? error.message : undefined,
-      changelog,
-      reads: readFile.mock.calls,
-      writes: writeFile.mock.calls,
-      renames: rename.mock.calls,
-    }).toEqual({
-      error: 'invalid canonical GitHub pull request URL',
-      changelog: '## [Unreleased]\n\n- Add widget support ({{IMPLEMENTATION_PR}}).\n',
-      reads: [],
-      writes: [],
-      renames: [],
-    });
+    expect(outcomes).toEqual(
+      invalidUrls.map(([label]) => ({
+        label,
+        error: 'invalid canonical GitHub pull request URL',
+        changelog,
+        reads: 0,
+        writes: 0,
+        renames: 0,
+        cleanups: 0,
+      })),
+    );
   });
 
   it('returns no-op without writing when the changelog has no token', async () => {
