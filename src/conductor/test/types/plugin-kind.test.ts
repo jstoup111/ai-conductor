@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { VALID_PLUGIN_KINDS } from '../../src/types/plugin.js';
-import type { PluginKind } from '../../src/types/plugin.js';
 
 /**
  * Task A1: memory_provider plugin kind registration.
@@ -11,11 +10,5 @@ import type { PluginKind } from '../../src/types/plugin.js';
 describe('PluginKind — memory_provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration)', () => {
   it('VALID_PLUGIN_KINDS includes memory_provider', () => {
     expect(VALID_PLUGIN_KINDS).toContain('memory_provider');
-  });
-
-  it('memory_provider is assignable to PluginKind (type assertion)', () => {
-    // If memory_provider is in the union, this cast is safe at runtime.
-    const kind: PluginKind = 'memory_provider' as PluginKind;
-    expect(kind).toBe('memory_provider');
   });
 });

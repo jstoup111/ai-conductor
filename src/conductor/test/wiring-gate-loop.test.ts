@@ -8,6 +8,8 @@
  *   - an unsatisfied wiring_check verdict blocks manual_test from being
  *     selected next (selector level);
  *   - a satisfied verdict unblocks manual_test (selector level);
+ *   - a real Conductor run dispatches build_review, wiring_check, test_suite,
+ *     then manual_test in that order (runtime registry/composition boundary);
  *   - a wiring gap kicks back to build WITHOUT ever writing .pipeline/HALT —
  *     kickback only, never an unconditional halt (conductor level, real
  *     Conductor run, daemon:true so the wiring_check kickback block engages,
@@ -219,7 +221,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     return { stdout: '' };
   };
 
-  function makeConductor(runner: StepRunner): Conductor {
+  function makeConductor(runner: StepRunner, onFullSuiteEnsure?: () => void): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -233,11 +235,41 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       config: { build_review: { enabled: true } },
       git: fakeGit,
       fullSuiteVerifier: {
-        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        ensure: async () => {
+          onFullSuiteEnsure?.();
+          return { status: 'REUSED', evidence: {} as never };
+        },
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
       },
     });
   }
+
+  it('dispatches build_review, wiring_check, test_suite, then manual_test in a real Conductor run', async () => {
+    await writeState(statePath, {
+      ...frontDone(),
+      complexity_tier: 'M',
+      track: 'technical',
+      coherence_check: 'done',
+    });
+    const ran: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        ran.push(step);
+        return satisfy(step);
+      },
+    };
+
+    await makeConductor(runner, () => ran.push('test_suite')).run();
+
+    const reviewIdx = ran.indexOf('build_review');
+    const wiringIdx = ran.indexOf('wiring_check');
+    const testSuiteIdx = ran.indexOf('test_suite');
+    const manualIdx = ran.indexOf('manual_test');
+    expect(reviewIdx).toBeGreaterThan(-1);
+    expect(wiringIdx).toBeGreaterThan(reviewIdx);
+    expect(testSuiteIdx).toBeGreaterThan(wiringIdx);
+    expect(manualIdx).toBeGreaterThan(testSuiteIdx);
+  });
 
   it('a wiring gap kicks back to build with NO .pipeline/HALT written', async () => {
     // technical track: skips prd_audit (no PRD to audit) so this test

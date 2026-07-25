@@ -1236,17 +1236,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         }
       });
 
-      // Story 5 scope note exemption: repairProcessed is exempt from the null-prUrl guard
-      // because it drives a cache repair from a committed shipped record already merged
-      // on the base branch. Its null prUrl marks a malformed-but-proven record (ADR §2,
-      // scope note). This test documents the exception for future refactors.
-      it('repairProcessed exemption documented: scope note permits null prUrl in repair-path markers (Story 5)', () => {
-        // This is a documentation test — it clarifies that the live-path guard
-        // (markProcessed must be called with non-null prUrl) does NOT apply to
-        // repairProcessed, which is driven by committed evidence already on the branch.
-        // See ADR adr-2026-07-06-daemon-false-ship-guard §2, scope note (amended).
-        expect(true).toBe(true); // placeholder assertion
-      });
     });
 
     describe('Task 11: Park evidence — extended diagnostic HALT (TS-4)', () => {
