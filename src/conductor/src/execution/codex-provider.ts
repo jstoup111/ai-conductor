@@ -73,11 +73,18 @@ export class CodexProvider implements LLMProvider {
     const parsed = parseCodexJsonl(stdout);
     const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
 
-    if (exitCode === 127 || /ENOENT|command not found|codex:\s*not found|spawn codex/i.test(stderr)) {
+    // Missing-binary classification is anchored to structural process signals.
+    // Never infer provider-wide unavailability from arbitrary stderr prose.
+    if (result.code === 'ENOENT' || exitCode === 127) {
+      const reason =
+        "LLM provider 'codex' not found. Install it or check your PATH.";
       return {
         success: false,
-        output: "LLM provider 'codex' not found. Install it or check your PATH.",
+        output: reason,
         exitCode,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
       };
     }
 
