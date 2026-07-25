@@ -92,6 +92,7 @@ describe('engine/resolved-config', () => {
       expect(CLAUDE_MODEL_POLICY.stepEfforts.worktree).toBe('low');
       expect(CLAUDE_MODEL_POLICY.stepEfforts.finish).toBe('low');
       expect(CLAUDE_MODEL_POLICY.stepEfforts.build).toBe('low'); // dispatcher
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.test_suite).toBe('low');
     });
 
     it('recovery steps (rebase, remediate) use fable with high+ effort', () => {
@@ -107,6 +108,7 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_REVIEW.architecture_diagram).toBe('auto');
       expect(DEFAULT_STEP_REVIEW.acceptance_specs).toBe('auto');
       expect(DEFAULT_STEP_REVIEW.build).toBe('auto');
+      expect(DEFAULT_STEP_REVIEW.test_suite).toBe('auto');
       expect(DEFAULT_STEP_REVIEW.prd).toBe('manual');
     });
 
@@ -121,6 +123,7 @@ describe('engine/resolved-config', () => {
       // architecture_review is out of #188 scope — stays at 5.
       expect(DEFAULT_STEP_RETRIES.architecture_review).toBe(5);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
+      expect(DEFAULT_STEP_RETRIES.test_suite).toBe(1);
     });
 
     it('fallbacks are sensible', () => {
@@ -167,7 +170,7 @@ describe('engine/resolved-config', () => {
         ['stories', 'DECIDE'], ['conflict_check', 'DECIDE'], ['plan', 'DECIDE'],
         ['architecture_diagram', 'DECIDE'], ['architecture_review', 'DECIDE'],
         ['worktree', 'SETUP'], ['acceptance_specs', 'BUILD'], ['build', 'BUILD'],
-        ['build_review', 'BUILD'], ['wiring_check', 'BUILD'], ['manual_test', 'SHIP'],
+        ['build_review', 'BUILD'], ['wiring_check', 'BUILD'], ['test_suite', 'BUILD'], ['manual_test', 'SHIP'],
         ['prd_audit', 'SHIP'], ['architecture_review_as_built', 'SHIP'], ['retro', 'SHIP'],
         ['rebase', 'SHIP'], ['finish', 'SHIP'], ['remediate', 'SHIP'],
         ['attribution_verify', 'SHIP'],
@@ -199,6 +202,7 @@ describe('engine/resolved-config', () => {
         { step: 'build', model: 'sonnet', effort: 'low' },
         { step: 'build_review', model: 'opus', effort: 'high' },
         { step: 'wiring_check', model: 'sonnet', effort: 'low' },
+        { step: 'test_suite', model: 'sonnet', effort: 'low' },
         { step: 'manual_test', model: 'sonnet', effort: 'medium' },
         { step: 'prd_audit', model: 'opus', effort: 'high' },
         { step: 'architecture_review_as_built', model: 'sonnet', effort: 'medium' },
@@ -208,6 +212,20 @@ describe('engine/resolved-config', () => {
         { step: 'remediate', model: 'fable', effort: 'high' },
         { step: 'attribution_verify', model: 'opus', effort: 'high' },
       ]);
+    });
+
+    it('resolves the native test_suite gate to one auto-reviewed non-disableable attempt', () => {
+      expect(resolveStepConfig('test_suite', 'BUILD', CLAUDE_MODEL_POLICY)).toEqual({
+        step: 'test_suite',
+        model: 'sonnet',
+        effort: 'low',
+        max_retries: 1,
+        review: 'auto',
+        skill: undefined,
+        hooks: { before: undefined, after: undefined },
+        disabled: false,
+        escalate: true,
+      });
     });
   });
 

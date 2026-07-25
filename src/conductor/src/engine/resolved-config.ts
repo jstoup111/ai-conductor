@@ -44,6 +44,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   build: 3,
   build_review: 3,
   wiring_check: 3,
+  test_suite: 1,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -72,6 +73,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
   wiring_check: 'auto', // deterministic gap-carrying evidence file, no LLM verdict to review
+  test_suite: 'auto', // deterministic native verifier; no generative review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED

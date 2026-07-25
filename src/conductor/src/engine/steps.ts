@@ -166,7 +166,7 @@ export const ALL_STEPS: StepDefinition[] = [
   },
   {
     // Wiring reachability gate: sits strictly between build_review and
-    // manual_test, verifying newly-built code is actually reachable/wired
+    // test_suite, verifying newly-built code is actually reachable/wired
     // in before manual test exercises it. Gating loop member like its
     // upstream neighbor build_review.
     name: 'wiring_check',
@@ -174,6 +174,19 @@ export const ALL_STEPS: StepDefinition[] = [
     phase: 'BUILD',
     enforcement: 'gating',
     prerequisites: ['build_review'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    loopGate: true,
+  },
+  {
+    // Native aggregate verification gate: serially blocks the BUILD-to-SHIP
+    // boundary after wiring reachability and before the validation group.
+    // Task 16 wires execution through FullSuiteVerifier.
+    name: 'test_suite',
+    label: 'Test Suite',
+    phase: 'BUILD',
+    enforcement: 'gating',
+    prerequisites: ['wiring_check'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
@@ -187,7 +200,7 @@ export const ALL_STEPS: StepDefinition[] = [
     // one of the two false-ship paths behind incident PR #364. Matches the
     // enforcement the manual-test SKILL.md frontmatter has always declared.
     enforcement: 'gating',
-    prerequisites: ['wiring_check'],
+    prerequisites: ['test_suite'],
     // ADR D5: Small-tier features skip manual testing.
     skippableForTiers: ['S'],
     isCheckpoint: true,
@@ -334,7 +347,7 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
 /**
  * The SHIP-tail validation group (adr-2026-07-10-validation-group-join.md,
  * Decision-1): manual_test, prd_audit, architecture_review_as_built, in that
- * order, positioned immediately after build_review. This is a WRAPPER over
+ * order, positioned immediately after the serial test_suite gate. This is a WRAPPER over
  * the members' existing `StepDefinition`s in `ALL_STEPS` — it does not
  * remove, replace, or reorder them. Fan-out dispatch, join logic, and the
  * auto-mode-only engagement guard are built in later tasks (14+); this

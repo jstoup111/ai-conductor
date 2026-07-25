@@ -75,6 +75,9 @@ const STEP_PROMPTS: Record<StepName, string> = {
   // or computes the wiring-reachability evidence file directly; no skill
   // dispatch. Present only to keep the Record<StepName, string> exhaustive.
   wiring_check: '/conduct wiring-check',
+  // Engine-native aggregate verifier gate (Task 16 wires execution). This is
+  // a display/exhaustiveness sentinel, never a skill dispatch.
+  test_suite: '/conduct test-suite',
   manual_test: '/manual-test',
   prd_audit: '/prd-audit',
   // Runs the architecture-review skill in its as-built compliance-gate mode.

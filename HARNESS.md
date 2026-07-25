@@ -54,7 +54,7 @@ UNDERSTAND → DECIDE → BUILD → ✓checkpoint → SHIP(manual-test) → ✓c
 
 In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
 architecture-review --as-built) execute as one **concurrent validation group** after the
-build gates (build_review → wiring_check), fan-out capped by `validation_concurrency`
+build gates (build_review → wiring_check → test_suite), fan-out capped by `validation_concurrency`
 with a single-writer join; interactive runs keep the serial sequence and checkpoints
 shown above.
 
@@ -145,7 +145,8 @@ this section. CI enforces both content drift (the table matches the source) and 
 | writing-system-tests | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Generating specs from acceptance criteria — templated work. |
 | pipeline | autonomous engine | sonnet | low | gpt-5.6-terra | low | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
 | build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review. |
-| wiring-check | autonomous engine | sonnet | low | gpt-5.6-terra | low | Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and manual_test — mechanical evidence gathering, no generative judgement required. |
+| wiring-check | autonomous engine | sonnet | low | gpt-5.6-terra | low | Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and test_suite — mechanical evidence gathering, no generative judgement required. |
+| test-suite | autonomous engine | sonnet | low | gpt-5.6-terra | low | Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required. |
 | manual-test | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured validation against stories — pattern-following. |
 | prd-audit | autonomous engine | opus | high | gpt-5.6-sol | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
 | architecture-review --as-built | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design. |

@@ -205,6 +205,16 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('rejects steps.test_suite.disable: true — the native BUILD gate is non-disableable', () => {
+      const result = validateConfig({
+        steps: { test_suite: { disable: true } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/test_suite/);
+      expect(result.error.message).toMatch(/gating/i);
+    });
+
     it('rejects disabling a structural step', () => {
       const result = validateConfig({
         steps: { build: { disable: true } },

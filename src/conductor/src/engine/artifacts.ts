@@ -80,6 +80,10 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed, same convention as build_review/manual_test above.
   wiring_check: ['.pipeline/wiring-evidence.json'],
+  // Engine-native completion is wired to FullSuiteVerifier in Task 16. Keep
+  // this exhaustive sentinel empty until the verifier predicate exists; mere
+  // evidence-file presence must never satisfy the gate.
+  test_suite: [],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
