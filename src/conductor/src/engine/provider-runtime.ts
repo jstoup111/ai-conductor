@@ -13,6 +13,7 @@ export interface ProviderRuntime {
   policy: ProviderModelPolicy;
   builtIn: boolean;
   availability: ModelAvailability;
+  runWideUnavailable?: { reason: string };
 }
 
 export class ProviderRuntimeSet {

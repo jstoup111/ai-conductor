@@ -10,7 +10,16 @@ import {
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import type { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+
+interface ClassifiedInvokeResult extends InvokeResult {
+  providerUnavailable?: boolean;
+  providerUnavailableReason?: string;
+  providerUnavailableScope?: 'run';
+  providerInvocationSkipped?: boolean;
+  timedOut?: boolean;
+  rejected?: boolean;
+}
 
 interface ProviderRuntime {
   key: string;
@@ -18,6 +27,7 @@ interface ProviderRuntime {
   policy: ProviderModelPolicy;
   builtIn: boolean;
   availability: ModelAvailability;
+  runWideUnavailable?: { reason: string };
 }
 
 interface ProviderRuntimeSet {
@@ -32,7 +42,7 @@ type CreateProviderRuntimeSet = (
 type InvokeRuntime = (
   runtime: ProviderRuntime,
   options: InvokeOptions,
-) => Promise<InvokeResult>;
+) => Promise<ClassifiedInvokeResult>;
 
 async function loadRuntimeSetFactory(): Promise<
   CreateProviderRuntimeSet | undefined
@@ -225,5 +235,165 @@ describe('ProviderRuntimeSet', () => {
       },
       dead: { codex: true, claude: true },
     });
+  });
+
+  it('caches only explicit deterministic run-wide provider unavailability', async () => {
+    const invokeRuntime = await loadRuntimeInvoker();
+    const cases: Array<{
+      name: string;
+      result: ClassifiedInvokeResult;
+      expectedCalls: number;
+      expectedReason?: string;
+    }> = [
+      {
+        name: 'missing executable',
+        result: {
+          success: false,
+          output: 'codex executable missing',
+          exitCode: 127,
+          providerUnavailable: true,
+          providerUnavailableReason: 'codex executable missing',
+          providerUnavailableScope: 'run',
+        },
+        expectedCalls: 1,
+        expectedReason: 'codex executable missing',
+      },
+      {
+        name: 'model exhaustion',
+        result: {
+          success: false,
+          output: 'model unavailable',
+          exitCode: 1,
+          modelUnavailable: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'unscoped provider unavailability',
+        result: {
+          success: false,
+          output: 'provider unavailable for this attempt',
+          exitCode: 1,
+          providerUnavailable: true,
+          providerUnavailableReason: 'provider unavailable for this attempt',
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'timeout',
+        result: {
+          success: false,
+          output: 'request timed out',
+          exitCode: 1,
+          timedOut: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'authentication',
+        result: {
+          success: false,
+          output: 'not logged in',
+          exitCode: 1,
+          authFailure: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'rate limit',
+        result: {
+          success: false,
+          output: 'rate limited',
+          exitCode: 1,
+          rateLimited: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'session expiry',
+        result: {
+          success: false,
+          output: 'session expired',
+          exitCode: 1,
+          sessionExpired: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'rejection',
+        result: {
+          success: false,
+          output: 'work rejected',
+          exitCode: 1,
+          rejected: true,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'ordinary failure',
+        result: {
+          success: false,
+          output: 'command failed',
+          exitCode: 1,
+        },
+        expectedCalls: 2,
+      },
+      {
+        name: 'misleading missing-executable prose',
+        result: {
+          success: false,
+          output: 'codex executable missing',
+          exitCode: 1,
+        },
+        expectedCalls: 2,
+      },
+    ];
+    const observed = [];
+
+    for (const fixture of cases) {
+      let calls = 0;
+      const runtime: ProviderRuntime = {
+        key: `codex-${fixture.name}`,
+        provider: {
+          invoke: vi.fn(async () => {
+            calls += 1;
+            return fixture.result;
+          }),
+          invokeInteractive: vi.fn(async () => {}),
+        },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      };
+      const options: InvokeOptions = {
+        prompt: fixture.name,
+        sessionId: `${fixture.name}-session`,
+        resume: false,
+        model: 'opaque-model',
+      };
+
+      await invokeRuntime?.(runtime, options);
+      const second = await invokeRuntime?.(runtime, options);
+      const skipped = second?.providerInvocationSkipped === true;
+      observed.push({
+        name: fixture.name,
+        calls,
+        cachedReason: runtime.runWideUnavailable?.reason,
+        skipped,
+        exposedReason: skipped
+          ? second.providerUnavailableReason
+          : undefined,
+      });
+    }
+
+    expect(observed).toEqual(
+      cases.map((fixture) => ({
+        name: fixture.name,
+        calls: fixture.expectedCalls,
+        cachedReason: fixture.expectedReason,
+        skipped: fixture.expectedReason !== undefined,
+        exposedReason: fixture.expectedReason,
+      })),
+    );
   });
 });
