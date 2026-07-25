@@ -383,6 +383,62 @@ describe('publishShipmentRepair', () => {
     })).rejects.toThrow('repair 916/durable-shipped-records pull-request failed: API rate limit exceeded');
   });
 
+  it('posts the stable failed status only when the GitHub repair head is invalid', async () => {
+    const statuses: Array<{ sha: string; state: string; description: string }> = [];
+
+    const result = await publishShipmentRepair(repairPlan, {
+      ensureRepairBranch: async () => {},
+      commitRecordOnly: async () => ({ headSha: repairHead }),
+      findOrCreateRepairPullRequest: async () => ({
+        url: 'https://github.com/acme/conductor/pull/1000',
+        headSha: repairHead,
+      }),
+      verifyRepairHead: async () => ({
+        kind: 'refusal',
+        code: 'shipped-record-hash-mismatch',
+        expected: 'a'.repeat(64),
+        observed: 'b'.repeat(64),
+      }),
+      postStatus: async ({ sha, state, description }) => { statuses.push({ sha, state, description }); },
+    });
+
+    expect({ result, statuses }).toEqual({
+      result: {
+        kind: 'repair-published',
+        identity: '916/durable-shipped-records',
+        branch: repairBranch,
+        pullRequestUrl: 'https://github.com/acme/conductor/pull/1000',
+        headSha: repairHead,
+        status: 'failure',
+      },
+      statuses: [{
+        sha: repairHead,
+        state: 'failure',
+        description: 'durable shipment evidence: shipped-record-hash-mismatch',
+      }],
+    });
+  });
+
+  it('surfaces insufficient status authority without broadening the repair operation', async () => {
+    await expect(publishShipmentRepair(repairPlan, {
+      ensureRepairBranch: async () => {},
+      commitRecordOnly: async () => ({ headSha: repairHead }),
+      findOrCreateRepairPullRequest: async () => ({
+        url: 'https://github.com/acme/conductor/pull/1000',
+        headSha: repairHead,
+      }),
+      verifyRepairHead: async () => ({
+        kind: 'valid',
+        slug: 'durable-shipped-records',
+        pr: 'https://github.com/acme/conductor/pull/916',
+        recordPath: '.docs/shipped/durable-shipped-records.md',
+        hash: 'a'.repeat(64),
+        commit: repairHead,
+      }),
+      postStatus: async () => { throw new Error('403 statuses: write permission required'); },
+    })).rejects.toThrow('repair 916/durable-shipped-records status failed: 403 statuses: write permission required');
+  });
+
   it('does not publish a branch, commit, PR, or status for aligned or unresolved plans', async () => {
     const publisher = {
       ensureRepairBranch: async () => { throw new Error('must not create a branch'); },

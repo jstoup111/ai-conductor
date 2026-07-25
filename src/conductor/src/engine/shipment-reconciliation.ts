@@ -167,12 +167,16 @@ export async function publishShipmentRepair(
   const description = verdict.kind === 'valid'
     ? 'durable shipment evidence valid on repair head'
     : `durable shipment evidence: ${repairFailureDescription(verdict)}`;
-  await publisher.postStatus({
-    sha: headSha,
-    context: SHIPMENT_REPAIR_STATUS_CONTEXT,
-    state: status,
-    description,
-  });
+  try {
+    await publisher.postStatus({
+      sha: headSha,
+      context: SHIPMENT_REPAIR_STATUS_CONTEXT,
+      state: status,
+      description,
+    });
+  } catch (error) {
+    throw new Error(`repair ${plan.identity} status failed: ${errorMessage(error)}`);
+  }
 
   return {
     kind: 'repair-published',
