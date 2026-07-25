@@ -11,15 +11,6 @@
 > of `FR-N`; each maps to a component/decision in the design doc. Stories state observable
 > behavior (WHAT), not mechanism — the *how* is the plan's job.
 
-> **Provider-scope amendment (#905, approved 2026-07-25):** provider-neutral
-> self-host detection, version, release-artifact, and publication gates continue to
-> apply to every self-build. The relink, throwaway `CLAUDE_CONFIG_DIR`, Claude
-> credential preparation, and Claude hook sandbox requirements apply only when the
-> preferred build provider is Claude. A Codex-selected self-build skips those
-> Claude-specific steps and uses Codex's native readiness and bounded workspace
-> policy. Authentication failure still enters the provider-neutral bounded park; the
-> skip applies only to Claude-specific preparation, never common self-host gates.
-
 ---
 
 ## Story: Auto-detect that the repo under build is the harness
