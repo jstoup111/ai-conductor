@@ -1231,11 +1231,20 @@ export class Conductor {
     const actualProvider = failed?.actualProvider;
     if (authentication?.provider === 'codex' && actualProvider) {
       if (authentication.source === 'api-key') {
+        const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
+        const startedAt = Date.now();
+        await this.events.emit({
+          type: 'credentials_park',
+          reason: 'Codex API key is startup-only — waiting for daemon restart',
+        });
+        while (timeoutMs > 0 && Date.now() - startedAt < timeoutMs) {
+          await this.sleep(1_000);
+        }
         return {
           timedOut: true,
           haltReason:
             'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
-            'Restart the daemon after updating CODEX_API_KEY, then re-queue this feature.',
+            'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
         };
       }
 

@@ -124,7 +124,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(park).toEqual({ timedOut: false, haltReason: '' });
   });
 
-  it('halts Codex API-key failures as restart-required without rechecking another source', async () => {
+  it('parks Codex API-key failures until the configured timeout without rechecking another source', async () => {
     const readiness = vi.fn();
     const runtimes = new ProviderRuntimeSet([
       {
@@ -140,7 +140,12 @@ describe('conductor auth-park: daemon-token mode', () => {
       },
     ]);
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
-    const sleepFn = vi.fn(async () => {});
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async () => {
+      clockOffset += 60_000;
+    });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -150,23 +155,64 @@ describe('conductor auth-park: daemon-token mode', () => {
       mode: 'auto',
       maxRetries: 1,
       sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'unusable',
+        },
+      });
+
+      expect(runner.run).not.toHaveBeenCalled();
+      expect(readiness).not.toHaveBeenCalled();
+      expect(sleepFn).toHaveBeenCalledTimes(1);
+      expect(park.timedOut).toBe(true);
+      expect(park.haltReason).toContain('restart the daemon');
+      expect(park.haltReason).not.toContain('CODEX_API_KEY=');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('halts Codex API-key failures immediately when the auth park timeout is disabled', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const sleepFn = vi.fn(async () => {});
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
     });
 
     const park = await (conductor as any).parkOnAuthFailure({
       actualProvider: 'codex',
-      authentication: {
-        provider: 'codex',
-        source: 'api-key',
-        state: 'unusable',
-      },
+      authentication: { provider: 'codex', source: 'api-key', state: 'unusable' },
     });
 
-    expect(runner.run).not.toHaveBeenCalled();
     expect(readiness).not.toHaveBeenCalled();
     expect(sleepFn).not.toHaveBeenCalled();
-    expect(park.haltReason).toContain('Restart the daemon');
-    expect(park.haltReason).not.toContain('CODEX_API_KEY=');
+    expect(park).toMatchObject({ timedOut: true });
+    expect(park.haltReason).toContain('restart the daemon');
   });
 
   it.each(['missing', 'unusable', 'unverifiable'] as const)(
@@ -257,6 +303,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       mode: 'auto',
       maxRetries: 1,
       sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
     });
 
@@ -265,7 +312,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(runner.run).toHaveBeenCalledTimes(1);
     expect(readiness).not.toHaveBeenCalled();
     expect(halts).toHaveLength(1);
-    expect(halts[0]).toContain('Restart the daemon');
+    expect(halts[0]).toContain('restart the daemon');
     expect(halts[0]).not.toContain('replacement-must-not-hot-resume');
   });
 
