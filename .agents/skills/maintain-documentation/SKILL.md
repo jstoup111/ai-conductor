@@ -62,3 +62,35 @@ Maintain this repository's human-facing documentation when invoked.
 - Inline source comments: Flag contradictions only. Do not create, edit, move, rename, or delete them.
 - JSDoc: Flag contradictions only. Do not create, edit, move, rename, or delete it.
 - Docstrings: Flag contradictions only. Do not create, edit, move, rename, or delete them.
+
+## Audiences and destinations
+
+Audience priority:
+
+1. New users
+2. Operators implementing features
+3. Contributors modifying the codebase
+4. Maintainers debugging internals
+
+Select each destination by its purpose. Assign each fact to one canonical document.
+
+- Quick start: Provide the shortest path to a working result.
+- Guides: Provide task-oriented procedures.
+- Reference and configuration: Define interfaces, options, and configuration facts.
+- Explanation and deep dives: Explain concepts, behavior, and design.
+- Runbooks: Define operational and recovery procedures.
+- Contributor documentation and code organization: Explain development workflows and implementation structure.
+- Changelog: Record release history.
+
+Propose any new category for operator approval before using it. Treat current flat `docs/*.md` files as transitional until a separate migration.
+
+## README ownership
+
+Treat this README contract as a repository-local refinement of the global harness convention.
+
+- Maintain README as one concise landing page.
+- Allow value or marketing language only in one project-value section.
+- Include requirements, installation, the shortest working quick start, a documentation map, and contribution and support links.
+- In the shortest working quick start, highlight `conduct-ts --interactive`, daemon operation, and multiprovider use.
+- For a reader-visible change, update the canonical affected document. Leave README unchanged unless the change affects its landing-page contract.
+- Keep consumer projects without this custom step configuration unchanged; they continue to use the global harness convention.

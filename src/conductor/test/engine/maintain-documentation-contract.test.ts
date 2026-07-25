@@ -296,4 +296,92 @@ describe('repository-local maintain-documentation contract', () => {
       },
     });
   });
+
+  it('defines the repository taxonomy, audience priority, and README ownership', async () => {
+    const skill = await readFile(canonicalSkill, 'utf-8');
+    const section = (heading: string): string =>
+      skill.match(new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`))?.[1] ?? '';
+    const taxonomy = section('Audiences and destinations');
+    const readme = section('README ownership');
+
+    expect({
+      audiencePriority:
+        /Audience priority:\s*1\. New users\s*2\. Operators implementing features\s*3\. Contributors modifying the codebase\s*4\. Maintainers debugging internals/i.test(
+          taxonomy,
+        ),
+      destinations: {
+        quickStart: /Quick start:/i.test(taxonomy),
+        guides: /Guides:/i.test(taxonomy),
+        referenceConfiguration: /Reference and configuration:/i.test(taxonomy),
+        explanationDeepDives: /Explanation and deep dives:/i.test(taxonomy),
+        runbooks: /Runbooks:/i.test(taxonomy),
+        contributorCodeOrganization:
+          /Contributor documentation and code organization:/i.test(taxonomy),
+        changelog: /Changelog:/i.test(taxonomy),
+      },
+      destinationRules: {
+        selectByPurpose: /select .*destination.*purpose/i.test(taxonomy),
+        canonicalOwnership: /each fact.*one canonical (?:document|owner)/i.test(taxonomy),
+        newCategoryApproval: /new category.*operator approval/i.test(taxonomy),
+        flatDocsTransitional: /flat .*docs.*transitional/i.test(taxonomy),
+      },
+      readmeContract: {
+        localRefinement: /repository-local refinement.*global harness convention/i.test(readme),
+        oneLandingPage: /one concise landing page/i.test(readme),
+        singleValueSection: /only in one (?:project-)?value.*section/i.test(readme),
+        requirements: /requirements/i.test(readme),
+        installation: /installation/i.test(readme),
+        shortestQuickStart: /shortest working quick start/i.test(readme),
+        docMap: /documentation map/i.test(readme),
+        contributionSupport: /contribution.*support/i.test(readme),
+        interactive: readme.includes('conduct-ts --interactive'),
+        daemon: /daemon/i.test(readme),
+        multiprovider: /multiprovider/i.test(readme),
+      },
+      updateBoundary: {
+        canonicalAffectedDocument: /reader-visible change.*canonical affected document/is.test(
+          readme,
+        ),
+        readmeUnchanged:
+          /leave README unchanged unless.*landing-page contract/is.test(readme),
+      },
+      consumerIsolation:
+        /consumer projects.*without.*custom (?:step )?configuration.*unchanged/is.test(readme),
+    }).toEqual({
+      audiencePriority: true,
+      destinations: {
+        quickStart: true,
+        guides: true,
+        referenceConfiguration: true,
+        explanationDeepDives: true,
+        runbooks: true,
+        contributorCodeOrganization: true,
+        changelog: true,
+      },
+      destinationRules: {
+        selectByPurpose: true,
+        canonicalOwnership: true,
+        newCategoryApproval: true,
+        flatDocsTransitional: true,
+      },
+      readmeContract: {
+        localRefinement: true,
+        oneLandingPage: true,
+        singleValueSection: true,
+        requirements: true,
+        installation: true,
+        shortestQuickStart: true,
+        docMap: true,
+        contributionSupport: true,
+        interactive: true,
+        daemon: true,
+        multiprovider: true,
+      },
+      updateBoundary: {
+        canonicalAffectedDocument: true,
+        readmeUnchanged: true,
+      },
+      consumerIsolation: true,
+    });
+  });
 });
