@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -317,6 +317,35 @@ describe('engine/artifacts', () => {
     it('rejects a fresh directory at the configured completion artifact path', async () => {
       const marker = '.pipeline/maintain-documentation-pass';
       await mkdir(join(dir, marker), { recursive: true });
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
+    });
+
+    it('rejects a fresh symlink at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const target = join(dir, 'outside-pass');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(target, 'PASS\n');
+      await symlink(target, join(dir, marker));
       const config: HarnessConfig = {
         steps: {
           'maintain-documentation': {

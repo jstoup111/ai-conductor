@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -2949,7 +2949,7 @@ export async function checkStepCompletion(
       };
     }
     const comparand = verdictFreshnessComparand(ctx);
-    const artifactStat = await stat(artifact).catch(() => undefined);
+    const artifactStat = await lstat(artifact).catch(() => undefined);
     if (artifactStat === undefined) {
       return {
         done: false,
