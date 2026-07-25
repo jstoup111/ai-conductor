@@ -13,6 +13,7 @@ import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import { escalateAttempt } from './escalation.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -143,6 +144,19 @@ export interface ResolvePreferredProviderNativeInput {
   policy: ProviderModelPolicy;
   config?: HarnessConfig;
   options?: ResolveOptions;
+}
+
+export interface ResolveFallbackProviderNativeInput {
+  step: StepName;
+  tier?: ComplexityTier;
+  policy: ProviderModelPolicy;
+  attempt: number;
+  escalate: boolean;
+}
+
+export interface ResolvedFallbackProviderNativeConfig
+  extends ResolvedProviderNativeStepConfig {
+  modelFallbackLadder: readonly string[];
 }
 
 /**
@@ -283,6 +297,39 @@ export function resolvePreferredProviderNativeStepConfig({
     specializedConfig,
     options,
   );
+}
+
+/**
+ * Resolve a fallback attempt entirely inside the fallback provider's native
+ * domain. Primary config, CLI overrides, escalation values, and configured
+ * ladders are intentionally absent from the input boundary.
+ */
+export function resolveFallbackProviderNativeStepConfig({
+  step,
+  tier,
+  policy,
+  attempt,
+  escalate,
+}: ResolveFallbackProviderNativeInput): ResolvedFallbackProviderNativeConfig {
+  const base = resolveProviderNativeStepConfig(
+    step,
+    phaseForStep(step),
+    policy,
+    undefined,
+    { tier },
+  );
+  const native = escalateAttempt(
+    base.model,
+    base.effort,
+    attempt,
+    escalate,
+    policy,
+  );
+
+  return {
+    ...native,
+    modelFallbackLadder: policy.modelFallbackLadder,
+  };
 }
 
 export function resolveProviderNeutralStepConfig(

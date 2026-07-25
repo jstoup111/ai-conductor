@@ -54,6 +54,38 @@ async function loadPreferredNativeResolver(): Promise<
   ).resolvePreferredProviderNativeStepConfig;
 }
 
+type ResolveFallbackProviderNativeStepConfig = (input: {
+  step: StepName;
+  tier?: ComplexityTier;
+  policy: ProviderModelPolicy;
+  attempt: number;
+  escalate: boolean;
+  primaryAttempt: {
+    model: string;
+    effort: EffortLevel;
+    modelCliOverride: string;
+    effortCliOverride: EffortLevel;
+    escalatedModel: string;
+    escalatedEffort: EffortLevel;
+    configuredModelFallbackLadder: readonly string[];
+  };
+}) => {
+  model: string;
+  effort: EffortLevel;
+  modelFallbackLadder: readonly string[];
+};
+
+async function loadFallbackNativeResolver(): Promise<
+  ResolveFallbackProviderNativeStepConfig | undefined
+> {
+  const loaded = await import('../../src/engine/resolved-config.js');
+  return (
+    loaded as typeof loaded & {
+      resolveFallbackProviderNativeStepConfig?: ResolveFallbackProviderNativeStepConfig;
+    }
+  ).resolveFallbackProviderNativeStepConfig;
+}
+
 interface ProviderAttempt {
   provider: string;
   model?: string;
@@ -421,6 +453,63 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
         options: { tier: 'L' },
       }),
     ).toEqual({ model: 'opaque-tier-model/verbatim', effort: 'max' });
+  });
+
+  it('recomputes fallback native settings from its policy at the current retry attempt', async () => {
+    const resolveFallback = await loadFallbackNativeResolver();
+
+    expect(
+      resolveFallback?.({
+        step: 'build',
+        tier: 'L',
+        policy: CLAUDE_MODEL_POLICY,
+        attempt: 3,
+        escalate: true,
+        primaryAttempt: {
+          model: 'gpt-explicit-primary',
+          effort: 'max',
+          modelCliOverride: 'gpt-cli-primary',
+          effortCliOverride: 'max',
+          escalatedModel: 'gpt-retry-escalated',
+          escalatedEffort: 'xhigh',
+          configuredModelFallbackLadder: [
+            'gpt-configured-first',
+            'gpt-configured-second',
+          ],
+        },
+      }),
+    ).toEqual({
+      model: 'opus',
+      effort: 'medium',
+      modelFallbackLadder: CLAUDE_MODEL_POLICY.modelFallbackLadder,
+    });
+  });
+
+  it('uses fallback tier defaults without escalation when neutral settings opt out', async () => {
+    const resolveFallback = await loadFallbackNativeResolver();
+
+    expect(
+      resolveFallback?.({
+        step: 'plan',
+        tier: 'L',
+        policy: CLAUDE_MODEL_POLICY,
+        attempt: 3,
+        escalate: false,
+        primaryAttempt: {
+          model: 'gpt-explicit-primary',
+          effort: 'low',
+          modelCliOverride: 'gpt-cli-primary',
+          effortCliOverride: 'max',
+          escalatedModel: 'gpt-retry-escalated',
+          escalatedEffort: 'max',
+          configuredModelFallbackLadder: ['gpt-configured-only'],
+        },
+      }),
+    ).toEqual({
+      model: 'fable',
+      effort: 'xhigh',
+      modelFallbackLadder: CLAUDE_MODEL_POLICY.modelFallbackLadder,
+    });
   });
 
   it('inherits the first provider, honors explicit specialization, and never infers a judgment provider', async () => {
