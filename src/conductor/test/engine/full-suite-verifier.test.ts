@@ -574,8 +574,11 @@ describe('FullSuiteVerifier', () => {
       }),
       readEvidence: async () => ({ usable: false, reason: 'io_error' }),
     } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+    const writeFailureRoot = await makeConfiguredProject(
+      'full-suite-verifier-write-failure-',
+    );
     const writeFailure = await new FullSuiteVerifier({
-      projectRoot,
+      projectRoot: writeFailureRoot,
       execute: execution,
       fingerprint: async () => ({
         ok: true,
@@ -601,6 +604,11 @@ describe('FullSuiteVerifier', () => {
         status: 'FAILED',
         reason: 'preflight_failed',
         message: 'Unable to hash verification input: src/app.ts',
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: 'preflight_failed',
+          stderr: 'Unable to hash verification input: src/app.ts',
+        }),
       },
       readFailure: {
         status: 'FAILED',
@@ -617,9 +625,141 @@ describe('FullSuiteVerifier', () => {
         status: 'FAILED',
         reason: 'invalid_config',
         message: expect.stringMatching(/test_suite|command/i),
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: 'invalid_config',
+          stderr: expect.stringMatching(/test_suite|command/i),
+        }),
       },
       launches: 1,
     });
+  });
+
+  it('atomically persists every fail-closed preflight result without making it reusable', async () => {
+    const secret = 'preflight-secret-value';
+    const cases = [
+      {
+        name: 'missing config',
+        reason: 'missing_config',
+        message: expect.stringMatching(/config/i),
+        arrange: async () => {
+          const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-preflight-missing-'));
+          scratches.push(projectRoot);
+          return { projectRoot, options: {} };
+        },
+      },
+      {
+        name: 'invalid config',
+        reason: 'invalid_config',
+        message: expect.stringMatching(/test_suite|command/i),
+        arrange: async () => {
+          const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-preflight-invalid-'));
+          scratches.push(projectRoot);
+          await writeProjectFile(
+            projectRoot,
+            '.ai-conductor/config.yml',
+            'test_suite:\n  command: ""\n',
+          );
+          return { projectRoot, options: {} };
+        },
+      },
+      {
+        name: 'fingerprint indeterminate',
+        reason: 'preflight_failed',
+        message: 'Unable to hash verification input: ',
+        arrange: async () => {
+          const projectRoot = await makeConfiguredProject('full-suite-preflight-fingerprint-');
+          return {
+            projectRoot,
+            options: {
+              environment: { SUITE_SECRET: secret },
+              fingerprint: async () => ({
+                ok: false as const,
+                reason: {
+                  code: 'input_read_failed' as const,
+                  message: `Unable to hash verification input: ${secret}`,
+                  path: 'src/app.ts',
+                },
+              }),
+            },
+          };
+        },
+      },
+    ];
+    const observed: unknown[] = [];
+
+    for (const testCase of cases) {
+      const { projectRoot, options } = await testCase.arrange();
+      let launches = 0;
+      const createVerifier = () => new FullSuiteVerifier({
+        projectRoot,
+        execute: async () => {
+          launches += 1;
+          throw new Error('preflight failures must not execute');
+        },
+        ...options,
+      } as ConstructorParameters<typeof FullSuiteVerifier>[0]);
+      const first = await createVerifier().ensure();
+      const persistedAfterFirst = await readFullSuiteEvidence(projectRoot);
+      const second = await createVerifier().ensure();
+      const persistedAfterSecond = await readFullSuiteEvidence(projectRoot);
+
+      observed.push({
+        name: testCase.name,
+        first,
+        persistedAfterFirst,
+        second,
+        persistedAfterSecond,
+        launches,
+        leaked: JSON.stringify({ first, persistedAfterFirst, second }).includes(secret),
+      });
+    }
+
+    expect(observed).toEqual(cases.map((testCase) => ({
+      name: testCase.name,
+      first: {
+        status: 'FAILED',
+        reason: testCase.reason,
+        message: testCase.message,
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: testCase.reason,
+          fingerprint: null,
+          provenanceHeadSha: null,
+          stderr: testCase.message,
+        }),
+      },
+      persistedAfterFirst: {
+        usable: false,
+        reason: 'not_pass',
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: testCase.reason,
+          stderr: testCase.message,
+        }),
+      },
+      second: {
+        status: 'FAILED',
+        reason: testCase.reason,
+        message: testCase.message,
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: testCase.reason,
+          stderr: testCase.message,
+        }),
+      },
+      persistedAfterSecond: {
+        usable: false,
+        reason: 'not_pass',
+        evidence: expect.objectContaining({
+          outcome: 'FAIL',
+          reason: testCase.reason,
+          stderr: testCase.message,
+        }),
+      },
+      launches: 0,
+      leaked: false,
+    })));
   });
 
   it('persists sanitized correlated FAIL evidence without making it reusable', async () => {

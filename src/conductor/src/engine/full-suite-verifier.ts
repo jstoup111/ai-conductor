@@ -87,12 +87,24 @@ interface FullSuiteVerificationContext {
   fingerprint: FullSuiteFingerprint;
 }
 
+type FullSuiteInspectionFailure = Extract<FullSuiteInspectionResult, { status: 'FAILED' }> & {
+  reason:
+    | 'missing_config'
+    | 'invalid_config'
+    | 'invalid_input'
+    | 'preflight_failed'
+    | 'internal_error';
+};
+
 type ResolvedInspection =
   | {
       inspection: Extract<FullSuiteInspectionResult, { status: 'CURRENT' | 'STALE' }>;
       context: FullSuiteVerificationContext;
     }
-  | { inspection: Extract<FullSuiteInspectionResult, { status: 'FAILED' }> };
+  | {
+      inspection: FullSuiteInspectionFailure;
+      testSuite?: TestSuiteConfig;
+    };
 
 interface FullSuiteLockOwner {
   version: 1;
@@ -420,7 +432,48 @@ export class FullSuiteVerifier {
     try {
       const resolved = await this.resolveInspection();
       if (!('context' in resolved)) {
-        return resolved.inspection;
+        const failure = resolved.inspection;
+        if (failure.reason === 'internal_error') return failure;
+        const secretValues = resolved.testSuite === undefined
+          ? []
+          : declaredEnvironmentValues(resolved.testSuite, environment);
+        const message = sanitizeFullSuiteDiagnosticOutput(failure.message, secretValues);
+        const evidence = buildPreflightFailEvidence(
+          failure.reason,
+          message,
+          resolved.testSuite,
+        );
+        try {
+          await writeEvidence(projectRoot, evidence, secretValues);
+        } catch {
+          return {
+            status: 'FAILED',
+            reason: 'internal_error',
+            message: 'Unable to persist full-suite preflight FAIL evidence',
+          };
+        }
+        let persisted;
+        try {
+          persisted = await readEvidence(projectRoot);
+        } catch {
+          return {
+            status: 'FAILED',
+            reason: 'internal_error',
+            message: 'Unable to read persisted full-suite preflight FAIL evidence',
+          };
+        }
+        if (
+          persisted.usable ||
+          persisted.reason !== 'not_pass' ||
+          persisted.evidence === undefined
+        ) {
+          return {
+            status: 'FAILED',
+            reason: 'internal_error',
+            message: 'Persisted preflight FAIL evidence is unavailable',
+          };
+        }
+        return { ...failure, message, evidence: persisted.evidence };
       }
       if (resolved.inspection.status === 'CURRENT') {
         return { status: 'REUSED', evidence: resolved.inspection.evidence };
@@ -578,14 +631,19 @@ export class FullSuiteVerifier {
         environmentValues: environment,
       });
       if (!fingerprintResult.ok) {
+        const secretValues = declaredEnvironmentValues(testSuite, environment);
         return {
           inspection: {
             status: 'FAILED',
             reason: fingerprintResult.reason.code === 'invalid_input'
               ? 'invalid_input'
               : 'preflight_failed',
-            message: fingerprintResult.reason.message,
+            message: sanitizeFullSuiteDiagnosticOutput(
+              fingerprintResult.reason.message,
+              secretValues,
+            ),
           },
+          testSuite,
         };
       }
 
@@ -658,6 +716,30 @@ function buildFailEvidence(
     reason: execution.reason,
     exitCode: execution.exitCode,
     signal: execution.signal,
+  };
+}
+
+function buildPreflightFailEvidence(
+  reason: Exclude<FullSuiteInspectionFailure['reason'], 'internal_error'>,
+  message: string,
+  testSuite?: TestSuiteConfig,
+): FullSuiteFailEvidence {
+  const timestamp = new Date().toISOString();
+  return {
+    version: FULL_SUITE_EVIDENCE_VERSION,
+    outcome: 'FAIL',
+    reason,
+    fingerprint: null,
+    provenanceHeadSha: null,
+    command: testSuite?.command ?? null,
+    workingDirectory: null,
+    startedAt: timestamp,
+    endedAt: timestamp,
+    durationMs: 0,
+    exitCode: null,
+    signal: null,
+    stdout: '',
+    stderr: message,
   };
 }
 
