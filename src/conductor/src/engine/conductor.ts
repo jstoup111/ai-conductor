@@ -411,10 +411,10 @@ export interface StepRunner {
   runInteractive?(step: StepName): Promise<void>;
   assessComplexity?(): Promise<ComplexityTier | null>;
   /**
-   * Drop session state so the next invocation creates a fresh Claude session.
+   * Drop session state so the next invocation creates a fresh provider session.
    * Called by the conductor when `sessionExpired` is reported.
    */
-  resetSession?(): Promise<void>;
+  resetSession?(step?: StepName): Promise<void>;
   /**
    * Attempt to resolve a paused rebase conflict in the feature worktree.
    * Called by the conductor's engine-native rebase step (daemon only) when
@@ -3046,7 +3046,7 @@ export class Conductor {
         // a conversation that never existed (which surfaced as "session
         // unavailable (expired or in use)" and errored the feature out).
         if (this.stepRunner.resetSession) {
-          await this.stepRunner.resetSession();
+          await this.stepRunner.resetSession(step.name);
         }
 
         // Retry loop: auto-retry on step-runner failure OR completion-gate miss,

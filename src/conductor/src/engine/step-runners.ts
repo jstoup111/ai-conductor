@@ -29,6 +29,7 @@ import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
+import type { ProviderSessionStore } from './provider-session.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -291,6 +292,10 @@ export interface StepRunnerOptions {
    */
   gitRunner?: GitRunner;
   planPath?: string;
+  /** Provider-aware session authority. Omitted by legacy scalar callers. */
+  sessionStore?: ProviderSessionStore;
+  /** Registry key for the captured provider when sessionStore is present. */
+  providerKey?: string;
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -316,6 +321,8 @@ export class DefaultStepRunner implements StepRunner {
   private modelAvailability: ModelAvailability;
   private gitRunner: GitRunner;
   private planPathOverride?: string;
+  private sessionStore?: ProviderSessionStore;
+  private providerKey: string;
   callCount = 0;
 
   constructor(
@@ -340,6 +347,8 @@ export class DefaultStepRunner implements StepRunner {
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
+    this.sessionStore = options?.sessionStore;
+    this.providerKey = options?.providerKey ?? 'claude';
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -463,6 +472,7 @@ export class DefaultStepRunner implements StepRunner {
         effort: resolved.effort,
       });
       this.sessionStarted = true;
+      await this.sessionStore?.markCreated(this.providerKey);
       this.callCount++;
 
       // Persist marker and session ID after first success
@@ -555,6 +565,7 @@ export class DefaultStepRunner implements StepRunner {
       // adr-2026-07-10-concurrent-group-core.md.
       if (branchSessionId === undefined) {
         this.sessionStarted = true;
+        await this.sessionStore?.markCreated(this.providerKey);
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
@@ -586,7 +597,14 @@ export class DefaultStepRunner implements StepRunner {
     return { success: false, output: result.output, model: effectiveModel };
   }
 
-  async resetSession(): Promise<void> {
+  async resetSession(step?: StepName): Promise<void> {
+    if (this.sessionStore && step !== undefined) {
+      await this.sessionStore.beginStep(step);
+      this.sessionId = (await this.sessionStore.create(this.providerKey)).id;
+      this.sessionStarted = false;
+      this.sessionStartedInitialized = true;
+      return;
+    }
     const { v4: uuidv4 } = await import('uuid');
     this.sessionId = uuidv4();
     this.sessionStarted = false;
