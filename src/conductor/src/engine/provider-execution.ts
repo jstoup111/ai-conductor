@@ -21,6 +21,11 @@ export interface ProviderUnavailableClassification {
   reason: string;
 }
 
+export interface ProviderCandidateFailureClassification {
+  scope: 'run' | 'step';
+  reason: string;
+}
+
 export interface ProviderExecutionResult extends InvokeResult {
   preferredProvider: string;
   actualProvider: string;
@@ -71,6 +76,22 @@ export function classifyProviderAttempt(
 }
 
 /**
+ * Classify only failures that may advance the current provider candidate list.
+ * Model unavailability reaches this boundary only after the native ladder has
+ * been exhausted; unlike run-wide unavailability, it is scoped to this step.
+ */
+export function classifyProviderCandidateFailure(
+  result: InvokeResult,
+): ProviderCandidateFailureClassification | undefined {
+  return (
+    classifyProviderAttempt(result) ??
+    (result.modelUnavailable
+      ? { scope: 'step', reason: result.output }
+      : undefined)
+  );
+}
+
+/**
  * Invoke exactly one provider runtime through its provider-local availability
  * cache and native model ladder. Candidate selection lives outside this seam.
  */
@@ -104,7 +125,8 @@ export async function invokeRuntime(
 
 /**
  * Execute selected-first configured providers in one caller-owned step scope.
- * Only explicit run-wide provider unavailability authorizes advancement.
+ * Advancement requires explicit run-wide provider unavailability or completed
+ * provider-native model exhaustion.
  */
 export async function executeProviderCandidates({
   step,
@@ -163,7 +185,7 @@ export async function executeProviderCandidates({
       await sessions.markCreated(providerKey);
     }
 
-    const unavailable = classifyProviderAttempt(result);
+    const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];
     if (!unavailable || !nextProvider) {
       return {

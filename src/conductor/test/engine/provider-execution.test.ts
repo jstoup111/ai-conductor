@@ -403,4 +403,239 @@ describe('executeProviderCandidates', () => {
       },
     });
   });
+
+  it('advances only after complete native model exhaustion and retries that provider on a later step', async () => {
+    const unavailableModel = (model: string): InvokeResult => ({
+      success: false,
+      output: `model unavailable: ${model}`,
+      exitCode: 1,
+      modelUnavailable: true,
+    });
+    const makeProvider = (
+      invoke: (options: InvokeOptions, call: number) => InvokeResult,
+    ): {
+      provider: LLMProvider;
+      calls: InvokeOptions[];
+    } => {
+      const calls: InvokeOptions[] = [];
+      return {
+        calls,
+        provider: {
+          invoke: vi.fn(async (options: InvokeOptions) => {
+            calls.push(options);
+            return invoke(options, calls.length);
+          }),
+          invokeInteractive: vi.fn(async (): Promise<void> => {}),
+        },
+      };
+    };
+    const partialCodex = makeProvider((options, call) =>
+      call === 1
+        ? unavailableModel(options.model ?? '')
+        : {
+            success: true,
+            output: 'native ladder recovered',
+            exitCode: 0,
+          },
+    );
+    const partialClaude = makeProvider(() => ({
+      success: true,
+      output: 'must not cross providers',
+      exitCode: 0,
+    }));
+    const partialRuntimes = new ProviderRuntimeSet([
+      runtime('codex', partialCodex.provider),
+      runtime('claude', partialClaude.provider),
+    ]);
+    const fullCodex = makeProvider((options, call) =>
+      call <= CODEX_MODEL_POLICY.modelFallbackLadder.length
+        ? unavailableModel(options.model ?? '')
+        : {
+            success: true,
+            output: 'codex eligible on later step',
+            exitCode: 0,
+          },
+    );
+    const fullClaude = makeProvider(() => ({
+      success: true,
+      output: 'cross-provider fallback',
+      exitCode: 0,
+    }));
+    const fullRuntimes = new ProviderRuntimeSet([
+      runtime('codex', fullCodex.provider),
+      runtime('claude', fullClaude.provider),
+    ]);
+    const warnings: Array<{
+      message: string;
+      transition: ProviderTransitionWarning;
+    }> = [];
+    const warn = (
+      message: string,
+      transition: ProviderTransitionWarning,
+    ): void => {
+      warnings.push({ message, transition });
+    };
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+    const config = {
+      llm_provider: ['codex', 'claude'],
+      steps: {
+        build: { llm_provider: 'codex' },
+        build_review: { llm_provider: 'codex' },
+      },
+    } as HarnessConfig;
+    const common = {
+      step: 'build' as const,
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      config,
+      attempt: 2,
+      escalate: true,
+      modelOverride: CODEX_MODEL_POLICY.modelFallbackLadder[0],
+      effortOverride: 'medium' as const,
+      warn,
+      options: {
+        prompt: 'Execute the step.',
+        cwd: '/workspace/feature',
+      },
+    };
+    const partial = await execute?.({
+      ...common,
+      runtimes: partialRuntimes,
+      sessions: new ProviderSessionScope(
+        vi.fn().mockReturnValue('partial-codex-session'),
+      ),
+    });
+    const fullSessions = new ProviderSessionScope(
+      vi.fn()
+        .mockReturnValueOnce('full-codex-session')
+        .mockReturnValueOnce('full-claude-session'),
+    );
+    const full = await execute?.({
+      ...common,
+      runtimes: fullRuntimes,
+      sessions: fullSessions,
+    });
+    const later = await execute?.({
+      ...common,
+      step: 'build_review',
+      effortOverride: undefined,
+      runtimes: fullRuntimes,
+      sessions: new ProviderSessionScope(
+        vi.fn().mockReturnValue('later-codex-session'),
+      ),
+    });
+
+    expect({
+      partial: {
+        codexModels: partialCodex.calls.map(({ model }) => model),
+        claudeCalls: partialClaude.calls,
+        result: partial,
+      },
+      exhausted: {
+        codexModels: fullCodex.calls
+          .slice(0, CODEX_MODEL_POLICY.modelFallbackLadder.length)
+          .map(({ model }) => model),
+        claudeCalls: fullClaude.calls,
+        sessions: {
+          codex: fullSessions.current('codex'),
+          claude: fullSessions.current('claude'),
+        },
+        result: full,
+      },
+      later: {
+        codexCall: fullCodex.calls.at(-1),
+        result: later,
+      },
+      availability: {
+        codexRunWide: fullRuntimes.get('codex').runWideUnavailable,
+        codexDead: [
+          ...fullRuntimes.get('codex').availability.dead,
+        ],
+        claudeDead: [
+          ...fullRuntimes.get('claude').availability.dead,
+        ],
+      },
+      warnings,
+    }).toEqual({
+      partial: {
+        codexModels: ['gpt-5.6-sol', 'gpt-5.6-terra'],
+        claudeCalls: [],
+        result: {
+          success: true,
+          output: 'native ladder recovered',
+          exitCode: 0,
+          preferredProvider: 'codex',
+          actualProvider: 'codex',
+          resolvedModel: 'gpt-5.6-sol',
+          resolvedEffort: 'medium',
+        },
+      },
+      exhausted: {
+        codexModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+        claudeCalls: [
+          {
+            prompt: 'Execute the step.',
+            cwd: '/workspace/feature',
+            sessionId: 'full-claude-session',
+            resume: false,
+            model: 'sonnet',
+            effort: 'medium',
+          },
+        ],
+        sessions: {
+          codex: { id: 'full-codex-session', created: true },
+          claude: { id: 'full-claude-session', created: true },
+        },
+        result: {
+          success: true,
+          output: 'cross-provider fallback',
+          exitCode: 0,
+          preferredProvider: 'codex',
+          actualProvider: 'claude',
+          resolvedModel: 'sonnet',
+          resolvedEffort: 'medium',
+        },
+      },
+      later: {
+        codexCall: {
+          prompt: 'Execute the step.',
+          cwd: '/workspace/feature',
+          sessionId: 'later-codex-session',
+          resume: false,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        result: {
+          success: true,
+          output: 'codex eligible on later step',
+          exitCode: 0,
+          preferredProvider: 'codex',
+          actualProvider: 'codex',
+          resolvedModel: 'gpt-5.6-sol',
+          resolvedEffort: 'high',
+        },
+      },
+      availability: {
+        codexRunWide: undefined,
+        codexDead: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+        claudeDead: [],
+      },
+      warnings: [
+        {
+          message:
+            'Step build: provider codex unavailable (model unavailable: gpt-5.6-luna); falling back to claude.',
+          transition: {
+            type: 'provider_fallback',
+            step: 'build',
+            failedProvider: 'codex',
+            reason: 'model unavailable: gpt-5.6-luna',
+            nextProvider: 'claude',
+          },
+        },
+      ],
+    });
+  });
 });
