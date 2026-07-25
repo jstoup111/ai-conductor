@@ -7,6 +7,11 @@ type ValidateRegisteredProviderSelections = (input: {
   registeredProviders: readonly string[];
 }) => void;
 
+type ResolveProviderCandidates = (input: {
+  configuredProviders: readonly string[];
+  stepSelection?: ProviderSelection;
+}) => string[];
+
 async function loadRegisteredSelectionValidator(): Promise<
   ValidateRegisteredProviderSelections | undefined
 > {
@@ -24,6 +29,15 @@ function frozenProviderNames(): string[] {
   registry.register('llm_provider', 'codex', {});
   registry.markInitialized();
   return registry.list('llm_provider');
+}
+
+async function loadCandidateResolver(): Promise<ResolveProviderCandidates | undefined> {
+  const providerSelection = await import('../../src/engine/provider-selection.js');
+  return (
+    providerSelection as typeof providerSelection & {
+      resolveProviderCandidates?: ResolveProviderCandidates;
+    }
+  ).resolveProviderCandidates;
 }
 
 describe.each([
@@ -101,5 +115,43 @@ describe('validateRegisteredProviderSelections', () => {
         registeredProviders: frozenProviderNames(),
       }),
     ).toThrow(/steps\.build_review\.llm_provider.*unknown.*available.*claude.*codex/i);
+  });
+});
+
+describe.each([
+  {
+    name: 'inherits the declared first provider',
+    configuredProviders: ['claude', 'codex'],
+    stepSelection: undefined,
+    expected: ['claude', 'codex'],
+  },
+  {
+    name: 'keeps an explicit first provider first',
+    configuredProviders: ['claude', 'codex'],
+    stepSelection: 'claude',
+    expected: ['claude', 'codex'],
+  },
+  {
+    name: 'moves an explicit later provider first',
+    configuredProviders: ['claude', 'codex', 'custom'],
+    stepSelection: 'codex',
+    expected: ['codex', 'claude', 'custom'],
+  },
+  {
+    name: 'prepends an explicit registered provider outside the run list',
+    configuredProviders: ['claude', 'custom'],
+    stepSelection: 'codex',
+    expected: ['codex', 'claude', 'custom'],
+  },
+] satisfies Array<{
+  name: string;
+  configuredProviders: string[];
+  stepSelection: ProviderSelection | undefined;
+  expected: string[];
+}>)('resolveProviderCandidates: $name', ({ configuredProviders, stepSelection, expected }) => {
+  it('returns selected-first candidates and preserves the configured remainder', async () => {
+    const resolveProviderCandidates = await loadCandidateResolver();
+
+    expect(resolveProviderCandidates?.({ configuredProviders, stepSelection })).toEqual(expected);
   });
 });

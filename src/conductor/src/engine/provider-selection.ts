@@ -7,6 +7,22 @@ export function normalizeProviderSelection(
   return Array.isArray(selection) ? [...selection] : [selection];
 }
 
+export function resolveProviderCandidates({
+  configuredProviders,
+  stepSelection,
+}: {
+  configuredProviders: readonly string[];
+  stepSelection?: ProviderSelection;
+}): string[] {
+  if (stepSelection === undefined) return [...configuredProviders];
+
+  const selectedProviders = normalizeProviderSelection(stepSelection);
+  return [
+    ...selectedProviders,
+    ...configuredProviders.filter((provider) => !selectedProviders.includes(provider)),
+  ];
+}
+
 export function validateRegisteredProviderSelections({
   config,
   registeredProviders,
