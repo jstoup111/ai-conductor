@@ -313,6 +313,32 @@ describe('engine/artifacts', () => {
         review: '# Documentation review\n\n**Verdict:** BLOCKED\n',
       });
     });
+
+    it('rejects a fresh directory at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      await mkdir(join(dir, marker), { recursive: true });
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
+    });
   });
 
   describe('checkStepCompletion: acceptance_specs (monorepo + config globs)', () => {

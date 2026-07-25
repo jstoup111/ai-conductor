@@ -2949,13 +2949,20 @@ export async function checkStepCompletion(
       };
     }
     const comparand = verdictFreshnessComparand(ctx);
-    const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
-    if (mtimeMs === undefined) {
+    const artifactStat = await stat(artifact).catch(() => undefined);
+    if (artifactStat === undefined) {
       return {
         done: false,
         reason: `configured completion artifact "${completionArtifact}" is missing — ${step} must write it after a passing review`,
       };
     }
+    if (!artifactStat.isFile()) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is not a regular file — ${step} must replace it with a file written after a passing review`,
+      };
+    }
+    const mtimeMs = artifactStat.mtimeMs;
     if (mtimeMs < comparand!) {
       return {
         done: false,
