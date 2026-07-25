@@ -201,6 +201,44 @@ describe('engine/cost-rollup', () => {
     });
   });
 
+  it('preserves provider keys that collide with inherited object properties', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'toString',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 11, output: 2, costUsd: 0.01 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: '__proto__',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 23, output: 5, costUsd: 0.02 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.providers).toEqual({
+      toString: {
+        tokens: { input: 11, output: 2, cacheRead: 0, cacheCreation: 0 },
+        costUsd: expect.closeTo(0.01, 5),
+        dispatches: 1,
+        unmetered: { count: 0, durationMs: 0 },
+      },
+      ['__proto__']: {
+        tokens: { input: 23, output: 5, cacheRead: 0, cacheCreation: 0 },
+        costUsd: expect.closeTo(0.02, 5),
+        dispatches: 1,
+        unmetered: { count: 0, durationMs: 0 },
+      },
+    });
+  });
+
   it('returns an all-zero rollup when events.jsonl is missing', async () => {
     const rollup = await computeCostRollup(dir);
 

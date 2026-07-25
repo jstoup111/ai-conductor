@@ -61,7 +61,7 @@ function addDispatch(
 
 export async function computeCostRollup(worktreeDir: string): Promise<CostRollup> {
   const rollup = zeroRollup();
-  const providers: Record<string, ProviderCostRollup> = {};
+  const providers: Record<string, ProviderCostRollup> = Object.create(null);
   const eventsPath = join(worktreeDir, '.pipeline', 'events.jsonl');
 
   let raw: string;
