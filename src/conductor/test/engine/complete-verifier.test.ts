@@ -46,10 +46,29 @@ describe('engine/complete-verifier', () => {
       '| Story | Result |\n|---|---|\n| foo | PASS |\n',
     );
     await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
-    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr');
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
 
     const result = await verifyWithCurrentSuite();
     expect(result.ok).toBe(true);
+  });
+
+  it('reports a finish gap when fresh PR markers lack durable shipment evidence', async () => {
+    await writeState({
+      feature_status: 'complete',
+      feature_desc: 'add-foo',
+      pr_url: 'https://github.com/x/y/pull/1',
+    });
+    await mkdir(join(dir, '.docs/retros'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/manual-test-results.md'),
+      '| Story | Result |\n|---|---|\n| foo | PASS |\n',
+    );
+    await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr');
+
+    const result = await verifyCompleteState(dir);
+
+    expect(result).toMatchObject({ ok: false, failedSteps: ['finish'] });
   });
 
   it('reports gaps when manual_test, retro, and finish artifacts are all missing', async () => {

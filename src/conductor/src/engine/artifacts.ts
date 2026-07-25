@@ -18,6 +18,12 @@ import {
   FullSuiteVerifier,
   type FullSuiteInspectionResult,
 } from './full-suite-verifier.js';
+import {
+  evaluateShipmentEvidence,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
+import { currentCommitSha } from './project-prelude.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -537,6 +543,11 @@ export interface CompletionContext {
    */
   isHeadPushed?: () => Promise<boolean | null>;
   /**
+   * Strict durable shipment-evidence verifier. Absent → use the production
+   * verifier against the current candidate commit.
+   */
+  shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
+  /**
    * Injectable gh runner for presentation checks (finish predicate Phase 2).
    * Used to verify the recorded PR's title is not stale (needs-remediation:).
    * Absent → falls back to makeProductionGh() (fail-open for testing).
@@ -586,6 +597,38 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+}
+
+async function verifyDurableShipmentEvidence(
+  dir: string,
+  ctx: CompletionContext,
+  prUrl: string,
+): Promise<CompletionResult | null> {
+  const candidateCommit = (await (ctx.getHeadSha?.() ?? currentCommitSha(dir))) ?? '';
+
+  const verify = ctx.shipmentEvidence ?? evaluateShipmentEvidence;
+  try {
+    const verdict = await verify({
+      repoDir: dir,
+      slug: ctx.featureDesc ?? '',
+      implementationPr: prUrl,
+      candidateCommit,
+      implementationHead: candidateCommit,
+    });
+    if (verdict.kind === 'valid') return null;
+    const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
+    return {
+      done: false,
+      reason: `durable shipment evidence refused completion: ${detail}`,
+      missing: 'other',
+    };
+  } catch (error) {
+    return {
+      done: false,
+      reason: `durable shipment evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+      missing: 'other',
+    };
+  }
 }
 
 /**
@@ -2099,14 +2142,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // ---- Phase 1: evidence — all non-presentation conditions. Each miss
     // returns immediately, before any presentation (gh) call is made. ----
     let prUrl: string | undefined;
-    if (choice === 'pr') {
+    if (choice === 'pr' || choice === 'merge-local') {
       try {
         const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
         const state = JSON.parse(raw) as { pr_url?: string };
         if (!state.pr_url) {
           return {
             done: false,
-            reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
+            reason: `${FINISH_CHOICE_MARKER}="${choice}" but no pr_url in state — the PR URL must be recorded`,
             missing: 'recording',
           };
         }
@@ -2114,7 +2157,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         return {
           done: false,
-          reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
+          reason: `cannot read state to confirm pr_url for finish-choice="${choice}"`,
           missing: 'recording',
         };
       }
@@ -2150,6 +2193,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           };
         }
       }
+
+      const durableEvidence = await verifyDurableShipmentEvidence(dir, ctx, prUrl);
+      if (durableEvidence) return durableEvidence;
     }
 
     // ---- Order-gate: repair invocation (Task 8, ADR D1) — runs after Phase 1
