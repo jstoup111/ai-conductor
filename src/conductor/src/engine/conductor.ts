@@ -3602,118 +3602,15 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
-            const shPark = resolveSelfHostConfig(this.config);
-
-            // Task 11 (TR-4): Retarget authFailure park to daemon token in daemon-token mode.
-            // Only applies when self-host mode is active. In daemon-token mode, watch the
-            // daemon token path for non-empty content. In operator mode, watch the operator
-            // credentials for expiresAt freshness. In api-key mode, do not park — HALT
-            // immediately with ANTHROPIC_API_KEY.
-            let parkResult: Awaited<ReturnType<typeof waitForCredentialsChange>>;
-            let haltReason: string;
-
-            if (this.selfHost && shPark.buildAuthMode === 'api-key') {
-              // Task 11: api-key mode does not support auth-failure park
-              haltReason =
-                `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
-                `is missing, invalid, or has insufficient permissions.\n` +
-                `Please set ANTHROPIC_API_KEY and re-queue this feature.`;
-              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                () => {},
-              );
-              await writeFile(
-                join(this.projectRoot, LOOP_HALT_MARKER),
-                haltReason + '\n',
-                'utf-8',
-              ).catch(() => {
-                /* best-effort marker */
-              });
-              await writeState(this.stateFilePath, state);
-              const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
-              process.off('SIGINT', sigintHandler);
-              process.off('SIGTERM', sigterm);
-              return;
-            } else if (this.selfHost && shPark.buildAuthMode === 'daemon-token') {
-              // Task 11: Park on daemon token path, check for non-empty content
-              const tokenPath = shPark.buildAuthTokenPath;
-              const daemonTokenClassifier = createDaemonTokenContentClassifier();
-
-              await emitTracked({
-                type: 'credentials_park',
-                reason: 'daemon build token expired or invalid — waiting for refresh',
-              });
-
-              parkResult = await waitForCredentialsChange({
-                initialState: 'expired', // Start as expired (trigger polling)
-                credentialsPath: tokenPath,
-                globalConfigDir: '', // Not used in daemon-token mode
-                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-                sleep: this.sleep,
-                now: () => Date.now(),
-                contentClassifier: daemonTokenClassifier,
-              });
-
-              if (parkResult.type === 'timeout') {
-                // Task 13 (TR-4): Daemon-token park timeout HALT names token path and re-mint instructions
-                // (never operator OAuth file, never "retries exhausted"). Preserves retry budget contract.
-                haltReason =
-                  `Daemon build token expired and refresh timed out.\n` +
-                  `Token file: ${tokenPath}\n` +
-                  `Please run: ${(await import('./self-host/daemon-build-token.js')).DAEMON_BUILD_TOKEN_MINT_COMMAND}\n` +
-                  `Then re-queue this feature.`;
-              } else {
-                // Task 11 + Task 9: Park resolved, resume retry. On the next attempt,
-                // runSelfBuildDispatch will re-read the daemon token from the file
-                // (which was updated during the park interval) and re-inject it.
-                haltReason = ''; // Not halting on successful resume
-              }
-            } else {
-              // Operator credentials mode (backward compatibility)
-              const operatorConfigDir =
-                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-              const credPath = join(operatorConfigDir, '.credentials.json');
-              const credState = await readOperatorCredentialsState(
-                operatorConfigDir,
-                Date.now(),
-              );
-
-              await emitTracked({
-                type: 'credentials_park',
-                reason: 'operator OAuth token expired or invalid — waiting for refresh',
-              });
-
-              parkResult = await waitForCredentialsChange({
-                initialState: credState,
-                credentialsPath: credPath,
-                globalConfigDir: operatorConfigDir,
-                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-                sleep: this.sleep,
-                now: () => Date.now(),
-              });
-
-              if (parkResult.type === 'timeout') {
-                // Operator mode: Auth-park timeout
-                const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
-                haltReason =
-                  `Operator credentials expired and refresh timed out.\n` +
-                  `Credentials file: ${parkResult.credentialsPath}\n` +
-                  `Expires at: ${expiresAtStr}\n` +
-                  `Please refresh your OAuth token and re-queue this feature.`;
-              } else {
-                haltReason = ''; // Not halting on successful resume
-              }
-            }
-
-            // Handle park timeout
-            if (parkResult.type === 'timeout') {
+            const park = await this.parkOnAuthFailure(result);
+            if (park.timedOut) {
               // Task 14: Auth-park timeout → credentials-specific HALT.
               await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                 () => {},
               );
               await writeFile(
                 join(this.projectRoot, LOOP_HALT_MARKER),
-                haltReason + '\n',
+                park.haltReason + '\n',
                 'utf-8',
               ).catch(() => {
                 /* best-effort marker */
@@ -3722,8 +3619,8 @@ export class Conductor {
               // so the daemon can classify the outcome even if escalation throws (C1).
               await writeState(this.stateFilePath, state);
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
-              const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              const prUrl = await this.surfaceRemediationPr(park.haltReason);
+              await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;

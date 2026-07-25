@@ -43,6 +43,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   let tokenPath: string;
   let events: ConductorEventEmitter;
   let priorToken: string | undefined;
+  let priorCodexApiKey: string | undefined;
 
   function selfHostConfig() {
     return {
@@ -60,6 +61,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    priorCodexApiKey = process.env.CODEX_API_KEY;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeState(statePath, READY_STATE);
@@ -69,6 +71,8 @@ describe('conductor auth-park: daemon-token mode', () => {
   afterEach(async () => {
     if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    if (priorCodexApiKey === undefined) delete process.env.CODEX_API_KEY;
+    else process.env.CODEX_API_KEY = priorCodexApiKey;
     await rm(dir, { recursive: true, force: true }).catch(() => {});
     await rm(tokenDir, { recursive: true, force: true }).catch(() => {});
   });
@@ -163,6 +167,106 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(sleepFn).not.toHaveBeenCalled();
     expect(park.haltReason).toContain('Restart the daemon');
     expect(park.haltReason).not.toContain('CODEX_API_KEY=');
+  });
+
+  it.each(['missing', 'unusable', 'unverifiable'] as const)(
+    'serial Codex %s preflight parks and resumes only the failed attempt',
+    async (state) => {
+      const readiness = vi
+        .fn()
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state })
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const buildAttempts: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          if (step !== 'build') return { success: true };
+          buildAttempts.push(options?.attempt ?? -1);
+          if (buildAttempts.length === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state },
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        maxRetries: 1,
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      });
+
+      await conductor.run();
+
+      expect(readiness).toHaveBeenCalledTimes(2);
+      expect(buildAttempts).toEqual([1, 1]);
+    },
+  );
+
+  it('serial Codex API-key rejection halts once without hot-resuming after an environment change', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step !== 'build') return { success: true };
+        process.env.CODEX_API_KEY = 'replacement-must-not-hot-resume';
+        return {
+          success: false,
+          authFailure: true,
+          actualProvider: 'codex',
+          authentication: { provider: 'codex', source: 'api-key', state: 'unusable' },
+        };
+      }),
+    };
+    const halts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(readiness).not.toHaveBeenCalled();
+    expect(halts).toHaveLength(1);
+    expect(halts[0]).toContain('Restart the daemon');
+    expect(halts[0]).not.toContain('replacement-must-not-hot-resume');
   });
 
   it('authFailure in daemon-token mode parks on the daemon token path (not operator credentials)', async () => {
