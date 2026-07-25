@@ -67,17 +67,55 @@ export class CodexProvider implements LLMProvider {
       cwd: options.cwd,
     });
 
+    return this.classifyCompletion(result, true);
+  }
+
+  /**
+   * Codex's `exec` mode is one-shot rather than a REPL. Keep the interface
+   * usable for conductor's collaborative calls by streaming that one-shot run.
+   */
+  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    const result = await execa('codex', this.buildArgs(options, false), {
+      reject: false,
+      input: this.composePrompt(options),
+      stdin: 'pipe',
+      stdout: ['pipe', 'inherit'],
+      stderr: ['pipe', 'inherit'],
+      cwd: options.cwd,
+    });
+
+    return this.classifyCompletion(result, false);
+  }
+
+  private classifyCompletion(
+    result: {
+      stdout?: unknown;
+      stderr?: unknown;
+      exitCode?: number | null;
+      code?: string;
+    },
+    jsonOutput: boolean,
+  ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
-    const parsed = parseCodexJsonl(stdout);
+    const parsed = jsonOutput
+      ? parseCodexJsonl(stdout)
+      : { output: stdout, tokenUsage: undefined };
     const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
 
-    if (exitCode === 127 || /ENOENT|command not found|codex:\s*not found|spawn codex/i.test(stderr)) {
+    // Missing-binary classification is anchored to structural process signals.
+    // Never infer provider-wide unavailability from arbitrary stderr prose.
+    if (result.code === 'ENOENT' || exitCode === 127) {
+      const reason =
+        "LLM provider 'codex' not found. Install it or check your PATH.";
       return {
         success: false,
-        output: "LLM provider 'codex' not found. Install it or check your PATH.",
+        output: reason,
         exitCode,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
       };
     }
 
@@ -99,19 +137,6 @@ export class CodexProvider implements LLMProvider {
       sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
     };
-  }
-
-  /**
-   * Codex's `exec` mode is one-shot rather than a REPL. Keep the interface
-   * usable for conductor's collaborative calls by streaming that one-shot run.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<void> {
-    await execa('codex', this.buildArgs(options, false), {
-      reject: false,
-      input: this.composePrompt(options),
-      stdio: ['pipe', 'inherit', 'inherit'],
-      cwd: options.cwd,
-    });
   }
 
   private buildArgs(options: InvokeOptions, json: boolean): string[] {

@@ -1,5 +1,11 @@
 # Implementation Plan: Phase 3 — Conductor Rewrite in TypeScript
 
+> **Historical session note:** This plan predates issue #325 / PR #365. Its
+> ST-008 tasks implemented the retired one-session-per-feature behavior.
+> Current conductor behavior is fresh session per step, with resume only for
+> retries within that step. Do not use the historical session tasks below as
+> current requirements.
+
 **Date:** 2026-04-12
 **Design:** .docs/specs/2026-04-12-pluggable-harness-architecture.md
 **Stories:** .docs/stories/features/conduct/ST-001 through ST-011
@@ -341,8 +347,9 @@ DRAFT ADRs remain blocks
 ---
 
 ### Task 12: Session management — session ID lifecycle
-**Story:** ST-008 happy paths: new feature creates session ID, subsequent steps resume session,
---resume uses stored session ID
+**Story (historical; superseded by #325):** ST-008 originally required a new
+feature session and subsequent-step resume. Current behavior creates fresh
+context per step and resumes only within-step retries.
 **Type:** happy-path
 
 **Steps:**
@@ -1177,7 +1184,7 @@ Task 1 (scaffolding)
 | ST-007 | Deleted branch reports error | 27 |
 | ST-007 | Slug collision appends suffix | 27 |
 | ST-008 | New session ID created | 12 |
-| ST-008 | Subsequent steps resume session | 12 |
+| ST-008 | Historical subsequent-step resume — superseded by #325 fresh-per-step | 12 |
 | ST-008 | Subagent context discarded | 14 |
 | ST-008 | --resume uses stored session | 12 |
 | ST-008 | Expired session creates fresh | 13 |

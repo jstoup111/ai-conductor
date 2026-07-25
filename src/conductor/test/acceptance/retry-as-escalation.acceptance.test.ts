@@ -31,8 +31,14 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { validateConfig } from '../../src/engine/config.js';
 import { resolveStepConfig, DEFAULT_STEP_RETRIES } from '../../src/engine/resolved-config.js';
 import { aggregateRetryHotspots, parseEvents } from '../../src/engine/report-renderer.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
 import { writeState } from '../../src/engine/state.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 // ── Dispatch record for the Conductor-level stories ──────────────────────────
 
@@ -151,15 +157,16 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
       mode: 'auto',
       daemon: true,
       config: {
+        llm_provider: ['claude', 'codex'],
         steps: {
           plan: {
+            llm_provider: 'codex',
             model: 'gpt-5.6-luna',
             effort: 'low',
             max_retries: 4,
           },
         },
       } as HarnessConfig,
-      modelPolicy: CODEX_MODEL_POLICY,
       escalateBuildFailure: okEscalation(),
     });
 
@@ -170,6 +177,201 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
       { model: 'gpt-5.6-luna', effort: 'medium' },
       { model: 'gpt-5.6-terra', effort: 'medium' },
       { model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
+  });
+
+  it('escalates each step with its preferred provider policy before provider-native fallback', async () => {
+    const calls: Array<{
+      step: 'memory' | 'explore';
+      provider: 'claude' | 'codex';
+      model: string | undefined;
+      effort: string | undefined;
+      resume: boolean;
+    }> = [];
+    const providerCalls = new Map<string, number>();
+    const invoke = (
+      provider: 'claude' | 'codex',
+    ) => async (options: InvokeOptions): Promise<InvokeResult> => {
+      if (options.prompt !== '/memory' && options.prompt !== '/explore') {
+        return {
+          success: true,
+          output: `${provider} non-target step completed`,
+          exitCode: 0,
+        };
+      }
+      const step =
+        options.prompt === '/memory' ? 'memory' : 'explore';
+      const key = `${step}:${provider}`;
+      const call = (providerCalls.get(key) ?? 0) + 1;
+      providerCalls.set(key, call);
+      calls.push({
+        step,
+        provider,
+        model: options.model,
+        effort: options.effort,
+        resume: options.resume,
+      });
+      const primary =
+        (step === 'memory' && provider === 'claude') ||
+        (step === 'explore' && provider === 'codex');
+      if (primary && call < 3) {
+        return {
+          success: false,
+          output: `${provider} ordinary failure ${call}`,
+          exitCode: 1,
+        };
+      }
+      if (primary) {
+        return {
+          success: false,
+          output: `${provider} model unavailable after escalation`,
+          exitCode: 1,
+          modelUnavailable: true,
+        };
+      }
+      return {
+        success: true,
+        output: `${provider} fallback completed`,
+        exitCode: 0,
+      };
+    };
+    const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+      invoke: invoke(key),
+      invokeInteractive: invoke(key),
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider('claude'),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+      {
+        key: 'codex',
+        provider: provider('codex'),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const sessions = new ProviderSessionStore({
+      createSessionId: (() => {
+        let id = 0;
+        return () => `retry-provider-${++id}`;
+      })(),
+    });
+    const routingConfig: HarnessConfig = {
+      llm_provider: ['claude', 'codex'],
+      steps: {
+        memory: {
+          llm_provider: 'claude',
+          model: 'haiku',
+          effort: 'low',
+          max_retries: 3,
+        },
+        explore: {
+          llm_provider: 'codex',
+          model: 'gpt-5.6-luna',
+          effort: 'low',
+          max_retries: 3,
+        },
+      },
+    };
+    const runner = new DefaultStepRunner(
+      {
+        invoke: async () => ({
+          success: true,
+          output: 'legacy special lane completed',
+          exitCode: 0,
+        }),
+        invokeInteractive: async () => ({
+          success: true,
+          output: 'legacy special lane completed',
+          exitCode: 0,
+        }),
+      },
+      'legacy-session',
+      dir,
+      {
+        config: routingConfig,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+        providerWarn: vi.fn(),
+      },
+    );
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'default',
+      config: routingConfig,
+      onCheckpoint: async (step) =>
+        step === 'explore' ? 'quit' : 'continue',
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual([
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'haiku',
+        effort: 'low',
+        resume: false,
+      },
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'haiku',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'sonnet',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'memory',
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
+        effort: 'medium',
+        resume: false,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        effort: 'low',
+        resume: false,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'explore',
+        provider: 'claude',
+        model: 'fable',
+        effort: 'xhigh',
+        resume: false,
+      },
     ]);
   });
 
@@ -394,15 +596,16 @@ describe('#188 retry-as-escalation — S4 logging', () => {
       mode: 'auto',
       daemon: true,
       config: {
+        llm_provider: ['claude', 'codex'],
         steps: {
           plan: {
+            llm_provider: 'codex',
             model: 'gpt-5.6-luna',
             effort: 'low',
             max_retries: 4,
           },
         },
       } as HarnessConfig,
-      modelPolicy: CODEX_MODEL_POLICY,
       escalateBuildFailure: okEscalation(),
     });
 
@@ -456,15 +659,16 @@ describe('#188 retry-as-escalation — S4 logging', () => {
       fromStep: 'plan',
       verifyArtifacts: true,
       config: {
+        llm_provider: ['claude', 'codex'],
         steps: {
           plan: {
+            llm_provider: 'codex',
             model: 'gpt-5.6-luna',
             effort: 'low',
             max_retries: 4,
           },
         },
       } as HarnessConfig,
-      modelPolicy: CODEX_MODEL_POLICY,
       escalateBuildFailure: okEscalation(),
     });
 

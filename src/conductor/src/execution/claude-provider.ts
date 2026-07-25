@@ -501,21 +501,81 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
         });
 
+    return this.classifyCompletion(result, true);
+  }
+
+  /**
+   * Run Claude with stdio inherited — user sees output live.
+   *
+   * Default: every step uses `-p` (print mode) so the session exits when the
+   * skill completes. Matches bin/conduct; prevents the harness from hanging
+   * waiting for `/quit`. The autonomous vs. collaborative distinction is
+   * purely about the `--dangerously-skip-permissions` flag — collaborative
+   * steps still see Claude's permission prompts on the shared terminal.
+   *
+   * `interactive: true` is a deliberate opt-in (used by the recovery menu's
+   * "interactive fix" option) that opens a REPL instead of auto-exiting, so
+   * the user can debug with Claude manually.
+   */
+  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    const args = this.buildArgs(options);
+
+    if (options.prompt) {
+      if (options.interactive) {
+        // REPL mode — positional arg; session stays open until user /quits.
+        args.push(options.prompt);
+      } else {
+        // Print mode — auto-exit when done.
+        args.push('-p', options.prompt);
+      }
+    }
+
+    // Capture while inheriting output so classification remains available only
+    // after the visibly streamed process completes.
+    const result = await execa('claude', args, {
+      stdin: options.interactive ? 'inherit' : 'ignore',
+      stdout: ['pipe', 'inherit'],
+      stderr: ['pipe', 'inherit'],
+      reject: false,
+      env: this.buildEnv(options),
+      cwd: options.cwd,
+    });
+
+    return this.classifyCompletion(result, false);
+  }
+
+  private classifyCompletion(
+    result: {
+      stdout?: unknown;
+      stderr?: unknown;
+      exitCode?: number | null;
+      code?: string;
+    },
+    jsonOutput: boolean,
+  ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
 
-    const { output: parsedOutput, tokenUsage } = parseJsonResult(stdout);
+    const parsed = jsonOutput
+      ? parseJsonResult(stdout)
+      : { output: stdout, tokenUsage: undefined };
 
     // Combine stdout + stderr so the caller has full context
-    const output = stderr ? `${parsedOutput}\n${stderr}`.trim() : parsedOutput;
+    const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
 
-    // Detect missing binary (exit 127 or ENOENT in stderr)
-    if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {
+    // Missing-binary classification is anchored to structural process signals.
+    // Never infer provider-wide unavailability from arbitrary stderr prose.
+    if (result.code === 'ENOENT' || exitCode === 127) {
+      const reason =
+        "LLM provider 'claude' not found. Install it or check your PATH.";
       return {
         success: false,
-        output: "LLM provider 'claude' not found. Install it or check your PATH.",
+        output: reason,
         exitCode,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
       };
     }
 
@@ -556,49 +616,10 @@ export class ClaudeProvider implements LLMProvider {
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,
-      tokenUsage,
+      tokenUsage: parsed.tokenUsage,
       waitSeconds,
       deadline,
     };
-  }
-
-  /**
-   * Run Claude with stdio inherited — user sees output live.
-   *
-   * Default: every step uses `-p` (print mode) so the session exits when the
-   * skill completes. Matches bin/conduct; prevents the harness from hanging
-   * waiting for `/quit`. The autonomous vs. collaborative distinction is
-   * purely about the `--dangerously-skip-permissions` flag — collaborative
-   * steps still see Claude's permission prompts on the shared terminal.
-   *
-   * `interactive: true` is a deliberate opt-in (used by the recovery menu's
-   * "interactive fix" option) that opens a REPL instead of auto-exiting, so
-   * the user can debug with Claude manually.
-   */
-  async invokeInteractive(options: InvokeOptions): Promise<void> {
-    const args = this.buildArgs(options);
-
-    if (options.prompt) {
-      if (options.interactive) {
-        // REPL mode — positional arg; session stays open until user /quits.
-        args.push(options.prompt);
-      } else {
-        // Print mode — auto-exit when done.
-        args.push('-p', options.prompt);
-      }
-    }
-
-    // In REPL mode the user types, so stdin must be inherited. In print mode
-    // (`-p`, the default — including every interactive step under --auto) stdin
-    // must be IGNORED: `claude -p` with an inherited TTY stdin blocks waiting
-    // for EOF that never comes, hanging the step silently. stdout/stderr stay
-    // inherited so output is still live. (Mirrors `invoke`'s `stdin: 'ignore'`.)
-    await execa('claude', args, {
-      stdio: options.interactive ? 'inherit' : ['ignore', 'inherit', 'inherit'],
-      reject: false,
-      env: this.buildEnv(options),
-      cwd: options.cwd,
-    });
   }
 
   private buildArgs(options: InvokeOptions): string[] {

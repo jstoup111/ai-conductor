@@ -6,11 +6,14 @@ import * as chokidar from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
+import type { ProviderExecutionContext } from './provider-execution.js';
 import type {
+  FeatureRunScope,
   FeatureRunnerDeps,
   FeatureWorktree,
   WorktreeOutcome,
 } from './daemon-runner.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
@@ -29,9 +32,19 @@ export interface RealDepsConfig {
   /** Branch the worktrees fork from (e.g. 'main'). */
   baseBranch: string;
   /** Run the gate loop in a worktree to DONE/HALT (assembled by the CLI). */
-  runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
-  /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
-  provider: LLMProvider;
+  runConductorInWorktree: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
+    featureEvents?: ConductorEventEmitter,
+  ) => Promise<void>;
+  /** Legacy narrative provider when provider-aware feature execution is absent. */
+  provider?: LLMProvider;
+  providerExecution?: () => ProviderExecutionContext;
+  beginFeatureRun?: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => FeatureRunScope | Promise<FeatureRunScope>;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
    * run start by `resolveMemoryProvider` and carried on context so every
@@ -49,6 +62,7 @@ export interface RealDepsConfig {
     error: SetupFailureError,
     worktree: FeatureWorktree,
     item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
   ) => Promise<TriageOutcome>;
 }
 
@@ -65,6 +79,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    providerExecution: cfg.providerExecution,
+    beginFeatureRun: cfg.beginFeatureRun,
     // Thread the resolved active memory provider onto run context (adr-2026-06-29-per-project-memory-provider-selection/FR-10).
     memoryProvider: cfg.memoryProvider,
     // Project key for the engineer store = the main checkout's basename (NOT the
@@ -98,7 +114,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // each project translate the namespace into its own shared/namespaced infra.
     prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log, { verbose: cfg.verbose ?? false }),
 
-    runConductor: (wt, item) => cfg.runConductorInWorktree(wt, item),
+    runConductor: (wt, item, providerExecution, featureEvents) =>
+      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents),
 
     readOutcome: (wt) => readWorktreeOutcome(wt.path),
 

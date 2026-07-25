@@ -214,6 +214,49 @@ describe('report-renderer', () => {
     expect(report).toContain('75');
   });
 
+  it('renders preferred and actual providers for mixed-provider token spend while preserving legacy rows', async () => {
+    const content = makeLines([
+      {
+        event: {
+          type: 'step_completed',
+          step: 'plan',
+          status: 'done',
+          preferredProvider: 'codex',
+          actualProvider: 'claude',
+          tokenUsage: { input: 100, output: 20 },
+        },
+        ts: '2026-01-01T00:00:05.000Z',
+      },
+      {
+        event: {
+          type: 'step_completed',
+          step: 'build',
+          status: 'done',
+          preferredProvider: 'codex',
+          actualProvider: 'codex',
+          tokenUsage: { input: 50, output: 10 },
+        },
+        ts: '2026-01-01T00:00:10.000Z',
+      },
+      {
+        event: {
+          type: 'step_completed',
+          step: 'legacy',
+          status: 'done',
+          tokenUsage: { input: 10, output: 5 },
+        },
+        ts: '2026-01-01T00:00:15.000Z',
+      },
+    ]);
+    await writeFile(eventsPath, content, 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(
+      /Step\s+Preferred Provider\s+Actual Provider\s+Input\s+Output[\s\S]*plan\s+codex\s+claude\s+100\s+20[\s\S]*build\s+codex\s+codex\s+50\s+10[\s\S]*legacy\s+—\s+—\s+10\s+5/,
+    );
+  });
+
   it('shows "No token data recorded" when no step_completed has tokenUsage', async () => {
     const content = makeLines([
       { event: { type: 'step_started', step: 'bootstrap', index: 0 }, ts: '2026-01-01T00:00:00.000Z' },

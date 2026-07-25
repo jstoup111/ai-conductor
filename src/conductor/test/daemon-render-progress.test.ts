@@ -157,6 +157,20 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     expect(line).toContain('2');
   });
 
+  it('renders provider fallback loudly with complete diagnostics', () => {
+    const [line] = lines({
+      type: 'provider_fallback',
+      step: 'plan',
+      failedProvider: 'codex',
+      reason: 'executable not found',
+      nextProvider: 'claude',
+    });
+
+    expect(line ?? '').toContain(
+      '⚠ PROVIDER FALLBACK: plan — codex unavailable (executable not found); trying claude',
+    );
+  });
+
   it('produces no line for an unhandled kind (unchanged behavior)', () => {
     expect(lines({ type: 'dashboard_refresh' })).toEqual([]);
   });

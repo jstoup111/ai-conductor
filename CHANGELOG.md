@@ -25,6 +25,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Per-step provider routing (#927) preserves scalar `llm_provider` configuration
+  while accepting an ordered provider array and explicit per-step scalar/array
+  selections. The first configured provider remains the inherited default;
+  classified unavailability and provider-native model exhaustion now use
+  selected-first, stable fallback with visible warnings, provider-native
+  settings, isolated step/provider sessions, and actual-provider usage
+  attribution. Authentication, rate-limit, session-expiry, timeout, rejection,
+  and ordinary failures retain their existing recovery behavior without
+  crossing providers. Custom providers retain warned Claude-compatible policy
+  behavior without a guaranteed automatic mixed-provider fallback contract.
 - Autonomous model and effort resolution is now provider-aware (#902). The built-in Claude
   and Codex providers use independent provider-native step defaults, retry-escalation orders,
   and unavailable-model fallback ladders; explicit overrides remain opaque and keep their
@@ -4347,8 +4357,11 @@ fi
 - conduct-ts: hybrid session model — new `freshContextPerStep` option. When on,
   the conductor resets the LLM session before each new step in the looped region
   (`build`…`finish`), so each runs on fresh context (Ralph-style — context never
-  bloats across the SHIP phase) while a step's own retries still resume. The
-  front half keeps the persistent session. Default off (persistent everywhere).
+  bloats across the SHIP phase) while a step's own retries still resume.
+  **Historical intermediate behavior:** the front half remained persistent and
+  the option defaulted off. This was later superseded by
+  ai-conductor#325 / PR #365, which makes fresh-per-step unconditional across
+  all phases and retains resume only within a step's retries.
 - conduct-ts: the conductor now drives the **resolved step registry**
   (`buildStepRegistry(config)`) instead of the static `ALL_STEPS`, so **custom
   steps** defined in `.ai-conductor/config.yml` (via `after:` + `skill:`) are

@@ -22,6 +22,7 @@ import type { StepRunResult, StepRunOptions } from "./conductor.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
 import type { ConductorEvent } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";
+import type { ProviderSessionScope } from "./provider-session.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -289,6 +290,8 @@ export function runWithConcurrency<T>(
  */
 export interface BranchStepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  escalateForStep?(step: StepName, state: ConductState): boolean;
+  beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
 }
 
 /**
@@ -364,12 +367,13 @@ export interface BranchExecutorDeps {
 }
 
 /**
- * Runs a single concurrent-group branch to completion: mints its own fresh
- * session id (never the shared main-conductor session — adr-2026-07-10-
- * concurrent-group-core.md), dispatches the member's OWN step/skill name
- * (not the group name — the bug the ADR calls out), and retries up to
- * `maxRetries` times, resuming the SAME minted session id on every retry
- * (only the first attempt uses `resume: false`).
+ * Runs a single concurrent-group branch to completion: creates one detached
+ * provider-session scope when the runner supports provider routing, otherwise
+ * mints the legacy scalar session id. Neither path uses the shared
+ * main-conductor session (adr-2026-07-10-concurrent-group-core.md). Dispatches
+ * the member's OWN step/skill name (not the group name — the bug the ADR calls
+ * out), and retries up to `maxRetries` times, resuming the same member/provider
+ * session on retry.
  *
  * Returns a `BranchOutcome`: `verdict:pass` on the first successful
  * dispatch, or `no-verdict` (carrying the last failure's output) once
@@ -406,7 +410,10 @@ async function runGroupBranchInner(
   maxRetries: number,
 ): Promise<BranchOutcome> {
   const mintSessionId = deps.mintSessionId ?? uuidv4;
-  let sessionId = mintSessionId();
+  const memberStep = member.name as StepName;
+  const providerSessions = deps.stepRunner.beginProviderBranch?.(memberStep);
+  const escalate = deps.stepRunner.escalateForStep?.(memberStep, state) ?? true;
+  let sessionId = providerSessions ? "" : mintSessionId();
 
   // Task 9: sweep THIS member's own stale marker (if any) before its first
   // dispatch — scoped to member.name so branch A's leftover marker can
@@ -440,10 +447,13 @@ async function runGroupBranchInner(
     });
     let result: StepRunResult;
     try {
-      result = await deps.stepRunner.run(member.name as StepName, state, {
-        sessionId,
-        resume,
-      });
+      result = await deps.stepRunner.run(
+        memberStep,
+        state,
+        providerSessions
+          ? { providerSessions, attempt, escalate }
+          : { sessionId, resume, attempt, escalate },
+      );
     } catch (err) {
       // A THROW from the step runner is an infra failure of THIS branch
       // only — classified exactly like a `success: false` attempt (burns a
@@ -487,7 +497,12 @@ async function runGroupBranchInner(
     // retry budget — mirrors conductor.ts:1757-1769 (resets to a fresh
     // session, not a resume of the expired one).
     if (result.sessionExpired) {
-      sessionId = mintSessionId();
+      const expiredProvider = result.actualProvider ?? result.preferredProvider;
+      if (providerSessions && expiredProvider) {
+        await providerSessions.replace(expiredProvider);
+      } else {
+        sessionId = mintSessionId();
+      }
       hasRun = false;
       attempt -= 1;
       continue;

@@ -21,6 +21,9 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  */
 export type ReviewMode = 'auto' | 'manual' | 'conditional';
 
+/** One provider key or an ordered provider fallback sequence. */
+export type ProviderSelection = string | string[];
+
 /**
  * Overrides that kick in when the feature's current complexity tier matches.
  * Every field is optional — unset falls back to the step/phase/default value.
@@ -62,6 +65,9 @@ export interface ParallelBranch {
  * registry knows where and how to insert them.
  */
 export interface StepConfig {
+  /** Provider selection for this step. Unset steps inherit the first run-level entry. */
+  llm_provider?: ProviderSelection;
+
   /** Claude model: alias ("haiku"|"sonnet"|"opus"|"fable") or full ID. */
   model?: string;
 
@@ -389,8 +395,11 @@ export interface HarnessConfig {
    * too. (The `\` above is only to keep this comment from closing early.)
    */
   acceptance_spec_globs?: string[];
-  /** Plugin selection: which LLM provider to use (defaults to 'claude'). */
-  llm_provider?: string;
+  /**
+   * Ordered LLM provider selection. The first entry is inherited by steps
+   * without an explicit `llm_provider` selection.
+   */
+  llm_provider?: ProviderSelection;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
   /**

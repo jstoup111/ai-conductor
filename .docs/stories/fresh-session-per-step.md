@@ -19,6 +19,10 @@ Design decisions this file assumes (see `.docs/track/fresh-session-per-step.md`,
   a shared session may be retained **for interactive REPL steps only**; autonomous /
   print-mode steps always get fresh sessions.
 
+> **Implemented resolution:** No interactive carve-out was introduced. The
+> unconditional step-boundary reset applies in every mode and phase. Only
+> retries within the current step resume its session.
+
 ---
 
 ## Story: Every step boundary starts a fresh session, all phases, unconditionally

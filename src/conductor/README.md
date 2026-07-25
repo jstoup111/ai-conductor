@@ -187,11 +187,13 @@ by **gate verdicts** instead of a fixed order:
   that still reaches the attempt-3 model bump). Opt out per step with
   `steps.<step>.escalate: false` to pin the base config across retries. Each `step_retry`
   event carries the upcoming attempt's `escalatedModel`/`escalatedEffort` for retro Part C.
-- **Fresh session per step** — unconditionally, in all modes and all phases (interactive
+- **Fresh session per step and provider** — unconditionally, in all modes and all phases (interactive
   `/conduct` included; each step reads its inputs from committed `.docs/` artifacts, not
-  conversational memory), the LLM session is reset before **every** executed step
-  (Ralph-style; context never bloats across the loop), while a step's own retries resume
-  the same session. The reset also fires before the **first** step, which discards any
+  conversational memory), each reached provider receives a fresh session before **every**
+  executed step (Ralph-style; context never crosses steps or providers). Retries within the
+  same step-execution scope/provider may resume its matching session; re-entering a one-shot
+  phase/step execution starts a fresh scope. The reset also fires before the **first** step,
+  which discards any
   stale session inherited from a **reused worktree** — a kept worktree carries the prior
   run's `session-created`/`conduct-session-id`, and without the reset the first step would
   `--resume` a brand-new id that was never created → "session unavailable (expired or in
@@ -2031,6 +2033,41 @@ The feature guarantees halt PRs reliably carry **three durable markers**:
 
 All operations are **best-effort, non-throwing**, and sit behind the injected `GhRunner` seam
 so they are fully unit-testable with the existing `makeFakeGh` pattern.
+
+### Per-step provider routing (#927)
+
+At composition time, `llm_provider` is normalized from either a scalar or an
+ordered array. An omitted value remains equivalent to scalar `claude`. The
+first configured provider is the inherited default; an explicit
+`steps.<step>.llm_provider` scalar or array is selected first, followed by the
+remaining run-level providers once in stable order. All names are validated
+against the frozen plugin registry before the first dispatch.
+
+Provider fallback is restricted to two classified boundaries: explicit
+run-wide unavailability (for example, a missing executable) and completed
+provider-native model ladder exhaustion. Each transition emits a visible
+`provider_fallback` warning with the step, failed provider, reason, and next
+provider. The next provider recomputes model, effort, escalation, and model
+availability from its own provider-native defaults; settings are never copied
+from the failed provider.
+
+Authentication failure, rate limiting, session expiry, timeout, request
+rejection, and ordinary failure do not cross providers. Their existing
+recovery or retry behavior retains precedence, including authentication
+park-and-resume and non-consuming rate/session recovery.
+
+`ProviderSessionStore` creates a scope at every step boundary and a distinct
+session for each provider reached in that step. Retries within the same
+step-execution scope/provider may resume the matching session. Re-entering a
+one-shot phase/step execution, another provider, or a later step starts fresh.
+Each `provider_attempt` event identifies the provider that executed that
+attempt; `step_completed` records the preferred and actual provider attribution
+so fallback usage and diagnostics are not assigned to the inherited default.
+
+A registered custom provider retains its provider instance and receives the
+warned Claude-compatible model policy. Automatic mixed-provider fallback for a
+custom provider is not guaranteed until plugins can register a native provider
+policy; compatibility does not imply the built-in fallback contract.
 
 ### Provider-native model availability fallback (`engine/model-availability.ts`, #186/#902)
 

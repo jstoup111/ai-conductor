@@ -16,6 +16,8 @@ import {
   CODEX_MODEL_POLICY,
   resolveProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import { normalizeProviderSelection } from '../../src/engine/provider-selection.js';
+import { validateConfig } from '../../src/engine/config.js';
 
 class MockStepRunner implements StepRunner {
   calls: StepName[] = [];
@@ -88,6 +90,21 @@ describe('Integration: plugin defaults', () => {
     expect(provider).toHaveProperty('invokeInteractive');
     expect(registry.list('llm_provider')).toEqual(expect.arrayContaining(['claude', 'codex']));
   });
+
+  it.each(['claude', 'codex'] as const)(
+    'keeps scalar %s as the complete one-provider selection',
+    (providerKey) => {
+      const result = validateConfig({ llm_provider: providerKey });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.llm_provider).toBe(providerKey);
+      expect(normalizeProviderSelection(result.config.llm_provider)).toEqual([
+        providerKey,
+      ]);
+      expect(result.warnings).toEqual([]);
+    },
+  );
 
   it('selects each provider and its exact built-in or compatibility policy from the same key', async () => {
     const registry = new PluginRegistry();

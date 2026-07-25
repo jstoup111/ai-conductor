@@ -9,6 +9,11 @@ export interface EffectiveModelResult {
   downgraded: boolean;
 }
 
+export interface ResolvedModelInvocation {
+  result: InvokeResult;
+  model: string;
+}
+
 /**
  * Per-process cache tracking which models have been observed to be unavailable
  * (e.g. rate-limited, overloaded, or otherwise dead) so callers can transparently
@@ -61,27 +66,37 @@ export class ModelAvailability {
    * via effectiveModel(). Any other result (success or ordinary failure, e.g.
    * rate-limited) is returned immediately without further ladder walking.
    *
-   * Ordering: authFailure is checked first (transient auth issue, not a model problem)
-   * before modelUnavailable (model is permanently unavailable). This prevents auth
-   * failures from poisoning the ladder.
+   * Ordering: recovery signals are checked before modelUnavailable. Auth,
+   * rate-limit, and session-expiry recovery must never poison the ladder.
    */
   async invokeWithLadder(provider: LLMProvider, options: InvokeOptions): Promise<InvokeResult> {
+    return (await this.invokeWithLadderResolved(provider, options)).result;
+  }
+
+  /**
+   * Engine-internal variant that retains the final model identity alongside
+   * the provider-compatible InvokeResult payload.
+   */
+  async invokeWithLadderResolved(
+    provider: LLMProvider,
+    options: InvokeOptions,
+  ): Promise<ResolvedModelInvocation> {
     const requested = options.model ?? "";
     const result = await provider.invoke({ ...options, model: requested });
 
-    // Auth failure is transient (operator's OAuth token may be stale) — never poison
-    // the ladder. Return immediately without marking the model dead or walking.
-    if (result.authFailure) {
-      return result;
+    // Existing recovery owns these failures, even if a provider reports
+    // conflicting availability metadata.
+    if (result.authFailure || result.rateLimited || result.sessionExpired) {
+      return { result, model: requested };
     }
 
     if (!result.modelUnavailable) {
-      return result;
+      return { result, model: requested };
     }
 
     if (this.ladder.length === 0) {
       // No fallback ladder configured; nothing to walk, nothing to mark dead.
-      return result;
+      return { result, model: requested };
     }
 
     this.markDead(requested);
@@ -89,9 +104,12 @@ export class ModelAvailability {
 
     if (nextModel === requested) {
       // No live ladder entry remains; nothing further to try.
-      return result;
+      return { result, model: requested };
     }
 
-    return this.invokeWithLadder(provider, { ...options, model: nextModel });
+    return this.invokeWithLadderResolved(provider, {
+      ...options,
+      model: nextModel,
+    });
   }
 }

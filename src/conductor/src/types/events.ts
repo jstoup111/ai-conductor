@@ -23,8 +23,41 @@ export interface RecoveryContext {
 
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
-  | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[]; tokenUsage?: TokenUsage; model?: string; unmetered?: boolean }
+  | {
+      type: 'step_completed';
+      step: StepName;
+      status: StepStatus;
+      tail?: string[];
+      tokenUsage?: TokenUsage;
+      model?: string;
+      unmetered?: boolean;
+      /** Preferred provider resolved for this step, when provider routing is active. */
+      preferredProvider?: string;
+      /** Provider that produced the successful result. */
+      actualProvider?: string;
+    }
   | { type: 'step_failed'; step: StepName; error: string; retryCount: number }
+  | {
+      /** One provider candidate's result within a step attempt. */
+      type: 'provider_attempt';
+      step: StepName;
+      provider: string;
+      outcome: 'success' | 'failure' | 'unavailable';
+      /** False when a cached run-wide unavailability avoided process dispatch. */
+      invoked: boolean;
+      model?: string;
+      tokenUsage?: TokenUsage;
+      reason?: string;
+      fallbackReason?: string;
+    }
+  | {
+      /** A visible transition from an unavailable provider to the next candidate. */
+      type: 'provider_fallback';
+      step: StepName;
+      failedProvider: string;
+      reason: string;
+      nextProvider: string;
+    }
   | {
       type: 'step_retry';
       step: StepName;

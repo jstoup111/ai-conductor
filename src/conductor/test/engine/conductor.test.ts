@@ -27,7 +27,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 import { execa } from 'execa';
-import type { ConductState, StepGroup, Track } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -66,6 +66,15 @@ import {
   CODEX_MODEL_POLICY,
   type ProviderModelPolicy,
 } from '../../src/engine/provider-model-policy.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from '../../src/execution/llm-provider.js';
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
   return {
@@ -7791,6 +7800,224 @@ describe('engine/conductor', () => {
     expect(planDispatch).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
   });
 
+  it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+
+    let planDispatch: { model?: string; effort?: string } | undefined;
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        if (step === 'plan') {
+          planDispatch = {
+            model: options?.modelOverride,
+            effort: options?.effortOverride,
+          };
+        }
+        return { success: true };
+      }),
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+      invokeInteractive: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider,
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'plan',
+      config: {
+        llm_provider: 'codex',
+        steps: {
+          plan: { model: 'gpt-configured', effort: 'low' },
+        },
+      },
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes,
+        sessions: new ProviderSessionStore(),
+        modelOverride: 'gpt-cli',
+        effortOverride: 'max',
+      },
+    });
+
+    await conductor.run();
+
+    expect(planDispatch).toEqual({ model: 'gpt-cli', effort: 'max' });
+  });
+
+  it('emits provider transition, attempt identities, and actual-provider completion', async () => {
+    await writeState(statePath, {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'L',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+
+    const provider = (key: 'codex' | 'claude'): LLMProvider => {
+      const invoke = vi.fn(async () =>
+        key === 'codex'
+          ? {
+              success: false,
+              output: 'codex executable not found',
+              exitCode: 127,
+              providerUnavailable: true,
+              providerUnavailableReason: 'codex executable not found',
+              providerUnavailableScope: 'run' as const,
+            }
+          : {
+              success: true,
+              output: 'completed by claude',
+              exitCode: 0,
+              tokenUsage: { input: 120, output: 30 },
+            });
+      return { invoke, invokeInteractive: invoke };
+    };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: provider('codex'),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+      {
+        key: 'claude',
+        provider: provider('claude'),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const providerExecution = {
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionStore(),
+      config: { llm_provider: ['codex', 'claude'] },
+      onAttempt: (
+        step: StepName,
+        attempt: Omit<Extract<ConductorEvent, { type: 'provider_attempt' }>, 'type' | 'step'>,
+      ) => events.emit({ type: 'provider_attempt', step, ...attempt }),
+      warn: (_message: string, transition: Extract<ConductorEvent, { type: 'provider_fallback' }>) =>
+        events.emit(transition),
+    };
+    const runner = new DefaultStepRunner(
+      runtimes.get('codex').provider,
+      'legacy-session',
+      dir,
+      {
+        config: providerExecution.config,
+        modelPolicy: CODEX_MODEL_POLICY,
+        mode: 'auto',
+        providerExecution,
+      },
+    );
+    const observed: ConductorEvent[] = [];
+    for (const type of ['provider_fallback', 'provider_attempt', 'step_completed'] as const) {
+      events.on(type, (event) => {
+        if ('step' in event && event.step === 'plan') observed.push(event);
+      });
+    }
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'plan',
+      mode: 'auto',
+      config: providerExecution.config,
+      modelPolicy: CODEX_MODEL_POLICY,
+      providerExecution,
+    });
+
+    await conductor.run();
+
+    expect(observed.map((event) => {
+      if (event.type === 'provider_fallback') return event;
+      if (event.type === 'provider_attempt') {
+        return {
+          type: event.type,
+          step: event.step,
+          provider: event.provider,
+          outcome: event.outcome,
+          invoked: event.invoked,
+          model: event.model,
+          reason: event.reason,
+          tokenUsage: event.tokenUsage,
+        };
+      }
+      return {
+        type: event.type,
+        step: event.step,
+        preferredProvider: event.preferredProvider,
+        actualProvider: event.actualProvider,
+        tokenUsage: event.tokenUsage,
+      };
+    })).toEqual([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: true,
+        model: 'gpt-5.6-sol',
+        reason: 'codex executable not found',
+        tokenUsage: undefined,
+      },
+      {
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'codex executable not found',
+        nextProvider: 'claude',
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        model: 'fable',
+        reason: undefined,
+        tokenUsage: { input: 120, output: 30 },
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        tokenUsage: { input: 120, output: 30 },
+      },
+    ]);
+  });
+
   it.each([
     {
       signal: 'rate-limit',
@@ -8219,6 +8446,168 @@ describe('engine/conductor', () => {
   });
 
   describe('stale-session handling', () => {
+    it('scopes serial sessions per step and provider while stale recovery stays budget-neutral', async () => {
+      const calls: Array<{
+        step: 'memory' | 'explore';
+        provider: 'claude' | 'codex';
+        sessionId: string;
+        resume: boolean;
+      }> = [];
+      const providerCalls = new Map<string, number>();
+      const invoke = (
+        provider: 'claude' | 'codex',
+      ) => async (options: InvokeOptions): Promise<InvokeResult> => {
+        if (options.prompt !== '/memory' && options.prompt !== '/explore') {
+          return { success: true, output: 'non-target step completed', exitCode: 0 };
+        }
+        const step = options.prompt === '/memory' ? 'memory' : 'explore';
+        const key = `${step}:${provider}`;
+        const call = (providerCalls.get(key) ?? 0) + 1;
+        providerCalls.set(key, call);
+        calls.push({
+          step,
+          provider,
+          sessionId: options.sessionId,
+          resume: options.resume,
+        });
+
+        if (step === 'memory' && provider === 'codex' && call === 1) {
+          return {
+            success: false,
+            output: 'codex session expired',
+            exitCode: 1,
+            sessionExpired: true,
+          };
+        }
+        if (step === 'memory' && provider === 'codex' && call === 2) {
+          return {
+            success: false,
+            output: 'ordinary retryable failure',
+            exitCode: 1,
+          };
+        }
+        if (step === 'explore' && provider === 'codex') {
+          return {
+            success: false,
+            output: 'codex model unavailable',
+            exitCode: 1,
+            modelUnavailable: true,
+          };
+        }
+        return { success: true, output: 'completed', exitCode: 0 };
+      };
+      const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+        invoke: invoke(key),
+        invokeInteractive: invoke(key),
+      });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'claude',
+          provider: provider('claude'),
+          policy: CLAUDE_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability([]),
+        },
+        {
+          key: 'codex',
+          provider: provider('codex'),
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability([]),
+        },
+      ]);
+      const ids = [
+        'memory-codex-stale',
+        'memory-codex-recovered',
+        'explore-codex',
+        'explore-claude',
+      ][Symbol.iterator]();
+      const sessions = new ProviderSessionStore({
+        createSessionId: () => ids.next().value ?? 'unexpected-session',
+      });
+      const beginStep = vi.spyOn(sessions, 'beginStep');
+      const config: HarnessConfig = {
+        llm_provider: ['codex', 'claude'],
+        steps: {
+          memory: { llm_provider: 'codex', max_retries: 2 },
+          explore: { llm_provider: 'codex' },
+        },
+      };
+      const runner = new DefaultStepRunner(
+        provider('claude'),
+        'legacy-session',
+        dir,
+        {
+          config,
+          sessionStore: sessions,
+          providerRuntimes: runtimes,
+          configuredProviders: ['codex', 'claude'],
+        },
+      );
+      const resetSession = vi.spyOn(runner, 'resetSession');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        config,
+        onCheckpoint: async (step) =>
+          step === 'explore' ? 'quit' : 'continue',
+      });
+
+      await conductor.run();
+
+      const targetSteps = new Set(['memory', 'explore']);
+      expect({
+        calls,
+        beginStepCalls: beginStep.mock.calls.filter(([step]) =>
+          targetSteps.has(step)
+        ),
+        resetSessionCalls: resetSession.mock.calls.filter(
+          ([step]) => step === undefined || targetSteps.has(step),
+        ),
+      }).toEqual({
+        calls: [
+          {
+            step: 'memory',
+            provider: 'codex',
+            sessionId: 'memory-codex-stale',
+            resume: false,
+          },
+          {
+            step: 'memory',
+            provider: 'codex',
+            sessionId: 'memory-codex-recovered',
+            resume: false,
+          },
+          {
+            step: 'memory',
+            provider: 'codex',
+            sessionId: 'memory-codex-recovered',
+            resume: true,
+          },
+          {
+            step: 'explore',
+            provider: 'codex',
+            sessionId: 'explore-codex',
+            resume: false,
+          },
+          {
+            step: 'explore',
+            provider: 'claude',
+            sessionId: 'explore-claude',
+            resume: false,
+          },
+        ],
+        beginStepCalls: [['memory'], ['explore']],
+        resetSessionCalls: [
+          ['memory'],
+          [undefined, 'codex'],
+          ['explore'],
+        ],
+      });
+    });
+
     it('calls resetSession and retries without burning retry budget', async () => {
       let attempt = 0;
       const resetSession = vi.fn().mockResolvedValue(undefined);
@@ -8235,7 +8624,9 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         projectRoot: dir,
-        maxRetries: 2,
+        // One budgeted attempt: the successful retry can occur only if the
+        // stale-session cycle is explicitly budget-neutral.
+        maxRetries: 1,
       });
 
       const resetEvents: Array<{ reason: string }> = [];
@@ -8246,6 +8637,7 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect(resetSession).toHaveBeenCalled();
+      expect(resetSession).toHaveBeenCalledWith();
       expect(resetEvents.length).toBeGreaterThanOrEqual(1);
       expect(attempt).toBeGreaterThanOrEqual(2);
     });

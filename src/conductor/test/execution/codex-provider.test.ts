@@ -103,6 +103,167 @@ describe('CodexProvider', () => {
     if (expectedFlag === 'rateLimited') expect(result.waitSeconds).toBe(45);
   });
 
+  it('classifies only structural ENOENT and exit 127 as run-wide provider unavailability', async () => {
+    const missingOutput =
+      "LLM provider 'codex' not found. Install it or check your PATH.";
+    const cases = [
+      {
+        name: 'structured ENOENT',
+        response: {
+          stdout: '',
+          stderr: '',
+          exitCode: undefined,
+          code: 'ENOENT',
+          shortMessage: 'spawn codex ENOENT',
+          failed: true,
+        },
+        expected: {
+          output: missingOutput,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: missingOutput,
+        },
+      },
+      {
+        name: 'exit 127',
+        response: {
+          stdout: '',
+          stderr: 'shell could not execute command',
+          exitCode: 127,
+          failed: true,
+        },
+        expected: {
+          output: missingOutput,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: missingOutput,
+        },
+      },
+      {
+        name: 'misleading prose',
+        response: {
+          stdout: '',
+          stderr: 'The docs say spawn codex failed but the executable exists',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'The docs say spawn codex failed but the executable exists',
+        },
+      },
+      {
+        name: 'authentication',
+        response: {
+          stdout: '',
+          stderr: 'Authentication required. Please run codex login.',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'Authentication required. Please run codex login.',
+          authFailure: true,
+        },
+      },
+      {
+        name: 'model',
+        response: {
+          stdout: '',
+          stderr: 'Requested model gpt-nope is not available',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'Requested model gpt-nope is not available',
+          modelUnavailable: true,
+        },
+      },
+      {
+        name: 'rate limit',
+        response: {
+          stdout: '',
+          stderr: 'Error 429: rate limit exceeded',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'Error 429: rate limit exceeded',
+          rateLimited: true,
+        },
+      },
+      {
+        name: 'session',
+        response: {
+          stdout: '',
+          stderr: 'Thread not found; cannot resume this session',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'Thread not found; cannot resume this session',
+          sessionExpired: true,
+        },
+      },
+      {
+        name: 'ordinary failure',
+        response: {
+          stdout: '',
+          stderr: 'command failed for an ordinary reason',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          output: 'command failed for an ordinary reason',
+        },
+      },
+    ] as const;
+    const observed = [];
+
+    for (const fixture of cases) {
+      mockExeca.mockResolvedValue(fixture.response as any);
+      const result = await provider.invoke(baseOptions);
+      observed.push({
+        name: fixture.name,
+        output: result.output,
+        providerUnavailable: result.providerUnavailable,
+        providerUnavailableScope: result.providerUnavailableScope,
+        providerUnavailableReason: result.providerUnavailableReason,
+        authFailure: result.authFailure,
+        modelUnavailable: result.modelUnavailable,
+        rateLimited: result.rateLimited,
+        sessionExpired: result.sessionExpired,
+      });
+    }
+
+    expect(observed).toEqual(
+      cases.map(({ name, expected }) => ({
+        name,
+        output: expected.output,
+        providerUnavailable:
+          'providerUnavailable' in expected
+            ? expected.providerUnavailable
+            : undefined,
+        providerUnavailableScope:
+          'providerUnavailableScope' in expected
+            ? expected.providerUnavailableScope
+            : undefined,
+        providerUnavailableReason:
+          'providerUnavailableReason' in expected
+            ? expected.providerUnavailableReason
+            : undefined,
+        authFailure:
+          'authFailure' in expected ? expected.authFailure : undefined,
+        modelUnavailable:
+          'modelUnavailable' in expected
+            ? expected.modelUnavailable
+            : undefined,
+        rateLimited:
+          'rateLimited' in expected ? expected.rateLimited : undefined,
+        sessionExpired:
+          'sessionExpired' in expected ? expected.sessionExpired : undefined,
+      })),
+    );
+  });
+
   it('streams a one-shot exec for interface-compatible interactive calls', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
@@ -111,7 +272,153 @@ describe('CodexProvider', () => {
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
     expect(args).not.toContain('--json');
-    expect(options.stdio).toEqual(['pipe', 'inherit', 'inherit']);
+    expect(options).toMatchObject({
+      stdin: 'pipe',
+      stdout: ['pipe', 'inherit'],
+      stderr: ['pipe', 'inherit'],
+    });
+  });
+
+  it('streams interactive output and returns classified completion', async () => {
+    const missingOutput =
+      "LLM provider 'codex' not found. Install it or check your PATH.";
+    const cases = [
+      {
+        name: 'success',
+        response: { stdout: 'Done!', stderr: '', exitCode: 0, failed: false },
+        expected: { success: true, output: 'Done!', exitCode: 0 },
+      },
+      {
+        name: 'model unavailable',
+        response: {
+          stdout: '',
+          stderr: 'Requested model gpt-nope is not available',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'Requested model gpt-nope is not available',
+          exitCode: 1,
+          modelUnavailable: true,
+        },
+      },
+      {
+        name: 'missing executable',
+        response: {
+          stdout: '',
+          stderr: '',
+          exitCode: undefined,
+          code: 'ENOENT',
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: missingOutput,
+          exitCode: 1,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: missingOutput,
+        },
+      },
+      {
+        name: 'authentication',
+        response: {
+          stdout: '',
+          stderr: 'Authentication required. Please run codex login.',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'Authentication required. Please run codex login.',
+          exitCode: 1,
+          authFailure: true,
+        },
+      },
+      {
+        name: 'rate limit',
+        response: {
+          stdout: '',
+          stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
+          exitCode: 1,
+          failed: true,
+        },
+        expected: {
+          success: false,
+          output: 'Error 429: rate limit exceeded; retry after 45 seconds',
+          exitCode: 1,
+          rateLimited: true,
+          waitSeconds: 45,
+        },
+      },
+    ] as const;
+    const observed = [];
+
+    for (const fixture of cases) {
+      mockExeca.mockResolvedValue(fixture.response as any);
+      const result = await provider.invokeInteractive(baseOptions);
+      const [, , execaOptions] = mockExeca.mock.calls.at(-1) as [
+        string,
+        string[],
+        any,
+      ];
+      observed.push({
+        name: fixture.name,
+        result:
+          result === undefined
+            ? undefined
+            : {
+                success: result.success,
+                output: result.output,
+                exitCode: result.exitCode,
+                modelUnavailable: result.modelUnavailable,
+                providerUnavailable: result.providerUnavailable,
+                providerUnavailableScope: result.providerUnavailableScope,
+                providerUnavailableReason: result.providerUnavailableReason,
+                authFailure: result.authFailure,
+                rateLimited: result.rateLimited,
+                waitSeconds: result.waitSeconds,
+              },
+        stdout: execaOptions.stdout,
+        stderr: execaOptions.stderr,
+      });
+    }
+
+    expect(observed).toEqual(
+      cases.map(({ name, expected }) => ({
+        name,
+        result: {
+          success: expected.success,
+          output: expected.output,
+          exitCode: expected.exitCode,
+          modelUnavailable:
+            'modelUnavailable' in expected
+              ? expected.modelUnavailable
+              : undefined,
+          providerUnavailable:
+            'providerUnavailable' in expected
+              ? expected.providerUnavailable
+              : undefined,
+          providerUnavailableScope:
+            'providerUnavailableScope' in expected
+              ? expected.providerUnavailableScope
+              : undefined,
+          providerUnavailableReason:
+            'providerUnavailableReason' in expected
+              ? expected.providerUnavailableReason
+              : undefined,
+          authFailure:
+            'authFailure' in expected ? expected.authFailure : undefined,
+          rateLimited:
+            'rateLimited' in expected ? expected.rateLimited : undefined,
+          waitSeconds:
+            'waitSeconds' in expected ? expected.waitSeconds : undefined,
+        },
+        stdout: ['pipe', 'inherit'],
+        stderr: ['pipe', 'inherit'],
+      })),
+    );
   });
 });
 

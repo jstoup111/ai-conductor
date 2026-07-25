@@ -25,6 +25,12 @@ import type {
   RecoveryContext,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
+import type { ProviderSessionScope } from './provider-session.js';
+import type {
+  ProviderAttemptMetadata,
+  ProviderAttributionMetadata,
+  ProviderExecutionContext,
+} from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -39,7 +45,12 @@ import {
 import { evaluateWhen } from './when-expression.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { escalateAttempt } from './escalation.js';
-import { CLAUDE_MODEL_POLICY, type ProviderModelPolicy } from './provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
+import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import {
@@ -295,6 +306,10 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Provider routing identity and ordered candidate-attempt accounting. */
+  preferredProvider?: string;
+  actualProvider?: string;
+  attempts?: ProviderAttemptMetadata[];
   /**
    * Set when the provider detected a rate-limit signal in the output (or via
    * marker file). The conductor waits `waitSeconds` and retries without
@@ -373,6 +388,10 @@ export function graderDispatchBackoffMs(attempt: number): number {
   return Math.min(CAP_MS, exp);
 }
 
+export interface ComplexityAssessment extends ProviderAttributionMetadata {
+  tier: ComplexityTier | null;
+}
+
 export interface StepRunOptions {
   /**
    * Retry hint injected into the system prompt when the conductor re-invokes
@@ -395,6 +414,23 @@ export interface StepRunOptions {
    */
   resume?: boolean;
   /**
+   * Concurrent-group provider-aware dispatch only: a detached session scope
+   * owned by this member execution. It keeps provider sessions isolated from
+   * both sibling branches and the serial conductor session.
+   */
+  providerSessions?: ProviderSessionScope;
+  /**
+   * The Conductor-owned, 1-based retry attempt. Provider-aware runners forward
+   * this unchanged so a fallback provider can resolve its own native escalation
+   * rung without deriving retry state from invocation/session counters.
+   */
+  attempt?: number;
+  /**
+   * Whether the current step's retry ladder is enabled. Forwarded with
+   * `attempt` so fallback providers preserve `escalate:false`.
+   */
+  escalate?: boolean;
+  /**
    * Retry-as-escalation per-attempt overrides (#188). When set, the runner
    * dispatches at this model/effort instead of the step's resolved base. The
    * conductor computes them from `escalateAttempt(base, attempt, escalate)` on
@@ -408,13 +444,22 @@ export interface StepRunOptions {
 
 export interface StepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
-  runInteractive?(step: StepName): Promise<void>;
-  assessComplexity?(): Promise<ComplexityTier | null>;
+  /** Resolve the effective retry-escalation policy for a detached branch. */
+  escalateForStep?(step: StepName, state: ConductState): boolean;
   /**
-   * Drop session state so the next invocation creates a fresh Claude session.
-   * Called by the conductor when `sessionExpired` is reported.
+   * Create a detached provider-session scope for one concurrent-group member.
+   * Legacy runners omit this seam and continue using scalar branch sessions.
    */
-  resetSession?(): Promise<void>;
+  beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
+  runInteractive?(step: StepName): Promise<void>;
+  assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
+  /**
+   * Drop session state so the next invocation creates a fresh provider session.
+   * Called by the conductor when `sessionExpired` is reported.
+   * `providerKey` targets the provider that reported expiry; absent metadata
+   * preserves the legacy runner's captured-provider reset.
+   */
+  resetSession?(step?: StepName, providerKey?: string): Promise<void>;
   /**
    * Attempt to resolve a paused rebase conflict in the feature worktree.
    * Called by the conductor's engine-native rebase step (daemon only) when
@@ -498,6 +543,8 @@ export interface ConductorOptions {
    * Claude remains the compatibility default.
    */
   modelPolicy?: ProviderModelPolicy;
+  /** Shared provider routing state owned by this conductor run. */
+  providerExecution?: ProviderExecutionContext;
   projectRoot: string;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
@@ -827,7 +874,8 @@ export class Conductor {
   private fromStep?: StepName;
   private mode: RunMode;
   private config: HarnessConfig;
-  private readonly modelPolicy: ProviderModelPolicy;
+  private readonly legacyModelPolicy?: ProviderModelPolicy;
+  private readonly providerExecution?: ProviderExecutionContext;
   private validationConcurrency: number;
   private projectRoot: string;
   private featureDesc?: string;
@@ -1059,7 +1107,8 @@ export class Conductor {
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
     this.config = opts.config ?? {};
-    this.modelPolicy = opts.modelPolicy ?? CLAUDE_MODEL_POLICY;
+    this.legacyModelPolicy = opts.modelPolicy;
+    this.providerExecution = opts.providerExecution;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.featureDesc = opts.featureDesc;
@@ -1095,6 +1144,28 @@ export class Conductor {
     this.runGh = opts.runGh ?? makeProductionGh();
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
+  }
+
+  /**
+   * Resolve retry/model defaults from the provider preferred by this step.
+   * `modelPolicy` remains a compatibility adapter only for callers that have
+   * not configured provider selection yet; it is never captured as run-wide
+   * authority over explicitly routed steps.
+   */
+  private modelPolicyForStep(step: StepName): ProviderModelPolicy {
+    const selection =
+      this.config.steps?.[step]?.llm_provider ?? this.config.llm_provider;
+    if (selection === undefined) {
+      return this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY;
+    }
+
+    const preferredProvider = normalizeProviderSelection(selection)[0];
+    if (preferredProvider && this.providerExecution) {
+      return this.providerExecution.runtimes.get(preferredProvider).policy;
+    }
+    return preferredProvider === undefined
+      ? this.legacyModelPolicy ?? CLAUDE_MODEL_POLICY
+      : resolveProviderModelPolicy(preferredProvider);
   }
 
   /**
@@ -2214,13 +2285,16 @@ export class Conductor {
         // Resolve per-step config (model, effort, retries, review…). Tier is
         // threaded in so `by_tier` overrides apply when the feature's complexity
         // is known (post-complexity step).
+        const stepModelPolicy = this.modelPolicyForStep(step.name);
         const resolved = resolveStepConfig(
           step.name,
           step.phase,
-          this.modelPolicy,
+          stepModelPolicy,
           this.config,
           {
             tier: state.complexity_tier,
+            modelCliOverride: this.providerExecution?.modelOverride,
+            effortCliOverride: this.providerExecution?.effortOverride,
           },
         );
 
@@ -2314,7 +2388,7 @@ export class Conductor {
             builtinGroup,
             state,
             groupTrack,
-            this.modelPolicy,
+            this.modelPolicyForStep(step.name),
             this.config,
           );
           // Engagement is keyed to the group's first NON-SKIPPED member, not
@@ -3046,7 +3120,7 @@ export class Conductor {
         // a conversation that never existed (which surfaced as "session
         // unavailable (expired or in use)" and errored the feature out).
         if (this.stepRunner.resetSession) {
-          await this.stepRunner.resetSession();
+          await this.stepRunner.resetSession(step.name);
         }
 
         // Retry loop: auto-retry on step-runner failure OR completion-gate miss,
@@ -3200,7 +3274,7 @@ export class Conductor {
             resolved.effort,
             attempt,
             resolved.escalate,
-            this.modelPolicy,
+            stepModelPolicy,
           );
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
@@ -3307,6 +3381,8 @@ export class Conductor {
                       ? await this.runSelfBuildDispatch(step.name, state, retryHint)
                       : await this.stepRunner.run(step.name, state, {
                           retryReason: retryHint,
+                          attempt,
+                          escalate: resolved.escalate,
                           modelOverride: esc.model,
                           effortOverride: esc.effort,
                         });
@@ -3415,7 +3491,14 @@ export class Conductor {
               reason: 'session unavailable (expired or in use) — resetting to a fresh session',
             });
             if (this.stepRunner.resetSession) {
-              await this.stepRunner.resetSession();
+              if (result.actualProvider !== undefined) {
+                await this.stepRunner.resetSession(
+                  undefined,
+                  result.actualProvider,
+                );
+              } else {
+                await this.stepRunner.resetSession();
+              }
             }
             attempt--;
             continue;
@@ -3608,7 +3691,7 @@ export class Conductor {
                 resolved.effort,
                 attempt + 1,
                 resolved.escalate,
-                this.modelPolicy,
+                stepModelPolicy,
               );
               await emitTracked({
                 type: 'step_retry',
@@ -4267,7 +4350,7 @@ export class Conductor {
                   resolved.effort,
                   attempt + 1,
                   resolved.escalate,
-                  this.modelPolicy,
+                  stepModelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',
@@ -5292,6 +5375,8 @@ export class Conductor {
             tokenUsage: stepResult?.tokenUsage,
             model: stepResult?.model,
             unmetered: stepResult?.tokenUsage ? undefined : true,
+            preferredProvider: stepResult?.preferredProvider,
+            actualProvider: stepResult?.actualProvider,
           });
 
           // Store PR URL from finish step output. Prefer state-file write
@@ -6195,7 +6280,11 @@ export class Conductor {
     let recommended: ComplexityTier | null = state.complexity_tier ?? null;
     if (!recommended && this.stepRunner.assessComplexity) {
       try {
-        recommended = await this.stepRunner.assessComplexity();
+        const assessment = await this.stepRunner.assessComplexity();
+        recommended =
+          typeof assessment === 'string'
+            ? assessment
+            : assessment?.tier ?? null;
       } catch {
         recommended = null;
       }

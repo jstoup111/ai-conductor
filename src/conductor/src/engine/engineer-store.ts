@@ -25,6 +25,10 @@ import { join, dirname } from 'node:path';
 import type { FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import {
+  executeProviderCandidates,
+  type ProviderExecutionContext,
+} from './provider-execution.js';
+import {
   parseEvents,
   aggregateDurations,
   aggregateRetryHotspots,
@@ -281,7 +285,10 @@ export interface ProduceNarrativeArgs {
   runId: string;
   /** The (still-present, pre-teardown) worktree the feature ran in. */
   worktreePath: string;
-  provider: LLMProvider;
+  /** Legacy provider used only when providerExecution is absent. */
+  provider?: LLMProvider;
+  /** Per-feature built-in provider routing; absent preserves legacy/custom use. */
+  providerExecution?: ProviderExecutionContext;
   /** True when the complexity tier skipped the in-loop retro step (ST-005). */
   tierSkippedRetro: boolean;
 }
@@ -307,12 +314,32 @@ export async function produceNarrative(
 
   // `done` (or any non-halted, non-tier-skipped outcome): full retro.
   const prompt = buildRetroPrompt(args);
-  const result = await args.provider.invoke({
-    prompt,
-    sessionId: `engineer-retro-${args.feature}-${args.runId}`,
-    resume: false,
-    cwd: args.worktreePath,
-  });
+  const result = args.providerExecution
+    ? await (args.providerExecution.executor ?? executeProviderCandidates)({
+        step: 'retro',
+        configuredProviders: args.providerExecution.configuredProviders,
+        preferredProvider:
+          args.providerExecution.config?.steps?.retro?.llm_provider,
+        runtimes: args.providerExecution.runtimes,
+        sessions: args.providerExecution.sessions.beginBranch('retro'),
+        config: args.providerExecution.config,
+        onAttempt: args.providerExecution.onAttempt,
+        warn: args.providerExecution.warn,
+        options: {
+          prompt,
+          cwd: args.worktreePath,
+        },
+      })
+    : await args.provider?.invoke({
+        prompt,
+        sessionId: `engineer-retro-${args.feature}-${args.runId}`,
+        resume: false,
+        cwd: args.worktreePath,
+      }) ?? {
+        success: false,
+        output: 'No narrative provider configured',
+        exitCode: 1,
+      };
   // Don't persist provider error text as a narrative — on failure, emit the
   // signal with no narrativeRef rather than a bogus retro (the best-effort
   // caller logs it).
@@ -381,7 +408,9 @@ export interface EmitEngineerSignalArgs {
   feature: string;
   runId: string;
   worktreePath: string;
-  provider: LLMProvider;
+  /** Legacy provider used only when providerExecution is absent. */
+  provider?: LLMProvider;
+  providerExecution?: ProviderExecutionContext;
   tierSkippedRetro: boolean;
   log?: (msg: string) => void;
 }
@@ -414,6 +443,7 @@ export async function emitEngineerSignal(args: EmitEngineerSignalArgs): Promise<
         runId: args.runId,
         worktreePath: args.worktreePath,
         provider: args.provider,
+        providerExecution: args.providerExecution,
         tierSkippedRetro: args.tierSkippedRetro,
       });
       if (narrative != null) {

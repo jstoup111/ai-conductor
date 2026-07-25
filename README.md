@@ -123,6 +123,26 @@ aren't met — walking you from `/bootstrap` through `/finish`. For the full ins
 walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
 [Getting Started](docs/getting-started.md).
 
+### Per-step provider routing (#927)
+
+Existing projects can keep the scalar `llm_provider: claude` form. To configure
+fallback choices, use an ordered array such as `llm_provider: [claude, codex]`;
+the first provider is the inherited default for every step. A step can override
+that choice with `steps.<step>.llm_provider`, using either the same scalar form
+or an ordered array. Selected providers run first, followed by the remaining
+run-level providers in stable configuration order.
+
+Cross-provider fallback is deliberately narrow and visible: the conductor warns
+when explicit provider unavailability or provider-native model exhaustion moves
+a step to its next configured built-in provider. Authentication, rate-limit,
+session-expiry, timeout, rejected, and ordinary failures stay with existing
+recovery behavior instead of silently crossing providers. Each step/provider
+execution starts a fresh session; retries may resume only within the same
+step-execution scope and provider. Re-entering a one-shot phase/step execution,
+a later step, or another provider starts fresh.
+See [HARNESS.md](HARNESS.md#per-step-provider-routing-927) for configuration and
+failure details.
+
 ## Documentation
 
 - [Choosing a Conductor](docs/choosing-a-conductor.md) — `conduct` vs `conduct-ts`, which one to use and when

@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
-import type { ConductorEventEmitter, EventHandler } from '../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 
 /**
  * Thrown when EventPersister cannot append to the event log file.
@@ -25,6 +25,8 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'step_started',
   'step_completed',
   'step_failed',
+  'provider_attempt',
+  'provider_fallback',
   'step_retry',
   'checkpoint_reached',
   'recovery_needed',
@@ -101,4 +103,47 @@ export class EventPersister {
       throw new EventPersistError(this.filePath, err);
     }
   }
+}
+
+class ForwardingEventEmitter extends ConductorEventEmitter {
+  constructor(private readonly globalEvents: ConductorEventEmitter) {
+    super();
+  }
+
+  override async emit(event: ConductorEvent): Promise<void> {
+    await super.emit(event);
+    await this.globalEvents.emit(event);
+  }
+}
+
+export async function withFeatureEventPersistence<T>(input: {
+  worktreePath: string;
+  globalEvents: ConductorEventEmitter;
+  run: (featureEvents: ConductorEventEmitter) => Promise<T>;
+}): Promise<T> {
+  const scope = startFeatureEventPersistence(
+    input.worktreePath,
+    input.globalEvents,
+  );
+  try {
+    return await input.run(scope.events);
+  } finally {
+    scope.stop();
+  }
+}
+
+export function startFeatureEventPersistence(
+  worktreePath: string,
+  globalEvents: ConductorEventEmitter,
+): { events: ConductorEventEmitter; stop: () => void } {
+  const featureEvents = new ForwardingEventEmitter(globalEvents);
+  const persister = new EventPersister(
+    join(worktreePath, '.pipeline', 'events.jsonl'),
+    featureEvents,
+  );
+  persister.start();
+  return {
+    events: featureEvents,
+    stop: () => persister.stop(),
+  };
 }

@@ -34,10 +34,16 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
 import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMachinery } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -166,6 +172,188 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     expect(verdict.results).toHaveLength(1);
     expect(verdict.results[0].taskId).toBe('7');
     expect(verdict.results[0].verdict).toBe('satisfied');
+  });
+
+  it('routes build review and attribution judgment through their explicit provider in isolated scopes', async () => {
+    const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'captured provider must not run',
+      exitCode: 0,
+    }));
+    const capturedInteractive = vi.fn().mockResolvedValue(undefined);
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'non-selected Claude runtime must not run',
+      exitCode: 0,
+    }));
+    const claudeInteractive = vi.fn().mockResolvedValue(undefined);
+    const codexInvoke = vi.fn(
+      async (options: InvokeOptions): Promise<InvokeResult> => {
+        const attribution = options.systemPrompt?.includes('attribution_verify');
+        const output = attribution
+          ? JSON.stringify({
+              schema: 1,
+              anchor: {
+                head: 'abc1234567890123456789012345678901234567',
+                residue: ['7'],
+              },
+              results: [],
+            })
+          : '{"verdict":"PASS"}';
+        return {
+          success: true,
+          output,
+          exitCode: 0,
+          tokenUsage: attribution
+            ? { input: 13, output: 5 }
+            : { input: 11, output: 3 },
+        };
+      },
+    );
+    const provider = (
+      invoke: LLMProvider['invoke'],
+      invokeInteractive: LLMProvider['invokeInteractive'],
+    ): LLMProvider => ({ invoke, invokeInteractive });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider(claudeInvoke, claudeInteractive),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CLAUDE_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+      {
+        key: 'codex',
+        provider: provider(codexInvoke, vi.fn().mockResolvedValue(undefined)),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CODEX_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+    ]);
+    const sessionIds = [
+      'build-review-codex-session',
+      'attribution-codex-session',
+    ][Symbol.iterator]();
+    const sessions = new ProviderSessionStore({
+      createSessionId: () =>
+        sessionIds.next().value ?? 'unexpected-session',
+    });
+    const beginBranch = vi.spyOn(sessions, 'beginBranch');
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const planPath = join(planDir, 'test.md');
+    await writeFile(
+      planPath,
+      '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n\nTest task.\n',
+    );
+    const gitRunner = vi.fn(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return {
+          exitCode: 0,
+          stdout: 'refs/remotes/origin/main\n',
+          stderr: '',
+        };
+      }
+      if (args[0] === 'merge-base') {
+        return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+      }
+      if (args[0] === 'diff') {
+        return {
+          exitCode: 0,
+          stdout: 'diff --git a/src/test.ts b/src/test.ts\n',
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    });
+    const runner = new DefaultStepRunner(
+      provider(capturedInvoke, capturedInteractive),
+      'captured-session',
+      projectRoot,
+      {
+        config: {
+          llm_provider: ['claude', 'codex'],
+          steps: {
+            build_review: { llm_provider: 'codex' },
+            attribution_verify: { llm_provider: 'codex' },
+          },
+        },
+        gitRunner,
+        planPath,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+      },
+    );
+
+    const buildReview = await runner.run('build_review', {});
+    const attribution = await runner.dispatchVerifier({
+      residueIds: ['7'],
+      planPath,
+      projectRoot,
+    });
+
+    expect({
+      capturedCalls: {
+        invoke: capturedInvoke.mock.calls,
+        interactive: capturedInteractive.mock.calls,
+      },
+      claudeRuntimeCalls: {
+        invoke: claudeInvoke.mock.calls,
+        interactive: claudeInteractive.mock.calls,
+      },
+      beginBranchCalls: beginBranch.mock.calls,
+      codexCalls: codexInvoke.mock.calls.map(([options]) => ({
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        model: options.model,
+        effort: options.effort,
+      })),
+      buildReview,
+      attribution,
+    }).toEqual({
+      capturedCalls: { invoke: [], interactive: [] },
+      claudeRuntimeCalls: { invoke: [], interactive: [] },
+      beginBranchCalls: [
+        ['build_review'],
+        ['attribution_verify'],
+      ],
+      codexCalls: [
+        {
+          sessionId: 'build-review-codex-session',
+          resume: false,
+          cwd: projectRoot,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        {
+          sessionId: 'attribution-codex-session',
+          resume: false,
+          cwd: projectRoot,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+      ],
+      buildReview: expect.objectContaining({
+        success: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        model: 'gpt-5.6-sol',
+        tokenUsage: { input: 11, output: 3 },
+      }),
+      attribution: expect.objectContaining({
+        success: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        model: 'gpt-5.6-sol',
+        tokenUsage: { input: 13, output: 5 },
+      }),
+    });
   });
 
   it('passes the Codex model policy through dispatchVerifier to the attribution provider invocation', async () => {

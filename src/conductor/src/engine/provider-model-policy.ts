@@ -161,12 +161,24 @@ export const CODEX_MODEL_POLICY: ProviderModelPolicy = deepFreeze({
   modelFallbackLadder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
 });
 
+const BUILT_IN_PROVIDER_MODEL_POLICIES: Readonly<
+  Record<string, ProviderModelPolicy>
+> = Object.freeze({
+  claude: CLAUDE_MODEL_POLICY,
+  codex: CODEX_MODEL_POLICY,
+});
+
+export function hasBuiltInProviderModelPolicy(providerKey: string): boolean {
+  return Object.hasOwn(BUILT_IN_PROVIDER_MODEL_POLICIES, providerKey);
+}
+
 export function resolveProviderModelPolicy(
   providerKey: string,
   warn?: (message: string) => void,
 ): ProviderModelPolicy {
-  if (providerKey === 'codex') return CODEX_MODEL_POLICY;
-  if (providerKey === 'claude') return CLAUDE_MODEL_POLICY;
+  if (hasBuiltInProviderModelPolicy(providerKey)) {
+    return BUILT_IN_PROVIDER_MODEL_POLICIES[providerKey];
+  }
 
   warn?.(
     `Unknown provider "${providerKey}": Claude-compatible model defaults are being used; add a provider model policy for "${providerKey}".`,

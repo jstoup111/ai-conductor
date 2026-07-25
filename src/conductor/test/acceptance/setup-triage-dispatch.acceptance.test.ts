@@ -48,6 +48,7 @@ import type { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +67,188 @@ it('daemon setup-fix dispatch carries the selected provider model policy', async
   const constructorEnd = source.indexOf('});', marker);
 
   expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+});
+
+it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned provider execution', async () => {
+  const source = await readFile(
+    new URL('../../src/daemon-cli.ts', import.meta.url),
+    'utf8',
+  );
+  const sourceFile = ts.createSourceFile(
+    'daemon-cli.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const runners: Record<string, unknown> = {};
+  let depsFactory: string | undefined;
+  let factoryState: Record<string, string> | undefined;
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isNewExpression(node) &&
+      node.expression.getText(sourceFile) === 'DefaultStepRunner' &&
+      node.arguments?.length === 4 &&
+      ts.isObjectLiteralExpression(node.arguments[3])
+    ) {
+      const options = node.arguments[3];
+      const properties = new Map(
+        options.properties
+          .flatMap((property) =>
+            ts.isPropertyAssignment(property)
+              ? [[
+                  property.name.getText(sourceFile),
+                  property.initializer.getText(sourceFile),
+                ] as const]
+              : ts.isShorthandPropertyAssignment(property)
+                ? [[property.name.text, property.name.text] as const]
+                : [],
+          ),
+      );
+      const featureDesc = properties.get('featureDesc');
+      const label =
+        featureDesc === 'item.slug'
+          ? 'feature'
+          : featureDesc?.includes('setup-fix')
+            ? 'setup'
+            : featureDesc?.includes('ci-fix-resolution')
+              ? 'ci'
+              : undefined;
+      if (label) {
+        runners[label] = {
+          provider: node.arguments[0].getText(sourceFile),
+          providerExecution: properties.get('providerExecution'),
+        };
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(sourceFile) === 'makeFeatureRunnerDeps' &&
+      node.arguments.length === 1 &&
+      ts.isObjectLiteralExpression(node.arguments[0])
+    ) {
+      const providerExecution = node.arguments[0].properties.find(
+        (property): property is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(property) &&
+          property.name.getText(sourceFile) === 'providerExecution',
+      );
+      depsFactory = providerExecution?.initializer.getText(sourceFile);
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(sourceFile) === 'createProviderExecution' &&
+      node.initializer &&
+      ts.isArrowFunction(node.initializer)
+    ) {
+      const body = ts.isParenthesizedExpression(node.initializer.body)
+        ? node.initializer.body.expression
+        : node.initializer.body;
+      if (ts.isObjectLiteralExpression(body)) {
+        factoryState = Object.fromEntries(
+          body.properties
+            .flatMap((property) =>
+              ts.isPropertyAssignment(property)
+                ? [[
+                    property.name.getText(sourceFile),
+                    property.initializer.getText(sourceFile),
+                  ] as const]
+                : ts.isShorthandPropertyAssignment(property)
+                  ? [[property.name.text, property.name.text] as const]
+                  : [],
+            ),
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  const runnerSource = await readFile(
+    new URL('../../src/engine/daemon-runner.ts', import.meta.url),
+    'utf8',
+  );
+  const runnerFile = ts.createSourceFile(
+    'daemon-runner.ts',
+    runnerSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const contextFlow: string[] = [];
+  let contextOwner: string | undefined;
+  const visitRunner = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(runnerFile) === 'providerExecution'
+    ) {
+      contextOwner = node.initializer?.getText(runnerFile);
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.left.getText(runnerFile) === 'providerExecution' &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      contextOwner = node.right.getText(runnerFile);
+    }
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(runnerFile);
+      if (
+        ['deps.runSetupTriage', 'deps.runConductor', 'emitDaemonSignal'].includes(
+          callee,
+        )
+      ) {
+        const contextArgument =
+          callee === 'deps.runConductor'
+            ? node.arguments[2]
+            : node.arguments.at(-1);
+        contextFlow.push(
+          `${callee}:${contextArgument?.getText(runnerFile)}`,
+        );
+      }
+    }
+    ts.forEachChild(node, visitRunner);
+  };
+  visitRunner(runnerFile);
+
+  expect({
+    runners,
+    depsFactory,
+    factoryState,
+    contextOwner,
+    contextFlow,
+  }).toEqual({
+    runners: {
+      feature: {
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
+      },
+      setup: {
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
+      },
+      ci: {
+        provider: 'selectedRuntime.provider',
+        providerExecution: 'providerExecution',
+      },
+    },
+    depsFactory: 'createProviderExecution',
+    factoryState: {
+      configuredProviders: 'configuredProviders',
+      runtimes: 'createProviderRuntimeSet(registry, log)',
+      sessions: 'new ProviderSessionStore()',
+      config: 'config',
+      onAttempt:
+        "(step, attempt) =>\n      eventTarget.emit({ type: 'provider_attempt', step, ...attempt })",
+      warn: '(_message, transition) => eventTarget.emit(transition)',
+    },
+    contextOwner:
+      'featureRun?.providerExecution ?? deps.providerExecution?.()',
+    contextFlow: [
+      'deps.runSetupTriage:providerExecution',
+      'deps.runConductor:providerExecution',
+      'emitDaemonSignal:providerExecution',
+    ],
+  });
 });
 
 describe('acceptance: setup-before-dispatch wedge — deterministic setup-failure triage (#446)', () => {

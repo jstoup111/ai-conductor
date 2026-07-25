@@ -215,6 +215,9 @@ export function validateConfig(
     }
   }
 
+  const providerSelectionErr = validateProviderSelection(obj.llm_provider, 'llm_provider');
+  if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
+
   // defaults
   if (obj.defaults !== undefined) {
     const err = validateEffortAndModelBag(obj.defaults, 'defaults');
@@ -271,6 +274,7 @@ export function validateConfig(
       }
       const cfg = value as Record<string, unknown>;
       const knownStepKeys = new Set([
+        'llm_provider',
         'model',
         'effort',
         'max_retries',
@@ -291,6 +295,13 @@ export function validateConfig(
       }
 
       // Common validations
+      const stepProviderSelectionErr = validateProviderSelection(
+        cfg.llm_provider,
+        `steps.${name}.llm_provider`,
+      );
+      if (stepProviderSelectionErr) {
+        return { ok: false, error: stepProviderSelectionErr };
+      }
       if (cfg.effort !== undefined && !VALID_EFFORTS.has(cfg.effort as EffortLevel)) {
         return errVal(`steps.${name}.effort must be low|medium|high|xhigh|max`);
       }
@@ -1480,6 +1491,46 @@ export async function loadMergedConfig(
 
 function errVal(message: string): ConfigResult {
   return { ok: false, error: { type: 'validation_error', message } };
+}
+
+function validateProviderSelection(value: unknown, path: string): ConfigError | null {
+  if (value === undefined) return null;
+  if (typeof value === 'string') {
+    return value.trim() === ''
+      ? { type: 'validation_error', message: `${path} must be a non-empty provider name` }
+      : null;
+  }
+  if (!Array.isArray(value)) {
+    return {
+      type: 'validation_error',
+      message: `${path} must be a string or array of non-empty provider names`,
+    };
+  }
+  if (value.length === 0) {
+    return {
+      type: 'validation_error',
+      message: `${path} must be a non-empty array of provider names`,
+    };
+  }
+
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index++) {
+    const provider = value[index];
+    if (typeof provider !== 'string' || provider.trim() === '') {
+      return {
+        type: 'validation_error',
+        message: `${path}[${index}] must be a non-empty string`,
+      };
+    }
+    if (seen.has(provider)) {
+      return {
+        type: 'validation_error',
+        message: `${path} contains duplicate provider "${provider}"`,
+      };
+    }
+    seen.add(provider);
+  }
+  return null;
 }
 
 export function satisfiesVersion(installed: string, constraint: string): boolean {

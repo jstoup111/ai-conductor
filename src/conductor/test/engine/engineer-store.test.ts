@@ -1,9 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach, assert } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, assert, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import type { FeatureOutcome } from '../../src/engine/daemon.js';
-import type { LLMProvider, InvokeResult } from '../../src/execution/llm-provider.js';
+import type {
+  InvokeOptions,
+  LLMProvider,
+  InvokeResult,
+} from '../../src/execution/llm-provider.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
+import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the not-yet-built engineer-store module (Phase 9.1).
@@ -52,14 +64,25 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 // A scriptable fake provider: records the prompt it was invoked with and
 // returns a canned narrative. Lets us assert the `done` path calls the LLM and
 // the `halted`/tier-skip paths do NOT.
-function makeProvider(narrative = '# Retro\n\nWent fine.'): LLMProvider & { calls: number } {
+function makeProvider(
+  narrative = '# Retro\n\nWent fine.',
+): LLMProvider & {
+  calls: number;
+  interactiveCalls: number;
+  invocations: InvokeOptions[];
+} {
   const provider = {
     calls: 0,
-    async invoke(): Promise<InvokeResult> {
+    interactiveCalls: 0,
+    invocations: [] as InvokeOptions[],
+    async invoke(options: InvokeOptions): Promise<InvokeResult> {
       provider.calls += 1;
+      provider.invocations.push(options);
       return { success: true, output: narrative, exitCode: 0 };
     },
-    async invokeInteractive(): Promise<void> {},
+    async invokeInteractive(): Promise<void> {
+      provider.interactiveCalls += 1;
+    },
   };
   return provider;
 }
@@ -323,6 +346,96 @@ describe('engine/engineer-store', () => {
   // ─── FR-5 / FR-6: narratives ───────────────────────────────────────────────
 
   describe('FR-5/FR-6: produceNarrative + writeNarrative', () => {
+    it('routes a completed-feature retro through its configured provider context', async () => {
+      const mod = await loadEngineerStore();
+      const produceNarrative = requireFn(mod, 'produceNarrative');
+      const capturedProvider = makeProvider('captured daemon narrative');
+      const codexProvider = makeProvider('codex retro narrative');
+      const sessions = new ProviderSessionStore({
+        createSessionId: () => 'feature-retro-codex-session',
+      });
+      const beginBranch = vi.spyOn(sessions, 'beginBranch');
+      const providerExecutor = vi.fn(executeProviderCandidates);
+      const onAttempt = vi.fn();
+
+      const text = await produceNarrative({
+        outcome: { slug: 'feat-x', status: 'done' },
+        project: 'proj',
+        feature: 'feat-x',
+        runId: 'run-1',
+        worktreePath: projectDir,
+        provider: capturedProvider,
+        providerExecution: {
+          configuredProviders: ['claude', 'codex'],
+          runtimes: new ProviderRuntimeSet([
+            {
+              key: 'claude',
+              provider: capturedProvider,
+              policy: CLAUDE_MODEL_POLICY,
+              builtIn: true,
+              availability: new ModelAvailability(
+                CLAUDE_MODEL_POLICY.modelFallbackLadder,
+              ),
+            },
+            {
+              key: 'codex',
+              provider: codexProvider,
+              policy: CODEX_MODEL_POLICY,
+              builtIn: true,
+              availability: new ModelAvailability(
+                CODEX_MODEL_POLICY.modelFallbackLadder,
+              ),
+            },
+          ]),
+          sessions,
+          executor: providerExecutor,
+          onAttempt,
+          config: {
+            llm_provider: ['claude', 'codex'],
+            steps: {
+              retro: { llm_provider: 'codex' },
+            },
+          },
+        },
+        tierSkippedRetro: false,
+      });
+
+      expect({
+        text,
+        capturedCalls: capturedProvider.calls,
+        capturedInteractiveCalls: capturedProvider.interactiveCalls,
+        codexCalls: codexProvider.calls,
+        codexInteractiveCalls: codexProvider.interactiveCalls,
+        codexInvocations: codexProvider.invocations.map((invocation) => ({
+          sessionId: invocation.sessionId,
+          resume: invocation.resume,
+          cwd: invocation.cwd,
+        })),
+        beginBranchCalls: beginBranch.mock.calls,
+        executorSteps: providerExecutor.mock.calls.map(([input]) => input.step),
+        attemptSinkForwarded:
+          providerExecutor.mock.calls[0]?.[0].onAttempt === onAttempt,
+        codexSession: sessions.current('codex'),
+      }).toEqual({
+        text: 'codex retro narrative',
+        capturedCalls: 0,
+        capturedInteractiveCalls: 0,
+        codexCalls: 1,
+        codexInteractiveCalls: 0,
+        codexInvocations: [
+          {
+            sessionId: 'feature-retro-codex-session',
+            resume: false,
+            cwd: projectDir,
+          },
+        ],
+        beginBranchCalls: [['retro']],
+        executorSteps: ['retro'],
+        attemptSinkForwarded: true,
+        codexSession: undefined,
+      });
+    });
+
     it('done → full retro narrative via the LLM provider, narrativeRef set', async () => {
       const mod = await loadEngineerStore();
       const produceNarrative = requireFn(mod, 'produceNarrative');

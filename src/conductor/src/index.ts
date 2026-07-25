@@ -20,7 +20,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import { resolveProviderModelPolicy } from './engine/provider-model-policy.js';
+import { createProviderRuntimeSet } from './engine/provider-runtime.js';
+import { ProviderSessionStore } from './engine/provider-session.js';
+import type { ProviderExecutionContext } from './engine/provider-execution.js';
+import {
+  normalizeProviderSelection,
+  validateRegisteredProviderSelections,
+} from './engine/provider-selection.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
@@ -47,7 +53,6 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
@@ -946,14 +951,28 @@ async function main(): Promise<void> {
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
   registerBuiltins(registry, events, renderEvent);
   registry.markInitialized();
+  validateRegisteredProviderSelections({
+    config: config ?? {},
+    registeredProviders: registry.list('llm_provider'),
+  });
 
-  // Retrieve provider and subscriber from registry with defaults
-  const selectedProviderKey = config?.llm_provider ?? 'claude';
-  const provider = registry.get<LLMProvider>(
-    'llm_provider',
-    selectedProviderKey
+  // Compose one provider-routing context from the complete frozen registry.
+  // The ordered config survives intact; its first entry is only the
+  // compatibility adapter for legacy constructor surfaces.
+  const configuredProviders = normalizeProviderSelection(config?.llm_provider);
+  const providerExecution: ProviderExecutionContext = {
+    configuredProviders: configuredProviders,
+    runtimes: createProviderRuntimeSet(registry, console.warn),
+    sessions: new ProviderSessionStore(),
+    config: config,
+    modelOverride: opts.model,
+    onAttempt: (step, attempt) =>
+      events.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => events.emit(transition),
+  };
+  const compatibilityRuntime = providerExecution.runtimes.get(
+    providerExecution.configuredProviders[0],
   );
-  const modelPolicy = resolveProviderModelPolicy(selectedProviderKey, console.warn);
 
   // Select UI subscriber based on config (default: 'terminal')
   const subscriber = registry.get<UISubscriber>(
@@ -993,14 +1012,14 @@ async function main(): Promise<void> {
   }
   buildVisualizers(visualizerList, events);
 
-  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
+  const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
     stepCooldown: opts.cooldown,
     config,
-    modelPolicy,
-    modelOverride: opts.model,
+    modelPolicy: compatibilityRuntime.policy,
     mode,
+    providerExecution,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and
@@ -1020,10 +1039,14 @@ async function main(): Promise<void> {
     };
   const prelude = await runProjectPrelude(
     projectRoot,
-    provider,
+    compatibilityRuntime.provider,
     sessionId,
     config ?? {},
-    { harnessVersion, onAssessStalePrompt: interactivePrompt },
+    {
+      harnessVersion,
+      onAssessStalePrompt: interactivePrompt,
+      providerExecution,
+    },
   );
   if (prelude.bootstrapExecuted) {
     console.log(
@@ -1055,7 +1078,8 @@ async function main(): Promise<void> {
     fromStep: opts.from as StepName | undefined,
     mode,
     config,
-    modelPolicy,
+    modelPolicy: compatibilityRuntime.policy,
+    providerExecution,
     projectRoot,
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,

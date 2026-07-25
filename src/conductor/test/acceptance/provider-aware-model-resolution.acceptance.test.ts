@@ -422,8 +422,8 @@ describe('#902 real execution paths', () => {
     const indexSource = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const daemonSource = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
 
-    expect(indexSource).toContain('resolveProviderModelPolicy');
-    expect(daemonSource).toContain('resolveProviderModelPolicy');
+    expect(indexSource).toContain('createProviderRuntimeSet');
+    expect(daemonSource).toContain('createProviderRuntimeSet');
 
     const indexRunnerBlocks = indexSource.split('new DefaultStepRunner(').slice(1);
     const daemonRunnerBlocks = daemonSource.split('new DefaultStepRunner(').slice(1);
