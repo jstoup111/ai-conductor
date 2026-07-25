@@ -612,6 +612,15 @@ export class DefaultStepRunner implements StepRunner {
     const runtimes = streaming
       ? this.streamingProviderRuntimes(this.providerRuntimes)
       : this.providerRuntimes;
+    const invocationOptions: ExecuteProviderCandidatesInput['options'] = {
+      prompt,
+      systemPrompt,
+      cwd: this.projectDir,
+      dangerouslySkipPermissions: streaming
+        ? this.mode === 'auto'
+        : true,
+      ...(streaming ? { interactive } : {}),
+    };
     try {
       const result = await this.providerExecutor({
         step,
@@ -627,15 +636,14 @@ export class DefaultStepRunner implements StepRunner {
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
-        options: {
-          prompt,
-          systemPrompt,
-          cwd: this.projectDir,
-          dangerouslySkipPermissions: streaming
-            ? this.mode === 'auto'
-            : true,
-          ...(streaming ? { interactive } : {}),
-        },
+        options: invocationOptions,
+        optionsForCandidate: (candidateKey) => ({
+          ...invocationOptions,
+          prompt: renderSkillInvocation(
+            STEP_SKILL_INVOCATIONS[step],
+            candidateKey,
+          ),
+        }),
       });
       this.callCount++;
       if (!opts?.providerSessions) {

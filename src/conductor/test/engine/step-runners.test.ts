@@ -791,6 +791,88 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('renders Codex-native skill syntax for every eligible normal dispatch selected through provider candidates', async () => {
+    const cases = [
+      { step: 'bootstrap', prompt: '$bootstrap' },
+      { step: 'memory', prompt: '$memory' },
+      { step: 'assess', prompt: '$assess' },
+      { step: 'explore', prompt: '$explore' },
+      { step: 'prd', prompt: '$prd' },
+      { step: 'stories', prompt: '$stories' },
+      { step: 'conflict_check', prompt: '$conflict-check' },
+      { step: 'plan', prompt: '$plan' },
+      { step: 'coherence_check', prompt: '$coherence-check' },
+      { step: 'architecture_diagram', prompt: '$architecture-diagram' },
+      { step: 'architecture_review', prompt: '$architecture-review' },
+      { step: 'worktree', prompt: '$conduct worktree' },
+      { step: 'acceptance_specs', prompt: '$writing-system-tests' },
+      { step: 'build', prompt: '$pipeline' },
+      { step: 'manual_test', prompt: '$manual-test' },
+      { step: 'prd_audit', prompt: '$prd-audit' },
+      { step: 'architecture_review_as_built', prompt: '$architecture-review --as-built' },
+      { step: 'retro', prompt: '$retro' },
+      { step: 'finish', prompt: '$finish' },
+    ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
+    const codexBoundary = vi.fn(
+      async (): Promise<InvokeResult> => ({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+      }),
+    );
+    const codexProvider: LLMProvider = {
+      invoke: codexBoundary,
+      invokeInteractive: codexBoundary,
+    };
+    const claudeProvider = createMockProvider();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: claudeProvider,
+        policy: CLAUDE_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'codex',
+        provider: codexProvider,
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    let sessionSequence = 0;
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => `codex-normal-${++sessionSequence}`,
+    });
+    const runner = new DefaultStepRunner(
+      createMockProvider(),
+      'legacy-session',
+      '/tmp/project',
+      {
+        config: {
+          llm_provider: ['claude', 'codex'],
+          steps: Object.fromEntries(
+            cases.map(({ step }) => [step, { llm_provider: 'codex' }]),
+          ),
+        } as HarnessConfig,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+      },
+    );
+    const observed: Array<{ step: StepName; prompt: string }> = [];
+
+    for (const { step } of cases) {
+      await runner.resetSession(step);
+      await runner.run(step, emptyState);
+      const options = codexBoundary.mock.calls.at(-1)?.[0] as InvokeOptions;
+      observed.push({ step, prompt: options.prompt });
+    }
+
+    expect(observed).toEqual(cases);
+  });
+
   // Worktree isolation: the spawned claude must run in the runner's projectDir,
   // not the daemon's cwd. Without this, daemon feature builds committed to the
   // main checkout's branch instead of the per-feature worktree branch.
