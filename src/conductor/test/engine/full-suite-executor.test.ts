@@ -7,6 +7,7 @@ import {
   DEFAULT_FULL_SUITE_TIMEOUT_MS,
   executeFullSuite,
   type FullSuiteCommandRunner,
+  type ExecuteFullSuiteOptions,
 } from '../../src/engine/full-suite-executor.js';
 
 describe('executeFullSuite', () => {
@@ -275,4 +276,69 @@ describe('executeFullSuite', () => {
       });
     },
   );
+
+  it('dispatches win32 timeout cleanup to taskkill for the descendant tree before returning', async () => {
+    const events: Array<string | string[]> = [];
+    const options = {
+      projectRoot: process.cwd(),
+      testSuite: {
+        command: "trap '' TERM; while :; do :; done",
+        timeout_seconds: 0.01,
+      },
+      processTreeCleanup: {
+        platform: 'win32',
+        wait: async (milliseconds: number) => {
+          events.push(`wait:${milliseconds}`);
+        },
+        isProcessAlive: () => true,
+        runWindowsTaskkill: async (args: string[]) => {
+          events.push(args);
+          if (args.includes('/F')) process.kill(Number(args[1]), 'SIGKILL');
+        },
+      },
+    } as ExecuteFullSuiteOptions;
+
+    const result = await executeFullSuite(options);
+    const pid = (events[0] as string[] | undefined)?.[1];
+
+    expect({ result, events }).toMatchObject({
+      result: {
+        ok: false,
+        reason: 'timeout',
+        exitCode: null,
+        signal: null,
+      },
+      events: [
+        ['/PID', pid, '/T'],
+        `wait:${100}`,
+        ['/PID', pid, '/T', '/F'],
+      ],
+    });
+  });
+
+  it('fails closed with an actionable result when win32 tree cleanup fails', async () => {
+    const options = {
+      projectRoot: process.cwd(),
+      testSuite: {
+        command: "trap '' TERM; while :; do :; done",
+        timeout_seconds: 0.01,
+      },
+      processTreeCleanup: {
+        platform: 'win32',
+        runWindowsTaskkill: async () => {
+          throw new Error('taskkill denied');
+        },
+      },
+    } as ExecuteFullSuiteOptions;
+
+    const result = await executeFullSuite(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'internal_error',
+      exitCode: null,
+      signal: null,
+      stderr: 'Windows process-tree cleanup failed: taskkill denied',
+    });
+  });
 });
