@@ -20,11 +20,27 @@ const base: InvokeOptions = {
   cwd: '/workspace/feature-905',
 };
 
-function doctorReady() {
+function doctorReady(source: 'cached-login' | 'api-key' = 'cached-login') {
   return JSON.stringify({
     schemaVersion: 1,
-    auth: { selectedMode: 'cached-login', configured: true },
+    auth: { selectedMode: source, configured: true },
     transport: { authenticated: true },
+  });
+}
+
+function doctorNonReady(
+  source: 'cached-login' | 'api-key',
+  state: 'missing' | 'unusable' | 'unverifiable',
+) {
+  if (state === 'unverifiable') return '{not-json';
+  return JSON.stringify({
+    schemaVersion: 1,
+    auth: {
+      selectedMode: source,
+      configured: state === 'unusable',
+      ...(state === 'unusable' ? { rejected: true } : {}),
+    },
+    transport: { authenticated: false },
   });
 }
 
@@ -32,7 +48,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
   let priorKey: string | undefined;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockExeca.mockReset();
     priorKey = process.env.CODEX_API_KEY;
     delete process.env.CODEX_API_KEY;
   });
@@ -66,7 +82,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
   it('selects a supplied API key for both readiness and execution without exposing it', async () => {
     process.env.CODEX_API_KEY = secret;
     mockExeca
-      .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: doctorReady('api-key'), stderr: '', exitCode: 0 } as any)
       .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as any);
     const provider = new CodexProvider();
 
@@ -84,7 +100,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
   it('fails closed on rejected selected authentication without dispatching or falling back', async () => {
     process.env.CODEX_API_KEY = secret;
     mockExeca.mockResolvedValueOnce({
-      stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'api-key', configured: true, rejected: true } }),
+      stdout: doctorNonReady('api-key', 'unusable'),
       stderr: `401 invalid key ${secret}`,
       exitCode: 1,
     } as any);
@@ -97,7 +113,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(args).toEqual(expect.arrayContaining(['doctor', '--json', '--summary']));
     expect(args).not.toContain('exec');
     expect(result.success).toBe(false);
-    expect(result.output).toMatch(/codex.*api-key.*unusable/i);
+    expect(result.output).toMatch(/selected Codex authentication source was rejected/i);
     expect(result.output).not.toContain(secret);
     expect(result.output).not.toMatch(/claude|anthropic/i);
   });
@@ -124,6 +140,65 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       ]));
       expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     }
+  });
+
+  // Covers: FR-1 through FR-5. The selected source must agree with the
+  // captured doctor evidence; a mismatched source is deliberately unverifiable.
+  it.each([
+    ['cached-only', undefined, doctorReady('cached-login'), 'ready', 'cached-login'],
+    ['api-key-only', secret, doctorReady('api-key'), 'ready', 'api-key'],
+    ['both sources', secret, doctorReady('api-key'), 'ready', 'api-key'],
+    ['neither source', undefined, doctorNonReady('cached-login', 'missing'), 'missing', 'cached-login'],
+  ] as const)('selects %s deterministically and never falls back', async (_case, apiKey, stdout, state, source) => {
+    if (apiKey) process.env.CODEX_API_KEY = apiKey;
+    mockExeca.mockResolvedValueOnce({ stdout, stderr: '', exitCode: state === 'unusable' ? 1 : 0 } as any);
+    if (state === 'ready') mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as any);
+
+    const result = await new CodexProvider().invoke(base);
+
+    expect(result.authentication).toMatchObject({ provider: 'codex', source, state });
+    expect(mockExeca).toHaveBeenCalledTimes(state === 'ready' ? 2 : 1);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+
+  // Covers: FR-6 through FR-11. Every non-ready evidence state is terminal for
+  // this dispatch; even a previous ready check cannot authorize a resume.
+  it.each(['missing', 'unusable', 'unverifiable'] as const)(
+    'fails closed for %s doctor evidence without model work, fallback, or a budget classification',
+    async (state) => {
+      mockExeca.mockResolvedValueOnce({
+        stdout: doctorNonReady('cached-login', state), stderr: `diagnostic ${secret}`, exitCode: state === 'missing' ? 0 : 1,
+      } as any);
+
+      const result = await new CodexProvider().invoke({ ...base, resume: true });
+
+      expect(mockExeca).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ success: false, authFailure: true });
+      expect(result.rateLimited).toBeUndefined();
+      expect(result.modelUnavailable).toBeUndefined();
+      expect(result.authentication).toMatchObject({ source: 'cached-login', state });
+      expect(JSON.stringify(result)).not.toContain(secret);
+    },
+  );
+
+  // Covers: FR-13 through FR-18 and FR-22. A denied review is still bounded by
+  // the exact unattended policy and never causes the old danger-bypass mode.
+  it('keeps the bounded policy when a reviewer denies an unattended resume', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'approval denied by reviewer', exitCode: 1 } as any);
+
+    const result = await new CodexProvider().invoke({ ...base, resume: true });
+    const [, args] = mockExeca.mock.calls[1] as [string, string[]];
+
+    expect(result.success).toBe(false);
+    expect(args).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
   // Covers: FR-21
