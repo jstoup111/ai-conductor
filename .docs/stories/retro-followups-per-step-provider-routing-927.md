@@ -32,11 +32,11 @@ unmetered so that a clean zero-cost record cannot hide absent accounting.
 
 ### Done When
 
-- [ ] The missing-ledger acceptance test asserts a non-zero incomplete/unmetered
+- [x] The missing-ledger acceptance test asserts a non-zero incomplete/unmetered
       value rather than matching only the field name.
-- [ ] `computeCostRollup` distinguishes a readable empty ledger from an absent
+- [x] `computeCostRollup` distinguishes a readable empty ledger from an absent
       or unreadable ledger.
-- [ ] `conduct kpi` marks the resulting shipped record incomplete and excludes
+- [x] `conduct kpi` marks the resulting shipped record incomplete and excludes
       it from clean aggregate cost claims.
 
 ## Story RF-927-2: Provider candidate execution stays reviewable
@@ -68,8 +68,8 @@ reviewed independently without changing behavior.
 
 ### Done When
 
-- [ ] The candidate loop delegates native-config resolution, invocation/session
+- [x] The candidate loop delegates native-config resolution, invocation/session
       handling, and attempt-result construction to separately testable helpers.
-- [ ] No extracted function combines more than one of those responsibilities.
-- [ ] The 26 provider-routing acceptance scenarios and focused provider
+- [x] No extracted function combines more than one of those responsibilities.
+- [x] The 26 provider-routing acceptance scenarios and focused provider
       execution/session suites pass unchanged.
