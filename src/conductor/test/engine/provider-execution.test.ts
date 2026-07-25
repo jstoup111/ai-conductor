@@ -23,7 +23,14 @@ interface PreferredExecutionResult extends InvokeResult {
   resolvedEffort?: string;
   attempts?: Array<{
     provider: string;
-    reason: string;
+    model?: string;
+    tokenUsage?: {
+      input: number;
+      output: number;
+    };
+    outcome?: 'success' | 'failure' | 'unavailable';
+    reason?: string;
+    fallbackReason?: string;
     invoked: boolean;
   }>;
 }
@@ -179,6 +186,15 @@ describe('executeProviderCandidates', () => {
         actualProvider: 'codex',
         resolvedModel: 'gpt-step/verbatim',
         resolvedEffort: 'high',
+        attempts: [
+          {
+            provider: 'codex',
+            model: 'gpt-step/verbatim',
+            tokenUsage: { input: 13, output: 8 },
+            outcome: 'success',
+            invoked: true,
+          },
+        ],
       },
     });
   });
@@ -383,6 +399,22 @@ describe('executeProviderCandidates', () => {
         actualProvider: 'claude',
         resolvedModel: 'opus',
         resolvedEffort: 'medium',
+        attempts: [
+          {
+            provider: 'codex',
+            model: 'gpt-cli-primary',
+            outcome: 'unavailable',
+            reason: missingReason,
+            fallbackReason: missingReason,
+            invoked: true,
+          },
+          {
+            provider: 'claude',
+            model: 'opus',
+            outcome: 'success',
+            invoked: true,
+          },
+        ],
       },
       cached: {
         success: true,
@@ -392,6 +424,21 @@ describe('executeProviderCandidates', () => {
         actualProvider: 'claude',
         resolvedModel: 'opus',
         resolvedEffort: 'medium',
+        attempts: [
+          {
+            provider: 'codex',
+            outcome: 'unavailable',
+            reason: missingReason,
+            fallbackReason: missingReason,
+            invoked: false,
+          },
+          {
+            provider: 'claude',
+            model: 'opus',
+            outcome: 'success',
+            invoked: true,
+          },
+        ],
       },
       noNext: {
         success: false,
@@ -403,6 +450,7 @@ describe('executeProviderCandidates', () => {
           {
             provider: 'codex',
             reason: missingReason,
+            outcome: 'unavailable',
             invoked: false,
           },
         ],
@@ -577,6 +625,14 @@ describe('executeProviderCandidates', () => {
           actualProvider: 'codex',
           resolvedModel: 'gpt-5.6-sol',
           resolvedEffort: 'medium',
+          attempts: [
+            {
+              provider: 'codex',
+              model: 'gpt-5.6-sol',
+              outcome: 'success',
+              invoked: true,
+            },
+          ],
         },
       },
       exhausted: {
@@ -603,6 +659,22 @@ describe('executeProviderCandidates', () => {
           actualProvider: 'claude',
           resolvedModel: 'sonnet',
           resolvedEffort: 'medium',
+          attempts: [
+            {
+              provider: 'codex',
+              model: 'gpt-5.6-sol',
+              outcome: 'unavailable',
+              reason: 'model unavailable: gpt-5.6-luna',
+              fallbackReason: 'model unavailable: gpt-5.6-luna',
+              invoked: true,
+            },
+            {
+              provider: 'claude',
+              model: 'sonnet',
+              outcome: 'success',
+              invoked: true,
+            },
+          ],
         },
       },
       later: {
@@ -622,6 +694,14 @@ describe('executeProviderCandidates', () => {
           actualProvider: 'codex',
           resolvedModel: 'gpt-5.6-sol',
           resolvedEffort: 'high',
+          attempts: [
+            {
+              provider: 'codex',
+              model: 'gpt-5.6-sol',
+              outcome: 'success',
+              invoked: true,
+            },
+          ],
         },
       },
       availability: {
@@ -789,9 +869,97 @@ describe('executeProviderCandidates', () => {
           actualProvider: 'codex',
           resolvedModel: 'gpt-5.6-terra',
           resolvedEffort: 'low',
+          attempts: [
+            {
+              provider: 'codex',
+              model: 'gpt-5.6-terra',
+              outcome: 'failure',
+              reason: failure.output,
+              invoked: true,
+            },
+          ],
         },
       })),
     );
+  });
+
+  it('attributes failed preferred-provider and successful fallback usage to their own ordered attempts', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'codex executable missing',
+      exitCode: 127,
+      tokenUsage: { input: 3, output: 1 },
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'codex executable missing',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'fallback completed',
+      exitCode: 0,
+      tokenUsage: { input: 20, output: 8 },
+    }));
+    const provider = (
+      invoke: (options: InvokeOptions) => Promise<InvokeResult>,
+    ): LLMProvider => ({
+      invoke,
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    });
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+    const result = await execute?.({
+      step: 'build',
+      configuredProviders: ['claude', 'codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([
+        runtime('claude', provider(claudeInvoke)),
+        runtime('codex', provider(codexInvoke)),
+      ]),
+      sessions: new ProviderSessionScope(
+        vi.fn()
+          .mockReturnValueOnce('codex-attribution-session')
+          .mockReturnValueOnce('claude-attribution-session'),
+      ),
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      options: {
+        prompt: 'Execute the step.',
+        cwd: '/workspace/feature',
+      },
+    });
+
+    expect(result).toEqual({
+      success: true,
+      output: 'fallback completed',
+      exitCode: 0,
+      tokenUsage: { input: 20, output: 8 },
+      preferredProvider: 'codex',
+      actualProvider: 'claude',
+      resolvedModel: 'sonnet',
+      resolvedEffort: 'low',
+      attempts: [
+        {
+          provider: 'codex',
+          model: 'gpt-5.6-terra',
+          tokenUsage: { input: 3, output: 1 },
+          outcome: 'unavailable',
+          reason: 'codex executable missing',
+          fallbackReason: 'codex executable missing',
+          invoked: true,
+        },
+        {
+          provider: 'claude',
+          model: 'sonnet',
+          tokenUsage: { input: 20, output: 8 },
+          outcome: 'success',
+          invoked: true,
+        },
+      ],
+    });
   });
 
   it('fails with one diagnostic entry per configured provider when every candidate is unavailable', async () => {
@@ -913,16 +1081,23 @@ describe('executeProviderCandidates', () => {
           attempts: [
             {
               provider: 'codex',
+              model: 'gpt-5.6-terra',
+              outcome: 'unavailable',
               reason: 'codex binary missing',
+              fallbackReason: 'codex binary missing',
               invoked: true,
             },
             {
               provider: 'claude',
+              outcome: 'unavailable',
               reason: 'claude cached missing',
+              fallbackReason: 'claude cached missing',
               invoked: false,
             },
             {
               provider: 'third',
+              model: 'sonnet',
+              outcome: 'unavailable',
               reason: 'third integration missing',
               invoked: true,
             },

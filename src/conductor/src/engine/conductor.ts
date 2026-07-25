@@ -25,6 +25,7 @@ import type {
   RecoveryContext,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
+import type { ProviderAttemptMetadata } from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -295,6 +296,10 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Provider routing identity and ordered candidate-attempt accounting. */
+  preferredProvider?: string;
+  actualProvider?: string;
+  attempts?: ProviderAttemptMetadata[];
   /**
    * Set when the provider detected a rate-limit signal in the output (or via
    * marker file). The conductor waits `waitSeconds` and retries without

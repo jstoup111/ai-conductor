@@ -1,6 +1,7 @@
 import type {
   InvokeOptions,
   InvokeResult,
+  TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ComplexityTier, StepName } from '../types/index.js';
 import type { EffortLevel, HarnessConfig } from '../types/config.js';
@@ -26,9 +27,13 @@ export interface ProviderCandidateFailureClassification {
   reason: string;
 }
 
-export interface ProviderExhaustionAttempt {
+export interface ProviderAttemptMetadata {
   provider: string;
-  reason: string;
+  model?: string;
+  tokenUsage?: TokenUsage;
+  outcome: 'success' | 'failure' | 'unavailable';
+  reason?: string;
+  fallbackReason?: string;
   invoked: boolean;
 }
 
@@ -37,7 +42,7 @@ export interface ProviderExecutionResult extends InvokeResult {
   actualProvider?: string;
   resolvedModel?: string;
   resolvedEffort?: EffortLevel;
-  attempts?: ProviderExhaustionAttempt[];
+  attempts: ProviderAttemptMetadata[];
 }
 
 export interface ProviderTransitionWarning {
@@ -168,7 +173,7 @@ export async function executeProviderCandidates({
     stepSelection,
   });
   const preferredProvider = candidates[0];
-  const unavailableAttempts: ProviderExhaustionAttempt[] = [];
+  const attempts: ProviderAttemptMetadata[] = [];
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -208,6 +213,26 @@ export async function executeProviderCandidates({
 
     const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];
+    const invoked = result.providerInvocationSkipped !== true;
+    attempts.push({
+      provider: providerKey,
+      ...(invoked ? { model: resolved.model } : {}),
+      ...(invoked && result.tokenUsage
+        ? { tokenUsage: result.tokenUsage }
+        : {}),
+      outcome: unavailable
+        ? 'unavailable'
+        : result.success
+          ? 'success'
+          : 'failure',
+      ...(!result.success
+        ? { reason: unavailable?.reason ?? result.output }
+        : {}),
+      ...(unavailable && nextProvider
+        ? { fallbackReason: unavailable.reason }
+        : {}),
+      invoked,
+    });
     if (!unavailable) {
       return {
         ...result,
@@ -215,16 +240,12 @@ export async function executeProviderCandidates({
         actualProvider: providerKey,
         resolvedModel: resolved.model,
         resolvedEffort: resolved.effort,
+        attempts,
       };
     }
 
-    unavailableAttempts.push({
-      provider: providerKey,
-      reason: unavailable.reason,
-      invoked: result.providerInvocationSkipped !== true,
-    });
     if (!nextProvider) {
-      const diagnostic = unavailableAttempts
+      const diagnostic = attempts
         .map(({ provider, reason, invoked }) =>
           `${provider} (${reason}${invoked ? '' : ', cached skip'})`,
         )
@@ -234,7 +255,7 @@ export async function executeProviderCandidates({
         output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
         exitCode: result.exitCode,
         preferredProvider,
-        attempts: unavailableAttempts,
+        attempts,
       };
     }
 
