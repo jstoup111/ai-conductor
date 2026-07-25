@@ -178,6 +178,49 @@ this section. CI enforces both content drift (the table matches the source) and 
 | cto-orchestrator | Claude interactive | opus |  |  |  | Cross-referencing 9 reports and prioritizing requires deep reasoning. |
 <!-- END GENERATED: model-selection-table -->
 
+### Per-step provider routing (#927)
+
+`llm_provider` accepts its existing scalar form or an ordered array:
+
+```yaml
+# Scalar compatibility: one configured provider, with no implicit candidates.
+llm_provider: claude
+
+# Ordered provider set: the first provider is the inherited default.
+llm_provider: [claude, codex]
+
+steps:
+  # An explicit per-step scalar selection runs first.
+  build_review:
+    llm_provider: codex
+
+  # Per-step arrays are also accepted in their declared order.
+  attribution_verify:
+    llm_provider: [codex, claude]
+```
+
+For each step, the selected provider or providers run first, followed by the
+remaining configured providers once in stable order. The conductor emits a
+visible warning naming the step, failed provider, reason, and next provider for
+every cross-provider transition. A fallback provider resolves its own
+provider-native defaults for model, effort, escalation, and availability
+ladder; model or effort values from the failed provider never leak across.
+
+Cross-provider fallback occurs only after explicit run-wide provider
+unavailability or complete provider-native model-ladder exhaustion. It does
+not replace existing recovery for authentication failure, rate limit, session
+expiry, timeout, rejection, or ordinary failure; those conditions never
+silently advance to another provider. Installed custom providers remain
+supported with a warned Claude-compatible model policy, but automatic
+mixed-provider fallback involving a custom provider is not guaranteed until a
+plugin policy contract exists.
+
+Every execution creates a fresh session for each step and provider. Retries
+within the same step-execution scope/provider may resume that matching session,
+including its permissions and credentials. Re-entering a one-shot phase/step
+execution, reaching a later step, or falling back to another provider starts
+fresh.
+
 > **Provider-native model availability fallback (#186/#902):** When the requested model
 > is detected unavailable, the daemon descends the selected provider policy's native
 > ladder: Claude uses `fable→opus→sonnet`; Codex uses

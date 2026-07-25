@@ -3,6 +3,50 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
 
+it('documents per-step provider routing and compatibility at every operator surface', async () => {
+  const [readme, harness, conductorReadme, changelog] = await Promise.all([
+    readFile(new URL('../../../../README.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../../../HARNESS.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../README.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../../../CHANGELOG.md', import.meta.url), 'utf8'),
+  ]);
+  const harnessSection = harness.slice(
+    harness.indexOf('### Per-step provider routing (#927)'),
+    harness.indexOf('> **Provider-native model availability fallback'),
+  );
+  const requiredHarnessClaims = [
+    /llm_provider:\s*claude/,
+    /llm_provider:\s*\[claude,\s*codex\]/,
+    /steps:[\s\S]*build_review:[\s\S]*llm_provider:\s*codex/,
+    /steps:[\s\S]*attribution_verify:[\s\S]*llm_provider:\s*\[codex,\s*claude\]/,
+    /first provider[\s\S]*inherited default/i,
+    /selected provider[\s\S]*remaining configured providers[\s\S]*stable order/i,
+    /visible warning[\s\S]{0,200}cross-provider transition/i,
+    /fallback provider[\s\S]{0,200}provider-native defaults/i,
+    /cross-provider fallback occurs only after explicit run-wide provider[\s\S]{0,80}unavailability or complete provider-native model-ladder exhaustion/i,
+    /does\s+not replace existing recovery for authentication failure,\s+rate limit,\s+session\s+expiry,\s+timeout,\s+rejection,\s+or ordinary failure;\s+those conditions never\s+silently advance to another provider/i,
+    /custom providers[\s\S]{0,120}Claude-compatible[\s\S]{0,180}automatic\s+mixed-provider fallback[\s\S]{0,80}not guaranteed/i,
+    /fresh session[\s\S]{0,80}step and provider[\s\S]{0,200}retries\s+within the same step-execution scope\/provider may resume[\s\S]{0,240}re-entering a one-shot phase\/step\s+execution[\s\S]{0,120}fresh/i,
+  ];
+
+  expect(readme).toMatch(/Per-step provider routing \(#927\)/);
+  expect(readme).toMatch(/scalar[\s\S]*ordered array[\s\S]*first provider/i);
+  for (const claim of requiredHarnessClaims) expect(harnessSection).toMatch(claim);
+  expect(conductorReadme).toMatch(/Per-step provider routing \(#927\)/);
+  expect(conductorReadme).toMatch(
+    /provider fallback[\s\S]{0,160}explicit\s+run-wide unavailability[\s\S]{0,160}provider-native model ladder exhaustion/i,
+  );
+  expect(conductorReadme).toMatch(
+    /custom provider[\s\S]{0,160}Claude-compatible[\s\S]{0,240}automatic\s+mixed-provider fallback[\s\S]{0,80}not guaranteed/i,
+  );
+  expect(conductorReadme).toMatch(
+    /provider_attempt[\s\S]{0,140}provider that executed[\s\S]{0,140}step_completed[\s\S]{0,140}preferred and actual provider/i,
+  );
+  expect(changelog).toMatch(
+    /#927[\s\S]*scalar[\s\S]*ordered provider[\s\S]*per-step[\s\S]*fallback/i,
+  );
+});
+
 it('does not retain run-global model-policy authority in the conductor', async () => {
   const source = await readFile(
     new URL('../../src/engine/conductor.ts', import.meta.url),
