@@ -34,6 +34,46 @@ export interface ShipmentRecordWrite {
   content: string;
 }
 
+export const SHIPMENT_REPAIR_STATUS_CONTEXT = 'shipped-record';
+
+export interface ShipmentRepairPublisher {
+  /** Create or reuse the deterministic repair branch from protected main. */
+  ensureRepairBranch(input: { branch: string; base: 'main' }): Promise<void>;
+  /** Commit exactly the planner's one shipped-record write to the repair branch. */
+  commitRecordOnly(input: {
+    branch: string;
+    writes: [ShipmentRecordWrite];
+  }): Promise<{ headSha: string }>;
+  /** Return an existing open repair PR or create the one deterministic PR. */
+  findOrCreateRepairPullRequest(input: {
+    branch: string;
+    base: 'main';
+    identity: string;
+    expectedHeadSha: string;
+  }): Promise<{ url: string; headSha: string }>;
+  /** Strictly evaluate the record at the immutable repair commit before status. */
+  verifyRepairHead(input: { headSha: string }): Promise<ShipmentEvidenceResult>;
+  /** Publish only the stable required-check context at the exact repair commit. */
+  postStatus(input: {
+    sha: string;
+    context: typeof SHIPMENT_REPAIR_STATUS_CONTEXT;
+    state: 'success' | 'failure';
+    description: string;
+  }): Promise<void>;
+}
+
+export type ShipmentRepairPublicationResult =
+  | { kind: 'aligned' }
+  | { kind: 'unresolved'; reason: string }
+  | {
+      kind: 'repair-published';
+      identity: string;
+      branch: string;
+      pullRequestUrl: string;
+      headSha: string;
+      status: 'success' | 'failure';
+    };
+
 /**
  * Plans reconciliation only. Publishing the deterministic repair identity is
  * deliberately left to the workflow adapter so this pure decision cannot
@@ -83,4 +123,59 @@ export function planShipmentReconciliation(
     reason: input.evidence.kind === 'refusal' ? input.evidence.code : input.evidence.kind,
     writes: [],
   };
+}
+
+/**
+ * Publish a planned repair through the only allowed external operations. The
+ * narrow injected surface intentionally offers neither a generic GitHub client
+ * nor a main/approval/review/auto-merge/merge mutation.
+ */
+export async function publishShipmentRepair(
+  plan: ShipmentReconciliationPlan,
+  publisher: ShipmentRepairPublisher,
+): Promise<ShipmentRepairPublicationResult> {
+  if (plan.kind === 'aligned') return { kind: 'aligned' };
+  if (plan.kind === 'unresolved') return { kind: 'unresolved', reason: plan.reason };
+
+  assertRecordOnlyRepair(plan.writes);
+  const branch = `shipment-repair/${plan.identity}`;
+  await publisher.ensureRepairBranch({ branch, base: 'main' });
+  const { headSha: expectedHeadSha } = await publisher.commitRecordOnly({ branch, writes: plan.writes });
+  const { url: pullRequestUrl, headSha } = await publisher.findOrCreateRepairPullRequest({
+    branch,
+    base: 'main',
+    identity: plan.identity,
+    expectedHeadSha,
+  });
+  const verdict = await publisher.verifyRepairHead({ headSha });
+  const status = verdict.kind === 'valid' ? 'success' : 'failure';
+  const description = verdict.kind === 'valid'
+    ? 'durable shipment evidence valid on repair head'
+    : `durable shipment evidence: ${repairFailureDescription(verdict)}`;
+  await publisher.postStatus({
+    sha: headSha,
+    context: SHIPMENT_REPAIR_STATUS_CONTEXT,
+    state: status,
+    description,
+  });
+
+  return {
+    kind: 'repair-published',
+    identity: plan.identity,
+    branch,
+    pullRequestUrl,
+    headSha,
+    status,
+  };
+}
+
+function assertRecordOnlyRepair(writes: [ShipmentRecordWrite]): void {
+  const [write] = writes;
+  if (!write.path.startsWith('.docs/shipped/') || !write.path.endsWith('.md')) {
+    throw new Error(`repair write is not a shipped record: ${write.path}`);
+  }
+}
+
+function repairFailureDescription(verdict: Exclude<ShipmentEvidenceResult, { kind: 'valid' }>): string {
+  return verdict.kind === 'refusal' ? verdict.code : verdict.reason;
 }

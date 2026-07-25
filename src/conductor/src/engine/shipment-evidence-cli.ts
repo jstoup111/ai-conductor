@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   classifyShipmentAssociation,
@@ -9,18 +9,26 @@ import {
   type ShipmentEvidenceInput,
 } from './shipment-evidence.js';
 import {
+  planShipmentReconciliation,
+  publishShipmentRepair,
+  SHIPMENT_REPAIR_STATUS_CONTEXT,
+  type ShipmentRepairPublisher,
+} from './shipment-reconciliation.js';
+import {
   makeProductionGh,
   makeProductionGit,
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
+import { specHash } from './shipped-record.js';
 
 export type ShipmentEvidenceCommand =
   | { kind: 'check'; pr: string }
+  | { kind: 'reconcile'; pr: string; shipped: string }
   | { kind: 'guide' };
 
 export const SHIPMENT_EVIDENCE_USAGE =
-  'conduct shipment-evidence --pr <implementation-pr-url>';
+  'conduct shipment-evidence [reconcile] --pr <implementation-pr-url> [--shipped <YYYY-MM-DD>]';
 
 export interface ShipmentEvidenceRunners {
   runGh?: GhRunner;
@@ -43,9 +51,17 @@ interface PullRequestEvidenceMetadata {
 
 export function detectShipmentEvidenceCommand(argv: string[]): ShipmentEvidenceCommand | null {
   if (argv[2] !== 'shipment-evidence') return null;
-  const prIndex = argv.indexOf('--pr', 3);
+  const reconcile = argv[3] === 'reconcile';
+  const argsStart = reconcile ? 4 : 3;
+  const prIndex = argv.indexOf('--pr', argsStart);
   const pr = prIndex === -1 ? undefined : argv[prIndex + 1];
-  return pr && !pr.startsWith('--') ? { kind: 'check', pr } : { kind: 'guide' };
+  if (!pr || pr.startsWith('--')) return { kind: 'guide' };
+  if (!reconcile) return { kind: 'check', pr };
+  const shippedIndex = argv.indexOf('--shipped', argsStart);
+  const shipped = shippedIndex === -1 ? undefined : argv[shippedIndex + 1];
+  return shipped && /^\d{4}-\d{2}-\d{2}/.test(shipped)
+    ? { kind: 'reconcile', pr, shipped: shipped.slice(0, 'YYYY-MM-DD'.length) }
+    : { kind: 'guide' };
 }
 
 /**
@@ -87,6 +103,34 @@ export async function dispatchShipmentEvidence(
     }
 
     const candidateCommit = (await runGit(['rev-parse', 'HEAD'], { cwd })).stdout.trim();
+    if (cmd.kind === 'reconcile') {
+      const expectedRecord = await expectedReconciledRecord(cwd, association.slug, cmd.shipped);
+      const evidence = await evaluateAtCandidateHead(
+        cmd.pr,
+        cwd,
+        association.slug,
+        candidateCommit,
+        runGit,
+        runners.evaluateEvidence ?? evaluateShipmentEvidence,
+      );
+      const plan = planShipmentReconciliation({
+        implementationPr: { number: implementationPrNumber(cmd.pr), url: cmd.pr },
+        association,
+        evidence,
+        expectedRecord,
+      });
+      const result = await publishShipmentRepair(plan, makeProductionRepairPublisher({
+        cwd,
+        implementationPr: cmd.pr,
+        slug: association.slug,
+        runGh,
+        runGit,
+        evaluateEvidence: runners.evaluateEvidence ?? evaluateShipmentEvidence,
+      }));
+      report(`shipped-record: ${result.kind}`);
+      return result.kind === 'unresolved' ? 1 : 0;
+    }
+
     const evidence = await (runners.evaluateEvidence ?? evaluateShipmentEvidence)(
       {
         repoDir: cwd,
@@ -119,6 +163,143 @@ export async function dispatchShipmentEvidence(
     reportError(`shipped-record: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
+}
+
+async function expectedReconciledRecord(
+  cwd: string,
+  slug: string,
+  shipped: string,
+): Promise<{ specHash: string; shipped: string }> {
+  const plan = await readFile(join(cwd, '.docs', 'plans', `${slug}.md`));
+  const planContent = plan.toString('utf8');
+  const reference = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im)?.[1];
+  let stories: Buffer | null = null;
+  for (const path of [reference, `.docs/stories/${slug}.md`].filter((value): value is string => Boolean(value))) {
+    try {
+      stories = await readFile(join(cwd, path));
+      break;
+    } catch {
+      // The shared canonical-hash convention permits a plan without stories.
+    }
+  }
+  return { specHash: specHash(plan, stories).digest, shipped };
+}
+
+function implementationPrNumber(pr: string): number {
+  const value = /\/pull\/(\d+)(?:$|[/?#])/.exec(pr)?.[1];
+  if (!value) throw new Error(`implementation PR URL is not canonical: ${pr}`);
+  return Number(value);
+}
+
+async function evaluateAtCandidateHead(
+  implementationPr: string,
+  cwd: string,
+  slug: string,
+  candidateCommit: string,
+  runGit: GitRunner,
+  evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>,
+) {
+  return evaluateEvidence(
+    { repoDir: cwd, slug, implementationPr, candidateCommit },
+    {
+      gitRunner: async (args) => (await runGit(args, { cwd })).stdout,
+      githubRunner: async () => ({ url: implementationPr, headRefOid: candidateCommit }),
+    },
+  );
+}
+
+function makeProductionRepairPublisher(input: {
+  cwd: string;
+  implementationPr: string;
+  slug: string;
+  runGh: GhRunner;
+  runGit: GitRunner;
+  evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
+}): ShipmentRepairPublisher {
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
+
+  return {
+    ensureRepairBranch: async ({ branch, base }) => {
+      const remoteBranch = `refs/heads/${branch}`;
+      const exists = await input.runGh(
+        ['api', `repos/${repo}/git/ref/heads/${branch}`],
+        { cwd: input.cwd },
+      ).then(() => true, () => false);
+      await input.runGit(['fetch', 'origin', exists ? remoteBranch : base], { cwd: input.cwd });
+      const startPoint = exists ? `origin/${branch}` : `origin/${base}`;
+      await input.runGit(['switch', '--force-create', branch, startPoint], { cwd: input.cwd });
+    },
+    commitRecordOnly: async ({ branch, writes }) => {
+      const [write] = writes;
+      await mkdir(join(input.cwd, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(input.cwd, write.path), write.content);
+      await input.runGit(['add', '--', write.path], { cwd: input.cwd });
+      const changed = (await input.runGit(['diff', '--cached', '--name-only'], { cwd: input.cwd })).stdout
+        .split('\n')
+        .filter(Boolean);
+      if (changed.length > 0 && (changed.length !== 1 || changed[0] !== write.path)) {
+        throw new Error(`repair commit is not record-only: ${changed.join(', ')}`);
+      }
+      if (changed.length > 0) {
+        await input.runGit(['commit', '-m', `docs: repair shipped record for ${branch}`], { cwd: input.cwd });
+        await input.runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: input.cwd });
+      }
+      return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: input.cwd })).stdout.trim() };
+    },
+    findOrCreateRepairPullRequest: async ({ branch, base, identity }) => {
+      const existing = await input.runGh(
+        ['pr', 'list', '--head', branch, '--base', base, '--state', 'open', '--json', 'url', '--limit', '1'],
+        { cwd: input.cwd },
+      );
+      const existingUrl = (JSON.parse(existing.stdout) as Array<{ url?: unknown }>)[0]?.url;
+      if (typeof existingUrl === 'string') {
+        return readRepairPullRequestHead(input.runGh, input.cwd, existingUrl);
+      }
+      const created = await input.runGh(
+        [
+          'pr', 'create', '--base', base, '--head', branch,
+          '--title', `Repair durable shipment record for ${identity}`,
+          '--body', `Record-only repair for implementation PR ${input.implementationPr}. Human review and merge required.`,
+        ],
+        { cwd: input.cwd },
+      );
+      return readRepairPullRequestHead(input.runGh, input.cwd, created.stdout.trim());
+    },
+    verifyRepairHead: async ({ headSha }) => evaluateAtCandidateHead(
+      input.implementationPr,
+      input.cwd,
+      input.slug,
+      headSha,
+      input.runGit,
+      input.evaluateEvidence,
+    ),
+    postStatus: async ({ sha, context, state, description }) => {
+      await input.runGh(
+        [
+          'api', '--method', 'POST', `repos/${repo}/statuses/${sha}`,
+          '-f', `state=${state}`, '-f', `context=${context}`, '-f', `description=${description}`,
+        ],
+        { cwd: input.cwd },
+      );
+    },
+  };
+}
+
+async function readRepairPullRequestHead(
+  runGh: GhRunner,
+  cwd: string,
+  pullRequestUrl: string,
+): Promise<{ url: string; headSha: string }> {
+  const { stdout } = await runGh(
+    ['pr', 'view', pullRequestUrl, '--json', 'url,headRefOid'],
+    { cwd },
+  );
+  const value = JSON.parse(stdout) as { url?: unknown; headRefOid?: unknown };
+  if (value.url !== pullRequestUrl || typeof value.headRefOid !== 'string' || !value.headRefOid) {
+    throw new Error(`repair PR head is unavailable or mismatched: ${pullRequestUrl}`);
+  }
+  return { url: value.url, headSha: value.headRefOid };
 }
 
 async function readPullRequestEvidenceMetadata(
