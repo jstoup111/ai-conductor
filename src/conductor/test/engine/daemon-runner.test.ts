@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
@@ -13,6 +15,10 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -334,6 +340,75 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.teardownKeep).toBe(true);
       await expect(readFile(join(wt, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(wt, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(verdict.code);
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an unpushed candidate using the explicit implementation PR head before daemon ship side effects', async () => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-pr-binding-'));
+    const prUrl = 'https://github.com/owner/repo/pull/916';
+    try {
+      await initTestRepo(wt);
+      await mkdir(join(wt, '.docs/plans'), { recursive: true });
+      await mkdir(join(wt, '.docs/shipped'), { recursive: true });
+      const plan = '# Durable daemon evidence\n';
+      await writeFile(join(wt, `.docs/plans/${ITEM.slug}.md`), plan, 'utf-8');
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add durable daemon plan'], { cwd: wt });
+      const { stdout: remoteHeadStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      const remoteHead = remoteHeadStdout.trim();
+
+      await writeFile(
+        join(wt, `.docs/shipped/${ITEM.slug}.md`),
+        renderShippedRecord({
+          slug: ITEM.slug,
+          specHash: specHash(Buffer.from(plan), null).digest,
+          pr: prUrl,
+          shipped: '2026-07-25',
+        }),
+        'utf-8',
+      );
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add local durable shipment record'], { cwd: wt });
+
+      const rec: TestRecorder = {};
+      const ghCalls: string[][] = [];
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl,
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: undefined,
+        runGh: async (args) => {
+          ghCalls.push(args);
+          return { stdout: JSON.stringify({ url: prUrl, headRefOid: remoteHead }) };
+        },
+      });
+
+      const out = await run(ITEM);
+
+      expect({
+        status: out.status,
+        reason: out.reason,
+        ghCalls,
+        processedCalls: rec.processedCalls,
+        enrollCalls: rec.enrollCalls,
+        teardownKeep: rec.teardownKeep,
+      }).toEqual({
+        status: 'halted',
+        reason: 'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head',
+        ghCalls: [['pr', 'view', prUrl, '--json', 'url,headRefOid']],
+        processedCalls: [],
+        enrollCalls: [],
+        teardownKeep: true,
+      });
     } finally {
       await rm(wt, { recursive: true, force: true });
     }

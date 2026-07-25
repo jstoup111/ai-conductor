@@ -45,13 +45,16 @@ describe('evaluateShipmentEvidence', () => {
     await execFile('git', ['remote', 'add', 'origin', remote], { cwd: repoDir });
     await execFile('git', ['push', '-u', 'origin', 'main'], { cwd: repoDir });
 
-    const verdict = await evaluateShipmentEvidence({
-      repoDir,
-      slug,
-      implementationPr: pr,
-      candidateCommit: commit,
-      implementationHead: 'origin/main',
-    });
+    const githubRunner = async () => ({ url: pr, headRefOid: commit });
+    const verdict = await evaluateShipmentEvidence(
+      {
+        repoDir,
+        slug,
+        implementationPr: pr,
+        candidateCommit: commit,
+      },
+      { githubRunner },
+    );
 
     expect(verdict).toEqual({
       kind: 'valid',
@@ -62,15 +65,71 @@ describe('evaluateShipmentEvidence', () => {
       commit,
     });
 
-    const repeatedVerdict = await evaluateShipmentEvidence({
-      repoDir,
-      slug,
-      implementationPr: pr,
-      candidateCommit: commit,
-      implementationHead: 'origin/main',
-    });
+    const repeatedVerdict = await evaluateShipmentEvidence(
+      {
+        repoDir,
+        slug,
+        implementationPr: pr,
+        candidateCommit: commit,
+      },
+      { githubRunner },
+    );
 
     expect(repeatedVerdict).toEqual(verdict);
+  });
+
+  it('refuses a candidate when the implementation PR binding reports a different head', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-pr-head-mismatch-'));
+    scratchDirs.push(repoDir);
+    const slug = 'durable-evidence';
+    const pr = 'https://github.com/acme/conductor/pull/916';
+    const plan = '# Durable evidence\r\n';
+    const hash = specHash(Buffer.from(plan), null).digest;
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), plan);
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'test: add durable evidence plan'], { cwd: repoDir });
+    await execFile('git', ['branch', 'implementation-pr'], { cwd: repoDir });
+    await writeFile(
+      join(repoDir, `.docs/shipped/${slug}.md`),
+      renderShippedRecord({ slug, specHash: hash, pr, shipped: '2026-07-25' }),
+    );
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'feat: add durable evidence'], { cwd: repoDir });
+    const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const candidateCommit = stdout.trim();
+
+    const remote = join(repoDir, 'origin.git');
+    await execFile('git', ['init', '--bare', '--initial-branch=main', remote], { cwd: repoDir });
+    await execFile('git', ['remote', 'add', 'origin', remote], { cwd: repoDir });
+    await execFile('git', ['push', '-u', 'origin', 'main'], { cwd: repoDir });
+
+    await execFile('git', ['checkout', 'implementation-pr'], { cwd: repoDir });
+    await writeFile(join(repoDir, 'implementation.ts'), 'export const implementation = true;\n');
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'feat: advance implementation PR separately'], { cwd: repoDir });
+    await execFile('git', ['push', '-u', 'origin', 'implementation-pr'], { cwd: repoDir });
+    const { stdout: prHeadStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const prHead = prHeadStdout.trim();
+
+    const githubRunner = async () => ({ url: pr, headRefOid: prHead });
+    const verdict = await evaluateShipmentEvidence(
+      {
+        repoDir,
+        slug,
+        implementationPr: pr,
+        candidateCommit,
+      },
+      { githubRunner },
+    );
+
+    expect(verdict).toMatchObject({
+      kind: 'refusal',
+      code: 'shipment-candidate-not-on-implementation-head',
+    });
   });
 
   it.each([
@@ -315,9 +374,17 @@ describe('evaluateShipmentEvidence', () => {
       implementationHead: 'origin/main',
     };
 
-    const verdict = await evaluateShipmentEvidence(input, dependencies);
+    const verdict = await evaluateShipmentEvidence(input, {
+      githubRunner: async () => ({ url: pr, headRefOid: 'origin/main' }),
+      ...dependencies,
+    });
     expect(verdict).toEqual(expected(candidateCommit));
-    expect(await evaluateShipmentEvidence(input, dependencies)).toEqual(verdict);
+    expect(
+      await evaluateShipmentEvidence(input, {
+        githubRunner: async () => ({ url: pr, headRefOid: 'origin/main' }),
+        ...dependencies,
+      }),
+    ).toEqual(verdict);
     expect(await readFile(recordPath)).toEqual(recordBytes);
     expect(await gitSnapshot(repoDir)).toEqual(repositoryState);
   });

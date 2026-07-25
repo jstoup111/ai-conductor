@@ -1,6 +1,7 @@
 import { access } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
+import type { GhRunner } from './pr-labels.js';
 import { parseShippedRecord, specHash } from './shipped-record.js';
 
 export type ShipmentEvidenceResult =
@@ -29,6 +30,8 @@ export type ShipmentEvidenceRefusal = {
     | 'shipped-record-not-in-candidate'
     | 'shipment-candidate-not-on-implementation-head'
     | 'shipment-candidate-stale'
+    | 'shipment-implementation-pr-mismatch'
+    | 'shipment-implementation-head-missing'
     | 'shipment-evidence-file-unavailable'
     | 'shipment-evidence-git-unavailable'
     | 'shipment-evidence-github-unavailable';
@@ -41,13 +44,43 @@ export interface ShipmentEvidenceInput {
   slug: string;
   implementationPr: string;
   candidateCommit: string;
-  implementationHead: string;
+  /**
+   * @deprecated The shared evaluator deliberately ignores caller-supplied
+   * heads. It binds reachability to the head returned for implementationPr.
+   */
+  implementationHead?: string;
+}
+
+export interface ImplementationPrBinding {
+  url: string;
+  headRefOid: string;
 }
 
 export interface ShipmentEvidenceDependencies {
   readFile?: (path: string) => Promise<Buffer | null>;
   gitRunner?: (args: string[]) => Promise<string>;
-  githubRunner?: (pr: string) => Promise<void>;
+  githubRunner?: (pr: string) => Promise<ImplementationPrBinding>;
+}
+
+/**
+ * Resolve the immutable implementation PR identity and head through an
+ * explicit `gh pr view <url>` request. Callers pass this result to the strict
+ * evaluator; a local branch name or candidate SHA is never authoritative.
+ */
+export async function resolveImplementationPrBinding(
+  runGh: GhRunner,
+  cwd: string,
+  implementationPr: string,
+): Promise<ImplementationPrBinding> {
+  const { stdout } = await runGh(
+    ['pr', 'view', implementationPr, '--json', 'url,headRefOid'],
+    { cwd },
+  );
+  const data = JSON.parse(stdout) as { url?: unknown; headRefOid?: unknown };
+  return {
+    url: typeof data.url === 'string' ? data.url : '',
+    headRefOid: typeof data.headRefOid === 'string' ? data.headRefOid : '',
+  };
 }
 
 /**
@@ -58,8 +91,8 @@ export async function evaluateShipmentEvidence(
   input: ShipmentEvidenceInput,
   dependencies: ShipmentEvidenceDependencies = {},
 ): Promise<ShipmentEvidenceResult> {
-  const { repoDir, slug, implementationPr, candidateCommit, implementationHead } = input;
-  if (!repoDir || !slug || !implementationPr || !candidateCommit || !implementationHead) {
+  const { repoDir, slug, implementationPr, candidateCommit } = input;
+  if (!repoDir || !slug || !implementationPr || !candidateCommit) {
     return refusal(
       'shipment-evidence-inputs-incomplete',
       'complete shipment evidence inputs',
@@ -153,6 +186,27 @@ export async function evaluateShipmentEvidence(
     );
   }
 
+  let binding: ImplementationPrBinding;
+  try {
+    if (!dependencies.githubRunner) {
+      return refusal(
+        'shipment-evidence-github-unavailable',
+        'implementation PR identity and head binding',
+        null,
+      );
+    }
+    binding = await dependencies.githubRunner(implementationPr);
+  } catch (error) {
+    return unavailable('shipment-evidence-github-unavailable', implementationPr, error);
+  }
+  if (binding.url !== implementationPr) {
+    return refusal('shipment-implementation-pr-mismatch', implementationPr, binding.url || null);
+  }
+  if (!binding.headRefOid) {
+    return refusal('shipment-implementation-head-missing', implementationPr, null);
+  }
+  const implementationHead = binding.headRefOid;
+
   let candidateOnHead: string;
   try {
     candidateOnHead = await gitRunner([
@@ -180,12 +234,6 @@ export async function evaluateShipmentEvidence(
   }
   if (resolvedHead.trim() !== candidateCommit) {
     return refusal('shipment-candidate-stale', implementationHead, candidateCommit);
-  }
-
-  try {
-    await dependencies.githubRunner?.(implementationPr);
-  } catch (error) {
-    return unavailable('shipment-evidence-github-unavailable', implementationPr, error);
   }
 
   return {

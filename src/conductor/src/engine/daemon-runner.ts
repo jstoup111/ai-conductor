@@ -25,6 +25,7 @@ import { SetupFailureError } from './worktree-prepare.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import {
   evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
   type ShipmentEvidenceInput,
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
@@ -241,19 +242,24 @@ async function shipmentFailureReason(
   worktree: FeatureWorktree,
   item: BacklogItem,
   outcome: WorktreeOutcome,
+  gh: GhRunner,
 ): Promise<string | null> {
   if (!isVerifiedShip(outcome)) return failureReasonForFalseShip(outcome);
 
   const candidateCommit = (await currentCommitSha(worktree.path)) ?? 'HEAD';
-  const verify = deps.shipmentEvidence ?? evaluateShipmentEvidence;
   try {
-    const verdict = await verify({
+    const input = {
       repoDir: worktree.path,
       slug: item.slug,
       implementationPr: outcome.prUrl!,
       candidateCommit,
-      implementationHead: candidateCommit,
-    });
+    };
+    const verdict = deps.shipmentEvidence
+      ? await deps.shipmentEvidence(input)
+      : await evaluateShipmentEvidence(input, {
+          githubRunner: (implementationPr) =>
+            resolveImplementationPrBinding(gh, worktree.path, implementationPr),
+        });
     if (verdict.kind === 'valid') return null;
     const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
     return `durable shipment evidence refused ship: ${detail}`;
@@ -376,7 +382,7 @@ export function makeRunFeature(
       }
 
       if (outcome.done) {
-        const shipmentFailure = await shipmentFailureReason(deps, worktree, item, outcome);
+        const shipmentFailure = await shipmentFailureReason(deps, worktree, item, outcome, gh);
         if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
           // Run the existing ship side effects.

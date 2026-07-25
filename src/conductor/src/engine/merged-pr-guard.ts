@@ -17,7 +17,7 @@ export interface VerifiedMergedPrDependencies {
       slug: string;
       implementationPr: string;
       candidateCommit: string;
-      implementationHead: string;
+      implementationHead?: string;
     },
     dependencies?: ShipmentEvidenceDependencies,
   ) => Promise<ShipmentEvidenceResult>;
@@ -38,13 +38,13 @@ export async function verifyMergedPrShipment(
 ): Promise<VerifiedMergedPrResult> {
   if (!prUrl) return { kind: 'not-merged' };
 
-  let data: { state?: string; mergeCommit?: { oid?: string | null } };
+  let data: { url?: string; state?: string; mergeCommit?: { oid?: string | null } };
   try {
     const { stdout } = await runGh(
-      ['pr', 'view', prUrl, '--json', 'state,mergeCommit'],
+      ['pr', 'view', prUrl, '--json', 'url,state,mergeCommit'],
       { cwd },
     );
-    data = JSON.parse(stdout) as { state?: string; mergeCommit?: { oid?: string | null } };
+    data = JSON.parse(stdout) as { url?: string; state?: string; mergeCommit?: { oid?: string | null } };
   } catch (error) {
     return { kind: 'halt', reason: `merge-state-unavailable: ${errorMessage(error)}` };
   }
@@ -53,16 +53,19 @@ export async function verifyMergedPrShipment(
   const commit = data.mergeCommit?.oid;
   if (!commit) return { kind: 'halt', reason: 'merge-state-unavailable: merged commit is absent' };
 
-  const evaluate = deps.evaluate ?? evaluateShipmentEvidence;
   let evidence: ShipmentEvidenceResult;
   try {
-    evidence = await evaluate({
+    const input = {
       repoDir: cwd,
       slug,
       implementationPr: prUrl,
       candidateCommit: commit,
-      implementationHead: commit,
-    });
+    };
+    evidence = deps.evaluate
+      ? await deps.evaluate(input)
+      : await evaluateShipmentEvidence(input, {
+          githubRunner: async () => ({ url: data.url ?? '', headRefOid: commit }),
+        });
   } catch (error) {
     return { kind: 'halt', reason: `merged-history-unavailable: ${errorMessage(error)}` };
   }

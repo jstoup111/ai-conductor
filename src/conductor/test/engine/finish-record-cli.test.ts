@@ -274,6 +274,43 @@ describe('engine/finish-record-cli', () => {
 
     const snapshotDir = async (dir: string) => (await readdir(dir)).sort();
 
+    it('binds the supplied PR URL and refuses a different GitHub PR identity before terminal writes', async () => {
+      const requestedPr = 'https://github.com/org/repo/pull/1';
+      const before = await snapshotDir(existingAbsDir);
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({
+          url: 'https://github.com/org/repo/pull/2',
+          headRefOid: 'b'.repeat(40),
+        }),
+      }));
+      const runGit = vi.fn(async () => {
+        throw new Error('git must not run after a mismatched PR binding');
+      });
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: requestedPr,
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+
+      expect({
+        code,
+        ghArgs: runGh.mock.calls[0]?.[0],
+        gitCalls: runGit.mock.calls.length,
+        entries: await snapshotDir(existingAbsDir),
+      }).toEqual({
+        code: 1,
+        ghArgs: ['pr', 'view', requestedPr, '--json', 'url,headRefOid'],
+        gitCalls: 0,
+        entries: before,
+      });
+    });
+
     it('refuses when gh returns empty stdout: exit !=0, zero writes, pipeline dir unchanged', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const before = await snapshotDir(existingAbsDir);
@@ -291,7 +328,7 @@ describe('engine/finish-record-cli', () => {
       );
       expect(code).not.toBe(0);
       expect(runGh).toHaveBeenCalledWith(
-        ['pr', 'view', '--json', 'url', '-q', '.url'],
+        ['pr', 'view', 'https://github.com/org/repo/pull/1', '--json', 'url,headRefOid'],
         { cwd: dirname(existingAbsDir) },
       );
       expect(errSpy.mock.calls.flat().join(' ')).toMatch(/gh pr view/i);
@@ -323,7 +360,9 @@ describe('engine/finish-record-cli', () => {
     });
 
     it('passes the guard when gh succeeds with a URL and push-evidence confirms HEAD is pushed', async () => {
-      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+      }));
       const runGit = vi.fn(async (args: string[]) => {
         if (args[0] === 'rev-parse' && args.includes('@{u}')) {
           return { stdout: 'refs/remotes/origin/feat\n' };
@@ -351,7 +390,7 @@ describe('engine/finish-record-cli', () => {
       );
       expect(code).toBe(0);
       expect(runGh).toHaveBeenCalledWith(
-        ['pr', 'view', '--json', 'url', '-q', '.url'],
+        ['pr', 'view', 'https://github.com/org/repo/pull/1', '--json', 'url,headRefOid'],
         { cwd: dirname(existingAbsDir) },
       );
     });
@@ -359,7 +398,9 @@ describe('engine/finish-record-cli', () => {
     it('refuses when headPushedToUpstream returns false: exit !=0, zero writes', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const before = await snapshotDir(existingAbsDir);
-      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+      }));
       const runGit = vi.fn(async (args: string[]) => {
         if (args[0] === 'rev-parse' && args.includes('@{u}')) {
           return { stdout: 'refs/remotes/origin/feat\n' };
@@ -388,7 +429,9 @@ describe('engine/finish-record-cli', () => {
     it('refuses when headPushedToUpstream returns null (indeterminate): exit !=0, zero writes', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const before = await snapshotDir(existingAbsDir);
-      const runGh = vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' }));
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+      }));
       const runGit = vi.fn(async () => {
         throw new Error('git not available');
       });
@@ -421,7 +464,9 @@ describe('engine/finish-record-cli', () => {
         JSON.stringify({ feature_desc: 'feature' }),
       );
       passingRunners = {
-        runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+        })),
         runGit: vi.fn(async (args: string[]) => {
           if (args[0] === 'rev-parse' && args.includes('@{u}')) {
             return { stdout: 'refs/remotes/origin/feat\n' };
@@ -615,7 +660,9 @@ describe('engine/finish-record-cli', () => {
         JSON.stringify({ feature_desc: 'feature' }),
       );
       passingRunners = {
-        runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+        })),
         runGit: vi.fn(async (args: string[]) => {
           if (args[0] === 'rev-parse' && args.includes('@{u}')) {
             return { stdout: 'refs/remotes/origin/feat\n' };

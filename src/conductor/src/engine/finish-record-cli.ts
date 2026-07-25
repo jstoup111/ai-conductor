@@ -9,6 +9,7 @@ import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
 import {
   evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
   type ShipmentEvidenceDependencies,
   type ShipmentEvidenceInput,
   type ShipmentEvidenceResult,
@@ -149,22 +150,28 @@ export async function dispatchFinishRecord(
   // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
   // — never falls back to writing the keep/finish-choice marker anyway.
   if (cmd.choice === 'pr') {
-    let stdout: string | undefined;
+    const repoDir = dirname(cmd.pipelineDir);
+    let implementationBinding;
     try {
-      const result = await deps.runGh(['pr', 'view', '--json', 'url', '-q', '.url'], {
-        cwd: dirname(cmd.pipelineDir),
-      });
-      stdout = (result as { stdout?: string } | undefined)?.stdout;
+      implementationBinding = await resolveImplementationPrBinding(
+        async (args, opts) => {
+          const result = await deps.runGh(args, opts);
+          const stdout = (result as { stdout?: string } | undefined)?.stdout;
+          return { stdout: stdout ?? '' };
+        },
+        repoDir,
+        cmd.prUrl!,
+      );
     } catch (err) {
       console.error(
-        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} identity and head; refusing to record`,
       );
       return 1;
     }
 
-    if (!stdout || !stdout.trim()) {
+    if (implementationBinding.url !== cmd.prUrl || !implementationBinding.headRefOid) {
       console.error(
-        `finish-record: gh pr view returned no URL — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view did not return the requested PR URL and head — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
@@ -201,12 +208,9 @@ export async function dispatchFinishRecord(
       return 1;
     }
 
-    const repoDir = dirname(cmd.pipelineDir);
     let candidateCommit: string;
-    let implementationHead: string;
     try {
       candidateCommit = (await deps.runGit(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim();
-      implementationHead = (await deps.runGit(['rev-parse', '--verify', '@{u}'], { cwd: repoDir })).stdout.trim();
     } catch (err) {
       console.error(
         `finish-record: cannot resolve the PR head for durable evidence (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
@@ -222,14 +226,15 @@ export async function dispatchFinishRecord(
           slug: stateResult.value.feature_desc,
           implementationPr: cmd.prUrl!,
           candidateCommit,
-          implementationHead,
         },
         {
           gitRunner: async (args) => (await deps.runGit(args, { cwd: repoDir })).stdout,
-          // `gh pr view` above is the required GitHub availability/identity
-          // check for this CLI boundary; the shared evaluator owns the durable
-          // file, hash, and reachability verdict.
-          githubRunner: async () => {},
+          githubRunner: async (implementationPr) => {
+            if (implementationPr !== cmd.prUrl) {
+              throw new Error(`unexpected implementation PR binding request: ${implementationPr}`);
+            }
+            return implementationBinding;
+          },
         },
       );
     } catch (err) {

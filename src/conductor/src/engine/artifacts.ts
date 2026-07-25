@@ -20,6 +20,7 @@ import {
 } from './full-suite-verifier.js';
 import {
   evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
   type ShipmentEvidenceInput,
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
@@ -606,15 +607,19 @@ async function verifyDurableShipmentEvidence(
 ): Promise<CompletionResult | null> {
   const candidateCommit = (await (ctx.getHeadSha?.() ?? currentCommitSha(dir))) ?? '';
 
-  const verify = ctx.shipmentEvidence ?? evaluateShipmentEvidence;
   try {
-    const verdict = await verify({
+    const input = {
       repoDir: dir,
       slug: ctx.featureDesc ?? '',
       implementationPr: prUrl,
       candidateCommit,
-      implementationHead: candidateCommit,
-    });
+    };
+    const verdict = ctx.shipmentEvidence
+      ? await ctx.shipmentEvidence(input)
+      : await evaluateShipmentEvidence(input, {
+          githubRunner: (implementationPr) =>
+            resolveImplementationPrBinding(ctx.gh ?? makeProductionGh(), dir, implementationPr),
+        });
     if (verdict.kind === 'valid') return null;
     const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
     return {
