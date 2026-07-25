@@ -453,11 +453,12 @@ compatibility proofs around three small production changes.
    requirements in assess, architecture-review, and code-review.
 2. Run the audit and verify it fails on the current host assumptions (RED).
 3. Express delegation through the selected host's available subagent facility, scope Claude model
-   choices, and preserve agent limits, fresh-context review, outputs, and veto/gate behavior.
-4. Run provider-contract, model-pin, and harness-integrity tests (GREEN).
+   choices, and preserve agent limits, fresh-context review, outputs, veto/gate behavior, and the
+   merged #946 `BATCH_AFFECTED_TESTS` evaluator-input contract without restating that policy.
+4. Run provider-contract, model-pin, pipeline-policy-contract, and harness-integrity tests (GREEN).
 5. Commit with message: `fix(skills): make review delegation provider-scoped`.
 
-**Files:** `skills/assess/SKILL.md`; `skills/architecture-review/SKILL.md`; `skills/code-review/SKILL.md`; `test/test_provider_skill_contracts.sh`; `test/test_harness_integrity.sh`
+**Files:** `skills/assess/SKILL.md`; `skills/architecture-review/SKILL.md`; `skills/code-review/SKILL.md`; `test/test_provider_skill_contracts.sh`; `test/test_skill_pipeline_contract.sh`; `test/test_harness_integrity.sh`
 
 **Wired-into:** `bin/install#install`
 
@@ -472,11 +473,13 @@ compatibility proofs around three small production changes.
    provider-specific subagent instructions in pipeline and TDD.
 2. Run the focused audit and verify the current instructions fail (RED).
 3. Introduce provider-neutral dispatch wording with explicitly scoped host mechanics while
-   preserving RED/DOMAIN/GREEN, commit, review, rework-budget, and evidence gates.
-4. Run provider-contract, TDD/pipeline contract, and integrity tests (GREEN).
+   preserving RED/DOMAIN/GREEN, commit, review, rework-budget, evidence gates, and #946's rule
+   that batch verification and its evaluator share one named `BATCH_AFFECTED_TESTS` union with a
+   full-suite fallback only when scope is indeterminate.
+4. Run provider-contract, TDD/pipeline policy-contract, and integrity tests (GREEN).
 5. Commit with message: `fix(skills): preserve build gates across host delegation`.
 
-**Files:** `skills/pipeline/SKILL.md`; `skills/tdd/SKILL.md`; `test/test_provider_skill_contracts.sh`; `test/test_harness_integrity.sh`
+**Files:** `skills/pipeline/SKILL.md`; `skills/tdd/SKILL.md`; `test/test_provider_skill_contracts.sh`; `test/test_skill_pipeline_contract.sh`; `test/test_harness_integrity.sh`
 
 **Wired-into:** `bin/install#install`
 
