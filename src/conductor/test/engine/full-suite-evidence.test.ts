@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  FULL_SUITE_DIAGNOSTIC_LIMIT,
   FULL_SUITE_EVIDENCE_VERSION,
+  FULL_SUITE_TRUNCATION_MARKER,
   readFullSuiteEvidence,
   writeFullSuiteEvidence,
+  type FullSuiteFailEvidence,
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
 
@@ -25,12 +28,34 @@ const PASS_EVIDENCE: FullSuitePassEvidence = {
   stderr: '',
 };
 
+const FAIL_EVIDENCE: FullSuiteFailEvidence = {
+  version: FULL_SUITE_EVIDENCE_VERSION,
+  outcome: 'FAIL',
+  reason: 'nonzero_exit',
+  fingerprint: 'sha256:content-fingerprint',
+  provenanceHeadSha: '0123456789abcdef',
+  command: 'npm test',
+  workingDirectory: 'src/conductor',
+  startedAt: '2026-07-25T12:00:00.000Z',
+  endedAt: '2026-07-25T12:00:03.000Z',
+  durationMs: 3_000,
+  exitCode: 7,
+  stdout: 'tests started\n',
+  stderr: 'terminal failure\n',
+};
+
 const scratches: string[] = [];
 
 async function makeProject(): Promise<string> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-evidence-'));
   scratches.push(projectRoot);
   return projectRoot;
+}
+
+async function writePersisted(projectRoot: string, value: unknown): Promise<void> {
+  const path = join(projectRoot, '.pipeline/test-suite-evidence.json');
+  await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+  await writeFile(path, typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
 }
 
 afterEach(async () => {
@@ -65,6 +90,141 @@ describe('full-suite evidence', () => {
       temporaryFiles: entries.filter(
         (entry) => entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp'),
       ),
-    }).toEqual({ roundTrip: PASS_EVIDENCE, temporaryFiles: [] });
+    }).toEqual({
+      roundTrip: { usable: true, evidence: PASS_EVIDENCE },
+      temporaryFiles: [],
+    });
+  });
+
+  it.each([
+    {
+      name: 'a missing target',
+      arrange: async () => undefined,
+      expected: { usable: false, reason: 'missing' },
+    },
+    {
+      name: 'malformed JSON',
+      arrange: async (projectRoot: string) => writePersisted(projectRoot, '{broken'),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'the wrong contract shape',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { version: 1, outcome: 'PASS' }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'oversized persisted diagnostics',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, {
+          ...PASS_EVIDENCE,
+          stdout: 'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT + 1),
+        }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'an unknown contract version',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...PASS_EVIDENCE, version: 99 }),
+      expected: { usable: false, reason: 'unsupported_version' },
+    },
+    {
+      name: 'torn-write temporary residue',
+      arrange: async (projectRoot: string) => {
+        await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(projectRoot, '.pipeline/.test-suite-evidence.123.crashed.tmp'),
+          JSON.stringify(PASS_EVIDENCE),
+          'utf8',
+        );
+      },
+      expected: { usable: false, reason: 'incomplete_write' },
+    },
+    {
+      name: 'a persisted FAIL result',
+      arrange: async (projectRoot: string) => writePersisted(projectRoot, FAIL_EVIDENCE),
+      expected: { usable: false, reason: 'not_pass', evidence: FAIL_EVIDENCE },
+    },
+    {
+      name: 'a FAIL result with a successful exit code',
+      arrange: async (projectRoot: string) =>
+        writePersisted(projectRoot, { ...FAIL_EVIDENCE, exitCode: 0 }),
+      expected: { usable: false, reason: 'corrupt' },
+    },
+    {
+      name: 'a non-file evidence target',
+      arrange: async (projectRoot: string) =>
+        mkdir(join(projectRoot, '.pipeline/test-suite-evidence.json'), {
+          recursive: true,
+        }),
+      expected: { usable: false, reason: 'io_error' },
+    },
+  ])('fails closed without throwing for $name', async ({ arrange, expected }) => {
+    const projectRoot = await makeProject();
+    await arrange(projectRoot);
+
+    expect(await readFullSuiteEvidence(projectRoot)).toEqual(expected);
+  });
+
+  it('writes FAIL evidence atomically and returns it only as non-reusable', async () => {
+    const projectRoot = await makeProject();
+
+    await writeFullSuiteEvidence(projectRoot, FAIL_EVIDENCE);
+
+    const [serialized, result, entries] = await Promise.all([
+      readFile(join(projectRoot, '.pipeline/test-suite-evidence.json'), 'utf8'),
+      readFullSuiteEvidence(projectRoot),
+      readdir(join(projectRoot, '.pipeline')),
+    ]);
+    expect({
+      persisted: JSON.parse(serialized),
+      result,
+      temporaryFiles: entries.filter(
+        (entry) => entry.startsWith('.test-suite-evidence.') && entry.endsWith('.tmp'),
+      ),
+    }).toEqual({
+      persisted: FAIL_EVIDENCE,
+      result: { usable: false, reason: 'not_pass', evidence: FAIL_EVIDENCE },
+      temporaryFiles: [],
+    });
+  });
+
+  it('redacts secrets and bounds both diagnostic streams while retaining their ends', async () => {
+    const projectRoot = await makeProject();
+    const secrets = ['stdout-secret-940', 'stderr-secret-940'];
+    const evidence: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      stdout: `stdout beginning\n${secrets[0]}\n${'o'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}\n${secrets[1]}\nstdout terminal failure`,
+      stderr: `stderr beginning\n${secrets[1]}\n${'e'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}\n${secrets[0]}\nstderr terminal error`,
+    };
+
+    await writeFullSuiteEvidence(projectRoot, evidence, secrets);
+
+    const serialized = await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'),
+      'utf8',
+    );
+    const persisted = JSON.parse(serialized) as FullSuiteFailEvidence;
+    expect({
+      secretResidue: secrets.filter((secret) => serialized.includes(secret)),
+      stdoutWithinLimit: persisted.stdout.length <= FULL_SUITE_DIAGNOSTIC_LIMIT,
+      stdoutRetainsEnds:
+        persisted.stdout.startsWith('stdout beginning') &&
+        persisted.stdout.endsWith('stdout terminal failure'),
+      stdoutMarked: persisted.stdout.includes(FULL_SUITE_TRUNCATION_MARKER),
+      stderrWithinLimit: persisted.stderr.length <= FULL_SUITE_DIAGNOSTIC_LIMIT,
+      stderrRetainsEnds:
+        persisted.stderr.startsWith('stderr beginning') &&
+        persisted.stderr.endsWith('stderr terminal error'),
+      stderrMarked: persisted.stderr.includes(FULL_SUITE_TRUNCATION_MARKER),
+    }).toEqual({
+      secretResidue: [],
+      stdoutWithinLimit: true,
+      stdoutRetainsEnds: true,
+      stdoutMarked: true,
+      stderrWithinLimit: true,
+      stderrRetainsEnds: true,
+      stderrMarked: true,
+    });
   });
 });
