@@ -3,8 +3,14 @@
 # Stories: content-aware shipped-work dedup (never re-dispatch shipped specs)
 
 Technical track. Derived from `adr-2026-07-03-committed-shipped-record-dispatch-dedup.md`
-(APPROVED) and the conditions in
+(now SUPERSEDED by `adr-2026-07-25-fail-closed-durable-shipment-evidence`, with stable discovery
+decisions carried forward) and the conditions in
 `architecture-review-2026-07-03-content-aware-shipped-work-dedup.md`. Fixes #204, #205.
+
+> **Conflict resolution 2026-07-25:** accepted stories
+> `durable-shipped-record-enforcement-and-backfill-916-936.md` supersede this file's former
+> cache-degradation failure path in Story 2 and permissive historical-backfill Story 6. The
+> hash, record-on-branch, discovery dedup, and cache-repair behavior below remains accepted.
 
 ---
 
@@ -57,10 +63,10 @@ implementation PR branch so that the human merge lands the code and the shipped-
   branch (invariant side-effect on the alternate branch).
 
 #### Negative Paths
-- Given the shipped-record write or commit fails (fs error, git error), when finish continues,
-  then the ship completes exactly as today (cache marker written, PR opened), a single
-  `shipped-record write failed — dedup degraded to local cache for <stem>` warn is logged, and
-  the failure is NOT retried in a loop and does NOT fail the finish step.
+- Given the shipped-record write or commit fails (fs error, git error), when PR completion is
+  evaluated, then no valid durable-evidence verdict exists: completion remains unsatisfied, no
+  processed cache or destructive teardown occurs, and the work is preserved with an actionable
+  HALT. The failure never degrades to cache-only shipment.
 - Given finish choice `discard` or `keep` (nothing ships), when the flow completes, then NO
   shipped record is written anywhere.
 - Given a re-run of finish after a partial prior attempt already committed the record, when the
@@ -70,8 +76,8 @@ implementation PR branch so that the human merge lands the code and the shipped-
 ### Done When
 - [ ] Integration test: finished feature's branch contains `.docs/shipped/<stem>.md` with all
       four frontmatter fields; `merge-local` variant asserted separately.
-- [ ] Injected-failure test: write failure → ship still succeeds, warn logged once, no marker
-      committed.
+- [ ] Injected-failure test: write/commit failure → no valid record, no terminal ship success,
+      no processed marker or teardown, and actionable HALT with the work preserved.
 - [ ] `discard`/`keep` paths assert absence of the record.
 
 ---
@@ -176,32 +182,17 @@ duplicate of shipped work stops burning an abort/clear/re-park cycle on every ba
 
 ---
 
-## Story 6: One-time backfill of shipped records
+## Story 6: One-time backfill of shipped records — SUPERSEDED
 
-As the operator, I want shipped records backfilled for everything that already shipped so that
-protection is retroactive the day this merges.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given the implementation PR, when it merges, then `.docs/shipped/` contains a record for
-  every current `.daemon/processed/` entry (16) and the known shipped-but-unmarked specs
-  (technical-assessment, phase-2-language-evaluation, pluggable-harness-architecture,
-  phase-9.3-engineer-redesign, mermaid-renderer, harness-self-host-guardrails,
-  multi-operator-ownership-hardening), each with `spec_hash` computed from current base-branch
-  content and `pr` pointing at the known implementation PR (or `unknown` where none is
-  recorded).
-
-#### Negative Paths
-- Given a backfilled spec whose current base-branch content has drifted from its as-shipped
-  content, when discovery runs post-merge, then the stem match alone still dedups it (Story 3)
-  — hash staleness in backfilled records is harmless and pinned by a test.
-- Given a ledger entry whose plan file no longer exists on the base branch, when the backfill
-  is generated, then a record is still written from the ledger data (stem + PR URL,
-  `spec_hash: unknown`) so the slug stays dead if the spec ever reappears.
+The count/ledger-driven backfill and `unknown` PR/hash fallbacks formerly specified here are no
+longer accepted. Historical audit and backfill are governed by Story ST-916-5 in
+`durable-shipped-record-enforcement-and-backfill-916-936.md`: every plan/spec is considered, but a
+record is proposed only from a proven merged implementation association and a valid canonical plan
+identity. Ambiguous, absent, contradictory, marker-only, and unrepresentable candidates are reported
+and skipped.
 
 ### Done When
-- [ ] `.docs/shipped/` in the PR contains ≥ 23 records; a test asserts every
-      `.daemon/processed/` slug in the fixture set has a matching record.
-- [ ] Post-merge dry run: `discoverBacklog` against the merged tree with an EMPTY local ledger
-      dispatches zero already-shipped specs.
+
+- [ ] No historical record is generated from a local processed marker or inventory count alone.
+- [ ] No generated record contains an unknown/placeholder PR or hash.
+- [ ] The ST-916-5 complete/incomplete audit report and idempotency criteria pass.
