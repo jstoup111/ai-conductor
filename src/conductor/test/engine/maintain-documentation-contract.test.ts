@@ -384,4 +384,150 @@ describe('repository-local maintain-documentation contract', () => {
       consumerIsolation: true,
     });
   });
+
+  it('defines writing, troubleshooting, and impact-scoped verification rules', async () => {
+    const skill = await readFile(canonicalSkill, 'utf-8');
+    const section = (heading: string): string =>
+      skill.match(new RegExp(`## ${heading}\\n([\\s\\S]*?)(?=\\n## |$)`))?.[1] ?? '';
+    const writing = section('Writing rules');
+    const documents = section('Document rules');
+    const verification = section('Verification');
+    const boundaries = section('Mutation boundaries');
+    const documentRule = (heading: string): string =>
+      documents.match(new RegExp(`### ${heading}\\n([\\s\\S]*?)(?=\\n### |$)`))?.[1] ?? '';
+    const rules = {
+      quickStart: documentRule('Quick start'),
+      guides: documentRule('Guides'),
+      referenceConfiguration: documentRule('Reference and configuration'),
+      explanationDeepDives: documentRule('Explanation and deep dives'),
+      runbooks: documentRule('Runbooks'),
+      contributorCodeOrganization: documentRule(
+        'Contributor documentation and code organization',
+      ),
+      changelog: documentRule('Changelog'),
+    };
+    const hasWritingAndTroubleshooting = (rule: string): boolean =>
+      /Writing:/i.test(rule) && /Troubleshooting:/i.test(rule);
+    const verificationTargets = [
+      'links',
+      'paths',
+      'commands',
+      'configuration',
+      'examples',
+      'artifacts',
+      'explanations',
+      'code organization',
+      'architecture',
+      'generated help',
+      'schema',
+      'observed behavior',
+    ];
+
+    expect({
+      globalWriting: {
+        conciseActiveTaskFirst: /concise, active, task-first instructions/i.test(writing),
+        noNarrative: /(?:reject|avoid|do not use) narrative/i.test(writing),
+        marketingBoundary: /marketing.*only.*README.*value section/i.test(writing),
+        noRepetition: /(?:reject|avoid|do not use) repetition/i.test(writing),
+        noConversationalFiller:
+          /(?:reject|avoid|do not use) conversational filler/i.test(writing),
+        noSpeculativeCommentary:
+          /(?:reject|avoid|do not use) speculative commentary/i.test(writing),
+        dryHumor: /dry humor.*only when.*clarity.*unchanged/i.test(writing),
+        canonicalLink: /link to the canonical source of truth/i.test(writing),
+        minimumQuickStart: /repeat only.*minimum quick-start commands/i.test(writing),
+      },
+      documentRules: {
+        quickStart:
+          hasWritingAndTroubleshooting(rules.quickStart) &&
+          /shortest working path/i.test(rules.quickStart),
+        guides:
+          hasWritingAndTroubleshooting(rules.guides) &&
+          /ordered task/i.test(rules.guides),
+        referenceConfiguration:
+          hasWritingAndTroubleshooting(rules.referenceConfiguration) &&
+          /exact/i.test(rules.referenceConfiguration),
+        explanationDeepDives:
+          hasWritingAndTroubleshooting(rules.explanationDeepDives) &&
+          /concept/i.test(rules.explanationDeepDives),
+        runbooks:
+          hasWritingAndTroubleshooting(rules.runbooks) &&
+          /symptom.*diagnosis.*recovery.*verification/is.test(rules.runbooks),
+        contributorCodeOrganization:
+          hasWritingAndTroubleshooting(rules.contributorCodeOrganization) &&
+          /code paths/i.test(rules.contributorCodeOrganization),
+        changelog:
+          hasWritingAndTroubleshooting(rules.changelog) &&
+          /reader-visible release outcome/i.test(rules.changelog),
+      },
+      impactScopedVerification: {
+        affectedOnly: /verify only.*affected/i.test(verification),
+        asApplicable: /as applicable/i.test(verification),
+        targets: Object.fromEntries(
+          verificationTargets.map((target) => [
+            target,
+            verification.toLowerCase().includes(target.toLowerCase()),
+          ]),
+        ),
+      },
+      unverifiableClaims: {
+        blockRequiredClaim: /required claim.*cannot be verified.*BLOCKED/is.test(verification),
+        neverGuessOrWeaken: /never guess or weaken/i.test(verification),
+      },
+      sourceDocumentation: {
+        flagOnly: /(?:comments|JSDoc|docstrings).*flag contradictions only/is.test(boundaries),
+        outsideWriteScope:
+          /(?:comments|JSDoc|docstrings)[\s\S]*do not (?:create|edit|move|rename|delete)/i.test(
+            boundaries,
+          ),
+      },
+    }).toEqual({
+      globalWriting: {
+        conciseActiveTaskFirst: true,
+        noNarrative: true,
+        marketingBoundary: true,
+        noRepetition: true,
+        noConversationalFiller: true,
+        noSpeculativeCommentary: true,
+        dryHumor: true,
+        canonicalLink: true,
+        minimumQuickStart: true,
+      },
+      documentRules: {
+        quickStart: true,
+        guides: true,
+        referenceConfiguration: true,
+        explanationDeepDives: true,
+        runbooks: true,
+        contributorCodeOrganization: true,
+        changelog: true,
+      },
+      impactScopedVerification: {
+        affectedOnly: true,
+        asApplicable: true,
+        targets: {
+          links: true,
+          paths: true,
+          commands: true,
+          configuration: true,
+          examples: true,
+          artifacts: true,
+          explanations: true,
+          'code organization': true,
+          architecture: true,
+          'generated help': true,
+          schema: true,
+          'observed behavior': true,
+        },
+      },
+      unverifiableClaims: {
+        blockRequiredClaim: true,
+        neverGuessOrWeaken: true,
+      },
+      sourceDocumentation: {
+        flagOnly: true,
+        outsideWriteScope: true,
+      },
+    });
+  });
 });

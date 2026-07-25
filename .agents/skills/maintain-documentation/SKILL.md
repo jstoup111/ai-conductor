@@ -94,3 +94,57 @@ Treat this README contract as a repository-local refinement of the global harnes
 - In the shortest working quick start, highlight `conduct-ts --interactive`, daemon operation, and multiprovider use.
 - For a reader-visible change, update the canonical affected document. Leave README unchanged unless the change affects its landing-page contract.
 - Keep consumer projects without this custom step configuration unchanged; they continue to use the global harness convention.
+
+## Writing rules
+
+- Use concise, active, task-first instructions.
+- Reject narrative.
+- Allow marketing only in the README project-value section.
+- Reject repetition.
+- Reject conversational filler.
+- Reject speculative commentary.
+- Allow occasional dry humor only when clarity is unchanged.
+- Link to the canonical source of truth. Repeat only the minimum quick-start commands needed to begin.
+
+## Document rules
+
+### Quick start
+
+- Writing: Lead with the shortest working path to the first successful result.
+- Troubleshooting: Place only common first-run blockers after the working steps; link to the canonical guide or runbook for more.
+
+### Guides
+
+- Writing: Use ordered task steps with prerequisites and observable outcomes.
+- Troubleshooting: Place task-specific failures after the affected step or in a final troubleshooting section.
+
+### Reference and configuration
+
+- Writing: State exact interfaces, fields, defaults, constraints, and examples.
+- Troubleshooting: Link errors and recovery procedures to the canonical guide or runbook.
+
+### Explanation and deep dives
+
+- Writing: Define the concept, constraints, mechanics, and consequences.
+- Troubleshooting: Link procedural diagnosis and recovery to the canonical guide or runbook.
+
+### Runbooks
+
+- Writing: Organize operational response as symptom, diagnosis, recovery, and verification.
+- Troubleshooting: Keep operational failure diagnosis and recovery in the runbook body.
+
+### Contributor documentation and code organization
+
+- Writing: Name development tasks, code paths, boundaries, dependencies, and extension points.
+- Troubleshooting: Place build, test, and development failures beside the affected workflow or link to a runbook.
+
+### Changelog
+
+- Writing: Summarize the reader-visible release outcome.
+- Troubleshooting: Link to the canonical guide or runbook; do not embed procedures.
+
+## Verification
+
+Verify only affected links, paths, commands, configuration, examples, artifacts, explanations, code organization, architecture, generated help, schema, and observed behavior, as applicable.
+
+If a required claim cannot be verified, return BLOCKED. Never guess or weaken the claim.
