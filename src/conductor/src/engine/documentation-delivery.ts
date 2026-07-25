@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GhRunner } from './tracker-client.js';
 
@@ -16,6 +16,8 @@ export interface DocumentationDelivery {
 export interface ReadDocumentationDeliveryOptions {
   projectRoot: string;
   gh: GhRunner;
+  /** Reject a marker written before this conductor invocation began. */
+  notBeforeMs?: number;
 }
 
 function isDelivery(value: unknown): value is DocumentationDelivery {
@@ -44,7 +46,12 @@ function closesSourceRef(body: string, sourceRef: string): boolean {
 export async function readDocumentationDelivery(
   options: ReadDocumentationDeliveryOptions,
 ): Promise<DocumentationDelivery> {
-  const raw = await readFile(join(options.projectRoot, DELIVERY_FILE), 'utf8');
+  const path = join(options.projectRoot, DELIVERY_FILE);
+  const metadata = await stat(path);
+  if (options.notBeforeMs !== undefined && metadata.mtimeMs < options.notBeforeMs) {
+    throw new Error(`Documentation delivery result is stale: ${DELIVERY_FILE}`);
+  }
+  const raw = await readFile(path, 'utf8');
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -79,4 +86,19 @@ export async function readDocumentationDelivery(
   }
 
   return value;
+}
+
+/**
+ * Return no result when explore did not take the documentation-only route.
+ * Any present but invalid result remains an error so callers fail closed.
+ */
+export async function findDocumentationDelivery(
+  options: ReadDocumentationDeliveryOptions,
+): Promise<DocumentationDelivery | null> {
+  try {
+    return await readDocumentationDelivery(options);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
 }
