@@ -287,11 +287,11 @@ false shipment facts.
       supporting evidence/reasons, aggregate totals, and an explicit complete/incomplete state.
 - [ ] Every `backfilled` row has exactly one valid record diff on the feature branch; every aligned,
       unresolved, absent, ambiguous, or contradictory row has no generated record diff.
-- [ ] Fixtures cover differently named spec→plan linkage, spec without plan, no PR, multiple PRs,
-      local-marker-only, valid existing record, missing record, and invalid record.
-- [ ] Pagination and injected GitHub/filesystem failures prove incomplete runs cannot report success.
 - [ ] A second complete run produces no record changes, deterministically reclassifies prior
       `backfilled` rows as `aligned`, and preserves unresolved/absent/ambiguous/contradictory results.
+- [ ] Per operator direction on 2026-07-25, the one-time historical backfill adds no dedicated
+      automated fixtures or backfill test suite; review evidence is the real complete report, exact
+      record diff, strict verification of every generated record, and the diff-free second run.
 
 ## Story ST-936-6: Preserve fresh-checkout durability and compatible discovery dedup
 

@@ -111,6 +111,11 @@ merge) a repair PR. The architecture gate is clear for stories.
   ruleset mutation is deliberately deferred until the bootstrap check context is observed. Delivery
   is not complete until the post-merge cutover re-reads ruleset `15933604` and the Actions setting
   and proves the exact additive result.
+- **Backfill verification boundary:** per operator direction on 2026-07-25, the one-time historical
+  backfill adds no dedicated automated audit/backfill fixtures. Tasks 9 and 31–35 still implement
+  every accepted classification/failure branch, while Task 40 gates delivery on the real complete
+  report, exact record diff, strict verification of every generated record, and a diff-free second
+  run. Reusable verifier, association, repair, and discovery behavior remains automated-test covered.
 - **Repository release gates:** ordinary documentation, changelog, and VERSION approval remain
   ship-time repository obligations outside `/plan`'s functional-task boundary. The new CLI/check
   must not reach PR creation without satisfying `CLAUDE.md`'s documentation and release rules.

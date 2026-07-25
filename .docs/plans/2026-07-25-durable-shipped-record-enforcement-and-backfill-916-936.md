@@ -13,7 +13,9 @@
 Add one strict, read-only shipment-evidence verdict; require it at every PR terminal boundary and on
 protected `main`; propose record-only repairs for out-of-band merges; and run one proven historical
 backfill. The plan has 40 small TDD/delivery tasks because all 29 accepted negative paths remain
-explicit rather than being hidden in catch-all error handling.
+explicit rather than being hidden in catch-all error handling. Per operator direction on
+2026-07-25, Tasks 9 and 31–35 implement and inspect the one-time historical backfill without adding
+a dedicated automated backfill test suite.
 
 ## Technical Approach
 
@@ -226,24 +228,23 @@ explicit rather than being hidden in catch-all error handling.
 
 **Dependencies:** Task 7
 
-### Task 9: Audit every plan/spec and emit a complete proven-backfill report
+### Task 9: Implement the real-repository audit and proven-backfill report
 
-**Story:** ST-916-5 AC1, AC2, AC3, AC4
-**Type:** happy-path
+**Story:** ST-916-5 AC1, AC2, AC3, AC4, NP1, NP2, NP3, NP4, NP5
+**Type:** infrastructure + happy-path
 
 **Steps:**
-1. Write failing fixtures containing every committed plan/spec shape, a differently named exact
-   spec-to-plan link, one unique merged implementation, one accurate record, and paginated PR history;
-   assert one row per candidate, stable classifications/counts, one proposed record, and `complete`.
-2. Confirm RED because the audit operation does not exist.
-3. Implement deterministic repository enumeration, paginated GitHub evidence loading, exact
+1. Define the typed audit result/report contract over the already-tested strict verifier and exact
+   association policy; do not add an audit fixture module or dedicated backfill test file.
+2. Implement deterministic repository enumeration, paginated GitHub evidence loading, exact
    association, strict validation, report persistence, and record generation through the existing
    renderer; register `shipment-evidence audit`.
-4. Confirm GREEN and prove a second complete run changes no valid bytes and reclassifies the prior
-   backfill as aligned.
+3. Run typecheck and production build to prove the audit/CLI result algebra is exhaustive and wired.
+4. Run report-only mode against the real repository; inspect candidate cardinality, evidence,
+   aggregate counts, completeness, and proposed paths without writing records.
 5. Commit with message: `feat(conductor): audit and backfill proven shipments`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`, `src/conductor/src/index.ts`, `src/conductor/test/engine/shipment-audit.test.ts`, `src/conductor/test/engine/shipment-evidence-cli.test.ts`, `src/conductor/test/cli/index.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`, `src/conductor/src/index.ts`
 
 **Wired-into:** `src/conductor/src/engine/shipment-evidence-cli.ts#dispatchShipmentEvidence`, `src/conductor/src/index.ts#main`
 
@@ -661,14 +662,13 @@ explicit rather than being hidden in catch-all error handling.
 **Type:** negative-path
 
 **Steps:**
-1. Add a failing audit fixture for a product spec with no exact repository link to a canonical plan;
-   assert one unresolved row and no spec-only/unknown hash or record.
-2. Confirm RED if spec basename or content is hashed as a plan.
-3. Require explicit resolvable plan evidence before record identity/hash computation.
-4. Confirm GREEN and stable unresolved reason text.
-5. Commit with message: `test(conductor): reject planless shipment backfill`
+1. Identify real product-spec candidates without an exact canonical-plan link in report-only output.
+2. Implement the unresolved classification before hash computation or record planning.
+3. Re-run report-only mode and inspect that those rows carry no spec-only/unknown hash or write path.
+4. Run typecheck and build; add no dedicated backfill fixture or automated test.
+5. Commit with message: `feat(conductor): classify planless shipment candidates`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/test/engine/shipment-audit.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`
 
 **Wired-into:** same as Task 9
 
@@ -680,14 +680,15 @@ explicit rather than being hidden in catch-all error handling.
 **Type:** negative-path
 
 **Steps:**
-1. Add failing rows for no merged PR, multiple plausible PRs, local-marker-only, candidate-count-only,
-   spec-only PR, and contradictory metadata; assert reported skips and zero record writes.
-2. Confirm RED against legacy unknown/hash or heuristic backfill behavior.
-3. Require one exact merged implementation association with non-`.docs/` corroboration.
-4. Confirm GREEN for every insufficient-proof classification.
-5. Commit with message: `test(conductor): backfill only proven implementations`
+1. Enumerate real report-only rows with no merged PR, multiple candidates, local-marker-only,
+   spec-only, heuristic-only, or contradictory evidence.
+2. Require one exact merged implementation association with non-`.docs/` corroboration before a
+   record plan can exist.
+3. Re-run report-only mode and inspect that every insufficient-proof row is skipped with no write path.
+4. Run typecheck and build; add no dedicated backfill fixture or automated test.
+5. Commit with message: `feat(conductor): require proven historical implementations`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-association.ts`, `src/conductor/test/engine/shipment-audit.test.ts`, `src/conductor/test/engine/shipment-association.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-association.ts`
 
 **Wired-into:** same as Task 9
 
@@ -699,14 +700,14 @@ explicit rather than being hidden in catch-all error handling.
 **Type:** negative-path
 
 **Steps:**
-1. Add failing accurate-record fixtures with later plan edits, local markers, and newer unrelated PRs;
-   assert byte/history immutability and a contradictory human-review row.
-2. Confirm RED if audit regenerates an already-valid path.
-3. Give valid committed evidence preservation priority and report later contradictions separately.
-4. Confirm GREEN across repeated audits.
-5. Commit with message: `test(conductor): preserve valid historical shipment evidence`
+1. Identify real aligned records and any later plan/local-marker/unrelated-PR contradictions in the
+   report-only output; snapshot their bytes before apply.
+2. Give valid committed evidence preservation priority and report later contradictions separately.
+3. Re-run report-only/apply and inspect byte-identical aligned records plus human-review rows.
+4. Run typecheck and build; add no dedicated backfill fixture or automated test.
+5. Commit with message: `fix(conductor): preserve valid historical shipment evidence`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/test/engine/shipment-audit.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`
 
 **Wired-into:** same as Task 9
 
@@ -718,15 +719,14 @@ explicit rather than being hidden in catch-all error handling.
 **Type:** negative-path
 
 **Steps:**
-1. Add failing pagination, authentication, rate-limit, timeout, and repository-read injections; assert
-   nonzero exit, `incomplete` report, and no aligned/backfilled claim for unavailable evidence.
-2. Confirm RED if partial scans summarize as complete.
-3. Track source completeness independently from candidate classifications and force a non-success exit
-   whenever any required page/read is unavailable.
-4. Confirm GREEN for every dependency failure and a fully paginated success.
-5. Commit with message: `test(conductor): expose incomplete shipment audits`
+1. Implement explicit completeness accounting across every GitHub page and repository read.
+2. Convert pagination, authentication, rate-limit, timeout, and read failures into typed incomplete
+   reports and nonzero exit without aligned/backfilled claims for unavailable evidence.
+3. Inspect the real complete run's page/candidate totals and audit the fail-closed branches in code.
+4. Run typecheck and build; add no injected backfill failures or dedicated automated test.
+5. Commit with message: `fix(conductor): expose incomplete shipment audits`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`, `src/conductor/test/engine/shipment-audit.test.ts`, `src/conductor/test/engine/shipment-evidence-cli.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`
 
 **Wired-into:** same as Task 9
 
@@ -738,15 +738,13 @@ explicit rather than being hidden in catch-all error handling.
 **Type:** negative-path
 
 **Steps:**
-1. Add a failing report-write injection after classification; assert nonzero exit and absence of a
-   successful-complete summary.
-2. Confirm RED if console success precedes durable report persistence.
-3. Persist the machine report before emitting completion and convert write failure to a typed
-   incomplete result.
-4. Confirm GREEN for failed and successful report sinks.
-5. Commit with message: `test(conductor): require durable shipment audit reports`
+1. Order report persistence before any successful-complete summary in the production command.
+2. Convert a report-write exception into a typed incomplete result and nonzero exit.
+3. Inspect the command path to prove no success output precedes the durable write.
+4. Run typecheck and build; add no report-write injection or dedicated automated backfill test.
+5. Commit with message: `fix(conductor): require durable shipment audit reports`
 
-**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`, `src/conductor/test/engine/shipment-audit.test.ts`, `src/conductor/test/engine/shipment-evidence-cli.test.ts`
+**Files:** `src/conductor/src/engine/shipment-audit.ts`, `src/conductor/src/engine/shipment-evidence-cli.ts`
 
 **Wired-into:** same as Task 9
 
@@ -840,7 +838,8 @@ explicit rather than being hidden in catch-all error handling.
    valid and contains no overwrite of an accurate existing record.
 3. Re-run the audit from a clean-cache checkout; assert zero additional record changes, prior
    backfilled rows now aligned, and unchanged unresolved/ambiguous/contradictory rows.
-4. Run the focused shipment suites, full harness integrity suite, typecheck, and build.
+4. Run the existing non-backfill shipment suites, full harness integrity suite, typecheck, and
+   build; do not add a dedicated automated test suite for the historical backfill.
 5. Commit the report-backed records with message: `chore: backfill proven shipped records`
 
 **Files:** `.docs/shipped`, `.pipeline/shipment-audit.json`
@@ -921,7 +920,9 @@ Actions PR setting. If the live inventory drifted, stop and review; do not submi
 
 - [ ] Every happy-path criterion is covered by at least one task.
 - [ ] Every negative-path criterion has its own explicit task.
-- [ ] Each implementation task uses a focused RED → GREEN cycle and targets a 2–5 minute slice.
+- [ ] Each implementation task uses a focused RED → GREEN cycle and targets a 2–5 minute slice,
+      except the operator-directed one-time backfill tasks (9 and 31–35), which add no dedicated
+      automated backfill tests and are verified against the real report/diff in Task 40.
 - [ ] Every task declares repo-relative `Files`, `Wired-into`, and acyclic `Dependencies`.
 - [ ] Focused shipment suites, full harness integrity suite, typecheck, and production build pass.
 - [ ] Repair code has zero direct-main/approval/review-request/auto-merge/merge operations.
