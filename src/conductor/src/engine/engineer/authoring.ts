@@ -44,6 +44,7 @@ import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
 import { writeTrackMarker } from './track-marker.js';
+import { findDocumentationDelivery } from '../documentation-delivery.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 
@@ -332,10 +333,20 @@ export interface RunAuthoringDeps {
 /**
  * Return value of runAuthoring — mirrors AuthoringResult for consistency.
  */
-export interface RunAuthoringResult {
+export interface SpecAuthoringResult {
+  kind: 'spec';
   branch: string;
   project: string;
 }
+
+/** A documentation-only explore delivery needs no DECIDE artifacts or handoff. */
+export interface DocumentationAuthoringResult {
+  kind: 'documentation_delivery';
+  prUrl: string;
+  project: string;
+}
+
+export type RunAuthoringResult = SpecAuthoringResult | DocumentationAuthoringResult;
 
 /**
  * runAuthoring — real DECIDE seam → Status:Accepted artifacts on spec/<slug> (FR-6, C2).
@@ -409,7 +420,24 @@ export async function runAuthoring(
 
   // Divergent step — context + approaches; decides the track. Its output is not
   // the spec (the PRD is authored by the `prd` gate on the product track).
+  const authoringStartedAt = Date.now();
   await gate('explore');
+
+  const delivery = await findDocumentationDelivery({
+    projectRoot: repoPath,
+    gh: deps.gh ?? (async () => {
+      throw new Error('runAuthoring: no gh runner injected for documentation delivery verification');
+    }),
+    notBeforeMs: authoringStartedAt,
+  });
+  if (delivery) {
+    if (deps.sourceRef && delivery.sourceRef !== deps.sourceRef) {
+      throw new Error(
+        `runAuthoring: documentation delivery source does not match intake: ${delivery.sourceRef}`,
+      );
+    }
+    return { kind: 'documentation_delivery', prUrl: delivery.prUrl, project: target.name };
+  }
 
   // Default (no seam): an approved Small tier — skips conflict-check + architecture,
   // preserving the lightweight explore→stories→plan flow. Production supplies a real seam.
@@ -625,5 +653,5 @@ export async function runAuthoring(
   // 4. Return to the default branch so the repo is left in a clean state.
   await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
 
-  return { branch, project: target.name };
+  return { kind: 'spec', branch, project: target.name };
 }

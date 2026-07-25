@@ -955,6 +955,78 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Issue #933: a documentation-only explore delivery is terminal.  Engineer
+// verifies the PR rather than continuing through DECIDE authoring or handoff.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('documentation delivery terminal path (issue #933)', () => {
+  it('after explore verifies a documentation PR, skips artifacts, handoff, and daemon launch', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+    const sourceRef = 'acme/widgets#17';
+    const prUrl = 'https://github.com/acme/widgets/pull/42';
+    const ghCalls: string[][] = [];
+    const gh = async (args: string[], _opts: { cwd: string }) => {
+      ghCalls.push([...args]);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'testuser\n' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            headRefName: 'docs/install-refresh',
+            body: `Documentation refresh\n\nCloses ${sourceRef}`,
+          }),
+        };
+      }
+      throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+    };
+    const decideSteps: string[] = [];
+    const decide = async (ctx: { step: string }) => {
+      decideSteps.push(ctx.step);
+      if (ctx.step === 'explore') {
+        await mkdir(join(dirA, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dirA, '.pipeline', 'documentation-delivery.json'),
+          JSON.stringify({
+            version: 1,
+            branch: 'docs/install-refresh',
+            prUrl,
+            sourceRef,
+          }),
+        );
+        return { approved: true, artifact: '# Explore\n' };
+      }
+      throw new Error(`documentation delivery must stop after explore; got ${ctx.step}`);
+    };
+    const launchCalls: string[] = [];
+    const { io, text } = scriptedIo(['refresh installation docs', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      decide,
+      ensureRunningLaunch: (repoPath) => launchCalls.push(repoPath),
+    });
+
+    expect(decideSteps).toEqual(['explore']);
+    expect(summary.ideasProcessed).toBe(1);
+    expect(summary.authored).toEqual([]);
+    expect(text()).toContain(prUrl);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'view')).toBe(true);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create')).toBe(false);
+    expect(launchCalls).toEqual([]);
+    const branches = (await execFile('git', ['branch', '--list', 'spec/*'], { cwd: dirA })).stdout;
+    expect(branches.trim()).toBe('');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Owner-gate caller-seam (retro A-1, adr-2026-06-30-*, FR-4 write side).
 // The autonomous authoring path (runEngineerMode → processIdea → runAuthoring)
 // MUST thread the target repo's `spec_owner` config + the in-scope gh runner into
