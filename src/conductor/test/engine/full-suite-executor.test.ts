@@ -190,4 +190,43 @@ describe('executeFullSuite', () => {
       stderr: 'terminal failure',
     });
   });
+
+  it('classifies a real shell-mediated SIGTERM as signal termination', async () => {
+    const command = "sh -c 'kill -TERM $$'";
+
+    const result = await executeFullSuite({
+      projectRoot: process.cwd(),
+      testSuite: { command },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'signal',
+      command,
+      cwd: process.cwd(),
+      exitCode: null,
+      signal: 'SIGTERM',
+    });
+  });
+
+  it('preserves a plain runner error message as its diagnostic', async () => {
+    const runner: FullSuiteCommandRunner = async () => {
+      throw new Error('runner exploded');
+    };
+
+    const result = await executeFullSuite({
+      projectRoot: '/repo',
+      testSuite: { command: 'npm test' },
+      runner,
+      clock: () => new Date('2026-07-25T13:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'internal_error',
+      exitCode: null,
+      signal: null,
+      stderr: 'runner exploded',
+    });
+  });
 });

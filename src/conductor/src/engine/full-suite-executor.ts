@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { constants as osConstants } from 'node:os';
 import { resolve } from 'node:path';
 import type { TestSuiteConfig } from '../types/config.js';
 
@@ -100,6 +101,12 @@ const UNLAUNCHABLE_CODES = new Set([
   'ENOTDIR',
   'EPERM',
 ]);
+const SIGNAL_BY_SHELL_EXIT_CODE = new Map<number, NodeJS.Signals>(
+  Object.entries(osConstants.signals).map(([signal, number]) => [
+    128 + number,
+    signal as NodeJS.Signals,
+  ]),
+);
 
 function errorRecord(error: unknown): Record<string, unknown> {
   return typeof error === 'object' && error !== null
@@ -107,12 +114,16 @@ function errorRecord(error: unknown): Record<string, unknown> {
     : {};
 }
 
-function errorOutput(error: Record<string, unknown>, stream: 'stdout' | 'stderr'): string {
+function errorOutput(
+  error: Record<string, unknown>,
+  stream: 'stdout' | 'stderr',
+  includeErrorMessage = false,
+): string {
   const output = error[stream];
   if (typeof output === 'string' && output.length > 0) return output;
-  return stream === 'stderr' && typeof error.shortMessage === 'string'
-    ? error.shortMessage
-    : '';
+  if (stream !== 'stderr') return '';
+  if (typeof error.shortMessage === 'string') return error.shortMessage;
+  return includeErrorMessage && typeof error.message === 'string' ? error.message : '';
 }
 
 function classifyFailure(
@@ -133,6 +144,12 @@ function classifyFailure(
   }
   if (exitCode === 126 || exitCode === 127) {
     return { reason: 'unlaunchable', exitCode, signal: null };
+  }
+  const shellSignal = exitCode === null
+    ? undefined
+    : SIGNAL_BY_SHELL_EXIT_CODE.get(exitCode);
+  if (shellSignal !== undefined) {
+    return { reason: 'signal', exitCode: null, signal: shellSignal };
   }
   if (exitCode !== null && exitCode !== 0) {
     return { reason: 'nonzero_exit', exitCode, signal: null };
@@ -166,17 +183,22 @@ export async function executeFullSuite(
   } catch (error) {
     const failure = errorRecord(error);
     if (failure.timedOut === true) throw error;
+    const classification = classifyFailure(failure);
     const ended = clock();
     return {
       ok: false,
-      ...classifyFailure(failure),
+      ...classification,
       command: testSuite.command,
       cwd,
       startedAt: started.toISOString(),
       endedAt: ended.toISOString(),
       durationMs: ended.getTime() - started.getTime(),
       stdout: errorOutput(failure, 'stdout'),
-      stderr: errorOutput(failure, 'stderr'),
+      stderr: errorOutput(
+        failure,
+        'stderr',
+        classification.reason === 'internal_error',
+      ),
     };
   }
   const ended = clock();
