@@ -1,5 +1,12 @@
 import { execa } from 'execa';
-import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  AuthenticationSource,
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+  TokenUsage,
+} from './llm-provider.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -16,6 +23,11 @@ interface CodexJsonEvent {
   type?: string;
   item?: { type?: string; text?: string; content?: Array<{ text?: string }> };
   usage?: Record<string, unknown>;
+}
+
+interface SelectedAuthentication {
+  source: AuthenticationSource;
+  apiKey?: string;
 }
 
 /** Extract the final agent message and optional usage from Codex JSONL output. */
@@ -56,6 +68,7 @@ function parseWaitSeconds(output: string): number {
 
 export class CodexProvider implements LLMProvider {
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    const authentication = this.selectAuthentication();
     const args = this.buildArgs(options, true);
     const prompt = this.composePrompt(options);
 
@@ -65,9 +78,12 @@ export class CodexProvider implements LLMProvider {
       stdout: ['pipe', 'inherit'],
       stderr: ['pipe', 'inherit'],
       cwd: options.cwd,
+      env: authentication.apiKey
+        ? { CODEX_API_KEY: authentication.apiKey }
+        : undefined,
     });
 
-    return this.classifyCompletion(result, true);
+    return this.classifyCompletion(result, true, authentication);
   }
 
   /**
@@ -75,6 +91,7 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    const authentication = this.selectAuthentication();
     const result = await execa('codex', this.buildArgs(options, false), {
       reject: false,
       input: this.composePrompt(options),
@@ -82,9 +99,12 @@ export class CodexProvider implements LLMProvider {
       stdout: ['pipe', 'inherit'],
       stderr: ['pipe', 'inherit'],
       cwd: options.cwd,
+      env: authentication.apiKey
+        ? { CODEX_API_KEY: authentication.apiKey }
+        : undefined,
     });
 
-    return this.classifyCompletion(result, false);
+    return this.classifyCompletion(result, false, authentication);
   }
 
   private classifyCompletion(
@@ -95,14 +115,21 @@ export class CodexProvider implements LLMProvider {
       code?: string;
     },
     jsonOutput: boolean,
+    authenticationSelection: SelectedAuthentication,
   ): InvokeResult {
+    const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
     const parsed = jsonOutput
       ? parseCodexJsonl(stdout)
       : { output: stdout, tokenUsage: undefined };
-    const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+    const rawOutput =
+      stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+    const output = this.sanitizeOutput(
+      rawOutput,
+      authenticationSelection.apiKey,
+    );
 
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.
@@ -121,22 +148,74 @@ export class CodexProvider implements LLMProvider {
 
     // Rate limits take precedence over auth: some service responses include
     // both quota and sign-in wording, but retry coordination must win.
-    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(output);
-    const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(output);
-    const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(output);
-    const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(output);
+    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput);
+    const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(rawOutput);
+    const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(rawOutput);
+    const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(rawOutput);
+    const authentication = this.authenticationResult(
+      source,
+      exitCode === 0 ? 'ready' : authFailure ? 'unusable' : undefined,
+    );
 
     return {
       success: exitCode === 0,
-      output,
+      output: authFailure
+        ? `Codex authentication failed using the selected ${source} source.`
+        : output,
       exitCode,
       rateLimited: rateLimited || undefined,
-      waitSeconds: rateLimited ? parseWaitSeconds(output) : undefined,
+      waitSeconds: rateLimited ? parseWaitSeconds(rawOutput) : undefined,
       modelUnavailable: modelUnavailable || undefined,
       authFailure: authFailure || undefined,
       sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
+      authentication,
     };
+  }
+
+  private selectAuthentication(): SelectedAuthentication {
+    const apiKey = process.env.CODEX_API_KEY;
+    return apiKey
+      ? { source: 'api-key', apiKey }
+      : { source: 'cached-login' };
+  }
+
+  private authenticationResult(
+    source: AuthenticationSource,
+    state: AuthenticationReadiness['state'] | undefined,
+  ): AuthenticationReadiness | undefined {
+    if (!state) return undefined;
+    return {
+      provider: 'codex',
+      source,
+      state,
+      ...(state === 'unusable'
+        ? { remediation: 'Update the selected Codex authentication source and retry.' }
+        : {}),
+    };
+  }
+
+  private sanitizeOutput(output: string, apiKey: string | undefined): string {
+    if (!apiKey) return output;
+
+    const fragments = [
+      apiKey,
+      ...Array.from(
+        { length: Math.max(0, apiKey.length - 1) },
+        (_, index) => apiKey.slice(0, apiKey.length - index - 1),
+      ),
+      ...Array.from(
+        { length: Math.max(0, apiKey.length - 1) },
+        (_, index) => apiKey.slice(index + 1),
+      ),
+    ]
+      .filter((fragment) => fragment.length > 0)
+      .sort((left, right) => right.length - left.length);
+
+    return fragments.reduce(
+      (sanitized, fragment) => sanitized.split(fragment).join('[redacted]'),
+      output,
+    );
   }
 
   private buildArgs(options: InvokeOptions, json: boolean): string[] {

@@ -84,6 +84,86 @@ describe('CodexProvider', () => {
   });
 
   it.each([
+    { name: 'cached login when no API key is supplied', key: undefined, source: 'cached-login' },
+    { name: 'an API key when it is supplied', key: 'sk-905-api-key', source: 'api-key' },
+    { name: 'an API key when both sources are available', key: 'sk-905-api-key', source: 'api-key' },
+    { name: 'cached login when neither source is known to be available', key: undefined, source: 'cached-login' },
+  ] as const)(
+    'selects $source for $name and never exposes the supplied credential',
+    async ({ key, source }) => {
+      const priorKey = process.env.CODEX_API_KEY;
+      if (key === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = key;
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: `Invalid API key ${key ?? 'cached-login-path'}`,
+        exitCode: 1,
+      } as any);
+
+      try {
+        const result = await provider.invoke(baseOptions);
+        const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+
+        expect({
+          authentication: result.authentication,
+          output: result.output,
+          childKey: options.env?.CODEX_API_KEY,
+        }).toEqual({
+          authentication: {
+            provider: 'codex',
+            source,
+            state: 'unusable',
+            remediation: 'Update the selected Codex authentication source and retry.',
+          },
+          output: `Codex authentication failed using the selected ${source} source.`,
+          childKey: key,
+        });
+      } finally {
+        if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+        else process.env.CODEX_API_KEY = priorKey;
+      }
+    },
+  );
+
+  it('redacts an API key and its visible fragments from successful result output', async () => {
+    const key = 'sk-905-api-key-fragment';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage(`Completed with ${key}, ${key.slice(0, 8)}, and ${key.slice(-8)}.`),
+      exitCode: 0,
+    } as any);
+
+    try {
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 8)}|${key.slice(-8)}`));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('redacts even one-character API key prefixes and suffixes without empty matching', async () => {
+    const key = 'ABCD';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage(`Visible ${key.slice(0, 1)} ${key.slice(-1)} ${key}.`),
+      exitCode: 0,
+    } as any);
+
+    try {
+      const result = await provider.invoke(baseOptions);
+
+      expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 1)}|${key.slice(-1)}`));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it.each([
     ['missing binary', { stdout: '', stderr: 'spawn codex ENOENT', exitCode: 127 }, 'output'],
     ['authentication failure', { stdout: '', stderr: 'Authentication required. Please run codex login.', exitCode: 1 }, 'authFailure'],
     ['rate limit', { stdout: '', stderr: 'Error 429: rate limit exceeded; retry after 45 seconds', exitCode: 1 }, 'rateLimited'],
@@ -160,7 +240,7 @@ describe('CodexProvider', () => {
           failed: true,
         },
         expected: {
-          output: 'Authentication required. Please run codex login.',
+          output: 'Codex authentication failed using the selected cached-login source.',
           authFailure: true,
         },
       },
@@ -331,7 +411,7 @@ describe('CodexProvider', () => {
         },
         expected: {
           success: false,
-          output: 'Authentication required. Please run codex login.',
+          output: 'Codex authentication failed using the selected cached-login source.',
           exitCode: 1,
           authFailure: true,
         },
