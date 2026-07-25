@@ -20,6 +20,7 @@ import {
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -57,6 +58,231 @@ function interactiveRuntime(
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
+  it('routes complexity and recovery dispatches through provider-native fresh one-shot scopes', async () => {
+    const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'captured provider must not run',
+      exitCode: 0,
+    }));
+    const capturedInteractive = vi.fn().mockResolvedValue(undefined);
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'wrong Claude path',
+      exitCode: 0,
+    }));
+    const claudeInteractive = vi.fn().mockResolvedValue(undefined);
+    const codexInvoke = vi.fn(
+      async (options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: options.prompt === '/conduct complexity'
+          ? [
+              'MODELS: 6',
+              'INTEGRATIONS: 1',
+              'AUTH: 0',
+              'STATE_MACHINES: 1',
+              'STORIES: 8',
+              'TIER: M',
+            ].join('\n')
+          : options.prompt === '/rebase'
+            ? '{"resolved": true}'
+            : 'done',
+        exitCode: 0,
+      }),
+    );
+    const provider = (
+      invoke: LLMProvider['invoke'],
+      invokeInteractive: LLMProvider['invokeInteractive'] =
+        vi.fn().mockResolvedValue(undefined),
+    ): LLMProvider => ({
+      invoke,
+      invokeInteractive,
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider(claudeInvoke, claudeInteractive),
+        policy: CLAUDE_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'codex',
+        provider: provider(codexInvoke),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const ids = [
+      'complexity-codex-session',
+      'remediate-codex-session',
+      'rebase-codex-session',
+      'setup-codex-session',
+      'ci-codex-session',
+    ][Symbol.iterator]();
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => ids.next().value ?? 'unexpected-session',
+    });
+    const beginBranch = vi.spyOn(sessions, 'beginBranch');
+    const providerExecutor = vi.fn(executeProviderCandidates);
+    const runner = new DefaultStepRunner(
+      provider(capturedInvoke, capturedInteractive),
+      'captured-session',
+      '/tmp/project',
+      {
+        config: {
+          llm_provider: ['claude', 'codex'],
+          steps: {
+            complexity: { llm_provider: 'codex' },
+            remediate: { llm_provider: 'codex' },
+            rebase: { llm_provider: 'codex' },
+            worktree: { llm_provider: 'codex' },
+            build: { llm_provider: 'codex' },
+          },
+        },
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+        providerExecutor,
+      },
+    );
+
+    const complexity = await runner.assessComplexity();
+    const remediate = await runner.run('remediate', emptyState, {
+      attempt: 3,
+      escalate: false,
+      modelOverride: 'gpt-5.6-terra',
+      effortOverride: 'max',
+    });
+    const rebase = await runner.resolveRebaseConflict({
+      conflicts: ['src/example.ts'],
+      projectRoot: '/wt/rebase',
+      baseRef: 'origin/main',
+    });
+    const setup = await runner.resolveSetupFailure({
+      worktreePath: '/wt/setup',
+      outputTail: 'install failed',
+      slug: 'setup-feature',
+    });
+    const ci = await runner.resolveCiFailure({
+      worktreePath: '/wt/ci',
+      prUrl: 'https://github.com/org/repo/pull/42',
+      hint: 'typecheck failed',
+      slug: 'ci-feature',
+    });
+
+    expect({
+      capturedCalls: {
+        invoke: capturedInvoke.mock.calls,
+        interactive: capturedInteractive.mock.calls,
+      },
+      claudeRuntimeCalls: {
+        invoke: claudeInvoke.mock.calls,
+        interactive: claudeInteractive.mock.calls,
+      },
+      beginBranchCalls: beginBranch.mock.calls,
+      remediateRetryInput: providerExecutor.mock.calls
+        .map(([input]) => input)
+        .find(({ step }) => step === 'remediate'),
+      codexCalls: codexInvoke.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        model: options.model,
+        effort: options.effort,
+      })),
+      complexity,
+      remediate,
+      rebase,
+      setup,
+      ci,
+    }).toEqual({
+      capturedCalls: { invoke: [], interactive: [] },
+      claudeRuntimeCalls: { invoke: [], interactive: [] },
+      beginBranchCalls: [
+        ['complexity'],
+        ['remediate'],
+        ['rebase'],
+        ['worktree'],
+        ['build'],
+      ],
+      remediateRetryInput: expect.objectContaining({
+        attempt: 3,
+        escalate: false,
+        modelOverride: 'gpt-5.6-terra',
+        effortOverride: 'max',
+      }),
+      codexCalls: [
+        {
+          prompt: '/conduct complexity',
+          sessionId: 'complexity-codex-session',
+          resume: false,
+          cwd: '/tmp/project',
+          model: 'gpt-5.6-terra',
+          effort: 'low',
+        },
+        {
+          prompt: '/remediate',
+          sessionId: 'remediate-codex-session',
+          resume: false,
+          cwd: '/tmp/project',
+          model: 'gpt-5.6-terra',
+          effort: 'max',
+        },
+        {
+          prompt: '/rebase',
+          sessionId: 'rebase-codex-session',
+          resume: false,
+          cwd: '/wt/rebase',
+          model: 'gpt-5.6-sol',
+          effort: 'max',
+        },
+        {
+          prompt: expect.stringContaining('install failed'),
+          sessionId: 'setup-codex-session',
+          resume: false,
+          cwd: '/wt/setup',
+          model: 'gpt-5.6-luna',
+          effort: 'low',
+        },
+        {
+          prompt: expect.stringContaining('typecheck failed'),
+          sessionId: 'ci-codex-session',
+          resume: false,
+          cwd: '/wt/ci',
+          model: 'gpt-5.6-terra',
+          effort: 'low',
+        },
+      ],
+      complexity: expect.objectContaining({
+        tier: 'M',
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
+      remediate: expect.objectContaining({
+        success: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
+      rebase: expect.objectContaining({
+        resolved: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
+      setup: expect.objectContaining({
+        attempted: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
+      ci: expect.objectContaining({
+        attempted: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
+    });
+  });
+
   it('dispatches consecutive normal steps through their preferred provider with fresh provider sessions', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,

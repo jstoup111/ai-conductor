@@ -4,7 +4,12 @@ import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
-import type { StepRunner, StepRunResult, StepRunOptions } from './conductor.js';
+import type {
+  ComplexityAssessment,
+  StepRunner,
+  StepRunResult,
+  StepRunOptions,
+} from './conductor.js';
 import { ALL_STEPS, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
@@ -472,6 +477,31 @@ export class DefaultStepRunner implements StepRunner {
     // because the user is actively interacting via REPL.
     if (autonomous) {
       if (this.providerRuntimes && branchSessionId === undefined) {
+        if (step === 'remediate') {
+          try {
+            const result = await this.executeProviderAwareOneShot(
+              step,
+              {
+                prompt,
+                systemPrompt,
+                cwd: this.projectDir,
+                dangerouslySkipPermissions: true,
+              },
+              state.complexity_tier,
+              opts,
+            );
+            if (result) {
+              this.callCount++;
+              return this.toStepRunResult(result);
+            }
+          } catch {
+            this.callCount++;
+            return {
+              success: false,
+              output: `Session for ${step} exited with error`,
+            };
+          }
+        }
         return this.runProviderAwareNormal(
           step,
           state,
@@ -613,6 +643,41 @@ export class DefaultStepRunner implements StepRunner {
       this.callCount++;
       return { success: false, output: `Session for ${step} exited with error` };
     }
+  }
+
+  private async executeProviderAwareOneShot(
+    step: StepName,
+    options: ExecuteProviderCandidatesInput['options'],
+    tier?: ComplexityTier,
+    dispatch?: StepRunOptions,
+  ): Promise<ProviderExecutionResult | undefined> {
+    if (!this.providerRuntimes || !this.sessionStore) return undefined;
+
+    return this.providerExecutor({
+      step,
+      configuredProviders: this.configuredProviders,
+      preferredProvider: this.config?.steps?.[step]?.llm_provider,
+      runtimes: this.providerRuntimes,
+      sessions: this.sessionStore.beginBranch(step),
+      config: this.config,
+      tier,
+      attempt: dispatch?.attempt ?? 1,
+      escalate: dispatch?.escalate ?? true,
+      modelOverride: dispatch?.modelOverride ?? this.modelOverride,
+      effortOverride: dispatch?.effortOverride ?? this.effortOverride,
+      warn: this.providerWarn,
+      options,
+    });
+  }
+
+  private providerAttribution(result: ProviderExecutionResult) {
+    return {
+      preferredProvider: result.preferredProvider,
+      ...(result.actualProvider
+        ? { actualProvider: result.actualProvider }
+        : {}),
+      attempts: result.attempts,
+    };
   }
 
   private streamingProviderRuntimes(
@@ -849,7 +914,9 @@ export class DefaultStepRunner implements StepRunner {
     });
   }
 
-  async assessComplexity(): Promise<ComplexityTier | null> {
+  async assessComplexity(): Promise<
+    ComplexityTier | ComplexityAssessment | null
+  > {
     if (!this.sessionStartedInitialized && this.pipelineDir) {
       this.sessionStarted = await this.fileExists(join(this.pipelineDir, 'session-created'));
       this.sessionStartedInitialized = true;
@@ -871,6 +938,26 @@ export class DefaultStepRunner implements StepRunner {
       'STATE_MACHINES: <integer>\n' +
       'STORIES: <integer estimate>\n' +
       'TIER: <S|M|L>   # your best letter judgement, used only as a fallback';
+
+    const providerResult = await this.executeProviderAwareOneShot(
+      'complexity',
+      {
+        prompt: '/conduct complexity',
+        dangerouslySkipPermissions: true,
+        systemPrompt,
+        cwd: this.projectDir,
+      },
+    );
+    if (providerResult) {
+      const counts = parseSignalCountsFromOutput(providerResult.output);
+      return {
+        tier: providerResult.success
+          ? scoreComplexityFromCounts(counts) ??
+            parseTierFromOutput(providerResult.output)
+          : null,
+        ...this.providerAttribution(providerResult),
+      };
+    }
 
     const resolved = this.resolvedConfigFor('complexity');
     // Walk the fallback ladder so a dead/out-of-credits configured model
@@ -911,8 +998,6 @@ export class DefaultStepRunner implements StepRunner {
    * garbage output (fail-safe).
    */
   async resolveRebaseConflict(ctx: ResolutionContext): Promise<ResolutionAttempt> {
-    const resolved = this.resolvedConfigFor('rebase');
-
     const conflictList =
       ctx.conflicts.length > 0
         ? ctx.conflicts.join(', ')
@@ -928,6 +1013,21 @@ export class DefaultStepRunner implements StepRunner {
       'Your FINAL output line MUST be exactly one of:\n' +
       '{"resolved": true}\n' +
       '{"resolved": false, "reason": "<explanation>"}';
+
+    const providerResult = await this.executeProviderAwareOneShot('rebase', {
+      prompt: '/rebase',
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      cwd: ctx.projectRoot,
+    });
+    if (providerResult) {
+      return {
+        ...parseRebaseResolutionOutput(providerResult.output),
+        ...this.providerAttribution(providerResult),
+      };
+    }
+
+    const resolved = this.resolvedConfigFor('rebase');
 
     // Use a fresh one-shot session — never contaminate the main conductor session.
     const { v4: uuidv4 } = await import('uuid');
@@ -964,8 +1064,6 @@ export class DefaultStepRunner implements StepRunner {
    * in the right worktree context.
    */
   async resolveSetupFailure(ctx: SetupFailureContext): Promise<SetupFailureAttempt> {
-    const resolved = this.resolvedConfigFor('worktree');
-
     const systemPrompt =
       'You are attempting to fix a setup failure in a feature worktree.\n' +
       `Worktree path: ${ctx.worktreePath}\n` +
@@ -981,6 +1079,21 @@ export class DefaultStepRunner implements StepRunner {
       `${ctx.outputTail}\n` +
       '```\n\n' +
       'Diagnose and fix the setup failure. Explain your diagnosis and the fixes you applied.';
+
+    const providerResult = await this.executeProviderAwareOneShot('worktree', {
+      prompt,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      cwd: ctx.worktreePath,
+    });
+    if (providerResult) {
+      return {
+        attempted: true,
+        ...this.providerAttribution(providerResult),
+      };
+    }
+
+    const resolved = this.resolvedConfigFor('worktree');
 
     // Use a fresh one-shot session — never contaminate the main conductor session.
     const { v4: uuidv4 } = await import('uuid');
@@ -1018,8 +1131,6 @@ export class DefaultStepRunner implements StepRunner {
    * commands operate in the right worktree context.
    */
   async resolveCiFailure(ctx: CiFailureContext): Promise<CiFailureAttempt> {
-    const resolved = this.resolvedConfigFor('build');
-
     const systemPrompt =
       'You are attempting to fix a CI failure on a shipped pull request.\n' +
       `Worktree path: ${ctx.worktreePath}\n` +
@@ -1035,6 +1146,21 @@ export class DefaultStepRunner implements StepRunner {
       `${ctx.hint}\n` +
       '```\n\n' +
       'Diagnose and fix the CI failure. Explain your diagnosis and the fixes you applied.';
+
+    const providerResult = await this.executeProviderAwareOneShot('build', {
+      prompt,
+      dangerouslySkipPermissions: true,
+      systemPrompt,
+      cwd: ctx.worktreePath,
+    });
+    if (providerResult) {
+      return {
+        attempted: true,
+        ...this.providerAttribution(providerResult),
+      };
+    }
+
+    const resolved = this.resolvedConfigFor('build');
 
     // Use a fresh one-shot session — never contaminate the main conductor session.
     const { v4: uuidv4 } = await import('uuid');

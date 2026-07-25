@@ -41,9 +41,14 @@ export interface ProviderAttemptMetadata {
   invoked: boolean;
 }
 
-export interface ProviderExecutionResult extends InvokeResult {
-  preferredProvider: string;
+export interface ProviderAttributionMetadata {
+  preferredProvider?: string;
   actualProvider?: string;
+  attempts?: ProviderAttemptMetadata[];
+}
+
+export interface ProviderExecutionResult extends InvokeResult, ProviderAttributionMetadata {
+  preferredProvider: string;
   resolvedModel?: string;
   resolvedEffort?: EffortLevel;
   attempts: ProviderAttemptMetadata[];

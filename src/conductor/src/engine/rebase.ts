@@ -13,6 +13,7 @@ import {
   GATE_SURFACE,
   isRuntimeSourcePath,
 } from './gate-invalidation.js';
+import type { ProviderAttributionMetadata } from './provider-execution.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -744,19 +745,21 @@ async function tryResolveChangelogConflict(
 
 // ── Resolution loop (feat/rebase-resolution-skill) ───────────────────────────
 
-export type ResolutionAttempt = { resolved: true } | { resolved: false; reason: string };
+export type ResolutionAttempt = (
+  { resolved: true } | { resolved: false; reason: string }
+) & ProviderAttributionMetadata;
 export interface ResolutionContext { conflicts: string[]; projectRoot: string; baseRef: string }
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 
 // ── Setup failure resolution (TS-3 / Task 9) ────────────────────────────────
 
-export type SetupFailureAttempt = { attempted: true };
+export type SetupFailureAttempt = { attempted: true } & ProviderAttributionMetadata;
 export interface SetupFailureContext { worktreePath: string; outputTail: string; slug: string }
 export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFailureAttempt>;
 
 // ── CI failure resolution (ci-fix resolver autofix) ─────────────────────────
 
-export type CiFailureAttempt = { attempted: true };
+export type CiFailureAttempt = { attempted: true } & ProviderAttributionMetadata;
 export interface CiFailureContext { worktreePath: string; prUrl: string; hint: string; slug: string }
 export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 
@@ -1598,4 +1601,3 @@ async function tier1StageDocsKeepBoth(
     return false;
   }
 }
-

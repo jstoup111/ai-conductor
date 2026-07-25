@@ -25,7 +25,10 @@ import type {
   RecoveryContext,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
-import type { ProviderAttemptMetadata } from './provider-execution.js';
+import type {
+  ProviderAttemptMetadata,
+  ProviderAttributionMetadata,
+} from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -383,6 +386,10 @@ export function graderDispatchBackoffMs(attempt: number): number {
   return Math.min(CAP_MS, exp);
 }
 
+export interface ComplexityAssessment extends ProviderAttributionMetadata {
+  tier: ComplexityTier | null;
+}
+
 export interface StepRunOptions {
   /**
    * Retry hint injected into the system prompt when the conductor re-invokes
@@ -430,7 +437,7 @@ export interface StepRunOptions {
 export interface StepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
   runInteractive?(step: StepName): Promise<void>;
-  assessComplexity?(): Promise<ComplexityTier | null>;
+  assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
   /**
    * Drop session state so the next invocation creates a fresh provider session.
    * Called by the conductor when `sessionExpired` is reported.
@@ -6247,7 +6254,11 @@ export class Conductor {
     let recommended: ComplexityTier | null = state.complexity_tier ?? null;
     if (!recommended && this.stepRunner.assessComplexity) {
       try {
-        recommended = await this.stepRunner.assessComplexity();
+        const assessment = await this.stepRunner.assessComplexity();
+        recommended =
+          typeof assessment === 'string'
+            ? assessment
+            : assessment?.tier ?? null;
       } catch {
         recommended = null;
       }
