@@ -65,6 +65,22 @@ commands above are for building by hand. If Node < 20.5 is active or `npm` is
 missing, `bin/install` skips the build with a warning and leaves the
 `conduct-ts` symlink off until `dist/` exists.
 
+The native pre-SHIP gate reads one project-owned aggregate operation from the
+project-level `.ai-conductor/config.yml`. This repository declares:
+
+```yaml
+test_suite:
+  command: npm test
+  working_directory: src/conductor
+  timeout_seconds: 1800
+```
+
+Here `npm test` runs `vitest run`, whose checked-in `test/**/*.test.ts` inclusion
+covers ordinary tests and `test/acceptance/**` through the same command. Other
+projects with separate suite commands compose them behind one package/script
+target. Missing or invalid configuration fails the gate closed. The harness
+integrity script remains an independent self-host check.
+
 ## Daemon Integration (Self-Hosting)
 
 This repository (the harness) is daemon-registered for build-to-PR on self-hosted instances.

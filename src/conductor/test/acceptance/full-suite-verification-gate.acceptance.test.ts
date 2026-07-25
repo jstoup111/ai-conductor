@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
+import { loadConfig } from '../../src/engine/config.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
@@ -205,6 +206,24 @@ describe('Story 2 — direct-Claude parity (FR-2, FR-8)', () => {
 });
 
 describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
+  it('checks in an aggregate declaration that includes ordinary and acceptance tests', async () => {
+    const [projectConfig, template, packageJson, vitestConfig] = await Promise.all([
+      loadConfig(REPO_ROOT),
+      readFile(join(REPO_ROOT, 'templates/ai-conductor-config.yml.template'), 'utf8'),
+      readFile(join(CONDUCTOR_ROOT, 'package.json'), 'utf8'),
+      readFile(join(CONDUCTOR_ROOT, 'vitest.config.ts'), 'utf8'),
+    ]);
+
+    expect(projectConfig.ok && projectConfig.config.test_suite).toEqual({
+      command: 'npm test',
+      working_directory: 'src/conductor',
+      timeout_seconds: 1800,
+    });
+    expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
+    expect(JSON.parse(packageJson).scripts.test).toBe('vitest run');
+    expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
+  });
+
   it('executes the declared command in its working directory and records one PASS', async () => {
     const result = await invokeSuite();
 

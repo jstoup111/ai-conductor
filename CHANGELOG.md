@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Add the native `test_suite` project declaration and documentation for the
+  reusable pre-SHIP aggregate gate. Projects identify one project-owned command
+  that composes their unit, acceptance, and other authoritative tests; this
+  repository uses `npm test` from `src/conductor`.
 - `build_review` now resolves its grading base through a read-only `git ls-remote`
   freshness probe (`resolveFreshBase`) instead of trusting the local `origin/<default>`
   tracking ref, refetching only when the ref is behind; fail-soft (no remote / probe
@@ -90,6 +94,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ```bash migration
 # Install the user-scoped HARNESS.md links consumed by generated CLAUDE.md and AGENTS.md.
 ./bin/install --update
+```
+
+Projects using the native pre-SHIP gate must declare their aggregate operation
+in `.ai-conductor/config.yml`. Compose multiple suites behind this one command:
+
+```yaml
+test_suite:
+  command: npm test
+  working_directory: .
+  timeout_seconds: 1800
 ```
 
 ### Fixed

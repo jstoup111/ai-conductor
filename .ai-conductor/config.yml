@@ -81,6 +81,14 @@ wiring:
     - src/conductor/src/intake-loop-cli.ts
     - src/conductor/src/engine/engineer-cli.ts
 
+# Native pre-SHIP aggregate verification. The project-owned npm script runs
+# Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
+# in one operation. Harness integrity remains a separate self-host gate.
+test_suite:
+  command: npm test
+  working_directory: src/conductor
+  timeout_seconds: 1800
+
 # Per-step overrides.
 #
 # manual_test is disabled for this repo's self-host builds (operator order,

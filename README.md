@@ -123,6 +123,24 @@ aren't met — walking you from `/bootstrap` through `/finish`. For the full ins
 walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
 [Getting Started](docs/getting-started.md).
 
+### Aggregate test-suite gate
+
+Projects using the native automated flow declare one authoritative aggregate operation in
+their project-level `.ai-conductor/config.yml`:
+
+```yaml
+test_suite:
+  command: npm test
+  working_directory: .
+  timeout_seconds: 1800
+```
+
+The command is project-owned: if unit, acceptance, or integration tests use separate commands,
+compose them in one package/script target and reference that target here. Missing or invalid
+configuration blocks the pre-SHIP gate. See [Configuration](docs/configuration.md#aggregate-test-suite-gate)
+for additional inputs, environment names, and failure behavior. Harness integrity is a separate
+self-host check and should not be folded into this declaration.
+
 ### Per-step provider routing (#927)
 
 Existing projects can keep the scalar `llm_provider: claude` form. To configure
