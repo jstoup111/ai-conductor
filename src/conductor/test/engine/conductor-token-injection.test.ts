@@ -266,6 +266,45 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     expect(observedTokens[0]).toBeUndefined();
   });
 
+  it('does not inject a Claude daemon token when Codex is the preferred self-host build provider', async () => {
+    const observedTokens: (string | undefined)[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: string): Promise<StepRunResult> => {
+        if (step === 'build') observedTokens.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+        return { success: true };
+      }),
+    };
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      maxRetries: 1,
+      selfHostGuardrails: mockGuardrails as any,
+      config: {
+        ...selfHostConfig(),
+        steps: { build: { llm_provider: 'codex' } },
+      },
+    }).run();
+
+    expect(observedTokens).toEqual([undefined]);
+    expect(mockGuardrails.relink).not.toHaveBeenCalled();
+    expect(mockGuardrails.provisionSandbox).not.toHaveBeenCalled();
+  });
+
   it('token restoration occurs even when stepRunner.run() throws an error', async () => {
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     const buildError = new Error('Build failed unexpectedly');

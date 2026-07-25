@@ -1744,6 +1744,17 @@ export class Conductor {
     state: ConductState,
     retryHint: string | undefined,
   ): Promise<StepRunResult> {
+    // Provider selection must precede self-host preparation: the guardrail
+    // bundle below configures Claude's global credentials and sandbox only.
+    // The step runner retains responsibility for Codex's provider-local
+    // readiness and unattended policy boundary.
+    const buildSelection =
+      this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
+    const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
+    if (preferredBuildProvider === 'codex') {
+      return this.stepRunner.run(name, state, { retryReason: retryHint });
+    }
+
     const sh = resolveSelfHostConfig(this.config);
 
     if (sh.skillRelinkPreflight && !this.relinkDone) {
