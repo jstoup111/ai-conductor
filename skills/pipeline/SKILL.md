@@ -216,9 +216,7 @@ Scoping logic:
    `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
    references to modified modules.
 3. Run the project's test runner with explicit file arguments targeting only the scoped set.
-4. **Batch boundaries are an exception:** At the end of a batch, run the FULL test suite before
-   starting the next batch (pre-batch verification, line 200). This ensures no test interdependencies
-   were missed across the task sequence.
+4. Retain the named affected-test set for the batch-boundary union described below.
 
 **Fallback to full suite:**
 - Trigger (a): Diff touches a shared/core module imported/required by 3+ other production modules
@@ -226,18 +224,22 @@ Scoping logic:
 - Trigger (c): The scoped set is empty
 - Trigger (d): The module→test mapping cannot be made confidently
 
-Uncertainty always resolves toward the FULL suite — scoping is an optimization, never a gate change.
+For per-task VERIFY, uncertainty resolves toward this fallback scope — scoping is an
+optimization, never a gate change.
 
 When a trigger fires, the task REPORT names it.
 
-**Contrast with pre-batch verification:** Pre-batch verification (step 379 onward) runs the
-full test suite to catch regressions from task interactions. Per-task VERIFY uses scoping to
-keep iteration fast; only the batch boundary re-test with full coverage. Scoped VERIFY is an
-optimization within the batch; full-suite runs anchor quality at batch transitions.
+**Batch affected-test union:** At each batch boundary, compute one named
+`BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set, then run
+that union once to catch regressions from task interactions.
+
+Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.
+The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.
+Only when `BATCH_AFFECTED_TESTS` cannot be determined with confidence MUST the full test suite run instead.
 
 **REPORT requirement (step 6):** The task's step 6 REPORT must list the files included in the
-scoped test set (or, if a fallback trigger fired, state which trigger caused the full suite
-to run instead). This provides audit-trail visibility into the scoping decision.
+scoped test set (or, if a fallback trigger fired, state the trigger and fallback scope).
+This provides audit-trail visibility into the scoping decision.
 
 ### Quality Gates
 
@@ -253,7 +255,8 @@ session hook (see Per-Task Execution) enforces this marker on every Agent-tool d
 evaluator included; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
-- The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
+- The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
+  snippets, not full verbose output), or the full-suite fallback result when the union was indeterminate
 - The tech-context review checklist if loaded in session
 - **Prior known issues** (batch 2+) — collect findings from previous `audit-trail/batch-*/review.json`
   files and pass as a deduplicated list. This prevents the evaluator from re-raising the same
@@ -277,8 +280,8 @@ reasoning pays off. Retro on the 2026-04-17 Medium run (31 tasks, 7 batches) sho
 4 intermediate evaluators could have run on Sonnet without verdict drift — they were the
 largest single token line item in that run.
 
-Pre-batch verification (full test suite, linter, `/simplify`) still runs at EVERY boundary
-regardless of tier.
+Pre-batch verification (`BATCH_AFFECTED_TESTS` or its indeterminate-scope fallback, linter,
+`/simplify`) still runs at EVERY boundary regardless of tier.
 
 **Evaluator diff scope:** Always scope the evaluator to the **current batch's diff only**
 (`git diff <batch-start-commit>..HEAD`), not the full branch diff. For the final batch,
@@ -468,7 +471,8 @@ in the same directory on non-overlapping files.
 3. Dispatch each task as a separate Agent tool call in a single message
 4. Each agent receives: the task description, the test directory, the source directory
 5. Wait for all agents to complete
-6. Run the full test suite to verify no conflicts
+6. Compute `BATCH_AFFECTED_TESTS` from every task's scoped affected-test set and run that union
+   once to verify no conflicts; use the full-suite fallback only if the union is indeterminate
 7. If tests fail: identify the conflict, fix sequentially, re-run
 
 **Worktree-based parallelism (Full autonomy only):**
@@ -485,8 +489,10 @@ For tasks that touch overlapping files or need full isolation:
 At natural batch boundaries (after completing a group of related tasks):
 
 **Pre-batch verification (before starting next batch):**
-- Run the full test suite — if ANY test fails that is NOT an expected RED test, stop and fix
-  before proceeding. Previous session bugs must not accumulate.
+- Compute `BATCH_AFFECTED_TESTS` as the union of every task's scoped affected-test set and run
+  the named union once. If ANY test fails that is NOT an expected RED test, stop and fix before
+  proceeding. If the union cannot be determined confidently, run the full suite instead.
+  Previous session bugs must not accumulate.
 - Verify the current branch is merge-ready: no WIP commits, no TODO-fixme code added this batch,
   all new code has tests. The branch should be shippable at any batch boundary, even if the
   feature is incomplete.

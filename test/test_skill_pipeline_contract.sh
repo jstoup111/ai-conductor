@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
+CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -54,6 +55,23 @@ if grep -qE 'PreToolUse|PostToolUse|session-hook-task-stamping' "$SKILL_FILE"; t
   pass "references session-hook machinery"
 else
   fail "missing reference to session-hook machinery"
+fi
+
+# Batch verification and its evaluator must share one named affected-test union, retaining a full-suite fallback.
+if [ -f "$CODE_REVIEW_SKILL" ] \
+  && grep -qF 'Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.' "$SKILL_FILE" \
+  && grep -qF 'The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.' "$SKILL_FILE" \
+  && grep -qF 'Only when `BATCH_AFFECTED_TESTS` cannot be determined with confidence MUST the full test suite run instead.' "$SKILL_FILE" \
+  && grep -qF 'For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.' "$CODE_REVIEW_SKILL" \
+  && ! tr '\n' ' ' < "$SKILL_FILE" \
+    | grep -oiE 'batch boundar(y|ies).{0,200}full (test )?suite|full (test )?suite.{0,200}batch boundar(y|ies)' \
+    | grep -viE 'uncertain|cannot be determined|fallback|only when' >/dev/null \
+  && ! tr '\n' ' ' < "$CODE_REVIEW_SKILL" \
+    | grep -oiE '.{0,160}(batch.{0,200}full[- ](test )?suite|full[- ](test )?suite.{0,200}batch|test results \(full suite output\)).{0,160}' \
+    | grep -viE 'indeterminate|uncertain|cannot be determined|fallback|only when' >/dev/null; then
+  pass "batch verification and evaluator use affected-test union with uncertainty fallback"
+else
+  fail "batch verification and evaluator must use affected-test union, with full suite only when scope is uncertain"
 fi
 
 echo ""
