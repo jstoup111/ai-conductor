@@ -701,6 +701,96 @@ describe('DefaultStepRunner', () => {
     expect(opts.prompt).toContain('/explore');
   });
 
+  it('renders provider-native skill syntax from the scalar provider key without changing interactive invocation semantics', async () => {
+    const invocations = [] as Array<{
+      providerKey: 'claude' | 'codex';
+      invokeCalls: number;
+      interactiveCalls: number;
+      options: InvokeOptions;
+    }>;
+
+    for (const providerKey of ['claude', 'codex'] as const) {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(
+        provider,
+        'shared-session',
+        '/wt/feature-x',
+        {
+          mode: 'interactive',
+          featureDesc: 'Provider-native skill invocation',
+          totalSteps: 14,
+          config: { llm_provider: providerKey },
+          providerKey,
+        },
+      );
+
+      await runner.run('stories', emptyState);
+
+      invocations.push({
+        providerKey,
+        invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.length,
+        interactiveCalls: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls.length,
+        options: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions,
+      });
+    }
+
+    const [claude, codex] = invocations;
+    const invocationFields = ({
+      systemPrompt,
+      model,
+      effort,
+      cwd,
+      sessionId,
+      resume,
+      dangerouslySkipPermissions,
+      interactive,
+    }: InvokeOptions) => ({
+      systemPrompt,
+      model,
+      effort,
+      cwd,
+      sessionId,
+      resume,
+      dangerouslySkipPermissions,
+      interactive,
+    });
+    const claudeInvocation = invocationFields(claude.options);
+    const codexInvocation = invocationFields(codex.options);
+
+    expect({
+      prompts: invocations.map(({ providerKey, options }) => ({ providerKey, prompt: options.prompt })),
+      routes: invocations.map(({ providerKey, invokeCalls, interactiveCalls }) => ({
+        providerKey,
+        invokeCalls,
+        interactiveCalls,
+      })),
+      claudeInvocation,
+      differingInvocationFields: Object.entries(claudeInvocation)
+        .filter(([key, value]) => codexInvocation[key as keyof typeof codexInvocation] !== value)
+        .map(([key]) => key),
+    }).toEqual({
+      prompts: [
+        { providerKey: 'claude', prompt: '/stories' },
+        { providerKey: 'codex', prompt: '$stories' },
+      ],
+      routes: [
+        { providerKey: 'claude', invokeCalls: 0, interactiveCalls: 1 },
+        { providerKey: 'codex', invokeCalls: 0, interactiveCalls: 1 },
+      ],
+      claudeInvocation: {
+        systemPrompt: expect.stringContaining('Stories'),
+        model: expect.any(String),
+        effort: expect.any(String),
+        cwd: '/wt/feature-x',
+        sessionId: 'shared-session',
+        resume: false,
+        dangerouslySkipPermissions: false,
+        interactive: true,
+      },
+      differingInvocationFields: [],
+    });
+  });
+
   // Worktree isolation: the spawned claude must run in the runner's projectDir,
   // not the daemon's cwd. Without this, daemon feature builds committed to the
   // main checkout's branch instead of the per-feature worktree branch.

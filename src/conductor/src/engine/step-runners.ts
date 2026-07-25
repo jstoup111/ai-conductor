@@ -429,7 +429,7 @@ export class DefaultStepRunner implements StepRunner {
       await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
-    const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS[step], 'claude');
+    const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS[step], this.providerKey);
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
