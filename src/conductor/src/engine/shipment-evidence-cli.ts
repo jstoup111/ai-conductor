@@ -109,8 +109,8 @@ export async function dispatchShipmentEvidence(
       return 0;
     }
     if (evidence.kind === 'not-applicable') {
-      report(`shipped-record: not applicable (${evidence.reason})`);
-      return 0;
+      reportError(`shipped-record: ${evidence.reason}`);
+      return 1;
     }
 
     reportError(`shipped-record: ${evidence.code}`);

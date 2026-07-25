@@ -108,6 +108,72 @@ describe('shipment-evidence CLI', () => {
     expect(code).toBe(1);
   });
 
+  it('fails a proven implementation when strict verification cannot validate it', async () => {
+    const errors: string[] = [];
+    const code = await dispatchShipmentEvidence(
+      { kind: 'check', pr: 'https://github.com/org/repo/pull/1' },
+      '/repo',
+      {
+        listPlanStems: async () => ['feature'],
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: 'https://github.com/org/repo/pull/1',
+            body: 'Plan: `.docs/plans/feature.md`',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        runGit: vi.fn(async () => ({ stdout: 'a'.repeat(40) })),
+        evaluateEvidence: vi.fn(async () => ({
+          kind: 'not-applicable' as const,
+          reason: 'strict verifier unavailable',
+        })),
+        reportError: (message) => errors.push(message),
+      },
+    );
+
+    expect({ code, errors }).toEqual({
+      code: 1,
+      errors: ['shipped-record: strict verifier unavailable'],
+    });
+  });
+
+  it('fails rather than guessing when PR classification inputs are unavailable', async () => {
+    const errors: string[] = [];
+    const code = await dispatchShipmentEvidence(
+      { kind: 'check', pr: 'https://github.com/org/repo/pull/1' },
+      '/repo',
+      {
+        runGh: vi.fn(async () => {
+          throw new Error('PR metadata unavailable');
+        }),
+        reportError: (message) => errors.push(message),
+      },
+    );
+
+    expect({ code, errors }).toEqual({
+      code: 1,
+      errors: ['shipped-record: PR metadata unavailable'],
+    });
+  });
+
+  it('does not allow checkout or dependency setup failures to continue to a success context', async () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+    const workflow = await readFile(join(repoRoot, '.github/workflows/shipped-record.yml'), 'utf8');
+
+    expect({
+      checkout: workflow.includes('uses: actions/checkout@v4'),
+      setup: workflow.includes('uses: actions/setup-node@v4'),
+      dependencies: workflow.includes('- run: npm ci'),
+      permitsFailure: /continue-on-error:\s*true|if:\s*always\(\)/.test(workflow),
+    }).toEqual({
+      checkout: true,
+      setup: true,
+      dependencies: true,
+      permitsFailure: false,
+    });
+  });
+
   it('defines a path-filter-free stable shipped-record check for every PR update', async () => {
     const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
     const workflow = await readFile(join(repoRoot, '.github/workflows/shipped-record.yml'), 'utf8');
