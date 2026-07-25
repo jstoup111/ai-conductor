@@ -26,11 +26,18 @@ export interface ProviderCandidateFailureClassification {
   reason: string;
 }
 
+export interface ProviderExhaustionAttempt {
+  provider: string;
+  reason: string;
+  invoked: boolean;
+}
+
 export interface ProviderExecutionResult extends InvokeResult {
   preferredProvider: string;
-  actualProvider: string;
-  resolvedModel: string;
-  resolvedEffort: EffortLevel;
+  actualProvider?: string;
+  resolvedModel?: string;
+  resolvedEffort?: EffortLevel;
+  attempts?: ProviderExhaustionAttempt[];
 }
 
 export interface ProviderTransitionWarning {
@@ -161,6 +168,7 @@ export async function executeProviderCandidates({
     stepSelection,
   });
   const preferredProvider = candidates[0];
+  const unavailableAttempts: ProviderExhaustionAttempt[] = [];
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -200,13 +208,33 @@ export async function executeProviderCandidates({
 
     const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];
-    if (!unavailable || !nextProvider) {
+    if (!unavailable) {
       return {
         ...result,
         preferredProvider,
         actualProvider: providerKey,
         resolvedModel: resolved.model,
         resolvedEffort: resolved.effort,
+      };
+    }
+
+    unavailableAttempts.push({
+      provider: providerKey,
+      reason: unavailable.reason,
+      invoked: result.providerInvocationSkipped !== true,
+    });
+    if (!nextProvider) {
+      const diagnostic = unavailableAttempts
+        .map(({ provider, reason, invoked }) =>
+          `${provider} (${reason}${invoked ? '' : ', cached skip'})`,
+        )
+        .join('; ');
+      return {
+        success: false,
+        output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
+        exitCode: result.exitCode,
+        preferredProvider,
+        attempts: unavailableAttempts,
       };
     }
 

@@ -18,9 +18,14 @@ import type { HarnessConfig } from '../../src/types/config.js';
 
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
-  actualProvider: string;
-  resolvedModel: string;
-  resolvedEffort: string;
+  actualProvider?: string;
+  resolvedModel?: string;
+  resolvedEffort?: string;
+  attempts?: Array<{
+    provider: string;
+    reason: string;
+    invoked: boolean;
+  }>;
 }
 
 interface ProviderTransitionWarning {
@@ -390,16 +395,17 @@ describe('executeProviderCandidates', () => {
       },
       noNext: {
         success: false,
-        output: missingReason,
+        output:
+          `All configured providers are unavailable for step build: codex (${missingReason}, cached skip).`,
         exitCode: 127,
-        providerUnavailable: true,
-        providerUnavailableReason: missingReason,
-        providerUnavailableScope: 'run',
-        providerInvocationSkipped: true,
         preferredProvider: 'codex',
-        actualProvider: 'codex',
-        resolvedModel: 'gpt-cli-primary',
-        resolvedEffort: 'max',
+        attempts: [
+          {
+            provider: 'codex',
+            reason: missingReason,
+            invoked: false,
+          },
+        ],
       },
     });
   });
@@ -786,5 +792,142 @@ describe('executeProviderCandidates', () => {
         },
       })),
     );
+  });
+
+  it('fails with one diagnostic entry per configured provider when every candidate is unavailable', async () => {
+    const calls: Array<{ provider: string; model: string | undefined }> = [];
+    const unavailableProvider = (
+      provider: string,
+      reason: string,
+    ): LLMProvider => ({
+      invoke: vi.fn(async (options): Promise<InvokeResult> => {
+        calls.push({ provider, model: options.model });
+        return {
+          success: false,
+          output: reason,
+          exitCode: 127,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: reason,
+        };
+      }),
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    });
+    const unlistedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run',
+      exitCode: 0,
+    }));
+    const cachedClaude = runtime(
+      'claude',
+      unavailableProvider('claude', 'must not invoke cached provider'),
+    );
+    cachedClaude.runWideUnavailable = { reason: 'claude cached missing' };
+    const runtimes = new ProviderRuntimeSet([
+      cachedClaude,
+      runtime('codex', unavailableProvider('codex', 'codex binary missing')),
+      {
+        ...runtime(
+          'claude',
+          unavailableProvider('third', 'third integration missing'),
+        ),
+        key: 'third',
+        builtIn: false,
+      },
+      {
+        ...runtime('claude', {
+          invoke: unlistedInvoke,
+          invokeInteractive: vi.fn(async (): Promise<void> => {}),
+        }),
+        key: 'unlisted',
+      },
+    ]);
+    const warnings: Array<{
+      message: string;
+      transition: ProviderTransitionWarning;
+    }> = [];
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+    const result = await execute?.({
+      step: 'build',
+      configuredProviders: ['claude', 'codex', 'third'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions: new ProviderSessionScope(
+        vi.fn()
+          .mockReturnValueOnce('codex-exhaustion-session')
+          .mockReturnValueOnce('claude-exhaustion-session')
+          .mockReturnValueOnce('third-exhaustion-session'),
+      ),
+      config: {
+        llm_provider: ['claude', 'codex', 'third'],
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      warn: (message, transition) =>
+        warnings.push({ message, transition }),
+      options: {
+        prompt: 'Execute the step.',
+        cwd: '/workspace/feature',
+      },
+    });
+
+    expect({ calls, unlistedCalls: unlistedInvoke.mock.calls, warnings, result })
+      .toEqual({
+        calls: [
+          { provider: 'codex', model: 'gpt-5.6-terra' },
+          { provider: 'third', model: 'sonnet' },
+        ],
+        unlistedCalls: [],
+        warnings: [
+          {
+            message:
+              'Step build: provider codex unavailable (codex binary missing); falling back to claude.',
+            transition: {
+              type: 'provider_fallback',
+              step: 'build',
+              failedProvider: 'codex',
+              reason: 'codex binary missing',
+              nextProvider: 'claude',
+            },
+          },
+          {
+            message:
+              'Step build: provider claude unavailable (claude cached missing); falling back to third.',
+            transition: {
+              type: 'provider_fallback',
+              step: 'build',
+              failedProvider: 'claude',
+              reason: 'claude cached missing',
+              nextProvider: 'third',
+            },
+          },
+        ],
+        result: {
+          success: false,
+          output:
+            'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached skip); third (third integration missing).',
+          exitCode: 127,
+          preferredProvider: 'codex',
+          attempts: [
+            {
+              provider: 'codex',
+              reason: 'codex binary missing',
+              invoked: true,
+            },
+            {
+              provider: 'claude',
+              reason: 'claude cached missing',
+              invoked: false,
+            },
+            {
+              provider: 'third',
+              reason: 'third integration missing',
+              invoked: true,
+            },
+          ],
+        },
+      });
   });
 });
