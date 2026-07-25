@@ -510,12 +510,18 @@ export class ClaudeProvider implements LLMProvider {
     // Combine stdout + stderr so the caller has full context
     const output = stderr ? `${parsedOutput}\n${stderr}`.trim() : parsedOutput;
 
-    // Detect missing binary (exit 127 or ENOENT in stderr)
-    if (exitCode === 127 || /ENOENT|not found/i.test(stderr)) {
+    // Missing-binary classification is anchored to structural process signals.
+    // Never infer provider-wide unavailability from arbitrary stderr prose.
+    if (result.code === 'ENOENT' || exitCode === 127) {
+      const reason =
+        "LLM provider 'claude' not found. Install it or check your PATH.";
       return {
         success: false,
-        output: "LLM provider 'claude' not found. Install it or check your PATH.",
+        output: reason,
         exitCode,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+        providerUnavailableReason: reason,
       };
     }
 

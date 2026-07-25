@@ -182,6 +182,155 @@ describe('ClaudeProvider', () => {
       expect(result.output).toMatch(/not found/i);
     });
 
+    it('classifies only anchored ENOENT and exit 127 as run-wide provider unavailability', async () => {
+      const missingOutput =
+        "LLM provider 'claude' not found. Install it or check your PATH.";
+      const cases = [
+        {
+          name: 'structured ENOENT',
+          response: {
+            stdout: '',
+            stderr: '',
+            exitCode: undefined,
+            code: 'ENOENT',
+            shortMessage: 'spawn claude ENOENT',
+            failed: true,
+          },
+          expected: {
+            output: missingOutput,
+            providerUnavailable: true,
+            providerUnavailableScope: 'run',
+            providerUnavailableReason: missingOutput,
+          },
+        },
+        {
+          name: 'exit 127',
+          response: {
+            stdout: '',
+            stderr: 'shell could not execute command',
+            exitCode: 127,
+            failed: true,
+          },
+          expected: {
+            output: missingOutput,
+            providerUnavailable: true,
+            providerUnavailableScope: 'run',
+            providerUnavailableReason: missingOutput,
+          },
+        },
+        {
+          name: 'misleading prose',
+          response: {
+            stdout: '',
+            stderr: 'The docs say the claude executable was not found',
+            exitCode: 1,
+            failed: true,
+          },
+          expected: {
+            output: 'The docs say the claude executable was not found',
+          },
+        },
+        {
+          name: 'authentication',
+          response: {
+            stdout: '',
+            stderr: 'Invalid API key',
+            exitCode: 1,
+            failed: true,
+          },
+          expected: {
+            output: 'Invalid API key',
+            authFailure: true,
+          },
+        },
+        {
+          name: 'model',
+          response: {
+            stdout: '',
+            stderr: 'Invalid model name: claude-bogus',
+            exitCode: 1,
+            failed: true,
+          },
+          expected: {
+            output: 'Invalid model name: claude-bogus',
+            modelUnavailable: true,
+          },
+        },
+        {
+          name: 'rate limit',
+          response: {
+            stdout: '',
+            stderr: 'Error: rate limit exceeded',
+            exitCode: 1,
+            failed: true,
+          },
+          expected: {
+            output: 'Error: rate limit exceeded',
+            rateLimited: true,
+          },
+        },
+        {
+          name: 'session',
+          response: {
+            stdout: '',
+            stderr: 'No conversation found for this session',
+            exitCode: 1,
+            failed: true,
+          },
+          expected: {
+            output: 'No conversation found for this session',
+            sessionExpired: true,
+          },
+        },
+      ] as const;
+      const observed = [];
+
+      for (const fixture of cases) {
+        mockExeca.mockResolvedValue(fixture.response as any);
+        const result = await provider.invoke(baseOptions);
+        observed.push({
+          name: fixture.name,
+          output: result.output,
+          providerUnavailable: result.providerUnavailable,
+          providerUnavailableScope: result.providerUnavailableScope,
+          providerUnavailableReason: result.providerUnavailableReason,
+          authFailure: result.authFailure,
+          modelUnavailable: result.modelUnavailable,
+          rateLimited: result.rateLimited,
+          sessionExpired: result.sessionExpired,
+        });
+      }
+
+      expect(observed).toEqual(
+        cases.map(({ name, expected }) => ({
+          name,
+          output: expected.output,
+          providerUnavailable:
+            'providerUnavailable' in expected
+              ? expected.providerUnavailable
+              : undefined,
+          providerUnavailableScope:
+            'providerUnavailableScope' in expected
+              ? expected.providerUnavailableScope
+              : undefined,
+          providerUnavailableReason:
+            'providerUnavailableReason' in expected
+              ? expected.providerUnavailableReason
+              : undefined,
+          authFailure:
+            'authFailure' in expected ? expected.authFailure : undefined,
+          modelUnavailable:
+            'modelUnavailable' in expected
+              ? expected.modelUnavailable
+              : undefined,
+          rateLimited:
+            'rateLimited' in expected ? expected.rateLimited : undefined,
+          sessionExpired:
+            'sessionExpired' in expected ? expected.sessionExpired : undefined,
+        })),
+      );
+    });
+
     it('detects model-unavailable from a not_found_error API response', async () => {
       mockExeca.mockResolvedValue({
         stdout: '',
