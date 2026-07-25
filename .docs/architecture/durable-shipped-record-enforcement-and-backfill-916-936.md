@@ -29,7 +29,7 @@ graph TD
   subgraph GH["GitHub"]
     FEATUREPR["Implementation PR<br/>head branch carries code + record"]
     CHECK["shipped-record required check (NEW)<br/>GitHub Action on pull_request"]
-    MAIN[("Protected main branch (NEW)<br/>PR + required checks + human review")]
+    MAIN[("Protected main branch (ENHANCED)<br/>existing PR + human review rules<br/>add required shipped-record check")]
     RECON["post-merge reconcile job (NEW)<br/>GitHub Action on merged PR"]
     REPAIR["Idempotent record-only repair PR (NEW)<br/>human merge; never auto-merge"]
   end
@@ -65,9 +65,9 @@ graph TD
 - **Shared durable-evidence verifier** is the single policy seam used by engine completion,
   daemon ship/teardown, merged-PR handling, and the GitHub Action. It validates content and Git
   reachability; ignored local markers never substitute for repository evidence.
-- **Protected `main`** requires pull requests, human review, and the shipped-record status check.
-  The repository currently lacks protection; adding it is part of this feature's operational
-  delivery.
+- **Protected `main`** already requires a squash pull request, one approving review, and code-owner
+  review through repository ruleset `15933604`. This feature adds the shipped-record status check
+  to that existing ruleset; it does not replace or weaken the current protections.
 - **Repair PR** is record-only, idempotent, and human-merged. The Action never directly pushes to
   `main` and never auto-merges, preserving the existing non-autonomy boundary.
 - **Proven association** means repository/GitHub evidence identifies both a plan/spec and its
@@ -79,3 +79,4 @@ graph TD
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-07-25 | Initial generation | DECIDE architecture for issues #916/#936 and repaired example PR #877 |
+| 2026-07-25 | Corrected `main` protection baseline | Ruleset inspection showed active PR/review protection; only the required evidence check is missing |
