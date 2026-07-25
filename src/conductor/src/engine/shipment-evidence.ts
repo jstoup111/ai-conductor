@@ -12,7 +12,22 @@ export type ShipmentEvidenceResult =
       commit: string;
     }
   | { kind: 'not-applicable'; reason: string }
-  | { kind: 'refusal'; reason: string };
+  | ShipmentEvidenceRefusal;
+
+export type ShipmentEvidenceRefusal = {
+  kind: 'refusal';
+  code:
+    | 'shipment-evidence-inputs-incomplete'
+    | 'shipped-record-missing'
+    | 'shipped-record-malformed'
+    | 'shipped-record-incomplete'
+    | 'shipped-record-slug-mismatch'
+    | 'shipped-record-pr-mismatch'
+    | 'shipped-record-hash-mismatch'
+    | 'shipment-plan-missing';
+  expected: string;
+  observed: string | null;
+};
 
 export interface ShipmentEvidenceInput {
   repoDir: string;
@@ -31,30 +46,83 @@ export async function evaluateShipmentEvidence(
 ): Promise<ShipmentEvidenceResult> {
   const { repoDir, slug, implementationPr, candidateCommit, implementationHead } = input;
   if (!repoDir || !slug || !implementationPr || !candidateCommit || !implementationHead) {
-    return { kind: 'refusal', reason: 'shipment evidence inputs are incomplete' };
+    return refusal(
+      'shipment-evidence-inputs-incomplete',
+      'complete shipment evidence inputs',
+      null,
+    );
   }
 
   const recordPath = `.docs/shipped/${slug}.md`;
   const recordContent = await showAtCommit(repoDir, candidateCommit, recordPath);
   if (recordContent === null) {
-    return { kind: 'refusal', reason: `missing committed shipped record: ${recordPath}` };
+    return refusal(
+      'shipped-record-missing',
+      recordPath,
+      null,
+    );
   }
 
-  const record = parseShippedRecord(recordContent.toString('utf8'));
-  if ('malformed' in record || record.slug !== slug || record.pr !== implementationPr) {
-    return { kind: 'refusal', reason: 'committed shipped record is invalid' };
+  const recordText = recordContent.toString('utf8');
+  const rawFields = readFrontmatterFields(recordText);
+  if (rawFields === null) {
+    return refusal(
+      'shipped-record-malformed',
+      'parseable shipped record',
+      'malformed',
+    );
+  }
+  for (const field of ['slug', 'spec_hash', 'pr', 'shipped'] as const) {
+    if (!rawFields[field]) {
+      return refusal(
+        'shipped-record-incomplete',
+        field,
+        null,
+      );
+    }
+  }
+
+  const record = parseShippedRecord(recordText);
+  if ('malformed' in record) {
+    return refusal(
+      'shipped-record-malformed',
+      'parseable shipped record',
+      'malformed',
+    );
+  }
+  if (record.slug !== slug) {
+    return refusal(
+      'shipped-record-slug-mismatch',
+      slug,
+      record.slug,
+    );
+  }
+  if (record.pr !== implementationPr) {
+    return refusal(
+      'shipped-record-pr-mismatch',
+      implementationPr,
+      record.pr,
+    );
   }
 
   const planPath = `.docs/plans/${slug}.md`;
   const planBytes = await showAtCommit(repoDir, candidateCommit, planPath);
   if (planBytes === null) {
-    return { kind: 'refusal', reason: `missing committed plan: ${planPath}` };
+    return refusal(
+      'shipment-plan-missing',
+      planPath,
+      null,
+    );
   }
 
   const storiesBytes = await readStoriesBytes(repoDir, candidateCommit, slug, planBytes);
   const hash = specHash(planBytes, storiesBytes).digest;
   if (record.specHash !== hash) {
-    return { kind: 'refusal', reason: 'committed shipped record hash does not match the spec' };
+    return refusal(
+      'shipped-record-hash-mismatch',
+      hash,
+      record.specHash,
+    );
   }
 
   return {
@@ -65,6 +133,28 @@ export async function evaluateShipmentEvidence(
     hash,
     commit: candidateCommit,
   };
+}
+
+function refusal(
+  code: ShipmentEvidenceRefusal['code'],
+  expected: string,
+  observed: string | null,
+): ShipmentEvidenceRefusal {
+  return { kind: 'refusal', code, expected, observed };
+}
+
+function readFrontmatterFields(content: string): Record<string, string> | null {
+  const lines = content.split('\n');
+  if (lines[0]?.trim() !== '---') return null;
+
+  const fields: Record<string, string> = {};
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (line.trim() === '---') return fields;
+    const match = /^([a-zA-Z_]+):\s*(.*)$/.exec(line);
+    if (match) fields[match[1]] = match[2].trim();
+  }
+  return null;
 }
 
 async function readStoriesBytes(
