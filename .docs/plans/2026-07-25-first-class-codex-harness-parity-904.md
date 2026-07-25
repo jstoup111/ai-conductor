@@ -5,14 +5,14 @@
 **Architecture:** `.docs/decisions/adr-2026-07-25-first-class-codex-skill-and-guidance-adaptation.md`
 **Stories:** `.docs/stories/first-class-codex-harness-parity-904.md`
 **Conflict check:** Clean as of 2026-07-25
-**Complexity:** Medium
+**Complexity:** Medium — `.docs/complexity/2026-07-25-first-class-codex-harness-parity-904.md`
 
 ## Summary
 
-This plan delivers #904 in 28 short TDD tasks across four independently testable seams: daemon
+This plan delivers #904 in 29 short TDD tasks across four independently testable seams: daemon
 invocation first, installer/migration, durable/shared guidance, and final direct/Claude parity.
 The task count is above the 20-task warning threshold (roughly 1–2.5 hours at the required 2–5
-minute granularity), but it is not architectural expansion: 18 tasks are focused negative-path or
+minute granularity), but it is not architectural expansion: 19 tasks are focused negative-path or
 compatibility proofs around three small production changes.
 
 ## Technical Approach
@@ -348,6 +348,30 @@ compatibility proofs around three small production changes.
 
 **Dependencies:** install-01, install-07
 
+### Task install-09: Preserve the self-host release and migration contract
+**Story:** ST-904-4 HP-2; ST-904-13 HP-1, NP-1
+**Type:** infrastructure
+
+**Steps:**
+1. Add a failing focused assertion that the current `[Unreleased]` Codex installation entry names
+   `~/.agents/skills`, rejects `~/.codex/skills` as the active target, and retains a runnable
+   `bash migration` block that invokes `bin/install --update`.
+2. Run the focused installer/release-contract assertion and verify the stale active path fails
+   (RED).
+3. Correct only the existing Codex install/migration release entry so `bin/migrate` communicates
+   and executes the ownership-safe current-scope reconciliation; do not add a general README/docs
+   workstream or use a release waiver for this consumer-visible change.
+4. Run the focused assertion, self-host release-gate/version-signal tests, `bin/migrate` syntax,
+   and harness integrity (GREEN); record the actual version signal for finish-time operator
+   approval without editing `VERSION` in BUILD.
+5. Commit with message: `docs(release): migrate Codex skills to current discovery scope`.
+
+**Files:** `CHANGELOG.md`; `test/test_codex_skill_installation.sh`
+
+**Wired-into:** `bin/migrate#extract_migration_blocks, src/conductor/src/engine/self-host/release-gate.ts#runReleaseArtifactGate`
+
+**Dependencies:** install-08
+
 ### Task guidance-01: Generate current durable Codex guidance
 **Story:** ST-904-5 HP-1
 **Type:** happy-path
@@ -563,7 +587,7 @@ compatibility proofs around three small production changes.
 
 **Verify-only:** yes
 
-**Dependencies:** install-08, guidance-03, contracts-06, runtime-08
+**Dependencies:** install-09, guidance-03, contracts-06, runtime-08
 
 ### Task verify-02: Run full Claude, Codex, installer, and routing regression evidence
 **Story:** ST-904-13 HP-1, HP-2, NP-1, NP-2; all stories regression closure
@@ -585,7 +609,7 @@ compatibility proofs around three small production changes.
 
 **Verify-only:** yes
 
-**Dependencies:** runtime-08, install-08, guidance-03, contracts-07, verify-01
+**Dependencies:** runtime-08, install-09, guidance-03, contracts-07, verify-01
 
 ## Task Dependency Graph
 
@@ -597,7 +621,7 @@ runtime-01 → runtime-02 → runtime-05 → runtime-06 → runtime-07 → runti
 
 Installer:
 install-01 → install-02 → install-03
-     └─────→ install-04 → install-05 → install-06 → install-07 → install-08
+     └─────→ install-04 → install-05 → install-06 → install-07 → install-08 → install-09
                     install-02 ────────────┘
 
 Guidance and shared contracts:
@@ -609,16 +633,17 @@ contracts-01 → contracts-02 ─┐
 install-01 + contracts-01 → contracts-07
 
 Final evidence:
-runtime-08 + install-08 + guidance-03 + contracts-06 → verify-01
-runtime-08 + install-08 + guidance-03 + contracts-07 + verify-01 → verify-02
+runtime-08 + install-09 + guidance-03 + contracts-06 → verify-01
+runtime-08 + install-09 + guidance-03 + contracts-07 + verify-01 → verify-02
 ```
 
 ## Integration Points
 
 - After `runtime-08`: daemon-selected Codex can cross skill-driven lifecycle boundaries with
   candidate-local syntax while existing artifact gates remain authoritative.
-- After `install-08`: normal install/update/check/uninstall exposes one current Codex catalog and
-  preserves foreign/current/legacy operator content.
+- After `install-09`: normal install/update/check/uninstall exposes one current Codex catalog,
+  preserves foreign/current/legacy operator content, and carries the executable self-host
+  migration/release evidence required for the discovery-scope change.
 - After `guidance-03` + `contracts-06`: direct Claude and Codex sessions share one workflow source
   with explicit host mechanics and deterministic drift checks.
 - After `verify-02`: all four seams are proven together without changing legacy `bin/conduct`,
@@ -640,7 +665,7 @@ runtime-08 + install-08 + guidance-03 + contracts-07 + verify-01 → verify-02
 | ST-904-3 NP-1 | install-06 |
 | ST-904-3 NP-2 | install-05, install-07 |
 | ST-904-4 HP-1 | install-03 |
-| ST-904-4 HP-2 | install-04, install-07 |
+| ST-904-4 HP-2 | install-04, install-07, install-09 |
 | ST-904-4 NP-1 | install-04, install-06 |
 | ST-904-4 NP-2 | install-03, install-05 |
 | ST-904-5 HP-1 | guidance-01 |
@@ -652,12 +677,12 @@ runtime-08 + install-08 + guidance-03 + contracts-07 + verify-01 → verify-02
 | ST-904-6 NP-1 | guidance-03 |
 | ST-904-6 NP-2 | guidance-03 |
 | ST-904-7 HP-1 | contracts-01 |
-| ST-904-7 HP-2 | contracts-01 through contracts-05 |
+| ST-904-7 HP-2 | contracts-01, contracts-02, contracts-03, contracts-04, contracts-05 |
 | ST-904-7 NP-1 | contracts-06 |
 | ST-904-7 NP-2 | contracts-06 |
-| ST-904-8 HP-1 | runtime-02, contracts-02 through contracts-07 |
-| ST-904-8 NP-1 | contracts-02 through contracts-06 |
-| ST-904-8 NP-2 | contracts-02 through contracts-06 |
+| ST-904-8 HP-1 | runtime-02, contracts-02, contracts-03, contracts-04, contracts-05, contracts-06, contracts-07 |
+| ST-904-8 NP-1 | contracts-02, contracts-03, contracts-04, contracts-05, contracts-06 |
+| ST-904-8 NP-2 | contracts-02, contracts-03, contracts-04, contracts-05, contracts-06 |
 | ST-904-9 HP-1 | runtime-01, runtime-06, runtime-07 |
 | ST-904-9 HP-2 | runtime-03, runtime-04 |
 | ST-904-9 NP-1 | runtime-02, runtime-06, runtime-07 |
@@ -684,7 +709,7 @@ runtime-08 + install-08 + guidance-03 + contracts-07 + verify-01 → verify-02
 - [x] Preconditions validated: Accepted stories have happy/negative paths and conflict-check is clean.
 - [x] Every happy and negative criterion maps to at least one task.
 - [x] Negative paths have explicit focused tasks rather than a generic cleanup task.
-- [x] Tasks are scoped to 2–5 minute RED→GREEN increments; 28 tasks trigger the documented warning
+- [x] Tasks are scoped to 2–5 minute RED→GREEN increments; 29 tasks trigger the documented warning
       but remain below the 41-task hard stop.
 - [x] Dependencies are explicit and acyclic.
 - [x] Every new production surface derives a `Wired-into:` contract from the approved architecture.
