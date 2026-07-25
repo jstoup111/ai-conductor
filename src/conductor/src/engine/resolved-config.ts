@@ -99,10 +99,8 @@ export const DEFAULT_STEP_ESCALATE = true;
 // Resolution
 // ────────────────────────────────────────────────────────────────────────────
 
-export interface ResolvedStepConfig {
+export interface ResolvedProviderNeutralStepConfig {
   step: StepName;
-  model: string;
-  effort: EffortLevel;
   max_retries: number;
   review: ReviewMode;
   skill?: string;
@@ -115,6 +113,15 @@ export interface ResolvedStepConfig {
    */
   escalate: boolean;
 }
+
+export interface ResolvedProviderNativeStepConfig {
+  model: string;
+  effort: EffortLevel;
+}
+
+export interface ResolvedStepConfig
+  extends ResolvedProviderNeutralStepConfig,
+    ResolvedProviderNativeStepConfig {}
 
 export interface ResolveOptions {
   /** CLI `--model` override. Beats every other source. */
@@ -172,6 +179,28 @@ export function resolveStepConfig(
   const options = hasExplicitPolicy
     ? legacyOptions
     : configOrOptions as ResolveOptions | undefined ?? {};
+  const neutral = resolveProviderNeutralStepConfig(step, phase, policy, config, options);
+  const native = resolveProviderNativeStepConfig(step, phase, policy, config, options);
+  return {
+    step: neutral.step,
+    model: native.model,
+    effort: native.effort,
+    max_retries: neutral.max_retries,
+    review: neutral.review,
+    skill: neutral.skill,
+    hooks: neutral.hooks,
+    disabled: neutral.disabled,
+    escalate: neutral.escalate,
+  };
+}
+
+export function resolveProviderNativeStepConfig(
+  step: StepName,
+  phase: Phase,
+  policy: ProviderModelPolicy,
+  config?: HarnessConfig,
+  options: ResolveOptions = {},
+): ResolvedProviderNativeStepConfig {
   const stepCfg: StepConfig | undefined = config?.steps?.[step];
   const phaseCfg: PhaseConfig | undefined = config?.phases?.[phase];
   const defaultsCfg = config?.defaults;
@@ -207,6 +236,26 @@ export function resolveStepConfig(
     policy.stepEfforts[step] ??
     FALLBACK_EFFORT;
 
+  return { model, effort };
+}
+
+export function resolveProviderNeutralStepConfig(
+  step: StepName,
+  phase: Phase,
+  policy: ProviderModelPolicy,
+  config?: HarnessConfig,
+  options: ResolveOptions = {},
+): ResolvedProviderNeutralStepConfig {
+  const stepCfg: StepConfig | undefined = config?.steps?.[step];
+  const phaseCfg: PhaseConfig | undefined = config?.phases?.[phase];
+  const defaultsCfg = config?.defaults;
+  const tier = options.tier;
+  const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
+  const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
+  const policyStepTier = tier
+    ? policy.stepTierOverrides[step]?.[tier]
+    : undefined;
+
   const max_retries =
     stepTier?.max_retries ??
     stepCfg?.max_retries ??
@@ -232,8 +281,6 @@ export function resolveStepConfig(
 
   return {
     step,
-    model,
-    effort,
     max_retries,
     review,
     skill: stepCfg?.skill,

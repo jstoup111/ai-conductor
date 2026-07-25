@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveStepConfig,
+  resolveProviderNativeStepConfig,
+  resolveProviderNeutralStepConfig,
   phaseForStep,
   DEFAULT_STEP_RETRIES,
   DEFAULT_STEP_REVIEW,
@@ -206,6 +208,101 @@ describe('engine/resolved-config', () => {
         { step: 'remediate', model: 'fable', effort: 'high' },
         { step: 'attribution_verify', model: 'opus', effort: 'high' },
       ]);
+    });
+  });
+
+  describe('resolveStepConfig — neutral/native split characterization', () => {
+    it('resolves retry, review, skill, hooks, disable, model, effort, and escalation together', () => {
+      const config: HarnessConfig = {
+        defaults: {
+          model: 'haiku',
+          effort: 'low',
+          max_retries: 1,
+          escalate: false,
+        },
+        phases: {
+          DECIDE: {
+            model: 'sonnet',
+            effort: 'medium',
+            max_retries: 2,
+            escalate: false,
+          },
+        },
+        steps: {
+          plan: {
+            model: 'opus',
+            effort: 'high',
+            max_retries: 3,
+            escalate: true,
+            skill: '.ai-conductor/skills/custom-plan/SKILL.md',
+            hooks: { before: 'before-plan.sh', after: 'after-plan.sh' },
+            disable: true,
+            by_tier: {
+              L: { model: 'fable', effort: 'xhigh', max_retries: 4 },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'L' }),
+      ).toEqual({
+        step: 'plan',
+        model: 'fable',
+        effort: 'xhigh',
+        max_retries: 4,
+        review: 'manual',
+        skill: '.ai-conductor/skills/custom-plan/SKILL.md',
+        hooks: { before: 'before-plan.sh', after: 'after-plan.sh' },
+        disabled: true,
+        escalate: true,
+      });
+    });
+
+    it('exposes the characterized fields through separate neutral and native seams', () => {
+      const config: HarnessConfig = {
+        defaults: { max_retries: 2, escalate: false },
+        steps: {
+          plan: {
+            model: 'opus',
+            effort: 'xhigh',
+            max_retries: 4,
+            skill: 'custom-plan/SKILL.md',
+            hooks: { before: 'before.sh', after: 'after.sh' },
+            disable: true,
+            escalate: true,
+          },
+        },
+      };
+
+      expect({
+        neutral: resolveProviderNeutralStepConfig(
+          'plan',
+          'DECIDE',
+          CLAUDE_MODEL_POLICY,
+          config,
+        ),
+        native: resolveProviderNativeStepConfig(
+          'plan',
+          'DECIDE',
+          CLAUDE_MODEL_POLICY,
+          config,
+        ),
+      }).toEqual({
+        neutral: {
+          step: 'plan',
+          max_retries: 4,
+          review: 'manual',
+          skill: 'custom-plan/SKILL.md',
+          hooks: { before: 'before.sh', after: 'after.sh' },
+          disabled: true,
+          escalate: true,
+        },
+        native: {
+          model: 'opus',
+          effort: 'xhigh',
+        },
+      });
     });
   });
 
