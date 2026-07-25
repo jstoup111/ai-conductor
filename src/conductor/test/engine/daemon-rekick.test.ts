@@ -919,20 +919,13 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
   });
 });
 
-// ── TS-5 (#358): merged-PR guard on the rekick play-forward path ──────────────
+// ── Task 8: strict merged-history verification on rekick play-forward ──────
 //
-// `resumeRebaseFirst` does not yet accept `runGh`/`prUrl` opts, and the
-// `'already_shipped'` outcome does not exist (plan Tasks 11/12,
-// .docs/decisions/adr-2026-07-09-mid-run-merged-pr-guard.md, amendment
-// 2026-07-09). Passing `runGh`/`prUrl` today is inert (unused options) — the
-// happy-path assertions below are expected to FAIL because `res` stays one of
-// the pre-existing `RekickResumeResult` values ('rebased'/'halted'), never
-// `'already_shipped'`, and the real rebase/HALT still runs over the merged PR.
-// The negative-path tests assert BYTE-IDENTICAL pass-through to the existing
-// gated rebase-resolution flow this file already covers above (FR-12,
-// #300) — those are expected to PASS today (fail-open by construction), which
-// pins the "no regression on non-MERGED verdicts" contract.
-describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5)', () => {
+// `resumeRebaseFirst` accepts `runGh`/`prUrl`/`slug` and only returns
+// `'already_shipped'` after the injected strict verifier returns valid.
+// Missing or unavailable evidence writes HALT; non-merged PRs keep the normal
+// rebase-resolution flow.
+describe('engine/daemon-rekick — strict merged-history verification', () => {
   let dir: string;
   let events: ConductorEventEmitter;
   const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
@@ -1013,7 +1006,6 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       localBase: 'main',
       events,
       ranManualTest: false,
-      // Not yet declared options (Task 11) — expected to be inert today.
       runGh,
       prUrl: PR_URL,
       slug: 'feature-a',
@@ -1153,11 +1145,10 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
   });
 });
 
-// ── TS-5 (#358) sweep-level: the caller that consumes resumeRebaseFirst's
-// outcome must write the processed marker, skip re-dispatch, and log the
-// out-of-band line ────────────────────────────────────────────────────────
+// ── Valid merged-history resume continues through the ordinary completion
+// boundary without manufacturing terminal markers. ─────────────────────────
 //
-// Per the ADR/plan (Task 11), `resumeRebaseFirst`'s `'already_shipped'`
+// Per the ADR/plan (Task 8), `resumeRebaseFirst`'s `'already_shipped'`
 // outcome is consumed by daemon-cli.ts's `runConductorInWorktree` closure
 // (wired through `makeFeatureRunnerDeps`, daemon-deps.ts:62/99) — NOT by
 // `rekickSweep` (that function only ever clears/aborts HALT markers; it does
@@ -1168,19 +1159,11 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
 // site and resorts to source-assembly assertions for that reason).
 //
 // This test instead drives the REAL production seam one layer down: the
-// `runConductor` injection point of `makeRunFeature` (daemon-runner.ts), fed
-// a `runConductor` that performs the EXACT sequence the plan specifies for
-// the daemon-cli.ts wiring once Task 11 lands — call `resumeRebaseFirst`
-// with the real merged-PR guard opts, and on `'already_shipped'` write the
-// synthetic ship markers and return without invoking a real conductor run
-// (no re-dispatch). Everything downstream of that point (`readOutcome` →
-// `isVerifiedShip` → `markProcessed`) is REAL production code, unmodified —
-// exactly the same integration TS-3 pins in daemon-runner.test.ts. Because
-// `resumeRebaseFirst` does not yet implement the guard, it returns 'rebased'
-// today instead of 'already_shipped', so the synthetic markers are never
-// written, `markProcessed` is never called, and the assertions below fail —
-// RED for the right reason (the guard's absence, not a fixture bug).
-describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#358, TS-5)', () => {
+// `runConductor` injection point of `makeRunFeature` (daemon-runner.ts). It
+// mirrors daemon-cli: a verified `'already_shipped'` result continues through
+// the ordinary conductor boundary rather than creating finish-choice/DONE or
+// a processed marker itself.
+describe('engine/daemon-rekick — verified merged-history continuation', () => {
   let dir: string;
   let worktreeBase: string;
   let processedDir: string;

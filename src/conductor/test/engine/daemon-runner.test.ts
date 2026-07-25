@@ -1473,18 +1473,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
   });
 
-  // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING
-  // verified-ship path (readOutcome → isVerifiedShip → markProcessed). No
-  // production change is expected here (plan Task 10 step 3) — the guard's
-  // markers (`finish-choice` == 'pr', `DONE`, `pr_url` present) produce
-  // EXACTLY the WorktreeOutcome shape `writeSyntheticShipMarkers` (Task 2)
-  // will write, fed through the same `deps()`/`makeRunFeature` fixture the
-  // rest of this file already uses. These tests are expected to PASS today —
-  // they pin the integration contract the not-yet-written guard depends on.
-  describe('merged-PR guard synthetic ship (#358, TS-3)', () => {
+  // A normal verified PR outcome reaches the daemon-owned ship side effects
+  // only after the shared evidence verifier has returned valid.
+  describe('verified PR ship outcome', () => {
     const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
-    it('a guard-shaped outcome (finish-choice=pr, DONE, pr_url present) rides isVerifiedShip → markProcessed called with slug + prUrl', async () => {
+    it('a valid PR outcome marks the feature processed with its PR URL', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1503,14 +1497,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processed).toBe(true);
       expect(rec.processedCalls).toHaveLength(1);
       expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
-      // Removed on success, same as any other verified ship — the guard's
-      // synthetic stop introduces no second ship pathway (ADR: "No second
-      // ship pathway is introduced; side-effects stay owned by the
-      // daemon-runner").
+      // Side effects remain owned by the daemon runner's single verified path.
       expect(rec.teardownKeep).toBe(false);
     });
 
-    it('a halted (non-guard) outcome — isVerifiedShip false, no processed marker written', async () => {
+    it('a halted outcome writes no processed marker', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1529,7 +1520,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processedCalls).toHaveLength(0);
     });
 
-    it('idempotency: the guard-shaped outcome fed through run() twice — single ledger entry each time, stable content, no throw', async () => {
+    it('two valid outcomes create one stable ledger entry each without throwing', async () => {
       const rec: TestRecorder = {};
       const outcome: WorktreeOutcome = {
         done: true,
