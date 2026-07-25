@@ -617,4 +617,147 @@ describe('repository-local maintain-documentation contract', () => {
       },
     });
   });
+
+  it('aligns repository release and README policy without changing consumer defaults', async () => {
+    const [claudePolicy, pullRequestTemplate] = await Promise.all([
+      readFile(join(repoRoot, 'CLAUDE.md'), 'utf-8'),
+      readFile(join(repoRoot, '.github/pull_request_template.md'), 'utf-8'),
+    ]);
+    const noReleaseContract = (policy: string) => {
+      const noReleaseLine =
+        policy.split(/\r?\n/).find((line) => /successful no-release path/i.test(line)) ?? '';
+      return {
+        successfulNoRelease: /empty `?\[Unreleased\]`?.*successful no-release path/i.test(
+          noReleaseLine,
+        ),
+        noChangelogRewrite: /no changelog rewrite(?:,|;|\.|$)/i.test(noReleaseLine),
+        noVersionBump: /no VERSION bump(?:,|;|\.|$)/i.test(noReleaseLine),
+        noTag: /no tag(?:,|;|\.|$)/i.test(noReleaseLine),
+        noReleaseCommit: /no release commit(?:,|;|\.|$)/i.test(noReleaseLine),
+        noGitHubRelease: /no GitHub Release(?:,|;|\.|$)/i.test(noReleaseLine),
+      };
+    };
+    const contradictionContract = (policy: string) => {
+      const paragraphs = policy
+        .split(/\r?\n\s*\r?\n/)
+        .map((paragraph) => paragraph.replace(/\s+/g, ' '));
+      return {
+        noUniversalEntryRequirement: !paragraphs.some((paragraph) =>
+          /(?:every|all) (?:PRs?|pull requests?).*(?:must|required to).*(?:add|include).*(?:changelog entry|entry.*CHANGELOG)|changelog entry.*required.*(?:every|all) (?:PRs?|pull requests?)|Required\. Pick one/i.test(
+            paragraph,
+          ),
+        ),
+        noEmptyFailureClaim: !paragraphs.some((paragraph) =>
+          /(?:fail|error).*\[Unreleased\].*empty|empty.*\[Unreleased\].*(?:fail|error)/i.test(
+            paragraph,
+          ),
+        ),
+      };
+    };
+    const policyContract = (policy: string) => ({
+      notableOnly:
+        /changelog entry.*required only when.*notable reader-visible implementation change/is.test(
+          policy,
+        ),
+      nonNotableAllowed:
+        /non-notable implementation.*(?:may|can).*without.*changelog entry/is.test(policy),
+      emptyUnreleased: noReleaseContract(policy),
+      breakingMigration:
+        /breaking changes.*still require.*runnable.*bash migration/is.test(policy),
+      readme: {
+        localRefinement: /README.*repository-local landing-page refinement/i.test(policy),
+        canonicalAffectedDocs:
+          /ordinary reader-visible changes.*canonical affected documentation/is.test(policy),
+        unchangedUnlessLanding:
+          /leave README unchanged unless.*landing-page contract/is.test(policy),
+      },
+      consumerIsolation:
+        /consumer projects without.*custom.*configuration.*global.*unchanged/is.test(policy),
+      removedContradictions: contradictionContract(policy),
+    });
+
+    expect({
+      claudePolicy: policyContract(claudePolicy),
+      pullRequestTemplate: policyContract(pullRequestTemplate),
+      mutationProbes: {
+        rewritesChangelog: !noReleaseContract(
+          'An empty [Unreleased] is a successful no-release path that rewrites the changelog.',
+        ).noChangelogRewrite,
+        bumpsVersion: !noReleaseContract(
+          'An empty [Unreleased] is a successful no-release path that bumps VERSION.',
+        ).noVersionBump,
+        createsTag: !noReleaseContract(
+          'An empty [Unreleased] is a successful no-release path that creates a tag.',
+        ).noTag,
+        createsReleaseCommit: !noReleaseContract(
+          'An empty [Unreleased] is a successful no-release path that creates a release commit.',
+        ).noReleaseCommit,
+        createsGitHubRelease: !noReleaseContract(
+          'An empty [Unreleased] is a successful no-release path that creates a GitHub Release.',
+        ).noGitHubRelease,
+        universalRequirement: !contradictionContract(
+          'All pull requests must add a changelog entry.',
+        ).noUniversalEntryRequirement,
+        emptyIsError: !contradictionContract(
+          'Empty [Unreleased] is an error.',
+        ).noEmptyFailureClaim,
+      },
+    }).toEqual({
+      claudePolicy: {
+        notableOnly: true,
+        nonNotableAllowed: true,
+        emptyUnreleased: {
+          successfulNoRelease: true,
+          noChangelogRewrite: true,
+          noVersionBump: true,
+          noTag: true,
+          noReleaseCommit: true,
+          noGitHubRelease: true,
+        },
+        breakingMigration: true,
+        readme: {
+          localRefinement: true,
+          canonicalAffectedDocs: true,
+          unchangedUnlessLanding: true,
+        },
+        consumerIsolation: true,
+        removedContradictions: {
+          noUniversalEntryRequirement: true,
+          noEmptyFailureClaim: true,
+        },
+      },
+      pullRequestTemplate: {
+        notableOnly: true,
+        nonNotableAllowed: true,
+        emptyUnreleased: {
+          successfulNoRelease: true,
+          noChangelogRewrite: true,
+          noVersionBump: true,
+          noTag: true,
+          noReleaseCommit: true,
+          noGitHubRelease: true,
+        },
+        breakingMigration: true,
+        readme: {
+          localRefinement: true,
+          canonicalAffectedDocs: true,
+          unchangedUnlessLanding: true,
+        },
+        consumerIsolation: true,
+        removedContradictions: {
+          noUniversalEntryRequirement: true,
+          noEmptyFailureClaim: true,
+        },
+      },
+      mutationProbes: {
+        rewritesChangelog: true,
+        bumpsVersion: true,
+        createsTag: true,
+        createsReleaseCommit: true,
+        createsGitHubRelease: true,
+        universalRequirement: true,
+        emptyIsError: true,
+      },
+    });
+  });
 });

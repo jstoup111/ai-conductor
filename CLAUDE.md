@@ -113,18 +113,15 @@ fix all references before committing.
 Docs track features. Every change that adds or alters user-facing behavior MUST
 update the relevant documentation in the **same** PR:
 
-- New `conduct`/`conduct-ts` flags or config keys → update `docs/configuration.md`
-  and `src/conductor/README.md`.
-- New daemon options or operational behavior → update `docs/daemon-operations.md`
-  and `src/conductor/README.md`.
+- New `conduct`/`conduct-ts` flags or config keys → update `docs/configuration.md`.
+- New daemon options or operational behavior → update `docs/daemon-operations.md`.
 - New skill, gate, hook, or HARNESS.md rule → reflect it in the relevant
   `docs/*.md` guide (see `README.md`'s Documentation index) and any affected
   skill/architecture docs.
-- A PR is not complete while its docs are stale. This is in addition to the
-  CHANGELOG `[Unreleased]` requirement, not a replacement for it.
+- Ordinary reader-visible changes update the canonical affected documentation. Leave README unchanged unless the README landing-page contract changes.
+- The README rule is a repository-local landing-page refinement of the global harness documentation convention.
 
-This mirrors the harness-wide "Docs track features" convention in HARNESS.md that
-applies to consumer projects.
+A PR is not complete while its affected canonical documentation is stale. For consumer projects without this custom-step configuration, the global harness documentation convention remains unchanged.
 
 ## Branch Policy
 
@@ -136,15 +133,13 @@ Create a branch before making changes, and open a PR to merge.
 The harness uses a semver tagging system and an auto-update flow. Every change
 to this repo must honor these gates:
 
-1. **Changelog on every PR.** Every PR to `main` MUST add an entry under
-   `## [Unreleased]` in `CHANGELOG.md` under one of: Added / Changed / Fixed /
-   Removed. The `.github/pull_request_template.md` scaffolds the required
-   sections. **CI enforces this** — `.github/workflows/release.yml` fails the
-   release workflow post-merge if `[Unreleased]` is empty. This rule applies
-   to the harness repo only. It does NOT change how Claude opens PRs in
-   consumer projects that use the harness.
+1. **Changelog for notable implementations.** A changelog entry is required only when the PR contains a notable reader-visible implementation change. A non-notable implementation may ship without a changelog entry. Specification-only, documentation-only, internal non-notable, and no-implementation changes do not add an entry.
 
-2. **Migration blocks for breaking changes.** Any PR that changes
+   An empty `[Unreleased]` is a successful no-release path with no changelog rewrite, no VERSION bump, no tag, no release commit, and no GitHub Release.
+
+   This rule applies to this repository only. For consumer projects without this custom-step configuration, the global harness release convention remains unchanged.
+
+2. **Migration blocks for breaking changes.** Breaking changes still require a runnable `bash migration` block. Any PR that changes
    `settings.json` schema, hook wiring, skill symlink targets, or `bin/conduct`
    CLI MUST include a `## Migration` section in `CHANGELOG.md` with a runnable
    ```` ```bash migration ```` fenced block. `bin/migrate` will execute these
