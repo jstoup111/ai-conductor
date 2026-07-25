@@ -22,6 +22,7 @@ import {
 import type { FinishChoice } from './artifacts.js';
 import type { TriageOutcome } from './setup-triage.js';
 import { SetupFailureError } from './worktree-prepare.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -54,6 +55,12 @@ export interface FeatureWorktree {
   branch: string;
 }
 
+export interface FeatureRunScope {
+  events: ConductorEventEmitter;
+  providerExecution: ProviderExecutionContext;
+  stop: () => void | Promise<void>;
+}
+
 /**
  * The real-I/O primitives a feature run needs. Injected so the orchestration
  * (done/halted/error + teardown discipline) is unit-testable without git,
@@ -79,6 +86,7 @@ export interface FeatureRunnerDeps {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
+    events?: ConductorEventEmitter,
   ) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
@@ -97,6 +105,11 @@ export interface FeatureRunnerDeps {
   provider?: LLMProvider;
   /** Fresh provider routing state allocated once for each feature run. */
   providerExecution?: () => ProviderExecutionContext;
+  /** Feature-local provider/event state, opened after worktree creation. */
+  beginFeatureRun?: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => FeatureRunScope | Promise<FeatureRunScope>;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection).
    * Computed once at run start via `resolveMemoryProvider` — all memory-using
@@ -234,11 +247,15 @@ export function makeRunFeature(
 
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
     let worktree: FeatureWorktree | null = null;
-    const providerExecution = deps.providerExecution?.();
+    let featureRun: FeatureRunScope | undefined;
+    let providerExecution: ProviderExecutionContext | undefined;
     try {
       // The worktree is cut from the fast-forwarded default branch, so the vetted
       // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
+      featureRun = await deps.beginFeatureRun?.(worktree, item);
+      providerExecution =
+        featureRun?.providerExecution ?? deps.providerExecution?.();
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any
@@ -297,7 +314,12 @@ export function makeRunFeature(
           }
         }
       }
-      await deps.runConductor(worktree, item, providerExecution);
+      await deps.runConductor(
+        worktree,
+        item,
+        providerExecution,
+        featureRun?.events,
+      );
       const outcome = await deps.readOutcome(worktree);
 
       // Phase 9.1: on daemon completion, emit a structured signal + narrative to
@@ -453,6 +475,8 @@ export function makeRunFeature(
         status: 'error',
         reason,
       };
+    } finally {
+      await featureRun?.stop();
     }
   };
 }

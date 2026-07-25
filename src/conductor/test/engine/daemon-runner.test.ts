@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -74,6 +75,106 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('owns one feature event scope from pre-dispatch setup through error cleanup', async () => {
+    const order: string[] = [];
+    const localEvents = new ConductorEventEmitter();
+    const providerExecution: ProviderExecutionContext = {
+      configuredProviders: ['claude'],
+      runtimes: new ProviderRuntimeSet([]),
+      sessions: new ProviderSessionStore(),
+      onAttempt: (step, attempt) =>
+        localEvents.emit({ type: 'provider_attempt', step, ...attempt }),
+    };
+    const featureDeps = deps({ done: false, halted: false });
+    const worktree = { path: '/wt/feature-a', branch: 'feat/feature-a' };
+    featureDeps.createWorktree = async () => {
+      order.push('create');
+      return worktree;
+    };
+    featureDeps.prepareWorktree = async () => {
+      order.push('prepare');
+    };
+    featureDeps.teardownWorktree = async () => {
+      order.push('teardown');
+    };
+    let receivedEvents: ConductorEventEmitter | undefined;
+    let receivedProviderExecution: ProviderExecutionContext | undefined;
+    let beginArgs:
+      | { worktree: typeof worktree; item: BacklogItem }
+      | undefined;
+    featureDeps.runConductor = async (
+      _worktree,
+      _item,
+      execution,
+      events,
+    ) => {
+      order.push('dispatch');
+      receivedProviderExecution = execution;
+      receivedEvents = events;
+      await execution?.onAttempt?.('build', {
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+      });
+      throw new Error('dispatch failed');
+    };
+    const stop = vi.fn(() => {
+      order.push('stop');
+    });
+    (
+      featureDeps as FeatureRunnerDeps & {
+        beginFeatureRun?: (
+          worktree: typeof worktree,
+          item: BacklogItem,
+        ) => Promise<{
+          events: ConductorEventEmitter;
+          providerExecution: ProviderExecutionContext;
+          stop: () => void;
+        }>;
+      }
+    ).beginFeatureRun = async (receivedWorktree, item) => {
+      beginArgs = { worktree: receivedWorktree, item };
+      order.push(`begin:${receivedWorktree.path}:${item.slug}`);
+      return { events: localEvents, providerExecution, stop };
+    };
+    const attempts: string[] = [];
+    localEvents.on('provider_attempt', (event) => attempts.push(event.provider));
+
+    const outcome = await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect({
+      order,
+      outcome,
+      receivedEvents,
+      receivedProviderExecution,
+      beginArgs,
+      attempts,
+      stopCalls: stop.mock.calls.length,
+    }).toEqual({
+      order: [
+        'create',
+        'begin:/wt/feature-a:feature-a',
+        'prepare',
+        'dispatch',
+        'teardown',
+        'stop',
+      ],
+      outcome: {
+        slug: 'feature-a',
+        status: 'error',
+        reason: 'dispatch failed',
+      },
+      receivedEvents: localEvents,
+      receivedProviderExecution: providerExecution,
+      beginArgs: {
+        worktree,
+        item: { slug: 'feature-a' },
+      },
+      attempts: ['claude'],
+      stopCalls: 1,
+    });
+  });
+
   it('allocates non-aliased provider caches and sessions for two feature invocations', async () => {
     const configuredProviders = ['claude'] as const;
     const provider = {

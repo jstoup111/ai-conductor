@@ -248,7 +248,7 @@ it('composes isolated provider execution state for every daemon feature after on
       daemonSource.indexOf('validateRegisteredProviderSelections({') <
         daemonSource.indexOf('const createProviderExecution'),
     factoryOwnsFreshRuntimeAndSessions:
-      /const createProviderExecution = \(\): ProviderExecutionContext => \(\{[\s\S]*?configuredProviders,[\s\S]*?runtimes: createProviderRuntimeSet\(registry, log\),[\s\S]*?sessions: new ProviderSessionStore\(\),[\s\S]*?config,[\s\S]*?\}\);/.test(
+      /const createProviderExecution = \([\s\S]*?eventTarget = events,[\s\S]*?\): ProviderExecutionContext => \(\{[\s\S]*?configuredProviders,[\s\S]*?runtimes: createProviderRuntimeSet\(registry, log\),[\s\S]*?sessions: new ProviderSessionStore\(\),[\s\S]*?config,[\s\S]*?\}\);/.test(
         daemonSource,
       ),
     factoryInjectedAtFeatureBoundary:

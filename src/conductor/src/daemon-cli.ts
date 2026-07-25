@@ -34,6 +34,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
+import { startFeatureEventPersistence } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
@@ -778,7 +779,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
       : createStaleEngineChecker(null, log);
 
-  // One shared provider + event bus across workers (rate limits are shared).
+  // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
+  // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
   const rateLimitEpisode = createRateLimitEpisode();
   // Task 20: track which parks were episode-caused so the episode-end sweep
@@ -803,15 +805,25 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   });
   subscriber.start();
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
-  const createProviderExecution = (): ProviderExecutionContext => ({
+  const createProviderExecution = (
+    eventTarget = events,
+  ): ProviderExecutionContext => ({
     configuredProviders,
     runtimes: createProviderRuntimeSet(registry, log),
     sessions: new ProviderSessionStore(),
     config,
     onAttempt: (step, attempt) =>
-      events.emit({ type: 'provider_attempt', step, ...attempt }),
-    warn: (_message, transition) => events.emit(transition),
+      eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => eventTarget.emit(transition),
   });
+  const beginFeatureRun = (worktree: FeatureWorktree) => {
+    const persistence = startFeatureEventPersistence(worktree.path, events);
+    const featureEvents = persistence.events;
+    return {
+      ...persistence,
+      providerExecution: createProviderExecution(featureEvents),
+    };
+  };
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -828,6 +840,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     wt: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
+    featureEvents: ConductorEventEmitter = events,
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
@@ -900,12 +913,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Daemon runs the engine in-process, so one writer per run covers all
     // steps for this worktree.
     const auditWriter = new AuditTrailWriter(wt.path);
-    auditWriter.subscribe(events);
+    auditWriter.subscribe(featureEvents);
 
     const conductor = new Conductor({
       stateFilePath,
       stepRunner,
-      events,
+      events: featureEvents,
       mode: 'auto',
       config,
       modelPolicy: selectedRuntime.policy,
@@ -955,7 +968,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
       localBase: baseBranch,
-      events,
+      events: featureEvents,
       ranManualTest,
       // #300: give the play-forward conflict the SAME gated /rebase attempts the
       // finish-time step gets, before parking for a human.
@@ -1101,6 +1114,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     baseBranch,
     runConductorInWorktree,
     providerExecution: createProviderExecution,
+    beginFeatureRun,
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,

@@ -183,6 +183,13 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     ) {
       contextOwner = node.initializer?.getText(runnerFile);
     }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.left.getText(runnerFile) === 'providerExecution' &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      contextOwner = node.right.getText(runnerFile);
+    }
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(runnerFile);
       if (
@@ -190,8 +197,12 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
           callee,
         )
       ) {
+        const contextArgument =
+          callee === 'deps.runConductor'
+            ? node.arguments[2]
+            : node.arguments.at(-1);
         contextFlow.push(
-          `${callee}:${node.arguments.at(-1)?.getText(runnerFile)}`,
+          `${callee}:${contextArgument?.getText(runnerFile)}`,
         );
       }
     }
@@ -227,10 +238,11 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       onAttempt:
-        "(step, attempt) =>\n      events.emit({ type: 'provider_attempt', step, ...attempt })",
-      warn: '(_message, transition) => events.emit(transition)',
+        "(step, attempt) =>\n      eventTarget.emit({ type: 'provider_attempt', step, ...attempt })",
+      warn: '(_message, transition) => eventTarget.emit(transition)',
     },
-    contextOwner: 'deps.providerExecution?.()',
+    contextOwner:
+      'featureRun?.providerExecution ?? deps.providerExecution?.()',
     contextFlow: [
       'deps.runSetupTriage:providerExecution',
       'deps.runConductor:providerExecution',
