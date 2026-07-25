@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'child_process';
@@ -25,6 +25,7 @@ vi.mock('../../src/engine/build-review-disposition.js', async (importOriginal) =
   };
 });
 import type { ConductState } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -339,6 +340,117 @@ describe('integration/gate-loop', () => {
     expect(ran).toContain('lint'); // the custom step was dispatched
     const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
     expect(finalState.lint).toBe('done');
+  });
+
+  it('advances past a custom completion gate only with fresh attempt evidence', async () => {
+    const customStep = 'maintain-documentation' as StepName;
+    const marker = '.pipeline/maintain-documentation-pass';
+    const config: HarnessConfig = {
+      steps: {
+        'maintain-documentation': {
+          after: 'rebase',
+          skill: '.agents/skills/maintain-documentation/SKILL.md',
+          enforcement: 'gating',
+          completion_artifact: marker,
+        },
+      },
+    };
+    const runScenario = async (evidence: 'fresh' | 'missing' | 'stale') => {
+      const root = join(dir, evidence);
+      const scenarioStatePath = join(root, 'conduct-state.json');
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      const initialState: Record<string, string> = {};
+      for (const step of ALL_STEPS) initialState[step.name] = 'done';
+      delete initialState.finish;
+      await writeState(scenarioStatePath, {
+        ...(initialState as unknown as ConductState),
+        complexity_tier: 'M',
+        track: 'technical',
+      });
+      if (evidence === 'stale') {
+        const markerPath = join(root, marker);
+        await writeFile(markerPath, 'PASS\n');
+        const staleTime = new Date(Date.now() - 60_000);
+        await utimes(markerPath, staleTime, staleTime);
+      }
+
+      const ran: StepName[] = [];
+      let halted = false;
+      let stepFailure: string | undefined;
+      const scenarioEvents = new ConductorEventEmitter();
+      scenarioEvents.on('loop_halt', () => {
+        halted = true;
+      });
+      scenarioEvents.on('step_failed', (event) => {
+        if (event.type === 'step_failed' && event.step === customStep) {
+          stepFailure = event.error;
+        }
+      });
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          if (step === customStep && evidence === 'fresh') {
+            await writeFile(join(root, marker), 'PASS\n');
+          }
+          if (step === 'finish') {
+            await writeFile(join(root, '.pipeline/finish-choice'), 'keep\n');
+          }
+          return { success: true };
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: scenarioStatePath,
+        stepRunner: runner,
+        events: scenarioEvents,
+        projectRoot: root,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: customStep,
+        maxRetries: 2,
+        config,
+      }).run();
+
+      return {
+        customRuns: ran.filter((step) => step === customStep).length,
+        finishRuns: ran.filter((step) => step === 'finish').length,
+        halted,
+        stepFailure,
+        done: await access(join(root, '.pipeline/DONE')).then(() => true).catch(() => false),
+      };
+    };
+
+    const results = {
+      fresh: await runScenario('fresh'),
+      missing: await runScenario('missing'),
+      stale: await runScenario('stale'),
+    };
+
+    expect(results).toEqual({
+      fresh: {
+        customRuns: 1,
+        finishRuns: 1,
+        halted: false,
+        stepFailure: undefined,
+        done: true,
+      },
+      missing: {
+        customRuns: 2,
+        finishRuns: 0,
+        halted: true,
+        stepFailure:
+          'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+        done: false,
+      },
+      stale: {
+        customRuns: 2,
+        finishRuns: 0,
+        halted: true,
+        stepFailure:
+          'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+        done: false,
+      },
+    });
   });
 
   // ── Front-half amendment kickback (Story: "Front-half amendment kickback
