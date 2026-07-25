@@ -7,6 +7,12 @@ import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
+import {
+  evaluateShipmentEvidence,
+  type ShipmentEvidenceDependencies,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -70,6 +76,10 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 export interface FinishRecordRunners {
   runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
   runGit: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string }>;
+  evaluateEvidence?: (
+    input: ShipmentEvidenceInput,
+    dependencies: ShipmentEvidenceDependencies,
+  ) => Promise<ShipmentEvidenceResult>;
 }
 
 const noopRunners: FinishRecordRunners = {
@@ -169,6 +179,72 @@ export async function dispatchFinishRecord(
     if (pushed !== true) {
       console.error(
         `finish-record: HEAD has not been verified as pushed to its upstream branch (push-evidence check returned ${String(pushed)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    // A PR URL and pushed HEAD only establish that a PR exists. The durable
+    // shipment contract additionally requires the record committed on that
+    // PR head to pass the shared strict evaluator before any terminal write.
+    const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+    const stateResult = await readState(statePath);
+    if (!stateResult.ok) {
+      console.error(
+        `finish-record: cannot read feature state from "${statePath}" (${stateResult.error.message}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (!stateResult.value.feature_desc) {
+      console.error(
+        `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    const repoDir = dirname(cmd.pipelineDir);
+    let candidateCommit: string;
+    let implementationHead: string;
+    try {
+      candidateCommit = (await deps.runGit(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim();
+      implementationHead = (await deps.runGit(['rev-parse', '--verify', '@{u}'], { cwd: repoDir })).stdout.trim();
+    } catch (err) {
+      console.error(
+        `finish-record: cannot resolve the PR head for durable evidence (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    let evidence: ShipmentEvidenceResult;
+    try {
+      evidence = await (deps.evaluateEvidence ?? evaluateShipmentEvidence)(
+        {
+          repoDir,
+          slug: stateResult.value.feature_desc,
+          implementationPr: cmd.prUrl!,
+          candidateCommit,
+          implementationHead,
+        },
+        {
+          gitRunner: async (args) => (await deps.runGit(args, { cwd: repoDir })).stdout,
+          // `gh pr view` above is the required GitHub availability/identity
+          // check for this CLI boundary; the shared evaluator owns the durable
+          // file, hash, and reachability verdict.
+          githubRunner: async () => {},
+        },
+      );
+    } catch (err) {
+      console.error(
+        `finish-record: durable shipment evidence is unavailable (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (evidence.kind !== 'valid') {
+      const detail =
+        evidence.kind === 'refusal'
+          ? `${evidence.code}: expected ${evidence.expected}, observed ${evidence.observed ?? 'none'}`
+          : evidence.reason;
+      console.error(
+        `finish-record: durable shipment evidence refused (${detail}) — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }

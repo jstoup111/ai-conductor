@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -48,6 +48,15 @@ import {
   FINISH_RECORD_USAGE,
   type FinishRecordRunners,
 } from '../../src/engine/finish-record-cli.js';
+
+const validEvidence = {
+  kind: 'valid' as const,
+  slug: 'feature',
+  pr: 'https://github.com/org/repo/pull/1',
+  recordPath: '.docs/shipped/feature.md',
+  hash: 'hash',
+  commit: 'candidate',
+};
 
 describe('engine/finish-record-cli', () => {
   describe('detectFinishRecordCommand', () => {
@@ -252,6 +261,10 @@ describe('engine/finish-record-cli', () => {
     beforeEach(async () => {
       scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-pr-'));
       existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'feature' }),
+      );
     });
 
     afterEach(async () => {
@@ -318,6 +331,12 @@ describe('engine/finish-record-cli', () => {
         if (args[0] === 'merge-base') {
           return { stdout: '' }; // exit 0 → is-ancestor → pushed
         }
+        if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+          return { stdout: 'candidate\n' };
+        }
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+          return { stdout: 'upstream\n' };
+        }
         throw new Error(`unexpected git args: ${args.join(' ')}`);
       });
       const code = await dispatchFinishRecord(
@@ -328,7 +347,7 @@ describe('engine/finish-record-cli', () => {
           pipelineDir: existingAbsDir,
         },
         scratchParent,
-        { runGh, runGit },
+        { runGh, runGit, evaluateEvidence: async () => validEvidence },
       );
       expect(code).toBe(0);
       expect(runGh).toHaveBeenCalledWith(
@@ -397,6 +416,10 @@ describe('engine/finish-record-cli', () => {
     beforeEach(async () => {
       scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-writes-'));
       existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'feature' }),
+      );
       passingRunners = {
         runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
         runGit: vi.fn(async (args: string[]) => {
@@ -406,8 +429,15 @@ describe('engine/finish-record-cli', () => {
           if (args[0] === 'merge-base') {
             return { stdout: '' };
           }
+          if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+            return { stdout: 'candidate\n' };
+          }
+          if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+            return { stdout: 'upstream\n' };
+          }
           throw new Error(`unexpected git args: ${args.join(' ')}`);
         }),
+        evaluateEvidence: async () => validEvidence,
       };
     });
 
@@ -416,10 +446,63 @@ describe('engine/finish-record-cli', () => {
       await rm(scratchParent, { recursive: true, force: true });
     });
 
+    it('choice=pr refuses a strict-evidence refusal before state, finish-choice, or DONE writes', async () => {
+      const before = await readdir(existingAbsDir);
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        {
+          ...passingRunners,
+          evaluateEvidence: async () => ({
+            kind: 'refusal',
+            code: 'shipped-record-missing',
+            expected: '.docs/shipped/feature.md',
+            observed: null,
+          }),
+        },
+      );
+
+      expect([code, await readdir(existingAbsDir)]).toEqual([1, before]);
+    });
+
+    it('choice=pr treats an unavailable strict-evidence evaluation as an actionable refusal before terminal writes', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await readdir(existingAbsDir);
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        {
+          ...passingRunners,
+          evaluateEvidence: async () => {
+            throw new Error('durable evidence service unavailable');
+          },
+        },
+      );
+
+      expect([code, await readdir(existingAbsDir), errSpy.mock.calls.flat().join(' ')]).toEqual([
+        1,
+        before,
+        expect.stringMatching(/durable evidence.*unavailable.*refusing/i),
+      ]);
+    });
+
     it('choice=pr preserves pre-existing state fields and adds pr_url', async () => {
       const statePath = join(existingAbsDir, 'conduct-state.json');
       const { writeFile } = await import('node:fs/promises');
-      await writeFile(statePath, JSON.stringify({ feature: 'x', session_id: 'y' }, null, 2) + '\n');
+      await writeFile(
+        statePath,
+        JSON.stringify({ feature: 'x', session_id: 'y', feature_desc: 'feature' }, null, 2) + '\n',
+      );
 
       const code = await dispatchFinishRecord(
         {
@@ -437,6 +520,7 @@ describe('engine/finish-record-cli', () => {
       expect(state).toEqual({
         feature: 'x',
         session_id: 'y',
+        feature_desc: 'feature',
         pr_url: 'https://github.com/org/repo/pull/1',
       });
     });
@@ -511,7 +595,10 @@ describe('engine/finish-record-cli', () => {
       const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
       expect(marker.trim()).toBe('keep');
       const after = await readdir(existingAbsDir);
-      expect(after).not.toContain('conduct-state.json');
+      expect(after).toContain('conduct-state.json');
+      expect(JSON.parse(await readFile(join(existingAbsDir, 'conduct-state.json'), 'utf-8'))).toEqual({
+        feature_desc: 'feature',
+      });
     });
   });
 
@@ -523,6 +610,10 @@ describe('engine/finish-record-cli', () => {
     beforeEach(async () => {
       scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-commit-point-'));
       existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'feature' }),
+      );
       passingRunners = {
         runGh: vi.fn(async () => ({ stdout: 'https://github.com/org/repo/pull/1\n' })),
         runGit: vi.fn(async (args: string[]) => {
@@ -532,8 +623,15 @@ describe('engine/finish-record-cli', () => {
           if (args[0] === 'merge-base') {
             return { stdout: '' };
           }
+          if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+            return { stdout: 'candidate\n' };
+          }
+          if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+            return { stdout: 'upstream\n' };
+          }
           throw new Error(`unexpected git args: ${args.join(' ')}`);
         }),
+        evaluateEvidence: async () => validEvidence,
       };
     });
 
