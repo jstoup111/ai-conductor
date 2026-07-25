@@ -4,7 +4,11 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ComplexityTier, StepName } from '../types/index.js';
-import type { EffortLevel, HarnessConfig } from '../types/config.js';
+import type {
+  EffortLevel,
+  HarnessConfig,
+  ProviderSelection,
+} from '../types/config.js';
 import { resolveProviderCandidates } from './provider-selection.js';
 import type {
   ProviderRuntime,
@@ -56,9 +60,9 @@ export interface ProviderTransitionWarning {
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
-  preferredProvider?: string;
+  preferredProvider?: ProviderSelection;
   runtimes: ProviderRuntimeSet;
-  sessions: ProviderSessionScope;
+  sessions: Pick<ProviderSessionScope, 'prepare' | 'markCreated'>;
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
@@ -200,13 +204,21 @@ export async function executeProviderCandidates({
             escalate,
           });
     const session = await sessions.prepare(providerKey);
-    const result = await invokeRuntime(runtime, {
-      ...options,
-      sessionId: session.id,
-      resume: session.resume,
-      model: resolved.model,
-      effort: resolved.effort,
-    });
+    let result: InvokeResult;
+    try {
+      result = await invokeRuntime(runtime, {
+        ...options,
+        sessionId: session.id,
+        resume: session.resume,
+        model: resolved.model,
+        effort: resolved.effort,
+      });
+    } catch (error) {
+      // A runtime rejection occurs only after a live dispatch was attempted.
+      // Preserve same-step retry continuity without marking cached skips.
+      await sessions.markCreated(providerKey);
+      throw error;
+    }
     if (!result.providerInvocationSkipped) {
       await sessions.markCreated(providerKey);
     }

@@ -13,7 +13,13 @@ import {
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
 } from '../../src/engine/step-runners.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import {
+  CLAUDE_MODEL_POLICY as CLAUDE_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -26,9 +32,329 @@ function createMockProvider(): LLMProvider {
   };
 }
 
+function interactiveRuntime(
+  key: 'claude' | 'codex',
+  invokeInteractive: LLMProvider['invokeInteractive'],
+) {
+  const policy =
+    key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+  return {
+    key,
+    provider: {
+      invoke: vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: 'wrong captured path',
+        exitCode: 0,
+      })),
+      invokeInteractive,
+    },
+    policy,
+    builtIn: true,
+    availability: new ModelAvailability(policy.modelFallbackLadder),
+  };
+}
+
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
+  it('dispatches consecutive normal steps through their preferred provider with fresh provider sessions', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'codex built',
+      exitCode: 0,
+      tokenUsage: { input: 11, output: 4 },
+    }));
+    const claudeInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'claude explored',
+      exitCode: 0,
+      tokenUsage: { input: 7, output: 3 },
+    }));
+    const legacyInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'legacy provider must not run',
+      exitCode: 0,
+    }));
+    const legacyInteractive = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'legacy provider must not run',
+      exitCode: 0,
+    }));
+    const provider = (
+      invoke: LLMProvider['invoke'],
+      invokeInteractive: LLMProvider['invokeInteractive'],
+    ): LLMProvider => ({ invoke, invokeInteractive });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider(
+          vi.fn(async (): Promise<InvokeResult> => ({
+            success: true,
+            output: 'wrong Claude path',
+            exitCode: 0,
+          })),
+          claudeInteractive,
+        ),
+        policy: CLAUDE_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CLAUDE_POLICY.modelFallbackLadder,
+        ),
+      },
+      {
+        key: 'codex',
+        provider: provider(
+          codexInvoke,
+          vi.fn(async (): Promise<InvokeResult> => ({
+            success: true,
+            output: 'wrong Codex path',
+            exitCode: 0,
+          })),
+        ),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CODEX_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+    ]);
+    const sessionIds = [
+      'build-codex-session',
+      'explore-claude-session',
+    ][Symbol.iterator]();
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => sessionIds.next().value ?? 'unexpected-session',
+    });
+    const beginStep = vi.spyOn(sessions, 'beginStep');
+    const runner = new DefaultStepRunner(
+      provider(legacyInvoke, legacyInteractive),
+      'legacy-session',
+      '/tmp/project',
+      {
+        config: {
+          llm_provider: ['claude', 'codex'],
+          steps: {
+            build: { llm_provider: 'codex' },
+            explore: { llm_provider: 'claude' },
+          },
+        },
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+      } satisfies StepRunnerOptions,
+    );
+
+    await runner.resetSession('build');
+    const build = await runner.run('build', emptyState);
+    const buildSession = sessions.current('codex');
+    await runner.resetSession('explore');
+    const explore = await runner.run('explore', emptyState);
+
+    expect({
+      legacyCalls: {
+        invoke: legacyInvoke.mock.calls,
+        interactive: legacyInteractive.mock.calls,
+      },
+      codexCalls: codexInvoke.mock.calls,
+      claudeInteractiveCalls: claudeInteractive.mock.calls,
+      beginStepCalls: beginStep.mock.calls,
+      buildSession,
+      exploreSession: sessions.current('claude'),
+      build,
+      explore,
+    }).toEqual({
+      legacyCalls: { invoke: [], interactive: [] },
+      beginStepCalls: [['build'], ['explore']],
+      codexCalls: [
+        [
+          expect.objectContaining({
+            cwd: '/tmp/project',
+            dangerouslySkipPermissions: true,
+            sessionId: 'build-codex-session',
+            resume: false,
+            model: 'gpt-5.6-terra',
+            effort: 'low',
+          }),
+        ],
+      ],
+      claudeInteractiveCalls: [
+        [
+          expect.objectContaining({
+            cwd: '/tmp/project',
+            dangerouslySkipPermissions: false,
+            sessionId: 'explore-claude-session',
+            resume: false,
+            interactive: true,
+            model: 'fable',
+            effort: 'high',
+          }),
+        ],
+      ],
+      buildSession: { id: 'build-codex-session', created: true },
+      exploreSession: { id: 'explore-claude-session', created: true },
+      build: {
+        success: true,
+        output: 'codex built',
+        tokenUsage: { input: 11, output: 4 },
+        model: 'gpt-5.6-terra',
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [
+          {
+            provider: 'codex',
+            model: 'gpt-5.6-terra',
+            tokenUsage: { input: 11, output: 4 },
+            outcome: 'success',
+            invoked: true,
+          },
+        ],
+      },
+      explore: {
+        success: true,
+        output: 'claude explored',
+        tokenUsage: { input: 7, output: 3 },
+        model: 'fable',
+        preferredProvider: 'claude',
+        actualProvider: 'claude',
+        attempts: [
+          {
+            provider: 'claude',
+            model: 'fable',
+            tokenUsage: { input: 7, output: 3 },
+            outcome: 'success',
+            invoked: true,
+          },
+        ],
+      },
+    });
+  });
+
+  it('persists interactive run-wide unavailability across step scopes without marking the cached skip invoked', async () => {
+    const unavailableCodex = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'codex executable missing',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'codex executable missing',
+    }));
+    const claudeFallback = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'claude fallback',
+      exitCode: 0,
+    }));
+    const cachedSessions = new ProviderSessionStore({
+      createSessionId: (() => {
+        let id = 0;
+        return () => `cached-${++id}`;
+      })(),
+    });
+    const cachedRunner = new DefaultStepRunner(
+      createMockProvider(),
+      'legacy-cache-session',
+      '/tmp/project',
+      {
+        mode: 'interactive',
+        config: {
+          llm_provider: ['codex', 'claude'],
+          steps: {
+            explore: { llm_provider: 'codex' },
+            stories: { llm_provider: 'codex' },
+          },
+        },
+        sessionStore: cachedSessions,
+        providerRuntimes: new ProviderRuntimeSet([
+          interactiveRuntime('codex', unavailableCodex),
+          interactiveRuntime('claude', claudeFallback),
+        ]),
+        configuredProviders: ['codex', 'claude'],
+        providerWarn: vi.fn(),
+      },
+    );
+
+    await cachedRunner.resetSession('explore');
+    await cachedRunner.run('explore', emptyState);
+    await cachedRunner.resetSession('stories');
+    const cachedResult = await cachedRunner.run('stories', emptyState);
+
+    expect({
+      unavailableCodexCalls: unavailableCodex.mock.calls.length,
+      cachedActualProvider: cachedResult.actualProvider,
+      cachedAttempt: cachedResult.attempts?.[0],
+      cachedSession: cachedSessions.current('codex'),
+    }).toEqual({
+      unavailableCodexCalls: 1,
+      cachedActualProvider: 'claude',
+      cachedAttempt: {
+        provider: 'codex',
+        outcome: 'unavailable',
+        reason: 'codex executable missing',
+        fallbackReason: 'codex executable missing',
+        invoked: false,
+      },
+      cachedSession: { id: 'cached-3', created: false },
+    });
+  });
+
+  it('marks a rejected interactive attempt created and resumes its session on same-step retry', async () => {
+    const throwingInteractive = vi
+      .fn<LLMProvider['invokeInteractive']>()
+      .mockRejectedValueOnce(new Error('interactive process rejected'))
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'retry completed',
+        exitCode: 0,
+      });
+    const retrySessions = new ProviderSessionStore({
+      createSessionId: () => 'retry-claude-session',
+    });
+    const retryRunner = new DefaultStepRunner(
+      createMockProvider(),
+      'legacy-retry-session',
+      '/tmp/project',
+      {
+        mode: 'interactive',
+        config: {
+          llm_provider: 'claude',
+          steps: { explore: { llm_provider: 'claude' } },
+        },
+        sessionStore: retrySessions,
+        providerRuntimes: new ProviderRuntimeSet([
+          interactiveRuntime('claude', throwingInteractive),
+        ]),
+        configuredProviders: ['claude'],
+      },
+    );
+
+    await retryRunner.resetSession('explore');
+    const failed = await retryRunner.run('explore', emptyState);
+    const afterFailure = retrySessions.current('claude');
+    const retried = await retryRunner.run('explore', emptyState);
+
+    expect({
+      failed,
+      afterFailure,
+      retryInvocations: throwingInteractive.mock.calls.map(
+        ([options]) => ({
+          sessionId: options.sessionId,
+          resume: options.resume,
+        }),
+      ),
+      retriedActualProvider: retried.actualProvider,
+    }).toEqual({
+      failed: {
+        success: false,
+        output: 'Session for explore exited with error',
+      },
+      afterFailure: { id: 'retry-claude-session', created: true },
+      retryInvocations: [
+        { sessionId: 'retry-claude-session', resume: false },
+        { sessionId: 'retry-claude-session', resume: true },
+      ],
+      retriedActualProvider: 'claude',
+    });
+  });
+
   it('dispatches the Codex policy default model and effort for the memory step', async () => {
     const provider = createMockProvider();
     const options = {

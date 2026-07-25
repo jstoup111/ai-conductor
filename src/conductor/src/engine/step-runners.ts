@@ -30,6 +30,16 @@ import {
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import type { ProviderSessionStore } from './provider-session.js';
+import {
+  executeProviderCandidates,
+  type ExecuteProviderCandidatesInput,
+  type ProviderExecutionResult,
+} from './provider-execution.js';
+import {
+  ProviderRuntimeSet,
+  type ProviderRuntime,
+} from './provider-runtime.js';
+import { normalizeProviderSelection } from './provider-selection.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -296,6 +306,14 @@ export interface StepRunnerOptions {
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
   providerKey?: string;
+  /** Provider-aware runtime registry for normal serial step dispatch. */
+  providerRuntimes?: ProviderRuntimeSet;
+  /** Ordered run-level candidates. Defaults to config.llm_provider. */
+  configuredProviders?: readonly string[];
+  /** Injectable candidate executor; production uses executeProviderCandidates. */
+  providerExecutor?: typeof executeProviderCandidates;
+  /** Visible provider-transition warning sink. */
+  providerWarn?: ExecuteProviderCandidatesInput['warn'];
 }
 
 export class DefaultStepRunner implements StepRunner {
@@ -323,6 +341,10 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private sessionStore?: ProviderSessionStore;
   private providerKey: string;
+  private providerRuntimes?: ProviderRuntimeSet;
+  private configuredProviders: readonly string[];
+  private providerExecutor: typeof executeProviderCandidates;
+  private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   callCount = 0;
 
   constructor(
@@ -349,6 +371,14 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.sessionStore = options?.sessionStore;
     this.providerKey = options?.providerKey ?? 'claude';
+    this.providerRuntimes = options?.providerRuntimes;
+    this.configuredProviders =
+      options?.configuredProviders ??
+      normalizeProviderSelection(this.config?.llm_provider);
+    this.providerExecutor =
+      options?.providerExecutor ?? executeProviderCandidates;
+    this.providerWarn =
+      options?.providerWarn ?? ((message) => console.warn(message));
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -405,6 +435,11 @@ export class DefaultStepRunner implements StepRunner {
     let resume: boolean;
     if (branchSessionId !== undefined) {
       resume = opts?.resume ?? false;
+    } else if (this.providerRuntimes) {
+      // Provider execution prepares the selected provider inside the
+      // caller-owned step scope. Never reset that scope from run(): retries
+      // and fallback candidates must share it.
+      resume = false;
     } else if (this.sessionStore) {
       const invocation = await this.sessionStore.prepare(this.providerKey);
       this.sessionId = invocation.id;
@@ -436,6 +471,16 @@ export class DefaultStepRunner implements StepRunner {
     // limits and stale sessions. Collaborative steps use invokeInteractive()
     // because the user is actively interacting via REPL.
     if (autonomous) {
+      if (this.providerRuntimes && branchSessionId === undefined) {
+        return this.runProviderAwareNormal(
+          step,
+          state,
+          opts,
+          prompt,
+          systemPrompt,
+          false,
+        );
+      }
       return this.runAutonomous(step, prompt, resume, systemPrompt, resolved, branchSessionId);
     }
 
@@ -454,6 +499,18 @@ export class DefaultStepRunner implements StepRunner {
     } else {
       // default mode: REPL only for explicitly conversational steps
       interactive = INTERACTIVE_STEPS.has(step);
+    }
+
+    if (this.providerRuntimes && branchSessionId === undefined) {
+      return this.runProviderAwareNormal(
+        step,
+        state,
+        opts,
+        prompt,
+        systemPrompt,
+        true,
+        interactive,
+      );
     }
 
     // Consult the availability cache before dispatch so a model already
@@ -505,6 +562,136 @@ export class DefaultStepRunner implements StepRunner {
       this.callCount++;
       return { success: false, output: `Session for ${step} exited with error` };
     }
+  }
+
+  private async runProviderAwareNormal(
+    step: StepName,
+    state: ConductState,
+    opts: StepRunOptions | undefined,
+    prompt: string,
+    systemPrompt: string,
+    streaming: boolean,
+    interactive = false,
+  ): Promise<StepRunResult> {
+    if (!this.providerRuntimes || !this.sessionStore) {
+      throw new Error(
+        'Provider-aware normal dispatch requires runtimes and a session store',
+      );
+    }
+
+    const runtimes = streaming
+      ? this.streamingProviderRuntimes(this.providerRuntimes)
+      : this.providerRuntimes;
+    try {
+      const result = await this.providerExecutor({
+        step,
+        configuredProviders: this.configuredProviders,
+        preferredProvider: this.config?.steps?.[step]?.llm_provider,
+        runtimes,
+        sessions: this.sessionStore,
+        config: this.config,
+        tier: state.complexity_tier,
+        modelOverride: opts?.modelOverride ?? this.modelOverride,
+        effortOverride: opts?.effortOverride ?? this.effortOverride,
+        warn: this.providerWarn,
+        options: {
+          prompt,
+          systemPrompt,
+          cwd: this.projectDir,
+          dangerouslySkipPermissions: streaming
+            ? this.mode === 'auto'
+            : true,
+          ...(streaming ? { interactive } : {}),
+        },
+      });
+      this.callCount++;
+      await this.persistProviderAwareSuccess(result);
+      return this.toStepRunResult(result);
+    } catch {
+      this.callCount++;
+      return { success: false, output: `Session for ${step} exited with error` };
+    }
+  }
+
+  private streamingProviderRuntimes(
+    runtimes: ProviderRuntimeSet,
+  ): ProviderRuntimeSet {
+    return new ProviderRuntimeSet(
+      runtimes.keys().map((key): ProviderRuntime => {
+        const runtime = runtimes.get(key);
+        return {
+          key: runtime.key,
+          policy: runtime.policy,
+          builtIn: runtime.builtIn,
+          availability: runtime.availability,
+          get runWideUnavailable() {
+            return runtime.runWideUnavailable;
+          },
+          set runWideUnavailable(value) {
+            runtime.runWideUnavailable = value;
+          },
+          provider: {
+            invoke: async (options) =>
+              (await runtime.provider.invokeInteractive(options)) ?? {
+                success: true,
+                output: '',
+                exitCode: 0,
+              },
+            invokeInteractive: (options) =>
+              runtime.provider.invokeInteractive(options),
+          },
+        };
+      }),
+    );
+  }
+
+  private async persistProviderAwareSuccess(
+    result: ProviderExecutionResult,
+  ): Promise<void> {
+    if (!result.success) return;
+
+    this.sessionStarted = true;
+    if (result.actualProvider) {
+      const session = this.sessionStore?.current(result.actualProvider);
+      if (session) this.sessionId = session.id;
+    }
+    if (this.pipelineDir) {
+      await this.ensurePipelineDir();
+      await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
+      await writeFile(
+        join(this.pipelineDir, 'conduct-session-id'),
+        this.sessionId,
+        'utf-8',
+      );
+      this.wasSessionMarkerFoundOnInit = true;
+    }
+  }
+
+  private toStepRunResult(
+    result: ProviderExecutionResult,
+  ): StepRunResult {
+    return {
+      success: result.success,
+      ...(result.output ? { output: result.output } : {}),
+      ...(result.authFailure ? { authFailure: true } : {}),
+      ...(result.rateLimited
+        ? {
+            rateLimited: true,
+            waitSeconds: result.waitSeconds ?? 300,
+            ...(result.deadline !== undefined
+              ? { deadline: result.deadline }
+              : {}),
+          }
+        : {}),
+      ...(result.sessionExpired ? { sessionExpired: true } : {}),
+      ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+      ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
+      preferredProvider: result.preferredProvider,
+      ...(result.actualProvider
+        ? { actualProvider: result.actualProvider }
+        : {}),
+      attempts: result.attempts,
+    };
   }
 
   private async runAutonomous(
@@ -617,7 +804,11 @@ export class DefaultStepRunner implements StepRunner {
   async resetSession(step?: StepName): Promise<void> {
     if (this.sessionStore && step !== undefined) {
       await this.sessionStore.beginStep(step);
-      this.sessionId = (await this.sessionStore.prepare(this.providerKey)).id;
+      if (!this.providerRuntimes) {
+        this.sessionId = (
+          await this.sessionStore.prepare(this.providerKey)
+        ).id;
+      }
       this.sessionStarted = false;
       this.sessionStartedInitialized = true;
       return;
