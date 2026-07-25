@@ -3,10 +3,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner } from '../../src/engine/conductor.js';
-import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import type { StepRunner, StepRunOptions } from '../../src/engine/conductor.js';
+import type {
+  FullSuiteFailureReason,
+  FullSuitePassEvidence,
+} from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteVerifierResult } from '../../src/engine/full-suite-verifier.js';
-import { writeState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -136,4 +139,124 @@ describe('test_suite native gate loop', () => {
     expect(inspect).toHaveBeenCalled();
     expect(ensure).toHaveBeenCalledTimes(1);
   });
+
+  it.each<{
+    label: string;
+    reason: FullSuiteFailureReason;
+    message: string;
+  }>([
+    {
+      label: 'non-zero exit',
+      reason: 'nonzero_exit',
+      message: 'unit/auth.test.ts failed; credential=[REDACTED]',
+    },
+    {
+      label: 'missing config',
+      reason: 'missing_config',
+      message: 'Project config must declare test_suite',
+    },
+    {
+      label: 'launch error',
+      reason: 'unlaunchable',
+      message: 'Unable to launch configured aggregate command',
+    },
+    {
+      label: 'timeout',
+      reason: 'timeout',
+      message: 'Aggregate suite timed out after 30 seconds',
+    },
+    {
+      label: 'fingerprint preflight failure',
+      reason: 'preflight_failed',
+      message: 'Unable to fingerprint declared test input',
+    },
+  ])(
+    'routes persistent $label evidence through BUILD twice, then halts at the shared cap',
+    async ({ reason, message }) => {
+      await writeState(stateFilePath, {
+        ...FRONT_DONE,
+        wiring_check: 'done',
+        test_suite: 'pending',
+        manual_test: 'pending',
+        prd_audit: 'pending',
+        architecture_review_as_built: 'pending',
+        retro: 'done',
+      });
+      const timeline: string[] = [];
+      const buildRetryReasons: Array<string | undefined> = [];
+      const ensure = vi.fn(async () => {
+        timeline.push('test_suite');
+        return { status: 'FAILED', reason, message } as const;
+      });
+      const runner: StepRunner = {
+        run: async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          timeline.push(step);
+          if (step === 'build') buildRetryReasons.push(options?.retryReason);
+          return { success: true };
+        },
+      };
+      const events = new ConductorEventEmitter();
+      const kickbacks: Array<{ evidence?: string; count: number }> = [];
+      let haltReason = '';
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback' && event.from === 'test_suite') {
+          kickbacks.push({ evidence: event.evidence, count: event.count });
+        }
+      });
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReason = event.reason;
+      });
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner: runner,
+        events,
+        projectRoot,
+        mode: 'auto',
+        fromStep: 'test_suite',
+        // The native gate owns a single attempt regardless of the generic
+        // retry policy; BUILD must intervene before ensure() can run again.
+        maxRetries: 7,
+        fullSuiteVerifier: {
+          ensure,
+          inspect: async () => ({ status: 'FAILED', reason, message }),
+        },
+      });
+
+      await conductor.run();
+
+      const persisted = await readState(stateFilePath);
+      const finalState = persisted.ok ? persisted.value : {};
+      const routedEvidence =
+        `full-suite verification failed (${reason}): ${message}\n` +
+        'Evidence: .pipeline/test-suite-evidence.json';
+      expect({
+        ensureCalls: ensure.mock.calls.length,
+        relevantTimeline: timeline.filter((step) => step === 'test_suite' || step === 'build'),
+        shipDispatches: timeline.filter((step) =>
+          ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step),
+        ),
+        kickbacks,
+        buildRetryReasons,
+        haltReason,
+        finalGateState: finalState.test_suite,
+        restagedDownstreamState: finalState.retro,
+      }).toEqual({
+        ensureCalls: 3,
+        relevantTimeline: ['test_suite', 'build', 'test_suite', 'build', 'test_suite'],
+        shipDispatches: [],
+        kickbacks: [
+          { evidence: routedEvidence, count: 1 },
+          { evidence: routedEvidence, count: 2 },
+        ],
+        buildRetryReasons: [
+          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
+          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
+        ],
+        haltReason:
+          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
+        finalGateState: 'failed',
+        restagedDownstreamState: 'stale',
+      });
+    },
+  );
 });

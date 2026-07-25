@@ -3168,6 +3168,7 @@ export class Conductor {
         pendingRetryHints.delete(step.name);
         let successOutput: string | undefined;
         let stepResult: StepRunResult | undefined;
+        let failedStepResult: StepRunResult | undefined;
 
         // D4 keying (Slice B): snapshot plan artifacts BEFORE the plan step runs
         // so the DECIDE-tail owner stamping targets only the plan(s) authored in
@@ -3179,7 +3180,10 @@ export class Conductor {
             ? await snapshotArtifactMtimes(this.projectRoot, 'plan')
             : null;
 
-        const stepMaxRetries = resolved.max_retries;
+        // The native suite owns one process attempt per BUILD lap. Retrying the
+        // identical verifier input here would only rerun the same command before
+        // BUILD had a chance to remediate it.
+        const stepMaxRetries = step.name === 'test_suite' ? 1 : resolved.max_retries;
         // Snapshot of resolved-task count before the most recent build retry,
         // so the circuit breaker can detect "Claude ran but completed zero
         // additional tasks" = no point retrying further, hand off to REPL.
@@ -3678,6 +3682,7 @@ export class Conductor {
           }
 
           if (!result.success) {
+            failedStepResult = result;
             // #814: an EMPTY/whitespace runner output slips past `??` (which
             // only substitutes null/undefined), so `lastError` used to become
             // '' and render as "no reason recorded" — masking a grader/subprocess
@@ -4492,6 +4497,53 @@ export class Conductor {
                 i = outcome.nextIndex;
                 continue;
               }
+            }
+
+            // Native full-suite failure routing (Task 17): the verifier owns
+            // execution and redaction, so carry its typed reason + sanitized
+            // diagnostic into the existing bounded BUILD kickback loop. This
+            // is mechanical and therefore applies to every auto-mode run, not
+            // only daemon-hosted runs.
+            const fullSuiteFailure = failedStepResult?.fullSuiteVerification;
+            if (step.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED') {
+              const evidence =
+                `full-suite verification failed (${fullSuiteFailure.reason}): ` +
+                `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
+              const count = (kickbackCounts.get('test_suite') ?? 0) + 1;
+              if (count <= MAX_KICKBACKS_PER_GATE) {
+                kickbackCounts.set('test_suite', count);
+                await emitTracked({
+                  type: 'kickback',
+                  from: 'test_suite',
+                  to: 'build',
+                  evidence,
+                  count,
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `test_suite failed:\n${evidence}\n` +
+                    'Fix and commit the failure before the suite is re-run.',
+                );
+                if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                // The failed native gate is not covered by the done-only stale
+                // cascade; restage it explicitly for the next BUILD lap.
+                (state as Record<string, unknown>).test_suite = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for-loop i++ lands on build
+                continue;
+              }
+              const reason =
+                `test_suite failure unresolved after ${count - 1} build kickback(s) ` +
+                `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
             }
 
             // build_review kickback (daemon only, Task 13): a FAIL verdict from
