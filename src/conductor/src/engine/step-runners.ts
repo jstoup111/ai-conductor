@@ -45,6 +45,7 @@ import {
   type ProviderRuntime,
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
+import type { VerifierDispatchResult } from './attribution-lane.js';
 
 const STEP_PROMPTS: Record<StepName, string> = {
   bootstrap: '/bootstrap',
@@ -1199,7 +1200,7 @@ export class DefaultStepRunner implements StepRunner {
     residueIds: string[];
     planPath: string;
     projectRoot: string;
-  }): Promise<{ success: boolean; output?: string }> {
+  }): Promise<VerifierDispatchResult> {
     const { dispatchAttributionVerifier } = await import('./attribution-lane.js');
 
     try {
@@ -1211,6 +1212,22 @@ export class DefaultStepRunner implements StepRunner {
         featureWorktreePath: opts.projectRoot,
         config: this.config,
         modelPolicy: this.modelPolicy,
+        ...(this.providerRuntimes && this.sessionStore
+          ? {
+              providerDispatch: async (options) => {
+                const result = await this.executeProviderAwareOneShot(
+                  'attribution_verify',
+                  options,
+                );
+                if (!result) {
+                  throw new Error(
+                    'Provider-aware attribution dispatch requires runtimes and a session store',
+                  );
+                }
+                return result;
+              },
+            }
+          : {}),
       });
     } catch (err) {
       return {
@@ -1234,8 +1251,6 @@ export class DefaultStepRunner implements StepRunner {
    * as a PASS.
    */
   private async runBuildReview(): Promise<StepRunResult> {
-    const resolved = this.resolvedConfigFor('build_review');
-
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
     // directory holds many files, and picking the alphabetically-last one graded
@@ -1337,38 +1352,71 @@ export class DefaultStepRunner implements StepRunner {
 
     const prompt = buildGraderPrompt(inputs);
 
-    // Fresh one-shot session — never contaminate the main conductor session,
-    // and never resume a prior grader session either.
-    const { v4: uuidv4 } = await import('uuid');
-    const sessionId = uuidv4();
-
     // Track every model attempted during the ladder walk so a full-ladder
     // exhaustion failure names every model tried.
     const attemptedModels: string[] = [];
-    const trackingProvider: LLMProvider = {
-      invoke: (invokeOpts) => {
-        attemptedModels.push(invokeOpts.model ?? '');
-        return this.provider.invoke(invokeOpts);
+    const providerResult = await this.executeProviderAwareOneShot(
+      'build_review',
+      {
+        prompt,
+        dangerouslySkipPermissions: true,
+        cwd: this.projectDir,
       },
-      invokeInteractive: (invokeOpts) => this.provider.invokeInteractive(invokeOpts),
-    };
-
-    const result = await this.modelAvailability.invokeWithLadder(trackingProvider, {
-      prompt,
-      sessionId,
-      resume: false,
-      dangerouslySkipPermissions: true,
-      model: this.modelAvailability.effectiveModel(resolved.model).model,
-      effort: resolved.effort,
-      cwd: this.projectDir,
-    });
+    );
+    const result =
+      providerResult ??
+      (await (async () => {
+        // Legacy scalar-provider adapter: retain the grader's internal native
+        // model ladder and fresh one-shot session contract.
+        const resolved = this.resolvedConfigFor('build_review');
+        const { v4: uuidv4 } = await import('uuid');
+        const trackingProvider: LLMProvider = {
+          invoke: (invokeOpts) => {
+            attemptedModels.push(invokeOpts.model ?? '');
+            return this.provider.invoke(invokeOpts);
+          },
+          invokeInteractive: (invokeOpts) =>
+            this.provider.invokeInteractive(invokeOpts),
+        };
+        return this.modelAvailability.invokeWithLadder(trackingProvider, {
+          prompt,
+          sessionId: uuidv4(),
+          resume: false,
+          dangerouslySkipPermissions: true,
+          model: this.modelAvailability.effectiveModel(resolved.model).model,
+          effort: resolved.effort,
+          cwd: this.projectDir,
+        });
+      })());
+    if (providerResult) {
+      attemptedModels.push(
+        ...providerResult.attempts.flatMap((attempt) =>
+          attempt.invoked && attempt.model ? [attempt.model] : [],
+        ),
+      );
+    }
     this.callCount++;
+    const withProviderMetadata = (r: StepRunResult): StepRunResult =>
+      providerResult
+        ? {
+            ...r,
+            ...this.providerAttribution(providerResult),
+            ...(providerResult.resolvedModel
+              ? { model: providerResult.resolvedModel }
+              : {}),
+            ...(providerResult.tokenUsage
+              ? { tokenUsage: providerResult.tokenUsage }
+              : {}),
+          }
+        : r;
+    const finalize = (r: StepRunResult): StepRunResult =>
+      withBaseFreshness(withProviderMetadata(r));
 
     if (result.authFailure) {
-      return withBaseFreshness({ success: false, output: result.output, authFailure: true });
+      return finalize({ success: false, output: result.output, authFailure: true });
     }
     if (result.rateLimited) {
-      return withBaseFreshness({
+      return finalize({
         success: false,
         output: result.output,
         rateLimited: true,
@@ -1376,11 +1424,11 @@ export class DefaultStepRunner implements StepRunner {
       });
     }
     if (result.sessionExpired) {
-      return withBaseFreshness({ success: false, output: result.output, sessionExpired: true });
+      return finalize({ success: false, output: result.output, sessionExpired: true });
     }
     if (result.success) {
       await this.stampBuildReviewVerdict();
-      return withBaseFreshness({ success: true, output: prependFloorAdvisory(result.output) });
+      return finalize({ success: true, output: prependFloorAdvisory(result.output) });
     }
 
     // Full-ladder exhaustion: every attempted model reported unavailable.
@@ -1388,7 +1436,7 @@ export class DefaultStepRunner implements StepRunner {
     // #814: this is a grader-DISPATCH failure (no model could run the grader),
     // not a returned FAIL — flag it so the conductor backs off and names it.
     if (result.modelUnavailable && attemptedModels.length > 1) {
-      return withBaseFreshness({
+      return finalize({
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
         graderDispatchFailed: true,
@@ -1406,7 +1454,7 @@ export class DefaultStepRunner implements StepRunner {
       typeof result.output === 'string' && result.output.trim().length > 0
         ? result.output
         : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
-    return withBaseFreshness({ success: false, output: graderOutput, graderDispatchFailed: true });
+    return finalize({ success: false, output: graderOutput, graderDispatchFailed: true });
   }
 
   /**
