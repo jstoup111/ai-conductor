@@ -251,6 +251,58 @@ complexity:
       expect(result.error.message).toContain('bogus_key');
     });
 
+    it('accepts provider-native TDD RED/GREEN model overrides on the build step', () => {
+      const result = validateConfig({
+        llm_provider: 'codex',
+        steps: {
+          build: {
+            tdd: {
+              red: { model: 'gpt-5.6-luna' },
+              green: { model: 'gpt-5.6-terra' },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.steps?.build?.tdd?.red?.model).toBe('gpt-5.6-luna');
+      expect(result.config.steps?.build?.tdd?.green?.model).toBe('gpt-5.6-terra');
+    });
+
+    it('rejects TDD models that do not belong to the selected provider', () => {
+      const result = validateConfig({
+        llm_provider: 'codex',
+        steps: { build: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.build.tdd.red.model');
+      expect(result.error.message).toContain('codex');
+    });
+
+    it('rejects TDD model configuration when llm_provider is not a string', () => {
+      const result = validateConfig({
+        llm_provider: 42,
+        steps: { build: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('llm_provider');
+    });
+
+    it('rejects TDD model configuration outside the build step', () => {
+      const result = validateConfig({
+        steps: { memory: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.memory.tdd');
+    });
+
     it('rejects invalid phase name', () => {
       const result = validateConfig({
         phases: { NONEXISTENT: { effort: 'medium' } },
