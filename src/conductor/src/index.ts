@@ -95,6 +95,10 @@ import {
   resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
+import {
+  detectTestSuiteCommand,
+  dispatchTestSuiteCommand,
+} from './engine/test-suite-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
@@ -375,6 +379,15 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const testSuiteCmd = detectTestSuiteCommand(process.argv);
+  if (testSuiteCmd) {
+    const code = await dispatchTestSuiteCommand(testSuiteCmd, {
+      projectRoot: process.cwd(),
+    });
+    process.exitCode = code;
+    return;
+  }
+
   // Memory setup subcommand (`conduct memory setup [dir]`, adr-2026-06-29-shared-memory-store-placement-and-durability) runs
   // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
   // store + .memory symlink. Dispatched first so bin/conduct can call it
