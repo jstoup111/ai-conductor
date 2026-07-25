@@ -8,6 +8,9 @@
 
 The outcome row class is omitted because this chat-origin feature has no staged or committed intake
 outcomes. The FR row class is omitted because the approved track is technical and has no PRD.
+Per operator direction on 2026-07-25, the backfill rows remain behaviorally mapped but add no
+dedicated automated audit/backfill tests; their evidence is the real report, record diff, strict
+record verification, and idempotent second run.
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 |---|---|---|---|---|
