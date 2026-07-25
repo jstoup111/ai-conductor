@@ -175,6 +175,65 @@ describe('daemon false-ship guard — real makeRunFeature entry point', () => {
     expect(await exists(join(worktreeDir, '.pipeline', 'HALT'))).toBe(true);
   });
 
+  // #916/#936 system boundary: drive the same production completion entry
+  // point as a daemon run, but give it a PR-shaped terminal state for a plan
+  // whose expected durable record is absent.  Strict record parsing,
+  // association, workflow, reconciliation, and the one-time historical audit
+  // have focused lower-layer coverage in the approved plan; the backfill has
+  // explicitly been kept out of automated fixtures.  This spec owns the
+  // cross-module invariant: a plausible local terminal state must not turn
+  // into a shipment before durable evidence is valid.
+  it('a PR-shaped completion without its durable shipped record halts before every ship side effect', async () => {
+    await mkdir(join(worktreeDir, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(worktreeDir, '.docs', 'stories'), { recursive: true });
+    await writeFile(
+      join(worktreeDir, '.docs', 'plans', 'feat-false-ship.md'),
+      '# Plan\n**Stories:** .docs/stories/feat-false-ship.md\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeDir, '.docs', 'stories', 'feat-false-ship.md'),
+      '# Stories\n**Status:** Accepted\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeDir, '.pipeline', 'conduct-state.json'),
+      JSON.stringify({
+        feature_desc: 'feat-false-ship',
+        pr_url: 'https://github.com/o/r/pull/916',
+      }),
+      'utf-8',
+    );
+
+    const rec = freshRecorders();
+    const run = makeRunFeature(
+      makeDeps(
+        worktreeDir,
+        projectRoot,
+        {
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: 'https://github.com/o/r/pull/916',
+        },
+        rec,
+      ),
+    );
+
+    const out = await run(ITEM);
+
+    expect(out.status).toBe('halted');
+    expect(rec.markProcessedCalls).toEqual([]);
+    expect(rec.ghCalls).toEqual([]);
+    expect(rec.enrollCalls).toEqual([]);
+    expect(rec.teardownCalls).toEqual([{ keep: true }]);
+    expect(await exists(join(worktreeDir, '.pipeline', 'DONE'))).toBe(false);
+    expect(await exists(join(worktreeDir, '.pipeline', 'HALT'))).toBe(true);
+    const haltText = await readFile(join(worktreeDir, '.pipeline', 'HALT'), 'utf-8');
+    expect(haltText).toMatch(/durable.*(evidence|record)|shipped.*record/i);
+    expect(haltText).toMatch(/missing|absent|not found/i);
+  });
+
   it('escalation surfaces the halt via a needs-remediation PR, with the worktree as cwd', async () => {
     const rec = freshRecorders();
     const run = makeRunFeature(
