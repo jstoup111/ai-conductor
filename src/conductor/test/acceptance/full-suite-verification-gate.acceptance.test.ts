@@ -486,3 +486,99 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
     expect(ciFix).not.toMatch(/test-suite-evidence\.json/);
   });
 });
+
+describe('Task 25 thin automated delivery proof (FR-1, FR-4, FR-13, FR-14)', () => {
+  it('executes the native gate once, reuses its PASS at finish, and hands off to /pr', async () => {
+    const [finishSkill, prSkill] = await Promise.all([
+      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
+    ]);
+    const testSuiteStep = ALL_STEPS.find((step) => step.name === 'test_suite');
+
+    const gate = invokeRealSuite();
+    const evidenceAfterGate = await readEvidence();
+    const launchesAfterGate = await readCount();
+    const finish = invokeRealSuite();
+    const evidenceAfterFinish = await readEvidence();
+    const launchesAfterFinish = await readCount();
+    const prPrePush = prSkill.slice(
+      prSkill.indexOf('### 5. Pre-Push Verification'),
+      prSkill.indexOf('### 6. Create or Update the PR'),
+    );
+    const launchesAfterPrHandoff = await readCount();
+
+    expect({
+      nativeGate: testSuiteStep,
+      gateExitCode: gate.exitCode,
+      gateOutput: gate.stdout + gate.stderr,
+      gateEvidence: evidenceAfterGate.outcome,
+      launchesAfterGate,
+      finishUsesSharedVerifier: finishSkill.includes('conduct-ts test-suite'),
+      finishExitCode: finish.exitCode,
+      finishOutput: finish.stdout + finish.stderr,
+      finishEvidence: evidenceAfterFinish.outcome,
+      launchesAfterFinish,
+      prReusesFinishPass: /reuse[\s\S]{0,100}passing result[\s\S]{0,100}\/finish/i.test(prPrePush),
+      prForbidsAggregateLaunch: /do not launch[\s\S]{0,100}aggregate test command/i.test(prPrePush),
+      launchesAfterPrHandoff,
+    }).toEqual({
+      nativeGate: expect.objectContaining({
+        name: 'test_suite',
+        phase: 'BUILD',
+        enforcement: 'gating',
+        prerequisites: ['wiring_check'],
+      }),
+      gateExitCode: 0,
+      gateOutput: expect.stringMatching(/EXECUTED.*PASS/is),
+      gateEvidence: 'PASS',
+      launchesAfterGate: 1,
+      finishUsesSharedVerifier: true,
+      finishExitCode: 0,
+      finishOutput: expect.stringMatching(/REUSED.*PASS/is),
+      finishEvidence: 'PASS',
+      launchesAfterFinish: 1,
+      prReusesFinishPass: true,
+      prForbidsAggregateLaunch: true,
+      launchesAfterPrHandoff: 1,
+    });
+  });
+
+  it('stops a failing finish fallback before choice or /pr handoff', async () => {
+    const [finishSkill, prSkill] = await Promise.all([
+      readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'skills/pr/SKILL.md'), 'utf8'),
+    ]);
+    const finishVerification = finishSkill.slice(
+      finishSkill.indexOf('### 1. Fresh Verification'),
+      finishSkill.indexOf('### 1b.'),
+    );
+    const prPrePush = prSkill.slice(
+      prSkill.indexOf('### 5. Pre-Push Verification'),
+      prSkill.indexOf('### 6. Create or Update the PR'),
+    );
+
+    const failure = invokeRealSuite({ SUITE_MODE: 'fail:task-25-thin' });
+    const evidence = await readEvidence();
+    const finishChoiceExists = await readFile(join(repo, '.pipeline/finish-choice'), 'utf8')
+      .then(() => true)
+      .catch(() => false);
+
+    expect({
+      exitCode: failure.exitCode,
+      output: failure.stdout + failure.stderr,
+      evidence: evidence.outcome,
+      launches: await readCount(),
+      finishStops: /non-?zero[\s\S]*STOP[\s\S]*(?:choice|options)/i.test(finishVerification),
+      finishChoiceExists,
+      prStopsWithoutFinishPass: /not reported a current pass[\s\S]{0,100}STOP[\s\S]{0,100}\/finish/i.test(prPrePush),
+    }).toEqual({
+      exitCode: 1,
+      output: expect.stringMatching(/FAILED.*evidence=nonzero_exit/is),
+      evidence: 'FAIL',
+      launches: 1,
+      finishStops: true,
+      finishChoiceExists: false,
+      prStopsWithoutFinishPass: true,
+    });
+  });
+});
