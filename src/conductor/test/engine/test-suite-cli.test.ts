@@ -41,12 +41,37 @@ describe('test-suite CLI adapter', () => {
     expect(cli.detectTestSuiteCommand(['node', 'conduct-ts', 'inline', 'feature'])).toBeNull();
   });
 
-  it('keeps recognized test-suite argv out of normal pipeline fallthrough', async () => {
+  it('classifies extra test-suite argv as recognized misuse instead of pipeline input', async () => {
     const cli = await import('../../src/engine/test-suite-cli.js');
 
     expect(
       cli.detectTestSuiteCommand(['node', 'conduct-ts', 'test-suite', '--future-option']),
-    ).not.toBeNull();
+    ).toEqual({ kind: 'guide' });
+  });
+
+  it('rejects recognized misuse with guidance without invoking the verifier', async () => {
+    const cli = await import('../../src/engine/test-suite-cli.js');
+    const output: string[] = [];
+    let verifierInvoked = false;
+
+    const exitCode = await cli.dispatchTestSuiteCommand(
+      { kind: 'guide' },
+      {
+        verifier: {
+          ensure: async () => {
+            verifierInvoked = true;
+            throw new Error('verifier must not run for malformed argv');
+          },
+        },
+        print: (line: string) => output.push(line),
+      },
+    );
+
+    expect({ exitCode, output, verifierInvoked }).toEqual({
+      exitCode: 1,
+      output: [expect.stringMatching(/Usage: conduct-ts test-suite[\s\S]*\/tdd or \/pipeline/i)],
+      verifierInvoked: false,
+    });
   });
 
   it.each(['EXECUTED', 'REUSED'] as const)(
@@ -81,7 +106,44 @@ describe('test-suite CLI adapter', () => {
     },
   );
 
-  it('returns non-zero for a non-PASS verifier result without defining Task 14 guidance', async () => {
+  it.each([
+    ['missing_config', 'Project config must declare test_suite'],
+    ['invalid_config', 'test_suite.command must be a non-empty string'],
+    ['invalid_input', 'Declared suite input is invalid'],
+    ['timeout', 'Aggregate suite exceeded its timeout'],
+    ['unlaunchable', 'Aggregate suite could not be launched'],
+    ['signal', 'Aggregate suite was terminated'],
+    ['preflight_failed', 'Aggregate suite preflight failed'],
+    ['internal_error', 'Full-suite verification failed'],
+  ] as const)('renders actionable blocking guidance for %s', async (reason, message) => {
+    const cli = await import('../../src/engine/test-suite-cli.js');
+    const output: string[] = [];
+    const sensitiveDiagnostic = `${message}: declared-environment-secret-940`;
+
+    const exitCode = await cli.dispatchTestSuiteCommand(
+      { kind: 'run' },
+      {
+        verifier: {
+          ensure: async () => ({
+            status: 'FAILED' as const,
+            reason,
+            message: sensitiveDiagnostic,
+          }),
+        },
+        print: (line: string) => output.push(line),
+      },
+    );
+
+    expect({ exitCode, output, leaked: output.join('\n').includes(sensitiveDiagnostic) }).toEqual({
+      exitCode: 1,
+      output: [
+        expect.stringMatching(new RegExp(`FAILED.*evidence=${reason}.*\\/tdd or \\/pipeline`, 'is')),
+      ],
+      leaked: false,
+    });
+  });
+
+  it('names stale nonzero evidence and its freshness reason before blocking', async () => {
     const cli = await import('../../src/engine/test-suite-cli.js');
     const output: string[] = [];
 
@@ -91,14 +153,22 @@ describe('test-suite CLI adapter', () => {
         verifier: {
           ensure: async () => ({
             status: 'FAILED' as const,
-            reason: 'internal_error' as const,
-            message: 'fixture failure',
+            reason: 'nonzero_exit' as const,
+            message: 'Aggregate suite exited with code 7',
+            freshness: { status: 'STALE' as const, reason: 'source_changed' as const },
           }),
         },
         print: (line: string) => output.push(line),
       },
     );
 
-    expect({ exitCode, output }).toEqual({ exitCode: 1, output: [] });
+    expect({ exitCode, output }).toEqual({
+      exitCode: 1,
+      output: [
+        expect.stringMatching(
+          /FAILED.*evidence=nonzero_exit.*freshness=source_changed.*\/tdd or \/pipeline/is,
+        ),
+      ],
+    });
   });
 });
