@@ -218,7 +218,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     // ...and the Cost block (if present at all) reflects total absence as
     // unmetered rather than a fabricated zero-cost clean rollup.
     if (/##\s*Cost/i.test(body)) {
-      expect(body).toMatch(/unmetered/i);
+      expect(body).toMatch(/unmetered:\s*(?:\{\s*)?count:\s*[1-9]\d*/i);
     }
   });
 
