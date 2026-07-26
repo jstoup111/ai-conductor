@@ -194,6 +194,8 @@ function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
   return { gh, calls };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 /**
  * Approving DECIDE seam for acceptance tests that reach authoring.
  * Returns real artifacts with the required markers.
@@ -238,7 +240,7 @@ describe('Scenario 1: conduct engineer loop start → idea → exit', () => {
     const { gh } = makeGh();
     const { io, text } = scriptedIo(['add a CSV export to alpha', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, decide: makeDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeDecide() });
 
     expect(text()).toMatch(/1 (known )?project/i); // reports count
     expect(summary).toMatchObject({ ideasProcessed: 1 });
@@ -432,7 +434,7 @@ describe('Scenario 4: authoring → spec branch + PR, never build, never merge',
     const { gh, calls: ghCalls } = makeGh('https://example.invalid/alpha/pull/7');
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    await runEngineerMode({ route, io, gh, decide: makeDecide() });
+    await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeDecide() });
 
     const branches = (await exec('git', ['branch', '--list', 'spec/*'], { cwd: repo })).stdout;
     expect(branches).toMatch(/spec\//); // a spec branch was created

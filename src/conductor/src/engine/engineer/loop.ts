@@ -50,6 +50,7 @@ import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from '../owner-gate/identity.js';
+import type { GitRunner } from '../pr-labels.js';
 
 const execFile = promisify(execFileCb);
 
@@ -89,6 +90,8 @@ export interface EngineerDeps {
   io: EngineerIO;
   /** GitHub runner for PR operations. */
   gh?: GhRunner;
+  /** Git runner for publishing the spec branch before PR creation. */
+  git?: GitRunner;
   /** Direct registry file path override (takes priority over env). */
   registryPath?: string;
   /** Direct engineer directory path override (takes priority over env). */
@@ -588,6 +591,7 @@ async function processIdea(
   //        the gh-present guard (A-3 — no `gh!`) and the ENSURE-NOT-MANAGE boundary.
   const entry = await runHandoff(target, branch, {
     gh: deps.gh,
+    git: deps.git,
     engineerDir: deps.engineerDir,
     launchFn,
     print: (s) => io.print(s),

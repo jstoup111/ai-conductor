@@ -46,7 +46,7 @@ import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
-import { restRemoveLabelArgs } from './pr-labels.js';
+import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
 import {
   claimUnblocked,
   resolveClaimBands,
@@ -378,6 +378,8 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+  /** Injected git runner (for tests). */
+  git?: GitRunner;
   /** Injected ensureRunning launch spy (for tests). */
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
   /**
@@ -648,6 +650,7 @@ export async function dispatchEngineer(
   const print = opts.print ?? ((s: string) => process.stdout.write(s + '\n'));
   const printErr = opts.printErr ?? ((s: string) => process.stderr.write(s + '\n'));
   const gh = opts.gh ?? makeProductionGh();
+  const git = opts.git ?? makeProductionGit();
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
 
@@ -913,6 +916,7 @@ export async function dispatchEngineer(
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
         handoffResult = await openSpecPr(target, branch, {
+          gitRunner: git,
           runner: async (args, runnerOpts) => {
             const cwd = runnerOpts?.cwd ?? worktree;
             const r = await gh(args, { cwd });
@@ -955,15 +959,7 @@ export async function dispatchEngineer(
           }
         }
 
-        print(
-          JSON.stringify({
-            kind: 'local-commit',
-            branch,
-            repoPath: target.canonicalPath,
-            worktreePath: worktree,
-          }),
-        );
-        return 0;
+        return 1;
       }
 
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove

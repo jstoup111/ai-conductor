@@ -201,7 +201,16 @@ export async function dispatchFinishRecord(
       );
       return 1;
     }
-    if (!stateResult.value.feature_desc) {
+    const worktreeBranch = stateResult.value.worktree_branch;
+    const branchSlug = worktreeBranch?.match(/^spec\/(.+)$/)?.[1];
+    if (worktreeBranch !== undefined && !branchSlug) {
+      console.error(
+        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    const featureSlug = branchSlug ?? stateResult.value.feature_desc;
+    if (!featureSlug) {
       console.error(
         `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
       );
@@ -223,7 +232,7 @@ export async function dispatchFinishRecord(
       evidence = await (deps.evaluateEvidence ?? evaluateShipmentEvidence)(
         {
           repoDir,
-          slug: stateResult.value.feature_desc,
+          slug: featureSlug,
           implementationPr: cmd.prUrl!,
           candidateCommit,
         },

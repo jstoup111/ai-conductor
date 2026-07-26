@@ -23,6 +23,7 @@ import type { GhRunner } from './loop.js';
 import { openSpecPr } from './handoff.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { ensureRunning } from '../daemon-lock.js';
+import type { GitRunner } from '../pr-labels.js';
 
 /** The authored-ledger entry returned for the session summary. */
 export interface HandoffEntry {
@@ -38,6 +39,8 @@ export interface HandoffEntry {
 export interface RunHandoffDeps {
   /** GitHub runner for PR operations. Required only when target.remote is set. */
   gh?: GhRunner;
+  /** Git runner for publishing the spec branch before PR creation. */
+  git?: GitRunner;
   /** Engineer directory override forwarded to the authored ledger. */
   engineerDir?: string;
   /**
@@ -82,6 +85,7 @@ export async function runHandoff(
       throw new Error('engineer: remote target requires a gh runner to open a spec PR');
     }
     const handoffResult = await openSpecPr(target, branch, {
+      gitRunner: deps.git,
       runner: async (args, runnerOpts) => {
         const ghCwd = runnerOpts?.cwd ?? target.canonicalPath;
         const r = await gh(args, { cwd: ghCwd });
