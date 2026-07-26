@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -8,12 +8,104 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 
 // Acceptance coverage for .docs/stories/ship-tail-parallel-validation-serial-
 // publication-922.md. This drives Conductor.run() through explicit finish
 // targeting: the #532 resume clamp is intentionally bypassed, but publication
 // safety must not be.
 describe('SHIP-tail publication fence (#922)', () => {
+  function stateAtPublicationWithStaleAsBuilt(): ConductState {
+    const state: Record<string, unknown> = {
+      complexity_tier: 'M',
+      track: 'technical',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    // These are legitimate skip policies: technical work has no PRD audit,
+    // and this fixture explicitly disables manual validation.
+    state.manual_test = 'skipped';
+    state.prd_audit = 'skipped';
+    state.architecture_review_as_built = 'stale';
+    return state as ConductState;
+  }
+
+  function asBuiltPassingRunner(dir: string): { runner: StepRunner; dispatched: StepName[] } {
+    const dispatched: StepName[] = [];
+    return {
+      dispatched,
+      runner: {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '**Verdict:** APPROVED\n',
+            );
+          }
+          return { success: true };
+        }),
+      },
+    };
+  }
+
+  it('normal traversal reruns a stale validator before dispatching finish', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-normal-'));
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    try {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeState(statePath, stateAtPublicationWithStaleAsBuilt());
+      const { runner, dispatched } = asBuiltPassingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        daemon: true,
+        mode: 'auto',
+        config: { steps: { manual_test: { disable: true } } },
+      }).run();
+
+      expect(dispatched.indexOf('architecture_review_as_built')).toBeLessThan(
+        dispatched.indexOf('finish'),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('resume reruns a stale validator before dispatching finish', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-resume-'));
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    try {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const state = stateAtPublicationWithStaleAsBuilt();
+      state.last_step = 'finish';
+      await writeState(statePath, state);
+      const { runner, dispatched } = asBuiltPassingRunner(dir);
+
+      await new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        daemon: true,
+        mode: 'auto',
+        resume: true,
+        config: { steps: { manual_test: { disable: true } } },
+      }).run();
+
+      expect(dispatched.indexOf('architecture_review_as_built')).toBeLessThan(
+        dispatched.indexOf('finish'),
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('does not dispatch finish when explicit targeting reaches an already-done rebase with failed or stale validation', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-'));
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -51,25 +143,17 @@ describe('SHIP-tail publication fence (#922)', () => {
     }
   });
 
-  it('re-enters failed and stale validators concurrently without rerunning a green manual test', async () => {
+  it('re-enters stale validators concurrently and publishes only after their active-run evidence is green', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-parallel-'));
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     try {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const manualResults = join(dir, '.pipeline/manual-test-results.md');
-      await writeFile(
-        manualResults,
-        '# Results\n\n| Story | Result |\n|--|--|\n| #922 | PASS |\n',
-      );
-      // Conductor stamps a fresh session at startup. Keep this fixture's
-      // already-complete manual run current for that invocation.
-      await utimes(manualResults, new Date(), new Date(Date.now() + 60_000));
       await writeState(statePath, {
         complexity_tier: 'M',
         track: 'product',
         architecture_review: 'done',
         test_suite: 'done',
-        manual_test: 'done',
+        manual_test: 'stale',
         prd_audit: 'failed',
         architecture_review_as_built: 'stale',
         retro: 'skipped',
@@ -80,7 +164,12 @@ describe('SHIP-tail publication fence (#922)', () => {
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           timeline.push({ step, phase: 'start', at: Date.now() });
-          if (step === 'prd_audit') {
+          if (step === 'manual_test') {
+            await writeFile(
+              join(dir, '.pipeline/manual-test-results.md'),
+              '# Results\n\n| Story | Result |\n|--|--|\n| #922 | PASS |\n',
+            );
+          } else if (step === 'prd_audit') {
             await new Promise((resolve) => setTimeout(resolve, 40));
             await writeFile(
               join(dir, '.pipeline/prd-audit.md'),
@@ -110,16 +199,24 @@ describe('SHIP-tail publication fence (#922)', () => {
       await conductor.run();
 
       expect(timeline.map((entry) => entry.step)).toEqual(
-        expect.arrayContaining(['prd_audit', 'architecture_review_as_built']),
+        expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built']),
       );
-      expect(timeline.map((entry) => entry.step)).not.toContain('manual_test');
       const prdAuditEnd = timeline.find(
         (entry) => entry.step === 'prd_audit' && entry.phase === 'end',
       );
       const asBuiltStart = timeline.find(
         (entry) => entry.step === 'architecture_review_as_built' && entry.phase === 'start',
       );
+      const finishStart = timeline.find(
+        (entry) => entry.step === 'finish' && entry.phase === 'start',
+      );
       expect(asBuiltStart?.at).toBeLessThan(prdAuditEnd?.at ?? 0);
+      for (const validator of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+        const validatorEnd = timeline.find(
+          (entry) => entry.step === validator && entry.phase === 'end',
+        );
+        expect(validatorEnd?.at).toBeLessThan(finishStart?.at ?? 0);
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -130,12 +227,6 @@ describe('SHIP-tail publication fence (#922)', () => {
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     try {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const manualResults = join(dir, '.pipeline/manual-test-results.md');
-      await writeFile(
-        manualResults,
-        '# Results\n\n| Story | Result |\n|--|--|\n| #922 | PASS |\n',
-      );
-      await utimes(manualResults, new Date(), new Date(Date.now() + 60_000));
       await writeState(statePath, {
         complexity_tier: 'M',
         track: 'product',
@@ -175,6 +266,7 @@ describe('SHIP-tail publication fence (#922)', () => {
         mode: 'auto',
         fromStep: 'finish',
         maxRetries: 1,
+        config: { steps: { manual_test: { disable: true } } },
       });
 
       await conductor.run();
