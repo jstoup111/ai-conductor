@@ -306,7 +306,7 @@ Add to `.gitignore` (idempotent — don't duplicate):
 When both host files are present, preserve and update `CLAUDE.md` and `AGENTS.md` independently:
 add only the missing harness reference and never normalize away operator-authored content. Validate
 that each host keeps its own invocation syntax (Claude `/skill-name`, Codex `$skill-name`) while
-both point to the same shared workflow and lifecycle gates in `HARNESS.md`. If either file
+both point to the same shared harness contract and lifecycle gates. If either file
 contradicts that contract, report the host and the conflicting instruction before completing
 initialization.
 
