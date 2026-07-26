@@ -45,6 +45,7 @@ import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon
 import {
   openDaemonLog,
   formatDaemonLogLine,
+  createFeatureDaemonLogger,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
@@ -791,14 +792,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  // Surface per-step loop progress on the console. Without this the daemon was
-  // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
-  // step_started/gate_verdict/kickback away). Events don't carry a feature slug,
-  // so with concurrency > 1 lines from different workers interleave; the `·`
-  // prefix marks them as inner-loop progress under the active feature.
-  const subscriber = registerBuiltins(registry, events, (event) =>
-    renderDaemonEvent(event, log),
-  );
+  // Feature event renderers are installed in beginFeatureRun, where the
+  // feature-owned logger is available. Keep this global subscriber inert while
+  // retaining the registry's built-in provider registrations.
+  const subscriber = registerBuiltins(registry, events, () => {});
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -808,9 +805,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
+    runtimeLog = log,
   ): ProviderExecutionContext => ({
     configuredProviders,
-    runtimes: createProviderRuntimeSet(registry, log),
+    runtimes: createProviderRuntimeSet(registry, runtimeLog),
     sessions: new ProviderSessionStore(),
     config,
     // The per-feature Conductor composes self-host authority around this
@@ -820,12 +818,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => eventTarget.emit(transition),
   });
-  const beginFeatureRun = (worktree: FeatureWorktree) => {
+  const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
+    const featureLog = createFeatureDaemonLogger(item.slug, log);
+    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+    const renderableEvents: ConductorEvent['type'][] = [
+      'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
+      'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
+      'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
+      'build_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+    ];
+    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     return {
       ...persistence,
-      providerExecution: createProviderExecution(featureEvents),
+      providerExecution: createProviderExecution(featureEvents, featureLog),
+      log: featureLog,
+      stop: () => {
+        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+        persistence.stop();
+      },
     };
   };
   // Resolve the active memory provider once at run start so all steps see the
@@ -845,6 +857,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
+    featureLog = log,
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
@@ -966,7 +979,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // or for the eventual un-park to resume normally.
     const parked = await isOperatorParked(projectRoot, item.slug);
     if (parked) {
-      log(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
+      featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
       return;
     }
     const resume = await resumeRebaseFirst({
@@ -985,13 +998,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       runGh: ownerGh,
       prUrl: baseState.pr_url,
       slug: item.slug,
-      log,
+      log: featureLog,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
     if (resume === 'already_shipped') {
       // The merged record was verified on merged history. Do not manufacture
       // local success markers; let the ordinary completion boundary converge.
-      log(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
+      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
     await conductor.run();
@@ -1009,7 +1022,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       prUrl: finalState.ok ? finalState.value.pr_url : undefined,
       cwd: wt.path,
       slug: item.slug,
-      log,
+      log: featureLog,
     });
 
   };
@@ -1023,6 +1036,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
+    featureLog = log,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1034,11 +1048,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     // Inject prepareWorktree for retry after quarantine
     const runPrepare = (worktreePath: string) =>
-      prepareWorktree(worktreePath, log, { verbose: config?.daemon_verbose ?? false });
+      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false });
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
-    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog });
 
     // A park with no quarantineRef is a genuine PRESERVATION failure (the
     // quarantine commit/branch itself could not be created) — stop immediately,
@@ -1078,7 +1092,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           providerExecution,
         },
       );
-      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
       await stepRunner.resolveSetupFailure({
         worktreePath: worktree.path,
         outputTail: error.outputTail ?? '',

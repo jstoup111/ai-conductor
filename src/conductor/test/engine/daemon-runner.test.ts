@@ -90,6 +90,40 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('routes setup, triage, and conductor execution through the feature logger', async () => {
+    const featureLog = vi.fn();
+    const setupFailure = new SetupFailureError('setup failed', 'diagnostic output');
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      log: featureLog,
+      stop: () => {},
+    });
+    featureDeps.prepareWorktree = async (_worktree, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      throw setupFailure;
+    };
+    featureDeps.runSetupTriage = async (_error, _worktree, _item, _execution, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      return { kind: 'pass' };
+    };
+    featureDeps.runConductor = async (_worktree, _item, _execution, _events, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+    };
+    featureDeps.daemon = true;
+
+    await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect(featureLog).toHaveBeenCalledWith(
+      '[daemon-runner] triage outcome: pass, continuing to runConductor',
+    );
+  });
+
   it('owns one feature event scope from pre-dispatch setup through error cleanup', async () => {
     const order: string[] = [];
     const localEvents = new ConductorEventEmitter();

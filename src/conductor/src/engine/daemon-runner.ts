@@ -89,13 +89,14 @@ export interface FeatureRunnerDeps {
    * aborts the feature (worktree kept) rather than building against a
    * half-prepared environment.
    */
-  prepareWorktree?: (worktree: FeatureWorktree) => Promise<void>;
+  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
     events?: ConductorEventEmitter,
+    log?: (message: string) => void,
   ) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
@@ -188,6 +189,7 @@ export interface FeatureRunnerDeps {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
+    log?: (message: string) => void,
   ) => Promise<TriageOutcome>;
   /**
    * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
@@ -315,7 +317,7 @@ export function makeRunFeature(
       // other primitive throw (worktree kept, feature errored).
       if (deps.prepareWorktree) {
         try {
-          await deps.prepareWorktree(worktree);
+          await deps.prepareWorktree(worktree, featureLog);
         } catch (prepareErr) {
           // Check if error is a SetupFailureError (by name and presence of outputTail)
           const isSetupFailure = prepareErr instanceof Error &&
@@ -332,6 +334,7 @@ export function makeRunFeature(
               worktree,
               item,
               providerExecution,
+              featureLog,
             );
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
@@ -372,6 +375,7 @@ export function makeRunFeature(
         item,
         providerExecution,
         featureRun?.events,
+        featureLog,
       );
       const outcome = await deps.readOutcome(worktree);
 
