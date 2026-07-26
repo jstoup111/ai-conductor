@@ -60,10 +60,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `HARNESS.md`, rather than a machine-specific harness checkout path, so they remain valid
   after a move or worktree checkout.
 - Installation now links every harness skill into both user-scoped client directories:
-  `~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex. The installer check and
-  uninstall paths cover both locations, while project-local skills remain explicit overrides.
-  Bootstrap now creates or preserves an `AGENTS.md` from the Codex-aware template so projects
-  can reference the user-scoped harness without copying skills into the repository.
+  `~/.claude/skills/` for Claude Code and `~/.agents/skills/` for Codex. `~/.codex/skills/` is
+  a legacy migration input, not Codex's active catalog; installer check and uninstall paths
+  reconcile only harness-owned entries in either location. Project-local skills remain explicit
+  overrides. Bootstrap now creates or preserves an `AGENTS.md` from the Codex-aware template so
+  projects can reference the user-scoped harness without copying skills into the repository.
 - Daemon log: a successful `bin/setup` no longer echoes its entire output into
   `.daemon/daemon.log`. That passthrough was 55% of the log (3,875 of 6,990 lines in one
   observed run — 748 of them blank, plus `publish-engine`'s raw `{"versionId":…}` JSON) and

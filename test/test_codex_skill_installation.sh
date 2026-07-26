@@ -420,5 +420,18 @@ check 'uninstall removes a complete prior-harness legacy skill link' \
 check 'uninstall removes complete prior-harness legacy instructions' \
   test ! -e "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills/HARNESS.md"
 
+CODEX_UNRELEASED=$(awk '
+  /^## \[Unreleased\]$/ { in_unreleased=1; next }
+  in_unreleased && /^## / { exit }
+  in_unreleased { print }
+' "$HARNESS_DIR/CHANGELOG.md")
+check 'Unreleased Codex installation notes name the active catalog, legacy scope, and migration command' \
+  bash -c 'grep -q "~/.agents/skills" <<<"$1" \
+    && grep -q "~/.codex/skills" <<<"$1" \
+    && grep -qiE "legacy.*(not|no longer).*active" <<<"$1" \
+    && grep -q "bash migration" "$2" \
+    && grep -A 2 "bash migration" "$2" | grep -q "./bin/install --update"' \
+  _ "$CODEX_UNRELEASED" "$HARNESS_DIR/CHANGELOG.md"
+
 printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
