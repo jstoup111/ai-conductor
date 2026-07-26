@@ -201,6 +201,29 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
   });
 
+  // Covers: FR-15 through FR-18. The mocked Codex process is the injected
+  // runner/reviewer seam: no network or source-control publication occurs here.
+  it('auto-reviews an approved lifecycle request that needs network and source-control publication', async () => {
+    const lifecycleRequest = 'Download the approved dependency, run the migration, commit the change, and push the branch.';
+    mockExeca
+      .mockResolvedValueOnce({ stdout: doctorReady(), stderr: '', exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: 'dependency installed; migration committed and branch published', stderr: '', exitCode: 0 } as any);
+
+    const result = await new CodexProvider().invoke({ ...base, prompt: lifecycleRequest });
+    const [command, args, options] = mockExeca.mock.calls[1] as [string, string[], any];
+
+    expect(result).toMatchObject({ success: true });
+    expect(command).toBe('codex');
+    expect(args).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(options.input).toContain(lifecycleRequest);
+    expect(mockExeca.mock.calls.map(([calledCommand]) => calledCommand)).toEqual(['codex', 'codex']);
+  });
+
   // Covers: FR-21
   it('keeps the Codex readiness and policy boundary self-host compatible without Claude configuration', async () => {
     mockExeca

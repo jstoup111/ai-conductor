@@ -44,17 +44,15 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('selects Codex before setup: skips Claude collaborators but retains common release gates', async () => {
+  it('selects Codex before setup and skips Claude collaborators', async () => {
     const relink = vi.fn(async () => {});
     const provisionSandbox = vi.fn(async () => ({
       configDir: '/tmp/should-not-exist', childEnv: () => ({}), teardown: vi.fn(async () => {}),
     }));
-    const versionGate = vi.fn(async () => ({ ok: true as const }));
-    const releaseGate = vi.fn(async () => ({ ok: true as const }));
     const guardrails: SelfHostGuardrails = {
       resolveHarnessRoot: vi.fn(async () => '/installed/harness'),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: '/installed/harness' })),
-      relink, provisionSandbox, versionGate, releaseGate,
+      relink, provisionSandbox,
     };
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
 
@@ -69,13 +67,37 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
     expect(relink).not.toHaveBeenCalled();
     expect(provisionSandbox).not.toHaveBeenCalled();
     expect(preflightBuildAuthCheck).not.toHaveBeenCalled();
-    expect(versionGate).toHaveBeenCalledOnce();
-    expect(releaseGate).toHaveBeenCalledOnce();
     expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
 
+  it('runs common release gates at the self-host finish boundary', async () => {
+    await writeState(stateFilePath, { ...DONE_TO_BUILD, rebase: 'done' } as ConductState);
+    const versionGate = vi.fn(async () => ({ ok: true as const }));
+    const releaseGate = vi.fn(async () => ({ ok: true as const }));
+    const guardrails: SelfHostGuardrails = {
+      resolveHarnessRoot: vi.fn(async () => '/installed/harness'),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: '/installed/harness' })),
+      relink: vi.fn(async () => {}),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: '/tmp/should-not-exist', childEnv: () => ({}), teardown: vi.fn(async () => {}),
+      })),
+      versionGate, releaseGate,
+    };
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+
+    await new Conductor({
+      stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
+      mode: 'auto', daemon: true, selfHost: true, baseBranch: 'main', fromStep: 'finish',
+      selfHostGuardrails: guardrails,
+    }).run();
+
+    expect(versionGate).toHaveBeenCalledOnce();
+    expect(releaseGate).toHaveBeenCalledOnce();
+    expect(runner.run).toHaveBeenCalledWith('finish', expect.anything(), expect.anything());
+  });
+
   it.each(['pre-dispatch missing', 'post-dispatch rejection'] as const)(
-    'parks and resumes only the failed Codex attempt after %s, without provider fallback or a new retry rung',
+    'parks and resumes Codex after %s without provider fallback or generic retry-rung metadata',
     async (failure) => {
       const readiness = vi
         .fn()
@@ -87,12 +109,12 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
         policy: CODEX_MODEL_POLICY, builtIn: true,
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       }]);
-      const attempts: number[] = [];
+      const buildCalls: Array<{ retryReason?: string; attempt?: number } | undefined> = [];
       const runner: StepRunner = {
         run: vi.fn(async (step, _state, options) => {
           if (step !== 'build') return { success: true };
-          attempts.push(options?.attempt ?? -1);
-          if (attempts.length === 1) {
+          buildCalls.push(options);
+          if (buildCalls.length === 1) {
             return {
               success: false, authFailure: true, actualProvider: 'codex',
               authentication: { provider: 'codex', source: 'cached-login', state: failure.startsWith('pre-') ? 'missing' : 'unusable' },
@@ -104,14 +126,18 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
 
       await new Conductor({
         stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
-        mode: 'auto', fromStep: 'build', maxRetries: 1, sleepFn: vi.fn(async () => {}),
-        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        mode: 'auto', daemon: true, selfHost: true, fromStep: 'build', maxRetries: 1, sleepFn: vi.fn(async () => {}),
+        config: {
+          harness_self_host: { auth_park_timeout_minutes: 1 },
+          steps: { build: { llm_provider: 'codex' } },
+        } as never,
         providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
       }).run();
 
       expect(readiness).toHaveBeenCalledTimes(2);
-      expect(attempts).toEqual([1, 1]);
-      expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build')).toHaveLength(2);
+      expect(buildCalls).toHaveLength(4);
+      expect(buildCalls.map((options) => options?.attempt)).toEqual([undefined, undefined, undefined, undefined]);
+      expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build')).toHaveLength(4);
     },
   );
 });
