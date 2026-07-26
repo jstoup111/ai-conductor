@@ -82,11 +82,14 @@ Reject as must-fix:
 - Cast-only or annotation-only type tests when the test suite is not semantically typechecked
 - Tests that validate mock behavior rather than production behavior
 - Tests of ordinary human-facing documentation wording, headings, links, or source layout
+- Tests retained only to mirror a historical plan or decision whose behavior has been superseded
 - Implementations that exist only to satisfy low-value assertions
 
 Machine-consumed or generated-document contracts are valid only when the test verifies the
 resulting runtime behavior. Every test must plausibly fail under a production regression, and
 every implementation must trace to an operator outcome or acceptance criterion.
+When removing a no-signal test exposes an apparent coverage gap, resolve it against the current
+governing contract before adding a replacement; do not recreate behavior from a superseded artifact.
 
 ### 6. Over-Engineering Detection
 
@@ -186,6 +189,7 @@ If the rework budget is exhausted, escalate to user.
 - [ ] Changed/added tests compared only with existing tests at the same production seam, including outside the batch when needed
 - [ ] Distinct failure boundaries stated for any intentionally overlapping tests
 - [ ] Tests can plausibly fail on production regressions; no tautology, mock-only, type-only, or documentation-layout assertions
+- [ ] Apparent coverage gaps checked against the current governing contract, not preserved from superseded artifacts
 - [ ] Implementations trace to an operator outcome or acceptance criterion
 - [ ] Test and Implementation Value findings included; violations marked must-fix
 - [ ] Output written to `.pipeline/audit-trail/batch-N-simplification.md`
