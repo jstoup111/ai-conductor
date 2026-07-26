@@ -176,8 +176,8 @@ export class CodexProvider implements LLMProvider {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
+      stdout: options.interactive ? ['pipe', 'inherit'] : 'pipe',
+      stderr: options.interactive ? ['pipe', 'inherit'] : 'pipe',
       cwd: options.cwd,
       env: authentication.apiKey
         ? { CODEX_API_KEY: authentication.apiKey }

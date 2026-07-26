@@ -814,10 +814,10 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('streams a one-shot exec for interface-compatible interactive calls', async () => {
+  it('captures output for a noninteractive invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
-    await provider.invokeInteractive(baseOptions);
+    await provider.invokeInteractive({ ...baseOptions, interactive: false });
 
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
@@ -826,6 +826,18 @@ describe('CodexProvider', () => {
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
+    });
+  });
+
+  it('live-inherits captured output for a true operator-interactive call', async () => {
+    mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+    expect({ stdout: options.stdout, stderr: options.stderr }).toEqual({
+      stdout: ['pipe', 'inherit'],
+      stderr: ['pipe', 'inherit'],
     });
   });
 
