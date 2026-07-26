@@ -281,10 +281,10 @@ fresh.
 > `steps.<step>.escalate: false` (also valid at `phases.<PHASE>` / `defaults`) to pin the
 > base `(model, effort)` across every retry (identical-retry, pre-#188 behavior).
 
-When dispatching subagents via the Agent tool, set the `model` parameter to match:
+When Claude Code dispatches subagents via the Agent tool, set the `model` parameter to match:
 ```
-Agent(subagent_type="general-purpose", model="sonnet", prompt="RED phase: write test...")
-Agent(subagent_type="general-purpose", model="opus", prompt="Evaluate this code...")
+Agent(subagent_type="general-purpose", model="sonnet", prompt="RED phase: write test...") # Claude Code
+Agent(subagent_type="general-purpose", model="opus", prompt="Evaluate this code...") # Claude Code
 ```
 
 ## Communication Protocol
@@ -371,7 +371,7 @@ When the context7 MCP server is installed, use it proactively:
 Each skill declares its enforcement level honestly:
 - **Advisory** — Instructions only
 - **Gating** — Evidence required before proceeding
-- **Structural** — Subagent isolation via Agent tool
+- **Structural** — Claude Code subagent isolation via Agent tool
 - **Mechanical** — Claude Code hooks (optional, opt-in)
 
 ## Memory

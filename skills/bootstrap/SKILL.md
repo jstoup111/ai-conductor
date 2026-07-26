@@ -326,7 +326,8 @@ Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patt
 
 ### 7b. Generate Architecture Diagrams
 
-Run `/architecture-diagram` to generate initial C4 diagrams from the codebase scan.
+Run the `architecture-diagram` workflow to generate initial C4 diagrams from the codebase scan
+(Claude `/architecture-diagram`; Codex `$architecture-diagram`).
 Use the inventory from Step 4 — don't re-scan.
 
 Output: `.docs/architecture/` with system-context.md, containers.md, components.md, erd.md,

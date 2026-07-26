@@ -255,7 +255,7 @@ Most cycles will NOT trigger a memory write — that is correct. Only persist ge
 more. Refactoring happens at **batch boundaries** (after completing a group of related tasks),
 as a distinct step between batches.
 
-At batch boundaries, run `/simplify` and check for:
+At batch boundaries, run the `simplify` workflow (Claude `/simplify`; Codex `$simplify`) and check for:
 
 1. **Duplicated business logic** — same authorization check, same event recording pattern,
    same calculation appearing in 2+ places. Extract on the **second** occurrence, don't wait

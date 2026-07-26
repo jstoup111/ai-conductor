@@ -50,9 +50,9 @@ Use `agents/evaluator.md` with the selected host's subagent facility. The evalua
 — it does not share conversation history with the generator.
 
 **Claude model selection by batch content:**
-- **Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
+- **Claude Code Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
   configuration files, infrastructure setup, or view templates
-- **Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,
+- **Claude Code Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,
   financial calculations, auth logic, or complex domain interactions
 
 Provide the evaluator with:

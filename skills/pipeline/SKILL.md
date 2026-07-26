@@ -87,7 +87,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD implementer through the selected host's available subagent facility
                   with scoped context only. In Claude Code, dispatch through the Agent tool with
-                  model="sonnet"; other supported hosts use their native model-selection mechanism.
+                  Claude Code model="sonnet"; other supported hosts use their native model-selection mechanism.
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
                   if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
@@ -512,10 +512,13 @@ At natural batch boundaries (after completing a group of related tasks):
 
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
-- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code).
+- Run the `simplify` workflow to check for accumulated duplication (dry business logic, not dry
+  code; Claude `/simplify`; Codex `$simplify`).
   If dispatched through the selected host's available subagent facility, the `/simplify` dispatch prompt's first line MUST be
   `Task: none` (session-hook marker contract, see Per-Task Execution).
-- Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
+- Verify architecture diagrams are current (if structural files changed in this batch, run the
+  `architecture-diagram` workflow in verification mode; Claude `/architecture-diagram`; Codex
+  `$architecture-diagram`)
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)

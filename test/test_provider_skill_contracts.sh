@@ -199,5 +199,105 @@ require_pattern 'engineer gives non-Claude hosts a normal session-end path' \
   'other supported host.*(end|close).*session|end.*session.*other supported host' \
   "$HARNESS_DIR/skills/engineer/SKILL.md"
 
+# The positive checks above pin expected language. This small deterministic audit
+# rejects the high-risk ways a shared instruction can accidentally become
+# Claude-only. Its fixtures keep the rules honest: every category below must
+# fail for the named provider-contract boundary, not merely because a word is
+# missing elsewhere in the catalog.
+provider_contract_audit() {
+  local file=$1
+  local required_gate=${2:-}
+  local violations=''
+
+  # `/skill` is permitted as a semantic reference (the HARNESS legend defines
+  # that convention), but an imperative host command must name its host on the
+  # same line. This avoids treating phase diagrams and cross-skill references
+  # as fabricated invocation mechanics.
+  violations+=$(grep -niE '\b(run|invoke|use|start|type)[[:space:]]+`?/[a-z][a-z-]*`?' "$file" \
+    | grep -viE 'Claude|MUST NOT|must not|do not' || true)
+
+  # The Claude Agent tool and its `model=` option are host mechanics. A shared
+  # instruction must not present either as a requirement for Codex.
+  violations+=$(grep -niE 'Agent tool' "$file" | grep -vi 'Claude' || true)
+  violations+=$(grep -niE 'model="(sonnet|opus|haiku|fable)"' "$file" | grep -vi 'Claude' || true)
+
+  # Claude-labelled delegation and interactive slash commands need an explicit
+  # Claude Code boundary. Native alternatives are covered by the selected-host
+  # contract already asserted above.
+  violations+=$(grep -niE '\b(delegate|dispatch)[[:space:]]+(the[[:space:]]+)?[^.]{0,30}Claude[[:space:]]+(subagents|agents)' "$file" \
+    | grep -viE 'Claude Code|Claude-only|Claude only|selected host' || true)
+  violations+=$(grep -niE '(interactive (session|run)|session)[^[:cntrl:]]{0,80}\b(run|invoke|type)[[:space:]]+`?/[a-z][a-z-]*`?' "$file" \
+    | grep -vi 'Claude' || true)
+
+  if [ -n "$required_gate" ] && ! grep -qiE "$required_gate" "$file"; then
+    violations="required shared gate missing${violations}"
+  fi
+
+  [ -z "$violations" ]
+}
+
+expect_audit() {
+  local description=$1
+  local expected=$2
+  local file=$3
+  local required_gate=${4:-}
+  local status
+
+  set +e
+  provider_contract_audit "$file" "$required_gate"
+  status=$?
+  set -e
+
+  if [ "$status" -eq "$expected" ]; then
+    pass "$description"
+  else
+    fail "$description"
+  fi
+}
+
+contract_fixture="$(mktemp)"
+trap 'rm -f "$contract_fixture"' EXIT
+
+printf '%s\n' \
+  'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' \
+  'Claude Code uses the Agent tool with `model="sonnet"`; other hosts use their native delegation facility.' \
+  'Claude Code users type `/quit`; other hosts use their normal session control.' \
+  'Shared lifecycle gate: required artifact evidence remains mandatory.' \
+  > "$contract_fixture"
+expect_audit 'provider audit accepts balanced invocation, model, tool, delegation, and interaction scope' 0 "$contract_fixture" 'Shared lifecycle gate'
+
+printf '%s\n' 'Run `/conduct` now.' > "$contract_fixture"
+expect_audit 'provider audit rejects unscoped Claude slash invocation' 1 "$contract_fixture"
+
+printf '%s\n' 'Use `model="sonnet"` for the evaluator.' > "$contract_fixture"
+expect_audit 'provider audit rejects unscoped Claude model selection' 1 "$contract_fixture"
+
+printf '%s\n' 'Dispatch the Agent tool for this review.' > "$contract_fixture"
+expect_audit 'provider audit rejects unscoped Claude tool delegation' 1 "$contract_fixture"
+
+printf '%s\n' 'Delegate the task to Claude subagents.' > "$contract_fixture"
+expect_audit 'provider audit rejects unscoped Claude delegation' 1 "$contract_fixture"
+
+printf '%s\n' 'In the interactive session, type `/quit`.' > "$contract_fixture"
+expect_audit 'provider audit rejects unscoped interactive Claude command' 1 "$contract_fixture"
+
+printf '%s\n' 'Claude Code invokes `conduct` as `/conduct`; Codex invokes it as `$conduct`.' > "$contract_fixture"
+expect_audit 'provider audit rejects a compatibility edit that removes the shared gate' 1 "$contract_fixture" 'Shared lifecycle gate'
+
+for provider_contract_file in \
+  "$HARNESS_DIR/HARNESS.md" \
+  "$HARNESS_DIR/skills/assess/SKILL.md" \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md" \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md" \
+  "$HARNESS_DIR/skills/code-review/SKILL.md" \
+  "$HARNESS_DIR/skills/conduct/SKILL.md" \
+  "$HARNESS_DIR/skills/engineer/SKILL.md" \
+  "$HARNESS_DIR/skills/finish/SKILL.md" \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md" \
+  "$HARNESS_DIR/skills/retro/SKILL.md" \
+  "$HARNESS_DIR/skills/tdd/SKILL.md"; do
+  expect_audit "provider audit accepts $(basename "$(dirname "$provider_contract_file")")" 0 "$provider_contract_file"
+done
+
 printf '\nProvider skill contract acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

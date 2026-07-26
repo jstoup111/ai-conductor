@@ -440,7 +440,7 @@ After executing the chosen option:
   `worktree-manager` responsibilities (see `agents/worktree-manager.md`). Preserve the cleanup
   outcome below regardless of host; do not replace it with a host-specific shortcut.
   **Claude Code only:** dispatch the `worktree-manager` through the Agent tool with
-  `model="haiku"`. Other supported hosts use their provider-native subagent facility and
+  `model="haiku"` in Claude Code. Other supported hosts use their provider-native subagent facility and
   configured provider policy, without translating the Claude Agent-tool or model instruction.
   - Options 1 (merge) and 2 (PR): agent merges the feature branch, runs post-merge tests,
     then removes the worktree and prunes the branch
