@@ -276,7 +276,7 @@ Build and install:
 
 ```bash
 cd src/conductor
-npm install
+npm ci
 npm run build
 cd ../..
 ./bin/install  # creates ~/.local/bin/conduct-ts symlink
