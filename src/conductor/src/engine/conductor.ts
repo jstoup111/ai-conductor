@@ -1325,6 +1325,7 @@ export class Conductor {
           reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
         });
 
+        let retryDelayMs = 1_000;
         for (;;) {
           const current = await readiness();
           if (
@@ -1342,7 +1343,8 @@ export class Conductor {
                 'Refresh the Codex login, then re-queue this feature.',
             };
           }
-          await this.sleep(1_000);
+          await this.sleep(retryDelayMs);
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }
     }

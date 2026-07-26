@@ -124,6 +124,45 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(park).toEqual({ timedOut: false, haltReason: '' });
   });
 
+  it('backs off cached-login readiness checks at exponentially increasing rungs', async () => {
+    const readiness = vi
+      .fn()
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'unusable' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'unusable' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const sleepFn = vi.fn(async () => {});
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    const park = await (conductor as any).parkOnAuthFailure({
+      actualProvider: 'codex',
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    });
+
+    expect(park).toEqual({ timedOut: false, haltReason: '' });
+    expect(readiness).toHaveBeenCalledTimes(4);
+    expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
+  });
+
   it('parks Codex API-key failures until the configured timeout without rechecking another source', async () => {
     const readiness = vi.fn();
     const runtimes = new ProviderRuntimeSet([
