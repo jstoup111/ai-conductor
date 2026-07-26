@@ -36,6 +36,8 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'navigation_back',
   'rate_limit',
   'session_reset',
+  'credentials_park',
+  'credentials_park_progress',
   'feature_complete',
   'dashboard_refresh',
   'auto_heal',

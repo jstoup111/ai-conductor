@@ -82,6 +82,34 @@ describe('EventPersister', () => {
     expect(line.waitSeconds).toBe(30);
   });
 
+  it('persists typed credential-park progress as JSONL', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'unusable',
+      elapsedSeconds: 3,
+      nextProbeDelaySeconds: 4,
+      degradation: 'credential-failure',
+    });
+
+    persister.stop();
+
+    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toEqual({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'unusable',
+      elapsedSeconds: 3,
+      nextProbeDelaySeconds: 4,
+      degradation: 'credential-failure',
+    });
+  });
+
   // ─── Task 4: missing tokenUsage does not crash ──────────────────────────────
 
   it('handles step_completed without tokenUsage without crashing', async () => {

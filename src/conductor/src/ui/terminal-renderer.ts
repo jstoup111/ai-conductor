@@ -175,6 +175,14 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
         break;
 
+      case 'credentials_park_progress':
+        this.region.log(
+          chalk.yellow(
+            `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+          ),
+        );
+        break;
+
       case 'tier_skip':
       case 'config_skip':
       case 'gate_blocked':
