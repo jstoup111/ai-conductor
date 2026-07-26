@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
 
@@ -44,6 +44,41 @@ export interface ActiveStepArtifactExceptionInput {
   phase: string;
   step: string;
   target: string;
+}
+
+export interface MutationTargetClassificationInput extends ActiveStepArtifactExceptionInput {
+  projectRoot: string;
+}
+
+export type MutationTargetClassification =
+  | { kind: 'unprotected'; target: string }
+  | { kind: 'allowed'; target: string }
+  | { kind: 'protected'; target: string };
+
+function canonicalWorkspaceTarget(projectRoot: string, target: string): string {
+  return relative(resolve(projectRoot), resolve(projectRoot, target)).replaceAll('\\', '/');
+}
+
+/**
+ * Produces the provider-neutral target verdict used by the generated artifact
+ * hook and the terminal seal audit. Paths are canonicalized relative to the
+ * feature workspace before policy is applied, so absolute and relative hook
+ * payloads have the same decision.
+ */
+export function classifyMutationTarget({
+  projectRoot,
+  target,
+  phase,
+  step,
+}: MutationTargetClassificationInput): MutationTargetClassification {
+  const canonicalTarget = canonicalWorkspaceTarget(projectRoot, target);
+  if (isActiveStepArtifactException({ phase, step, target: canonicalTarget })) {
+    return { kind: 'allowed', target: canonicalTarget };
+  }
+  if (canonicalTarget === '.docs' || canonicalTarget.startsWith('.docs/')) {
+    return { kind: 'protected', target: canonicalTarget };
+  }
+  return { kind: 'unprotected', target: canonicalTarget };
 }
 
 /**
@@ -150,9 +185,18 @@ async function inspectSeal(
   seal: ProtectedArtifactSeal,
 ): Promise<ProtectedArtifactSealVerdict> {
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
-  const actualPaths = (await Promise.all(
+  const discoveredPaths = (await Promise.all(
     PROTECTED_ARTIFACT_DIRECTORIES.map((directory) => workspaceProtectedPaths(projectRoot, directory)),
   )).flat().sort(comparePaths);
+  const actualPaths = discoveredPaths.map((path) => {
+    const classification = classifyMutationTarget({
+      projectRoot,
+      target: path,
+      phase: 'BUILD',
+      step: 'protected_artifact_seal_audit',
+    });
+    return classification.target;
+  });
 
   for (const path of actualPaths) {
     if (!expected.has(path)) {

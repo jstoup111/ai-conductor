@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createProtectedArtifactSeal,
+  classifyMutationTarget,
   isActiveStepArtifactException,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
@@ -164,5 +165,26 @@ describe('isActiveStepArtifactException', () => {
         target: '.docs/stories/retro-907.md',
       }),
     ).toBe(false);
+  });
+});
+
+describe('classifyMutationTarget', () => {
+  const projectRoot = '/workspace/feature-907';
+
+  it.each([
+    ['known unprotected', 'src/conductor.ts', 'BUILD', 'build', {
+      kind: 'unprotected', target: 'src/conductor.ts',
+    }],
+    ['exact allowed', '.docs/stories/retro-907.md', 'SHIP', 'retro', {
+      kind: 'allowed', target: '.docs/stories/retro-907.md',
+    }],
+    ['protected', '.docs/plans/frozen.md', 'BUILD', 'build', {
+      kind: 'protected', target: '.docs/plans/frozen.md',
+    }],
+    ['canonical in-workspace', '/workspace/feature-907/src/./conductor.ts', 'BUILD', 'build', {
+      kind: 'unprotected', target: 'src/conductor.ts',
+    }],
+  ] as const)('classifies a %s target', (_name, target, phase, step, expected) => {
+    expect(classifyMutationTarget({ projectRoot, target, phase, step })).toEqual(expected);
   });
 });
