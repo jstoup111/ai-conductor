@@ -272,6 +272,135 @@ describe('conductor auth-park: daemon-token mode', () => {
     }
   });
 
+  it.each(['serial', 'grouped', 'judgment'] as const)(
+    '%s recovery timeout preserves the selected Codex disposition without consuming a fallback',
+    async (shape) => {
+      const selectedReadiness = vi.fn().mockResolvedValue({
+        provider: 'codex', source: 'cached-login', state: 'unusable',
+      });
+      const alternateReadiness = vi.fn().mockResolvedValue({
+        provider: 'claude', source: 'cached-login', state: 'ready',
+      });
+      const completedSiblingDispatch = vi.fn();
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        },
+        {
+          key: 'claude',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+          policy: CLAUDE_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: completedSiblingDispatch },
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        maxRetries: 3,
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+      });
+
+      const terminal = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+
+      expect({
+        shape,
+        terminal,
+        selectedProbes: selectedReadiness.mock.calls.length,
+        alternateProviderProbes: alternateReadiness.mock.calls.length,
+        completedSiblingDispatches: completedSiblingDispatch.mock.calls.length,
+      }).toEqual({
+        shape,
+        terminal: {
+          timedOut: true,
+          haltReason:
+            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+            'Refresh the Codex login, then re-queue this feature.',
+        },
+        selectedProbes: 0,
+        alternateProviderProbes: 0,
+        completedSiblingDispatches: 0,
+      });
+    },
+  );
+
+  it('auxiliary verifier timeout does not redispatch, escalate, change models, or probe another provider', async () => {
+    const selectedReadiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'unusable',
+    });
+    const alternateReadiness = vi.fn().mockResolvedValue({
+      provider: 'claude', source: 'cached-login', state: 'ready',
+    });
+    const dispatchVerifier = vi.fn().mockResolvedValue({
+      success: false,
+      output: 'selected login rejected',
+      authFailure: true,
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'claude',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(), dispatchVerifier },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 3,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+    });
+
+    const result = await (conductor as any).dispatchSpotAuditVerifier({
+      residueIds: ['residue-1'],
+      planPath: 'plan.md',
+    });
+
+    expect({
+      result,
+      verifierDispatches: dispatchVerifier.mock.calls.length,
+      selectedProbes: selectedReadiness.mock.calls.length,
+      alternateProviderProbes: alternateReadiness.mock.calls.length,
+    }).toEqual({
+      result: expect.objectContaining({
+        success: false,
+        authFailure: true,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      }),
+      verifierDispatches: 1,
+      selectedProbes: 0,
+      alternateProviderProbes: 0,
+    });
+  });
+
   it('backs off cached-login readiness checks at exponentially increasing rungs', async () => {
     const readiness = vi
       .fn()
