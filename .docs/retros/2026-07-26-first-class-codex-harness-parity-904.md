@@ -20,7 +20,7 @@
 
 **Proposed changes:**
 
-- [ ] A-1: Add a tracked follow-up story for case-insensitive built-in provider selection in `bin/install`.
+- [ ] A-1: File a future intake only if case-insensitive provider selection becomes operator-impacting; do not add it to this completed feature plan.
 
 ## Part C: Context Efficiency
 
