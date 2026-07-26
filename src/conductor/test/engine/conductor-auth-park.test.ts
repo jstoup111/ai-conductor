@@ -44,6 +44,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   let events: ConductorEventEmitter;
   let priorToken: string | undefined;
   let priorCodexApiKey: string | undefined;
+  let priorClaudeConfigDir: string | undefined;
 
   function selfHostConfig() {
     return {
@@ -62,6 +63,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     events = new ConductorEventEmitter();
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     priorCodexApiKey = process.env.CODEX_API_KEY;
+    priorClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeState(statePath, READY_STATE);
@@ -73,6 +75,8 @@ describe('conductor auth-park: daemon-token mode', () => {
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
     if (priorCodexApiKey === undefined) delete process.env.CODEX_API_KEY;
     else process.env.CODEX_API_KEY = priorCodexApiKey;
+    if (priorClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = priorClaudeConfigDir;
     await rm(dir, { recursive: true, force: true }).catch(() => {});
     await rm(tokenDir, { recursive: true, force: true }).catch(() => {});
   });
@@ -343,6 +347,128 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(sleepFn).not.toHaveBeenCalled();
     expect(park).toMatchObject({ timedOut: true });
     expect(park.haltReason).toContain('restart the daemon');
+  });
+
+  it('keeps Codex API-key restart recovery on its fixed one-second cadence', async () => {
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async () => {
+      clockOffset += 20_000;
+    });
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const parked: unknown[] = [];
+    events.on('credentials_park', (event) => parked.push(event));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'api-key', state: 'unusable' },
+      });
+
+      expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 1_000, 1_000]);
+      expect(readiness).not.toHaveBeenCalled();
+      expect(park).toMatchObject({ timedOut: true, haltReason: expect.stringContaining('restart the daemon') });
+      expect(parked).toEqual([expect.objectContaining({
+        reason: 'Codex API key is startup-only — waiting for daemon restart',
+      })]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps Claude daemon-token and operator-OAuth recovery on their existing polling and reload traces', async () => {
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const daemonSleep = vi.fn(async (delay: number) => {
+      clockOffset += delay;
+      await writeFile(tokenPath, 'tok-v2', 'utf-8');
+      await utimes(tokenPath, new Date(realNow + clockOffset), new Date(realNow + clockOffset));
+    });
+    const daemonParked: unknown[] = [];
+    events.on('credentials_park', (event) => daemonParked.push(event));
+    const daemonConductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      selfHost: true,
+      sleepFn: daemonSleep,
+      config: selfHostConfig(),
+    });
+
+    const operatorConfigDir = await mkdtemp(join(tmpdir(), 'auth-park-operator-'));
+    process.env.CLAUDE_CONFIG_DIR = operatorConfigDir;
+    const operatorCredentialsPath = join(operatorConfigDir, '.credentials.json');
+    await writeFile(operatorCredentialsPath, JSON.stringify({ claudeAiOauth: { expiresAt: realNow - 1 } }), 'utf-8');
+    const operatorSleep = vi.fn(async (delay: number) => {
+      clockOffset += delay;
+      await writeFile(
+        operatorCredentialsPath,
+        JSON.stringify({ claudeAiOauth: { expiresAt: realNow + clockOffset + 10 * 60 * 1000 } }),
+        'utf-8',
+      );
+      await utimes(
+        operatorCredentialsPath,
+        new Date(realNow + clockOffset),
+        new Date(realNow + clockOffset),
+      );
+    });
+    const operatorEvents = new ConductorEventEmitter();
+    const operatorParked: unknown[] = [];
+    operatorEvents.on('credentials_park', (event) => operatorParked.push(event));
+    const operatorConductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: operatorEvents,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn: operatorSleep,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+    });
+
+    try {
+      const daemonPark = await (daemonConductor as any).parkOnAuthFailure();
+      const operatorPark = await (operatorConductor as any).parkOnAuthFailure();
+
+      expect(daemonPark).toEqual({ timedOut: false, haltReason: '' });
+      expect(daemonSleep.mock.calls.map(([delay]) => delay)).toEqual([1_000]);
+      expect(daemonParked).toEqual([expect.objectContaining({
+        reason: 'daemon build token expired or invalid — waiting for refresh',
+      })]);
+      expect(operatorPark).toEqual({ timedOut: false, haltReason: '' });
+      expect(operatorSleep.mock.calls.map(([delay]) => delay)).toEqual([1_000]);
+      expect(operatorParked).toEqual([expect.objectContaining({
+        reason: 'operator OAuth token expired or invalid — waiting for refresh',
+      })]);
+    } finally {
+      nowSpy.mockRestore();
+      await rm(operatorConfigDir, { recursive: true, force: true });
+    }
   });
 
   it.each(['missing', 'unusable', 'unverifiable'] as const)(
