@@ -98,6 +98,8 @@ export interface InvokeResult {
   providerInvocationSkipped?: boolean;
   /** Provider-owned, safe authentication source/readiness metadata. */
   authentication?: AuthenticationReadiness;
+  /** Sanitized diagnostic-only safety notices; never an authorization input. */
+  safetyDiagnostics?: readonly string[];
 }
 
 export interface InvokeOptions {

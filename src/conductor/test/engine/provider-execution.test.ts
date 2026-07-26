@@ -15,7 +15,7 @@ import {
 } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { formatProviderCapabilityGapMessages } from '../../src/engine/provider-execution.js';
+import { createCandidateSafetyBoundary, formatProviderCapabilityGapMessages } from '../../src/engine/provider-execution.js';
 
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
@@ -187,6 +187,25 @@ describe('executeProviderCandidates', () => {
     ]);
   });
 
+  it('carries diagnostic-only boundary notices into the result and attempt metadata', async () => {
+    const boundary = createCandidateSafetyBoundary({
+      protections: () => [{
+        name: 'native-observability', criticality: 'diagnostic',
+        classification: 'diagnostic-only', applicability: 'applicable', state: 'missing',
+      }],
+    });
+    const result = await boundary(
+      { step: 'build', providerKey: 'codex', model: 'gpt-5.6', effort: 'medium' },
+      async () => ({ success: true, exitCode: 0, output: 'completed' }),
+    );
+    const { buildProviderAttemptMetadata } = await import('../../src/engine/provider-execution.js');
+    const metadata = buildProviderAttemptMetadata({ providerKey: 'codex', result, resolvedModel: 'gpt-5.6' });
+    expect({ output: result.output, safetyDiagnostics: metadata.safetyDiagnostics }).toEqual({
+      output: 'Provider codex: diagnostic-only capability gap native-observability (missing).\ncompleted',
+      safetyDiagnostics: ['Provider codex: diagnostic-only capability gap native-observability (missing).'],
+    });
+  });
+
   it('wraps each resolved candidate through safety before fallback advances', async () => {
     const transcript: string[] = [];
     const unavailable = (): InvokeResult => ({
@@ -244,6 +263,66 @@ describe('executeProviderCandidates', () => {
       'preflight:claude',
       'invoke:claude',
       'verify-and-teardown:claude',
+    ]);
+  });
+
+  it.each([
+    ['codex', 'claude'],
+    ['claude', 'codex'],
+  ] as const)('prepares, verifies, and tears down every actual fallback candidate (%s -> %s)', async (first, second) => {
+    const transcript: string[] = [];
+    const unavailable = (provider: string): InvokeResult => ({
+      success: false, output: `${provider} unavailable`, exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run',
+    });
+    const providers = new ProviderRuntimeSet([
+      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: [first, second], preferredProvider: first,
+      runtimes: providers, sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      config: { llm_provider: [first, second] }, options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+      prepareCandidateSelfHost: async (candidate) => {
+        transcript.push(`prepare:${candidate.providerKey}`);
+        return { executable: candidate.providerKey, env: {}, args: [], teardown: async () => { transcript.push(`verify-and-teardown:${candidate.providerKey}`); } };
+      },
+    });
+
+    expect(transcript).toEqual([
+      `prepare:${first}`, `verify-and-teardown:${first}`,
+      `prepare:${second}`, `verify-and-teardown:${second}`,
+    ]);
+  });
+
+  it.each([
+    ['codex', 'claude'],
+    ['claude', 'codex'],
+  ] as const)('keeps the candidate lifecycle around SHIP fallback (%s -> %s)', async (first, second) => {
+    const transcript: string[] = [];
+    const unavailable = (provider: string): InvokeResult => ({
+      success: false, output: `${provider} unavailable`, exitCode: 127,
+      providerUnavailable: true, providerUnavailableScope: 'run',
+    });
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: vi.fn(async () => first === 'codex' ? unavailable('codex') : ({ success: true, output: 'shipped', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: vi.fn(async () => first === 'claude' ? unavailable('claude') : ({ success: true, output: 'shipped', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    await executeProviderCandidates({
+      step: 'finish', configuredProviders: [first, second], preferredProvider: first,
+      runtimes, sessions: new ProviderSessionScope(vi.fn().mockReturnValue('ship-session')),
+      config: { llm_provider: [first, second] }, options: { prompt: 'Ship it.', cwd: '/workspace/feature' },
+      prepareCandidateSelfHost: async (candidate) => {
+        transcript.push(`prepare:${candidate.providerKey}`);
+        return { executable: candidate.providerKey, env: {}, args: [], teardown: async () => transcript.push(`verify-and-teardown:${candidate.providerKey}`) };
+      },
+    });
+    expect(transcript).toEqual([
+      `prepare:${first}`, `verify-and-teardown:${first}`,
+      `prepare:${second}`, `verify-and-teardown:${second}`,
     ]);
   });
 

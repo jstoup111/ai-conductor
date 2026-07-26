@@ -30,7 +30,7 @@ import {
   type TaskAttributionDiagnosticCode,
   type TaskAttributionInput,
 } from './task-attribution.js';
-import type { SafetyDiagnosticGap } from './safety-boundary.js';
+import { evaluateSafetyBoundary, type SafetyDiagnosticGap, type SafetyProtection } from './safety-boundary.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 
 export interface ProviderUnavailableClassification {
@@ -56,6 +56,8 @@ export interface ProviderAttemptMetadata {
   outcome: 'success' | 'failure' | 'unavailable';
   reason?: string;
   fallbackReason?: string;
+  /** Visible diagnostic-only boundary notices; never controls fallback. */
+  safetyDiagnostics?: readonly string[];
   invoked: boolean;
 }
 
@@ -121,6 +123,43 @@ export type WithCandidateSafety = (
   candidate: ProviderCandidate,
   invoke: () => Promise<InvokeResult>,
 ) => Promise<InvokeResult>;
+
+/**
+ * The production candidate boundary. It evaluates a provider-labelled verdict
+ * even when no provider-independent protection applies, so BUILD/SHIP never
+ * degrade to a direct executor call. Callers may supply required protections;
+ * diagnostic-only gaps are carried into both result and attempt metadata.
+ */
+export function createCandidateSafetyBoundary(options: {
+  protections?: (candidate: ProviderCandidate) => readonly SafetyProtection[];
+  selfHost?: boolean;
+} = {}): WithCandidateSafety {
+  return async (candidate, invoke) => {
+    const verdict = evaluateSafetyBoundary({
+      provider: candidate.providerKey,
+      context: { selfHost: options.selfHost ?? false },
+      protections: options.protections?.(candidate) ?? [],
+    });
+    const notices = formatProviderCapabilityGapMessages(candidate.providerKey, verdict.diagnosticGaps);
+    if (!verdict.passed) {
+      return {
+        success: false,
+        exitCode: 1,
+        permissionDenied: true,
+        output: `Required safety protection unavailable: ${verdict.requiredFailures.map((p) => p.name).join(', ')}`,
+        ...(notices.length ? { safetyDiagnostics: notices } : {}),
+      };
+    }
+    const result = await invoke();
+    return notices.length === 0
+      ? result
+      : {
+          ...result,
+          output: [...notices, result.output].filter(Boolean).join('\n'),
+          safetyDiagnostics: notices,
+        };
+  };
+}
 
 /** Creates a child-only invocation context after the actual candidate resolves. */
 export type PrepareCandidateSelfHost = (
@@ -405,6 +444,7 @@ export function buildProviderAttemptMetadata({
     ...(unavailable && nextProvider
       ? { fallbackReason: redactSafetyText(unavailable.reason) }
       : {}),
+    ...(result.safetyDiagnostics ? { safetyDiagnostics: result.safetyDiagnostics } : {}),
     invoked,
   };
 }

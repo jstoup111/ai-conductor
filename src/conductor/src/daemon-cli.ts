@@ -27,6 +27,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -812,6 +813,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     runtimes: createProviderRuntimeSet(registry, log),
     sessions: new ProviderSessionStore(),
     config,
+    // The per-feature Conductor composes self-host authority around this
+    // resolved-candidate boundary; keep it present for every daemon context.
+    withCandidateSafety: createCandidateSafetyBoundary(),
     onAttempt: (step, attempt) =>
       eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => eventTarget.emit(transition),
