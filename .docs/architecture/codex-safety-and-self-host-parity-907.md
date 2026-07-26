@@ -16,7 +16,7 @@ flowchart LR
         Routing["Provider execution routing<br/>Claude or Codex"]
         TaskState["Task lifecycle state<br/>current identity and task rows"]
         PhaseState["Phase protection state<br/>active phase and allowed artifacts"]
-        Safety["Required safety authority<br/>engine-owned outcomes<br/>placement resolved by ADR"]
+        Safety["Conductor safety boundary<br/>task lease, artifact seal, terminal audits"]
         SelfHost["Self-host coordinator<br/>provider-aware isolation lifecycle"]
         Judgement["Judgment gates<br/>architecture, wiring, build completion"]
     end
@@ -25,7 +25,7 @@ flowchart LR
         Claude["Claude provider"]
         ClaudeHooks["Claude lifecycle integrations<br/>current interception surface"]
         Codex["Codex provider"]
-        CodexClient["Codex client<br/>no equivalent lifecycle assumed"]
+        CodexClient["Codex client<br/>native sandbox and lifecycle hooks"]
     end
 
     subgraph Workspace["Feature worktree boundary"]
@@ -51,7 +51,8 @@ flowchart LR
     Routing --> Codex
     Claude --> ClaudeHooks
     Codex --> CodexClient
-    ClaudeHooks -. "legacy compatibility signal" .-> Safety
+    ClaudeHooks -. "provider-local early guard" .-> Safety
+    CodexClient -. "provider-local early guard" .-> Safety
     Claude --> Safety
     Codex --> Safety
     Safety --> Work
@@ -88,8 +89,9 @@ flowchart LR
   current-task identity does not replace those judgments.
 - Self-host isolation preserves only the authentication source selected by issue #905.
   The live checkout and unrelated provider configuration remain protected.
-- Exact module placement and compatibility migration are decisions for architecture
-  review; this diagram fixes ownership and trust boundaries without choosing that seam.
+- `adr-2026-07-25-provider-neutral-safety-authority` places policy and terminal
+  acceptance in the conductor safety boundary. Provider hooks and sandboxes remain
+  early/preventive integrations rather than the correctness authority.
 
 ## Legend
 
@@ -104,4 +106,5 @@ flowchart LR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-25 | Resolve the safety seam and record Codex native guards | Architecture review for issue #907 |
 | 2026-07-25 | Initial component boundary | DECIDE architecture for issue #907 |

@@ -52,11 +52,13 @@ sequenceDiagram
 
 - `«id»` is the active plan task identifier.
 - The selected provider may be Claude or Codex; neither owns task-state authority.
-- The safety authority's exact implementation seam is intentionally deferred to the
-  architecture review.
+- `adr-2026-07-25-provider-neutral-safety-authority` places the task lease and
+  terminal mutation audit in the conductor safety boundary; provider lifecycle hooks
+  supply early events but do not own acceptance.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-25 | Resolve the task-safety authority seam | Architecture review for issue #907 |
 | 2026-07-25 | Initial sequence | DECIDE architecture for issue #907 |
