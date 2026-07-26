@@ -211,6 +211,31 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(mockExeca).toHaveBeenCalledTimes(2);
   });
 
+  // #970/#254 canary: a preceding BUILD must not taint the adjacent
+  // build_review dispatch when the selected cached login remains supported
+  // but an unrelated doctor diagnostic is degraded.
+  it('keeps the same cached login ready for adjacent BUILD then build_review work', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: doctorAuthReadyWithUnrelatedHealthFailure(), stderr: 'unrelated health check failed', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: 'BUILD completed', stderr: '', exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: doctorAuthReadyWithUnrelatedHealthFailure(), stderr: 'unrelated health check failed', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: 'build_review completed', stderr: '', exitCode: 0 } as any);
+    const provider = new CodexProvider();
+
+    const build = await provider.invoke({ ...base, prompt: 'BUILD' });
+    const review = await provider.invoke({ ...base, prompt: 'build_review' });
+
+    expect([build, review]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        success: true,
+        authentication: expect.objectContaining({
+          provider: 'codex', source: 'cached-login', state: 'ready',
+        }),
+      }),
+    ]));
+    expect(mockExeca.mock.calls.map(([, args]) => args.includes('exec'))).toEqual([false, true, false, true]);
+  });
+
   // Covers: FR-13 through FR-18 and FR-22. A denied review is still bounded by
   // the exact unattended policy and never causes the old danger-bypass mode.
   it('keeps the bounded policy when a reviewer denies an unattended resume', async () => {
