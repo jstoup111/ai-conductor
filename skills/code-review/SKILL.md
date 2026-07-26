@@ -20,6 +20,14 @@ confidence % and its basis to each finding (`verified` — reproduced/traced in 
 `inferred`), never asserts a defect it has not verified, and flags a low-confidence finding as
 **tentative** rather than as a hard defect.
 
+### Provider-native delegation
+
+Dispatch the evaluator through the selected host's available subagent facility. Preserve the fresh
+context boundary, skeptical review, verdict output, and blocking gates regardless of host.
+**Claude delegation:** Claude uses the Agent tool; the Claude model choices below apply only to
+that facility. A Codex-selected run uses its available subagent facility and configured Codex
+provider policy, without translating Claude model names.
+
 ## Practices
 
 ### 1. Prepare Review Context
@@ -38,10 +46,10 @@ For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a
 
 ### 2. Dispatch Evaluator Agent
 
-Use the Agent tool with `agents/evaluator.md` persona. The evaluator runs in a **fresh context**
+Use `agents/evaluator.md` with the selected host's subagent facility. The evaluator runs in a **fresh context**
 — it does not share conversation history with the generator.
 
-**Model selection by batch content:**
+**Claude model selection by batch content:**
 - **Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
   configuration files, infrastructure setup, or view templates
 - **Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,

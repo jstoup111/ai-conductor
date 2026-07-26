@@ -81,5 +81,42 @@ require_pattern 'code review retains fresh-context evaluator review' \
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
 
+# Assessment and review delegation has to remain usable by either built-in
+# host. The shared rule selects the host's subagent facility; the existing
+# Claude Agent-tool and model details stay explicitly Claude-scoped.
+for review_skill in assess architecture-review code-review; do
+  review_skill_file="$HARNESS_DIR/skills/${review_skill}/SKILL.md"
+  require_pattern "${review_skill} delegates through the selected host facility" \
+    'selected host.{0,80}(available )?subagent facility|selected provider.{0,80}(available )?subagent facility' \
+    "$review_skill_file"
+  require_pattern "${review_skill} scopes Claude Agent-tool mechanics" \
+    'Claude.{0,100}Agent tool|Agent tool.{0,100}Claude' \
+    "$review_skill_file"
+done
+
+if ! grep -qiE '(^|[^[:alnum:]])(use|via|using|dispatch.{0,40}via) the Agent tool' \
+  "$HARNESS_DIR/skills/assess/SKILL.md" \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md" \
+  "$HARNESS_DIR/skills/code-review/SKILL.md"; then
+  pass 'review and assessment skills contain no unscoped Agent-tool imperative'
+else
+  fail 'review and assessment skills contain no unscoped Agent-tool imperative'
+fi
+
+require_pattern 'assess scopes its specialist model table to Claude' \
+  'Claude.{0,120}(model|Agent tool)|(model|Agent tool).{0,120}Claude' \
+  "$HARNESS_DIR/skills/assess/SKILL.md"
+require_pattern 'code review scopes evaluator model selection to Claude' \
+  'Claude.{0,120}(model|Agent tool)|(model|Agent tool).{0,120}Claude' \
+  "$HARNESS_DIR/skills/code-review/SKILL.md"
+require_pattern 'architecture review preserves its two-agent medium-tier limit' \
+  'Max 2 agents|maximum of 2 agents' "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+require_pattern 'assess retains specialist-report output contract' \
+  'Write your findings to \.pipeline/assessment/' "$HARNESS_DIR/skills/assess/SKILL.md"
+require_pattern 'code review retains fresh-context evaluator review' \
+  'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
+require_pattern 'code review retains blocking verdict gate' \
+  'BLOCK verdict prevents merge' "$HARNESS_DIR/skills/code-review/SKILL.md"
+
 printf '\nProvider skill contract acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -27,6 +27,14 @@ assumption the design rests on, and HARD-BLOCK (operator approval interactive, H
 on any unconfirmed assumption that would change the decision. Do not record a decision as APPROVED
 while it rests on an unconfirmed load-bearing assumption.
 
+### Provider-native delegation
+
+When this review delegates exploration or analysis, use the selected host's available subagent facility.
+Preserve the scope limits, evidence, ADR output, and veto/gate behavior regardless of host.
+**Claude delegation:** Claude uses the Agent tool; any Claude model choice is confined to
+that facility. A Codex-selected run uses its available subagent facility and configured Codex
+provider policy, without translating Claude model names.
+
 ### Full vs amendment mode (convergence — adr-2026-06-29-architecture-before-stories-convergent-kickback)
 
 - **Full pass** — the pre-stories run above: full feasibility/alignment, produces APPROVED ADRs.

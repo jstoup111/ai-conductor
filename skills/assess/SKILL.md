@@ -20,6 +20,14 @@ observed it in the code — vs `inferred`), never asserts a finding it has not v
 low-confidence judgment as **tentative** rather than stating it as fact. The CTO orchestrator must
 not raise a finding's confidence beyond what its evidence supports when prioritizing.
 
+### Provider-native delegation
+
+Dispatch each specialist through the selected host's available subagent facility. Preserve the
+specialist persona, fresh assessment context, report output, and the assessment gates regardless
+of host. **Claude delegation:** Claude uses the Agent tool; the Claude model names below apply
+only to that facility. A Codex-selected run uses its available subagent facility and configured
+Codex provider policy, without translating Claude model names.
+
 **Invocation:**
 - **Onboarding:** Runs as part of `/conduct` after bootstrap for existing projects
 - **On-demand:** User invokes `/assess` anytime for a health check
@@ -51,11 +59,11 @@ Before dispatching specialists, gather context they all need:
 ### 4. Dispatch Specialists (3 Batches of 3)
 
 Dispatch specialists in parallel within each batch, sequential between batches.
-Each specialist is a subagent dispatched via the Agent tool using the corresponding agent persona.
+Each specialist is a subagent using the corresponding agent persona.
 
 **Batch 1** (parallel):
 
-| Specialist | Agent File | Model | Output |
+| Specialist | Agent File | Claude model | Output |
 |-----------|-----------|-------|--------|
 | Security Auditor | `agents/cto-security.md` | opus | `.pipeline/assessment/cto-security.md` |
 | Data Integrity Reviewer | `agents/cto-data-integrity.md` | opus | `.pipeline/assessment/cto-data-integrity.md` |
@@ -65,7 +73,7 @@ Each specialist is a subagent dispatched via the Agent tool using the correspond
 
 **Batch 2** (parallel, after Batch 1 completes):
 
-| Specialist | Agent File | Model | Output |
+| Specialist | Agent File | Claude model | Output |
 |-----------|-----------|-------|--------|
 | Architecture Coherence | `agents/cto-architecture.md` | opus | `.pipeline/assessment/cto-architecture.md` |
 | Code Duplication | `agents/cto-duplication.md` | sonnet | `.pipeline/assessment/cto-duplication.md` |
@@ -75,7 +83,7 @@ Each specialist is a subagent dispatched via the Agent tool using the correspond
 
 **Batch 3** (parallel, after Batch 2 completes):
 
-| Specialist | Agent File | Model | Output |
+| Specialist | Agent File | Claude model | Output |
 |-----------|-----------|-------|--------|
 | Infrastructure | `agents/cto-infrastructure.md` | sonnet | `.pipeline/assessment/cto-infrastructure.md` |
 | Observability | `agents/cto-observability.md` | sonnet | `.pipeline/assessment/cto-observability.md` |
@@ -134,7 +142,7 @@ Date: [YYYY-MM-DD]
 Write the final assessment report to .docs/decisions/technical-assessment-[YYYY-MM-DD].md.
 ```
 
-Model: opus (cross-referencing 9 reports requires deep reasoning).
+**Claude model:** opus (cross-referencing 9 reports requires deep reasoning).
 
 ### 6. Present Findings
 
