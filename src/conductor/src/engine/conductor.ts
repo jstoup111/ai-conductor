@@ -1320,10 +1320,20 @@ export class Conductor {
       if (readiness) {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
+        const timedOutResult = {
+          timedOut: true,
+          haltReason:
+            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+            'Refresh the Codex login, then re-queue this feature.',
+        };
         await this.events.emit({
           type: 'credentials_park',
           reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
         });
+
+        if (timeoutMs <= 0) {
+          return timedOutResult;
+        }
 
         let retryDelayMs = 1_000;
         for (;;) {
@@ -1336,14 +1346,10 @@ export class Conductor {
             return { timedOut: false, haltReason: '' };
           }
           if (timeoutMs <= 0 || Date.now() - startedAt >= timeoutMs) {
-            return {
-              timedOut: true,
-              haltReason:
-                'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
-                'Refresh the Codex login, then re-queue this feature.',
-            };
+            return timedOutResult;
           }
-          await this.sleep(retryDelayMs);
+          const remainingMs = timeoutMs - (Date.now() - startedAt);
+          await this.sleep(Math.min(retryDelayMs, remainingMs));
           retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }

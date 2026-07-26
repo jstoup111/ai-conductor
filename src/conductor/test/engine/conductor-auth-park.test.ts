@@ -163,6 +163,97 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
   });
 
+  it('clamps the final cached-login sleep to the remaining auth-park deadline', async () => {
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'unusable',
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async (delay: number) => {
+      clockOffset += delay;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+
+      expect({
+        sleepDelays: sleepFn.mock.calls.map(([delay]) => delay),
+        park,
+      }).toMatchObject({
+        sleepDelays: [1_000, 2_000, 4_000, 8_000, 16_000, 29_000],
+        park: { timedOut: true },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('halts disabled cached-login parks before probing or sleeping', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const sleepFn = vi.fn(async () => {});
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    const park = await (conductor as any).parkOnAuthFailure({
+      actualProvider: 'codex',
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    });
+
+    expect({ readinessCalls: readiness.mock.calls.length, sleepCalls: sleepFn.mock.calls.length, park })
+      .toEqual({
+        readinessCalls: 0,
+        sleepCalls: 0,
+        park: {
+          timedOut: true,
+          haltReason:
+            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+            'Refresh the Codex login, then re-queue this feature.',
+        },
+      });
+  });
+
   it('parks Codex API-key failures until the configured timeout without rechecking another source', async () => {
     const readiness = vi.fn();
     const runtimes = new ProviderRuntimeSet([
