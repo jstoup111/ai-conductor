@@ -78,12 +78,15 @@ async function writeRegistry(): Promise<void> {
       schemaVersion: 1,
       name: 'test-proj',
       path: repoPath,
+      remote: 'https://github.com/acme/test-proj.git',
       status: 'registered',
       registeredAt: '2026-07-04T00:00:00.000Z',
     },
   ];
   await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
 }
+
+const noOpGit = async () => ({ stdout: '', stderr: '' });
 
 function captureOpts(extra: Partial<DispatchEngineerOpts>): {
   out: string[];
@@ -151,6 +154,7 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
 
     const { out, err, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 
@@ -203,6 +207,7 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
 
     const { out, err, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 

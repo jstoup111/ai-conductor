@@ -959,15 +959,7 @@ export async function dispatchEngineer(
           }
         }
 
-        print(
-          JSON.stringify({
-            kind: 'local-commit',
-            branch,
-            repoPath: target.canonicalPath,
-            worktreePath: worktree,
-          }),
-        );
-        return 0;
+        return 1;
       }
 
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
