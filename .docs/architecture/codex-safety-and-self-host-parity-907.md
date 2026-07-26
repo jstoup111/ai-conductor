@@ -14,10 +14,13 @@ flowchart LR
     subgraph Engine["Conductor engine"]
         Conductor["Conductor lifecycle<br/>step, retry, resume, cleanup"]
         Routing["Provider execution routing<br/>Claude or Codex"]
-        TaskState["Concurrent task telemetry<br/>validated ids and active task rows"]
+        TaskState["Task attribution service<br/>validated ids and concurrent active rows"]
         PhaseState["Phase protection state<br/>active phase and allowed artifacts"]
-        Safety["Conductor safety boundary<br/>artifact seal, workspace boundary, terminal audits"]
-        SelfHost["Self-host coordinator<br/>provider-aware isolation lifecycle"]
+        Seal["Protected artifact seal<br/>approved DECIDE baseline"]
+        Safety["Safety boundary<br/>required verdict and capability classification"]
+        Diagnostics["Safety diagnostics<br/>structured recovery and redaction"]
+        SelfHost["Self-host coordinator<br/>provider-home and terminal cleanup lifecycle"]
+        LiveAudit["Live-boundary verifier<br/>checkout and provider-state fingerprints"]
         Judgement["Judgment gates<br/>architecture, wiring, build completion"]
     end
 
@@ -51,7 +54,9 @@ flowchart LR
     Conductor --> TaskState
     Conductor --> PhaseState
     TaskState -. "non-authoritative telemetry" .-> Safety
-    PhaseState --> Safety
+    PhaseState --> Seal
+    Seal --> Safety
+    Safety --> Diagnostics
     Routing --> Claude
     Routing --> Codex
     Claude --> ClaudeHooks
@@ -67,6 +72,8 @@ flowchart LR
     Safety --> State
     Conductor --> SelfHost
     Routing --> SelfHost
+    SelfHost --> LiveAudit
+    LiveAudit --> Safety
     SelfHost --> Auth
     SelfHost --> ClaudeHome
     SelfHost --> CodexHome
@@ -81,7 +88,7 @@ flowchart LR
     classDef required fill:#e8f5e9,stroke:#2e7d32
     classDef current fill:#fff3e0,stroke:#ef6c00
     classDef protected fill:#ffebee,stroke:#c62828
-    class Safety,SelfHost required
+    class Seal,Safety,Diagnostics,SelfHost,LiveAudit required
     class ClaudeHooks current
     class Live,ClaudeConfig,CodexConfig protected
 ```
@@ -94,6 +101,9 @@ flowchart LR
 - The required safety authority owns outcomes, not provider API symmetry. Claude
   lifecycle integration may remain as a compatibility signal, but it is not the
   correctness boundary.
+- The plan implements the green boundary as separate task-attribution, artifact-seal,
+  safety-verdict, diagnostic-redaction, provider-home, and live-fingerprint modules; the
+  conductor composes them around every BUILD/SHIP attempt.
 - Judgment gates remain the authority for architecture, wiring, and build completeness.
 - Both provider homes preserve only selected authentication, engine-owned controls, and
   worktree-owned harness assets. Personal settings/hooks and live global relink are excluded.
@@ -116,6 +126,7 @@ flowchart LR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Name planned safety, seal, diagnostic, provider-home, and live-verifier components | `/plan` update for issue #907 |
 | 2026-07-26 | Replace singular task lease with concurrent telemetry; add minimal homes for both providers | Conflict-check resolution for issue #907 |
 | 2026-07-25 | Resolve the safety seam and record Codex native guards | Architecture review for issue #907 |
 | 2026-07-25 | Initial component boundary | DECIDE architecture for issue #907 |

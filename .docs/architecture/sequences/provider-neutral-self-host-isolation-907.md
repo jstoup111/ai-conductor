@@ -15,6 +15,7 @@ sequenceDiagram
     participant A as Selected authentication source
     participant I as Self-host isolation boundary
     participant D as Isolated skill discovery
+    participant V as Live-boundary verifier
     participant P as Selected provider
     participant W as Feature worktree
     participant L as Live checkout and unrelated config
@@ -23,6 +24,8 @@ sequenceDiagram
     R-->>C: Claude or Codex
     C->>A: obtain provider-selected auth source
     A-->>C: selected authentication context
+    C->>V: fingerprint live checkout and unrelated provider state
+    V-->>C: bounded baseline ready
     C->>I: prepare minimal throwaway provider home
     alt required isolation cannot be verified
         I-->>C: unavailable or unverifiable
@@ -39,8 +42,14 @@ sequenceDiagram
         P--xL: mutation denied
         Note over P,L: no personal settings/hooks, global relink,<br/>mutable state, or live-checkout access
         P-->>C: success, failure, or interruption
-        C->>I: teardown isolated context
-        I-->>C: cleanup complete
+        C->>V: verify live boundary on terminal path
+        alt live boundary changed or unverifiable
+            V-->>C: reject safe completion with sanitized recovery
+        else live boundary unchanged
+            V-->>C: terminal verification passes
+        end
+        C->>I: finally teardown provider, discovery, and credential state
+        I-->>C: idempotent path-bounded cleanup complete
     end
 ```
 
@@ -59,6 +68,8 @@ sequenceDiagram
 - The provider may mutate the feature worktree but not the live harness checkout.
 - Teardown is required after success, failure, or interruption. Retry and resume create
   a fresh isolated context with the same #905 authentication-selection rules.
+- Provisioning failures remove only feature-created paths before any model work starts;
+  diagnostics are redacted before logs, HALTs, attempt metadata, or persisted artifacts.
 
 ## Legend
 
@@ -70,6 +81,7 @@ sequenceDiagram
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Add planned live fingerprint and unified terminal cleanup flow | `/plan` update for issue #907 |
 | 2026-07-26 | Apply minimal isolated-home behavior to both Claude and Codex | Conflict-check resolution for issue #907 |
 | 2026-07-26 | Add opaque cached-auth handoff and isolated #904 skill discovery | Landed #905 and inflight #904 conflict resolution |
 | 2026-07-25 | Initial sequence | DECIDE architecture for issue #907 |
