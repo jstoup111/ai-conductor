@@ -145,7 +145,7 @@ Emit one verdict so the calling skill knows whether it may proceed:
 This skill is a discipline applied *within* the calling skill's context (its model), not a
 separately dispatched agent. A skill invokes it by running the protocol above at its decision
 point — for example, `plan` before finalizing tasks, `architecture-review` before writing an ADR,
-`prd` before locking FRs. The HARNESS.md "Correctness & Assumption Gate" rule arms it at every
+`prd` before locking FRs. The repository's correctness and assumption gate arms it at every
 load-bearing point; the DECIDE/BUILD skills cite it where their assumptions get baked in.
 
 ## Verification

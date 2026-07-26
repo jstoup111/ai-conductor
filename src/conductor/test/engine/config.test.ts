@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -203,6 +203,16 @@ complexity:
         steps: { manual_test: { disable: true } },
       });
       expect(result.ok).toBe(true);
+    });
+
+    it('rejects steps.test_suite.disable: true — the native BUILD gate is non-disableable', () => {
+      const result = validateConfig({
+        steps: { test_suite: { disable: true } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/test_suite/);
+      expect(result.error.message).toMatch(/gating/i);
     });
 
     it('rejects disabling a structural step', () => {
@@ -563,6 +573,88 @@ complexity:
         { acceptance_spec_globs: ['*/spec/**/*'] },
       );
       expect(merged.acceptance_spec_globs).toEqual(['*/spec/**/*']);
+    });
+  });
+
+  describe('test_suite config block', () => {
+    it('accepts an aggregate suite declaration with every supported field', () => {
+      const testSuite = {
+        command: 'npm test',
+        working_directory: 'src/conductor',
+        timeout_seconds: 1800,
+        inputs: ['test-support/**'],
+        environment: ['CI', 'DATABASE_URL'],
+      };
+
+      const result = validateConfig({ test_suite: testSuite });
+
+      expect(result.ok && result.config.test_suite).toEqual(testSuite);
+    });
+
+    it.each([
+      ['a non-object block', 'npm test', /test_suite must be an object/],
+      ['an unknown key', { command: 'npm test', retries: 2 }, /test_suite.*retries/],
+      ['a missing command', {}, /test_suite\.command/],
+      ['a blank command', { command: '   ' }, /test_suite\.command/],
+      [
+        'a non-numeric timeout',
+        { command: 'npm test', timeout_seconds: 'slow' },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a zero timeout',
+        { command: 'npm test', timeout_seconds: 0 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a negative timeout',
+        { command: 'npm test', timeout_seconds: -1 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a non-string inputs entry',
+        { command: 'npm test', inputs: ['package.json', 42] },
+        /test_suite\.inputs/,
+      ],
+      [
+        'a non-string environment entry',
+        { command: 'npm test', environment: ['CI', false] },
+        /test_suite\.environment/,
+      ],
+      [
+        'an absolute working directory',
+        { command: 'npm test', working_directory: '/tmp/project' },
+        /test_suite\.working_directory/,
+      ],
+      [
+        'a working directory that escapes the project root',
+        { command: 'npm test', working_directory: '../outside' },
+        /test_suite\.working_directory/,
+      ],
+    ])('rejects %s with a field-specific error', (_name, testSuite, expectedMessage) => {
+      const result = validateConfig({ test_suite: testSuite }, tmpDir);
+
+      expect(result.ok ? '' : result.error.message).toMatch(expectedMessage);
+    });
+
+    it('rejects an existing working_directory symlink that escapes the project root', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'config-outside-'));
+      try {
+        await symlink(outside, join(tmpDir, 'linked-workdir'));
+
+        const result = validateConfig(
+          { test_suite: { command: 'npm test', working_directory: 'linked-workdir' } },
+          tmpDir,
+        );
+
+        expect(result.ok ? '' : result.error.message).toMatch(/test_suite\.working_directory/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps the entire test_suite block optional at global config validation', () => {
+      expect(validateConfig({}).ok).toBe(true);
     });
   });
 

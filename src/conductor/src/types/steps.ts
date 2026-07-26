@@ -16,6 +16,7 @@ export type StepName =
   | 'build'
   | 'build_review'
   | 'wiring_check'
+  | 'test_suite'
   | 'manual_test'
   | 'prd_audit'
   | 'architecture_review_as_built'

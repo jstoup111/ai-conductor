@@ -23,12 +23,12 @@ describe('engine/steps', () => {
       'worktree', 'memory', 'explore', 'complexity', 'prd',
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
       'coherence_check',
-      'acceptance_specs', 'build', 'build_review', 'wiring_check', 'manual_test', 'prd_audit',
+      'acceptance_specs', 'build', 'build_review', 'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
-    it('has exactly 21 steps', () => {
-      expect(ALL_STEPS).toHaveLength(21);
+    it('has exactly 22 steps', () => {
+      expect(ALL_STEPS).toHaveLength(22);
     });
 
     it('steps are in exact order', () => {
@@ -166,12 +166,26 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('manual_test is SHIP/gating, checkpoint, prereq wiring_check (#367 — a failing manual test must be able to block)', () => {
+    it('test_suite is a native non-disableable BUILD/gating loop gate after wiring_check', () => {
       const s = ALL_STEPS[15];
+      expect(s).toEqual({
+        name: 'test_suite',
+        label: 'Test Suite',
+        phase: 'BUILD',
+        enforcement: 'gating',
+        prerequisites: ['wiring_check'],
+        skippableForTiers: [],
+        isCheckpoint: false,
+        loopGate: true,
+      });
+    });
+
+    it('manual_test is SHIP/gating, checkpoint, prereq test_suite (#367 — a failing manual test must be able to block)', () => {
+      const s = ALL_STEPS[16];
       expect(s.name).toBe('manual_test');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['wiring_check']);
+      expect(s.prerequisites).toEqual(['test_suite']);
       expect(s.isCheckpoint).toBe(true);
       // ADR D5: Small-tier features skip manual testing (mirrors
       // conflict_check/acceptance_specs S-tier skip).
@@ -179,7 +193,7 @@ describe('engine/steps', () => {
     });
 
     it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
-      const s = ALL_STEPS[16];
+      const s = ALL_STEPS[17];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -191,7 +205,7 @@ describe('engine/steps', () => {
     });
 
     it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
-      const s = ALL_STEPS[17];
+      const s = ALL_STEPS[18];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
@@ -208,7 +222,7 @@ describe('engine/steps', () => {
     });
 
     it('retro is SHIP/advisory, skippable for S', () => {
-      const s = ALL_STEPS[18];
+      const s = ALL_STEPS[19];
       expect(s.name).toBe('retro');
       expect(s.enforcement).toBe('advisory');
       expect(s.prerequisites).toEqual(['architecture_review_as_built']);
@@ -216,7 +230,7 @@ describe('engine/steps', () => {
     });
 
     it('rebase is SHIP/structural loopGate, engine-native, before finish', () => {
-      const s = ALL_STEPS[19];
+      const s = ALL_STEPS[20];
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
@@ -229,18 +243,18 @@ describe('engine/steps', () => {
     });
 
     it('finish is SHIP/gating with prereq rebase', () => {
-      const s = ALL_STEPS[20];
+      const s = ALL_STEPS[21];
       expect(s.name).toBe('finish');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['rebase']);
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('build → build_review → wiring_check → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
+    it('build → build_review → wiring_check → test_suite → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
       const names = ALL_STEPS.map((s) => s.name);
       const tail = names.slice(names.indexOf('build'));
       expect(tail).toEqual([
-        'build', 'build_review', 'wiring_check', 'manual_test', 'prd_audit', 'architecture_review_as_built',
+        'build', 'build_review', 'wiring_check', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built',
         'retro', 'rebase', 'finish',
       ]);
     });
@@ -285,8 +299,8 @@ describe('engine/steps', () => {
       expect(getStepIndex('worktree')).toBe(0);
     });
 
-    it('returns 20 for finish', () => {
-      expect(getStepIndex('finish')).toBe(20);
+    it('returns 21 for finish', () => {
+      expect(getStepIndex('finish')).toBe(21);
     });
   });
 
@@ -295,12 +309,12 @@ describe('engine/steps', () => {
       expect(getStepByIndex(0).name).toBe('worktree');
     });
 
-    it('returns finish for index 20', () => {
-      expect(getStepByIndex(20).name).toBe('finish');
+    it('returns finish for index 21', () => {
+      expect(getStepByIndex(21).name).toBe('finish');
     });
 
     it('throws for out-of-range index', () => {
-      expect(() => getStepByIndex(21)).toThrow();
+      expect(() => getStepByIndex(22)).toThrow();
       expect(() => getStepByIndex(-1)).toThrow();
     });
   });
@@ -322,7 +336,7 @@ describe('engine/steps', () => {
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
-        'plan', 'build', 'wiring_check', 'finish',
+        'plan', 'build', 'wiring_check', 'test_suite', 'finish',
       ];
       for (const step of nonSkippable) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -341,9 +355,9 @@ describe('engine/steps', () => {
       }
     });
 
-    it('wiring_check is present (never skipped) for S/M/L tiers', () => {
+    it.each(['wiring_check', 'test_suite'] as const)('%s is present for S/M/L tiers', (step) => {
       for (const tier of ['S', 'M', 'L'] as ComplexityTier[]) {
-        expect(shouldSkipForTier('wiring_check', tier)).toBe(false);
+        expect(shouldSkipForTier(step, tier)).toBe(false);
       }
     });
 
@@ -354,7 +368,7 @@ describe('engine/steps', () => {
     // legitimately skip manual testing.
     it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
       const evidenceGateCore: StepName[] = [
-        'build', 'build_review', 'wiring_check', 'rebase', 'finish',
+        'build', 'build_review', 'wiring_check', 'test_suite', 'rebase', 'finish',
       ];
       for (const step of evidenceGateCore) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -434,7 +448,7 @@ describe('engine/steps', () => {
       const nonCheckpoint: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
         'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
-        'acceptance_specs', 'wiring_check', 'retro', 'finish',
+        'acceptance_specs', 'wiring_check', 'test_suite', 'retro', 'finish',
       ];
       for (const step of nonCheckpoint) {
         expect(isCheckpointStep(step)).toBe(false);
@@ -455,6 +469,13 @@ describe('engine/steps', () => {
 
     it('build requires plan', () => {
       expect(getPrerequisites('build')).toEqual(['plan']);
+    });
+
+    it('test_suite requires wiring_check and manual_test requires test_suite', () => {
+      expect({
+        testSuite: getPrerequisites('test_suite'),
+        manualTest: getPrerequisites('manual_test'),
+      }).toEqual({ testSuite: ['wiring_check'], manualTest: ['test_suite'] });
     });
 
     it('rebase requires manual_test', () => {

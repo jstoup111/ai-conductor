@@ -85,7 +85,13 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(25);
+    expect(policySteps.size).toBe(26);
+  });
+
+  it('describes test_suite as a mechanical native gate rather than a generative review', () => {
+    expect(STEP_RATIONALE.test_suite).toMatch(
+      /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
+    );
   });
 
   it('type-checks as a complete Record<StepName, string>', () => {

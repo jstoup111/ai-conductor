@@ -1,10 +1,16 @@
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../types/index.js';
 import { checkStepCompletion } from './artifacts.js';
+import type { FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { readState } from './state.js';
 
 /** Steps re-checked when a feature is marked complete on resume. */
-const SHIP_GATING_STEPS: StepName[] = ['manual_test', 'retro', 'finish'];
+const SHIP_GATING_STEPS: StepName[] = ['test_suite', 'manual_test', 'retro', 'finish'];
+
+export interface CompleteVerifierOptions {
+  /** Process-free current-PASS inspection seam for test_suite. */
+  fullSuiteInspect?: () => Promise<FullSuiteInspectionResult>;
+}
 
 export interface CompleteStateOk {
   ok: true;
@@ -28,7 +34,7 @@ export type CompleteStateVerification = CompleteStateOk | CompleteStateGap;
  * meant the marker could land without the SHIP phase having genuinely run.
  *
  * This helper detects that case: any worktree whose state claims complete
- * but where manual_test / retro / finish predicates can't reproduce
+ * but where test_suite / manual_test / retro / finish predicates can't reproduce
  * `done: true` is "stale-complete" and should be rolled back.
  *
  * `sessionStartedAt` is intentionally NOT passed in; we use the worktree
@@ -38,6 +44,7 @@ export type CompleteStateVerification = CompleteStateOk | CompleteStateGap;
  */
 export async function verifyCompleteState(
   worktreePath: string,
+  options: CompleteVerifierOptions = {},
 ): Promise<CompleteStateVerification> {
   const stateRes = await readState(join(worktreePath, '.pipeline/conduct-state.json'));
   const state: ConductState = stateRes.ok ? stateRes.value : {};
@@ -45,6 +52,7 @@ export async function verifyCompleteState(
   const ctx = {
     sessionStartedAt: state.session_started_at,
     featureDesc: state.feature_desc,
+    fullSuiteInspect: options.fullSuiteInspect,
   };
 
   const failedSteps: StepName[] = [];

@@ -63,6 +63,7 @@ function preBuildDoneState(): ConductState {
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
+    test_suite: 'done',
     complexity_tier: 'M',
     track: 'technical', // no PRD/prd_audit — keeps the SHIP tail minimal
     feature_desc: 'self-build-feat',

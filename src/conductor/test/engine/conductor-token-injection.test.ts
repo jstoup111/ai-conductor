@@ -31,6 +31,7 @@ const READY_STATE: ConductState = {
   architecture_diagram: 'done',
   architecture_review: 'done',
   acceptance_specs: 'done',
+  test_suite: 'done',
 } as ConductState;
 
 describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', () => {

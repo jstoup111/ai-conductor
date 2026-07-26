@@ -61,9 +61,9 @@ Step 17: /finish                → SHIP (verify, review changes, present option
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
-> implementation plan is grounded in the agreed design. This is the canonical `conduct-ts`
-> order. The legacy bash `bin/conduct` retains the prior plan→architecture order (its
-> `architecture-review` gates on the plan); use `conduct-ts` for the PRD-driven flow.
+> implementation plan is grounded in the agreed design. This is the canonical
+> `conduct-ts` order. Any legacy project runner that preserves the prior
+> plan→architecture order must not be used for the PRD-driven flow.
 
 ## Practices
 
@@ -86,7 +86,7 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 8b. diagrams | Architecture diagrams exist | Check `.docs/architecture/*.md` exist, or check state is "skipped" |
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
-| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
+| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` and the affected-test result set. Pipeline evaluator satisfies code-review gate. |
 | 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
 | 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
 | 14. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
@@ -235,7 +235,12 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
 **After build (before suggesting manual-test):**
-- Run the test suite and verify it passes
+- Run the union of affected tests for the BUILD diff and verify it passes
+- If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
+  not defer it to the later aggregate gate
+- If one of the repository's documented intermediate fallback triggers makes
+  the union genuinely unsafe, name the exact trigger and invoke the configured
+  aggregate verifier; never call the raw aggregate command
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
@@ -249,7 +254,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - **Daemon (auto) runs** route this automatically: an all-`impl-gap` audit self-heals back to
   BUILD (bounded, then HALTs if unresolved); any product/plan gap (`intended-drift` or an
   unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
-  autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
+  autonomously. Consult the repository's daemon PRD-audit routing documentation.
 
 **After architecture-review --as-built (before suggesting retro):**
 - This gate is **skipped** when `architecture_review` was skipped (Small tier, or a config/`when:`
@@ -261,8 +266,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If the report has no recognizable `APPROVED`/`BLOCKED` verdict (e.g. a confused review with no
   ADRs), BLOCK and re-run — never treat a missing/garbled verdict as a pass.
 
-**When pipeline reports task failure:** Verify by running tests before escalating or
-re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
+**When pipeline reports task failure:** Re-run the same affected-test scope before escalating or
+re-dispatching (or the same named shared-verifier fallback if one fired). JSON state can become
+stale — the observed scoped result is the source of truth.
 
 **Daemon-only PR labeling (irrecoverable build failure / successful ship):**
 In daemon/auto mode, an irrecoverable build failure that has commits on the branch surfaces a
@@ -272,7 +278,7 @@ kept-in-sync `mergeable` label (added when open + conflict-free + CI-green, remo
 pruned on merge/close). A `needs-remediation` PR is never labeled `mergeable`. If a previously
 failed feature later succeeds on re-dispatch, the daemon clears the stale `needs-remediation`
 label and un-drafts the PR before enrolling it in the sweep. Interactive runs are unchanged.
-See `src/conductor/README.md` → "PR labeling".
+Consult the repository's daemon PR-labeling documentation.
 
 ### 4. Handle Edge Cases
 

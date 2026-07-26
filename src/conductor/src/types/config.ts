@@ -385,6 +385,15 @@ export interface HarnessSelfHostConfig {
   };
 }
 
+/** Project-owned aggregate test operation used by full-suite verification. */
+export interface TestSuiteConfig {
+  command: string;
+  working_directory?: string;
+  timeout_seconds?: number;
+  inputs?: string[];
+  environment?: string[];
+}
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -416,6 +425,8 @@ export interface HarnessConfig {
    * too. (The `\` above is only to keep this comment from closing early.)
    */
   acceptance_spec_globs?: string[];
+  /** Project-owned aggregate test operation used by the full-suite gate. */
+  test_suite?: TestSuiteConfig;
   /**
    * Ordered LLM provider selection. The first entry is inherited by steps
    * without an explicit `llm_provider` selection.

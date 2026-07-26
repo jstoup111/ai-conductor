@@ -188,15 +188,14 @@ Keep it specific and under ~72 characters.
 5. **Impact is stated honestly** — required, one line minimum; never omitted.
 6. **Size/priority are ready to hand to the filer**: either you've picked
    `S`/`M`/`L` and (optionally) a priority tier to pass as flags in §8, or you're
-   content to let `bin/intake-file` infer/prompt/default them. Never hand-write a
+   content to let the configured intake filer infer/prompt/default them. Never hand-write a
    size or priority as prose in the body — that discipline is now enforced by the
    script, not the checklist.
 
 ### 8. File It
 
 Filing is not prose discipline — it is one atomic, deterministic operation run by
-`bin/intake-file` (`src/conductor/bin/intake-file`, backed by `fileIntakeIssue()`
-in `src/engine/engineer/intake/file-issue.ts`). It creates the issue, applies the
+the repository's configured intake filer. It creates the issue, applies the
 `priority:`/`size:` labels, and records a `--depends-on` link — or an explicit
 "no dependencies" decision when `--depends-on` is omitted — in one call, so there
 is never a window where an issue exists unlabeled or with a silently-skipped

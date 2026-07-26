@@ -19,7 +19,7 @@ Do not start a RED/GREEN cycle for ordinary human-facing documentation, and do n
 assert documentation wording, headings, formatting, placement, links, or repository explanations.
 Documentation-only requests are delivered from `/explore`. Keep tests for machine-consumed documents
 only when they assert generated or runtime behavior (for example OpenAPI contracts or generated
-`HARNESS.md` functionality), never prose shape.
+repository-harness functionality), never prose shape.
 
 ## Practices
 
@@ -28,7 +28,7 @@ only when they assert generated or runtime behavior (for example OpenAPI contrac
 ```
 RED → DOMAIN → GREEN → DOMAIN → COMMIT
  │       │        │        │        │
- │       │        │        │        └─ Full suite green, clean tree, commit
+ │       │        │        │        └─ Scoped affected-test union green, clean tree, commit
  │       │        │        └─ Review implementation for domain integrity
  │       │        └─ Implement minimally (scope check: ~20 lines, 1 file, 1 function)
  │       └─ Review test for primitive obsession, invalid states
@@ -49,8 +49,17 @@ normal model. This is an orchestration instruction, not a separate conductor ste
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
-3. Run the test — **watch it fail**
-4. Paste the failure output
+3. Run the scoped union of affected tests, retaining the test under change as
+   an expected failing member
+4. Confirm that the test under change fails for the expected reason and every
+   other affected test passes
+5. Paste the expected failure output
+
+Any unrelated scoped test failure blocks the current RED phase; fix that
+failure before proceeding to DOMAIN. If one of the repository's documented
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and reason and invoke the configured aggregate verifier.
+Never call a raw project aggregate command directly.
 
 **Rules:**
 - One test, one behavior, one assertion
@@ -91,7 +100,13 @@ production call site of any security/correctness derivation, with real adversari
 
 2. Write the minimum code to pass the test
 3. Run the test — **watch it pass**
-4. Run the affected/scoped test set (the task's own tests + the files this change touches) — the full suite runs at finish + CI, not per-cycle
+4. Run the affected/scoped test set (the task's own tests + the files this change touches). The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+
+A known failure in that scoped set blocks the current GREEN phase; fix it here
+rather than deferring it to a later gate. If one of the repository's documented
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and invoke the configured aggregate verifier. Never call a
+raw project aggregate command directly.
 
 **Rules:**
 - Simplest code that passes. Not the "best" code — that's for refactoring.
@@ -104,7 +119,7 @@ If the target test still fails after a bounded attempt (≈2 edits), or step 4 s
 broke other tests and the cause is not immediately obvious, STOP editing. A generator guessing
 at a non-obvious failure burns tokens and risks masking the bug rather than fixing it. Dispatch
 the `/debugging` protocol in a fresh sub-session on **`model="opus"** (root-cause analysis is
-reasoning-heavy — see the model table in HARNESS.md), handing it the failing test, the current
+reasoning-heavy — see the repository's model table), handing it the failing test, the current
 diff, and the full failure output. Return to GREEN only once debugging has produced an
 evidence-backed root cause.
 
@@ -131,7 +146,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **Hard gate — all conditions must be met:**
 
-1. Scoped affected-test set passes (the full suite runs at the feature's final verification / finish and at CI, not per-task)
+1. Scoped affected-test set passes (the engine's dedicated aggregate gate and CI own broad verification, not each task)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
@@ -171,7 +186,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
-   resolver — both outside this loop. See HARNESS.md → Rebase Policy.
+   resolver — both outside this loop. See the repository's rebase policy.
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
@@ -333,8 +348,8 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after RED (test reviewed for domain integrity)
 - [ ] Implementation is minimal (passes scope check)
 - [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Scoped affected-test set passes before commit (the full suite runs at the feature's
-      final verification task, not per-task)
+- [ ] Scoped affected-test set passes before commit (the engine's dedicated aggregate gate owns
+      broad pre-SHIP verification, not each task)
 - [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
       `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
 - [ ] Linter passes before commit

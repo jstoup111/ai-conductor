@@ -9,16 +9,16 @@ requires: [".docs/plans/ with implementation plan"]
 
 ## Purpose
 
-Orchestrates execution of an implementation plan through quality-gated stages. The conductor
-(`bin/conduct`) drives the task loop — it parses the plan, iterates tasks, and sends one prompt
+Orchestrates execution of an implementation plan through quality-gated stages. The configured
+harness runner drives the task loop — it parses the plan, iterates tasks, and sends one prompt
 per task. Claude orchestrates each task by dispatching subagents for implementation. Subagent
 context is isolated and discarded after completion, keeping the orchestrator's context lean.
 
 ## Execution Model
 
 ```
-bin/conduct (bash)          Claude (orchestrator)         Subagent (implementer)
-─────────────────          ─────────────────────         ──────────────────────
+Harness runner              Claude (orchestrator)         Subagent (implementer)
+──────────────              ─────────────────────         ──────────────────────
 Parse plan, extract task →  Receive task context    →     Full TDD cycle
                             Dispatch subagent       →     RED → DOMAIN → GREEN
                             Verify result           ←     → DOMAIN → COMMIT
@@ -114,7 +114,7 @@ listed in the task's `**Dependencies:**` field are marked as completed in
 **Design-conformance check (step 1):** Before dispatching the subagent, confirm the task builds
 toward — not against — the governing APPROVED design (the relevant ADR in `.docs/decisions/`
 and the FR in the approved PRD). This is the BUILD-phase instance of the harness-wide
-**design-conformance-before-effort** convention (HARNESS.md → Key Conventions). If a task would
+**design-conformance-before-effort** convention in the repository harness documentation. If a task would
 implement or harden a code path that a current APPROVED ADR/PRD supersedes or forbids, do NOT
 dispatch it — report BLOCKED and escalate as a conformance finding. Writing code slated for
 deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
@@ -422,7 +422,7 @@ This contract is mandatory. Without the marker, the conductor reads
 is done — silently cascading through `manual-test` / `retro` / `finish`
 to mark the entire feature complete while the user's actual blocker is
 still open. The build-completion predicate in
-`src/conductor/src/engine/artifacts.ts` (`build` predicate) checks for the
+the build-completion predicate checks for the
 halt marker on every attempt; a marker present at gate-check time fails
 the gate.
 

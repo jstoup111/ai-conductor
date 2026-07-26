@@ -122,15 +122,19 @@ Anything a reviewer should pay attention to:
 
 ### 5. Pre-Push Verification
 
-**GATE: Do not push until all checks pass locally.**
+**GATE: `/finish` owns local completion verification.**
 
-Before pushing, run the project's full verification suite:
+Before pushing:
 
-1. **Test suite** — `npm test`, `bundle exec rspec`, `pytest`, or equivalent. Must pass.
+1. **Completion result** — reuse the current passing result already reported by
+   `/finish`; do not launch the project's aggregate test command from `/pr`.
 2. **Linter** — `npm run lint`, `standardrb`, `ruff check .`, or equivalent. Must pass.
 3. **Type checker** — `npx tsc --noEmit`, `mypy .`, or equivalent (if project uses one). Must pass.
 
-If any check fails, fix the issues and re-run. Do NOT push with known failures — this wastes CI minutes and blocks the PR.
+If completion verification has not reported a current pass, STOP and route back
+to `/finish`; do not infer a pass or run the aggregate command here. If the
+linter or type checker fails, fix it and re-run that check. Do NOT push with
+known failures — this wastes CI minutes and blocks the PR.
 
 ### 6. Create or Update the PR
 
@@ -242,6 +246,7 @@ start with `needs-remediation:` (adr-2026-07-03-halt-pr-rehabilitation-at-finish
 - [ ] No file-by-file listing in the body
 - [ ] No pasted planning artifacts or boilerplate
 - [ ] Testing section describes actual verification performed
+- [ ] Completion verification already passed; `/pr` launched no aggregate test command
 - [ ] If `git push -u origin HEAD` was rejected as non-fast-forward: staleness proof (merge-base or reflog) ran and passed
 - [ ] If proof passed and `--force-with-lease` was required: push succeeded and no plain `--force` was used
 - [ ] If staleness proof failed or `--force-with-lease` failed: push was not retried, failure was reported

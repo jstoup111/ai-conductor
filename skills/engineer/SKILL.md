@@ -32,7 +32,7 @@ waits on, or owns the daemon.
 **Why this is a host-agent skill and not a CLI REPL (ADR-008).** The loop must run your *real*
 skills, agent personas, and hooks (`/explore`, `/prd`, `/stories`, `/plan` with their clarity loops).
 Those exist only inside a live Claude Code session. A Node REPL or a `claude -p` subprocess cannot
-run them interactively — so the engineer **is** the host agent, calling deterministic conduct-ts
+run them interactively — so the engineer **is** the host agent, calling deterministic `conduct-ts`
 primitives for the mechanical parts (registry read, path-guarded commit, PR open, daemon nudge)
 and running the DECIDE skills directly in chat for the reasoning parts.
 

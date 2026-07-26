@@ -588,6 +588,10 @@ describe('integration/retry-classify (#646)', () => {
       // MAX_KICKBACKS_PER_GATE cap path itself (same pattern as the cap tests
       // in gate-loop.test.ts).
       config: { kickback_escalation: { enabled: false } },
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     });
     await conductor.run();
 

@@ -100,10 +100,11 @@ describe('selector — wiring_check gates the build_review -> manual_test seam',
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'pending',
       manual_test: 'pending',
     };
     const d = selectNextGate(
-      input(state, { build: VSAT, build_review: VSAT, wiring_check: VSAT }),
+      input(state, { build: VSAT, build_review: VSAT, wiring_check: VSAT, test_suite: VSAT }),
     );
     expect(d.kind).toBe('run');
     if (d.kind === 'run') {
@@ -149,6 +150,11 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs'), { recursive: true });
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(dir, '.ai-conductor/config.yml'),
+      'test_suite:\n  command: true\n  working_directory: .\n  timeout_seconds: 10\n',
+    );
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -226,6 +232,10 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       daemon: true,
       config: { build_review: { enabled: true } },
       git: fakeGit,
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     });
   }
 

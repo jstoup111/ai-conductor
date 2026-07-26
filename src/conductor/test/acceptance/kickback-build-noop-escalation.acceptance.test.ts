@@ -153,6 +153,10 @@ describe('acceptance: kickback→build no-op escalation (#647)', () => {
       maxRetries: 1,
       escalateBuildFailure: async () => ({}),
       runGh: makeGhFake(),
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     } as never);
   }
 

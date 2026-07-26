@@ -40,7 +40,7 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 
 const FRONT_DONE: ConductState = {
@@ -118,6 +118,14 @@ describe('acceptance: wiring_check joins the gate loop between build_review and 
       );
     } else if (step === 'prd_audit') {
       await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\nNo FRs to audit.\n');
+    } else if (step === 'architecture_review_as_built') {
+      await writeFile(
+        join(dir, '.pipeline/architecture-review-as-built.md'),
+        '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+      );
+    } else if (step === 'retro') {
+      await mkdir(join(dir, '.docs/retros'), { recursive: true });
+      await writeFile(join(dir, '.docs/retros/2026-07-25-add-foo.md'), '# Retro\n');
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
     }
@@ -131,11 +139,12 @@ describe('acceptance: wiring_check joins the gate loop between build_review and 
     expect(wiringCheck?.skippableForTiers).toEqual([]);
   });
 
-  it('repoints manual_test.prerequisites to [wiring_check] (build_review stays strictly upstream)', () => {
-    // Today: manual_test.prerequisites reads ['build_review'].
+  it('keeps wiring_check strictly between build_review and test_suite', () => {
     const manualTest = ALL_STEPS.find((s) => s.name === 'manual_test');
     const wiringCheck = ALL_STEPS.find((s) => s.name === ('wiring_check' as unknown as (typeof ALL_STEPS)[number]['name']));
-    expect(manualTest?.prerequisites).toEqual(['wiring_check']);
+    const testSuite = ALL_STEPS.find((s) => s.name === 'test_suite');
+    expect(manualTest?.prerequisites).toEqual(['test_suite']);
+    expect(testSuite?.prerequisites).toEqual(['wiring_check']);
     expect(wiringCheck?.prerequisites).toEqual(['build_review']);
   });
 

@@ -36,8 +36,9 @@ All of these are valid work — they just belong in a future RED phase, not this
 
 After implementation:
 1. Run the specific failing test → should pass now
-2. Run the full test suite → nothing else should have broken
-3. If something broke → your change has unintended side effects. Revert and think smaller.
+2. Run the affected/scoped test union: the changed tests plus existing tests that cover the changed production modules
+3. If that scoped union fails → the GREEN phase is blocked; fix the regression here rather than deferring it
+4. If one of the repository's documented intermediate fallback triggers makes the affected set genuinely unsafe, name the exact trigger and run the configured aggregate verifier instead of a raw project-suite command
 
 ## Common GREEN Phase Mistakes
 
@@ -46,4 +47,4 @@ After implementation:
 | Over-engineering | Building for future tests, not current one | Simplest passing code only |
 | Touching multiple files | Scope too big for one GREEN | Use drill-down |
 | Adding "while I'm here" fixes | Mixes concerns, harder to debug | Note it, do it later |
-| Skipping full suite run | May have broken something | Always run full suite |
+| Skipping affected tests | May hide a local regression | Run the affected/scoped union and block on failure |

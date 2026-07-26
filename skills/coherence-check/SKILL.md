@@ -136,7 +136,7 @@ per row and must never assert "covered" that it has not actually confirmed.
 - **Surface every assumption.** If a row's coverage is ambiguous (e.g. a story vaguely
   gestures at an outcome without an explicit citation), do not silently resolve it in
   either direction — surface it as an assumption with confidence, impact-if-wrong, and
-  how to confirm, per the Correctness & Assumption Gate (HARNESS.md).
+  how to confirm, per the repository's correctness and assumption gate.
 - **Hard-block on unconfirmed load-bearing assumptions.** A verdict on this artifact is
   load-bearing — it gates land. Never mark a row "covered" on an unconfirmed
   assumption about what a story or task "probably" means. Interactive runs: present

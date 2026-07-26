@@ -274,7 +274,7 @@ Write the review to `.docs/decisions/architecture-review-YYYY-MM-DD-<feature>.md
 the feature introduces (exported function/module, hook script, config key, emitted event,
 scheduled job, CLI subcommand, etc.), state at design time where/how it will be called from
 in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
-`conduct-ts`'s CLI command table," "consumed by the existing event bus subscriber in
+`conduct-ts`'s command table," "consumed by the existing event bus subscriber in
 `src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
 required yet since the code doesn't exist. It is the precursor `/plan` later derives its
 `Wired-into:` contract from for each task.
@@ -362,7 +362,7 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
-  production entry point (`conduct-ts` CLI dispatch, the daemon loop, hook/settings provisioning,
+  production entry point (`conduct-ts` command dispatch, the daemon loop, hook/settings provisioning,
   a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
   primitive's own module do not count as callers.
   - **No production caller exists** → this is a **BLOCKED** violation ("unreachable rung"), same

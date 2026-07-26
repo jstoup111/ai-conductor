@@ -40,7 +40,6 @@ import {
   tryGetStepIndex,
 } from '../../src/engine/steps.js';
 import {
-  Conductor,
   getNavigableSteps,
   navigateBack,
   filterUnapprovedArtifacts,
@@ -51,6 +50,7 @@ import {
   findResumeIndex,
   resolveGroupMembership,
 } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupMember } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -338,12 +338,16 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // `complexity`, `worktree`, and `rebase` are engine-managed
-    // (runComplexityStep / runWorktreeStep / runRebaseStep, not runner.run), so
+    // `complexity`, `worktree`, `test_suite`, and `rebase` are engine-managed
+    // (not runner.run), so
     // the runner is called for every step EXCEPT those, and the first runner
     // dispatch is `memory`.
     const dispatchedSteps = ALL_STEPS.filter(
-      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+      (s) =>
+        s.name !== 'complexity' &&
+        s.name !== 'worktree' &&
+        s.name !== 'test_suite' &&
+        s.name !== 'rebase',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
     expect((runner.run as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('memory');
@@ -401,9 +405,13 @@ describe('engine/conductor', () => {
     await conductor.run();
 
     // Steps should be called in exact ALL_STEPS order, minus the engine-managed
-    // steps (complexity / worktree / rebase, not dispatched to runner.run).
+    // steps (complexity / worktree / test_suite / rebase, not runner.run).
     const expectedOrder = ALL_STEPS.filter(
-      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+      (s) =>
+        s.name !== 'complexity' &&
+        s.name !== 'worktree' &&
+        s.name !== 'test_suite' &&
+        s.name !== 'rebase',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
   });
@@ -4253,10 +4261,14 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // `complexity`, `worktree`, and `rebase` are engine-managed, not dispatched
+    // `complexity`, `worktree`, `test_suite`, and `rebase` are engine-managed, not dispatched
     // to runner.run. Every OTHER step should fire, in order.
     const expectedOrder = ALL_STEPS.filter(
-      (s) => s.name !== 'complexity' && s.name !== 'worktree' && s.name !== 'rebase',
+      (s) =>
+        s.name !== 'complexity' &&
+        s.name !== 'worktree' &&
+        s.name !== 'test_suite' &&
+        s.name !== 'rebase',
     ).map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
   });
@@ -4326,10 +4338,14 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // L tier has no skips; complexity/worktree/rebase are engine-managed (not
+    // L tier has no skips; complexity/worktree/test_suite/rebase are engine-managed (not
     // dispatched to stepRunner).
     const expectedOrder = ALL_STEPS.map((s) => s.name).filter(
-      (n) => n !== 'complexity' && n !== 'worktree' && n !== 'rebase',
+      (n) =>
+        n !== 'complexity' &&
+        n !== 'worktree' &&
+        n !== 'test_suite' &&
+        n !== 'rebase',
     );
     expect(stepsRun).toEqual(expectedOrder);
 
@@ -4511,6 +4527,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
     } as ConductState);
 
     const runner = createMockStepRunner();
@@ -4624,6 +4641,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
     } as ConductState;
 
     it('mode=auto reaching the validation group entry point takes the group path', async () => {
@@ -4780,6 +4798,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
     } as ConductState;
 
     it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
@@ -4845,6 +4864,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5001,6 +5021,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5138,6 +5159,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5280,6 +5302,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5437,6 +5460,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5570,6 +5594,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5710,6 +5735,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -5925,6 +5951,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'skipped',
       wiring_check: 'skipped',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -6098,6 +6125,7 @@ describe('engine/conductor', () => {
       build: 'done',
       build_review: 'done',
       wiring_check: 'done',
+      test_suite: 'done',
       retro: 'done',
       rebase: 'done',
       finish: 'done',
@@ -6942,6 +6970,7 @@ describe('engine/conductor', () => {
         build: 'done',
         build_review: 'done',
         wiring_check: 'done',
+        test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -7208,6 +7237,7 @@ describe('engine/conductor', () => {
         build: 'done',
         build_review: 'done',
         wiring_check: 'done',
+        test_suite: 'done',
         manual_test: 'done',
         prd_audit: 'done',
         architecture_review_as_built: 'done',
@@ -12592,14 +12622,14 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     ]);
   });
 
-  it('positions the group immediately after the build gates (build_review → wiring_check) in ALL_STEPS ordering', () => {
-    // wiring_check (3110f9fd, from main) sits between build_review and the
-    // group's first member — the group entry follows the LAST build gate.
+  it('positions the group after the serial build gates (build_review → wiring_check → test_suite) in ALL_STEPS ordering', () => {
     const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
     const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'wiring_check');
+    const testSuiteIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
     expect(wiringCheckIdx).toBe(buildReviewIdx + 1);
+    expect(testSuiteIdx).toBe(wiringCheckIdx + 1);
     const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
-    expect(firstMemberIdx).toBe(wiringCheckIdx + 1);
+    expect(firstMemberIdx).toBe(testSuiteIdx + 1);
 
     // Members remain contiguous and in order in the underlying linear list.
     const memberIndices = VALIDATION_GROUP.members.map(
@@ -12624,6 +12654,7 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('reports undefined group for ordinary serial steps', () => {
     expect(getGroupForStep('build')).toBeUndefined();
     expect(getGroupForStep('build_review')).toBeUndefined();
+    expect(getGroupForStep('test_suite')).toBeUndefined();
     expect(getGroupForStep('retro')).toBeUndefined();
   });
 
@@ -12643,11 +12674,11 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
     // Each member still resolves to its OWN linear-list index, not a
     // group-collapsed position.
-    const wiringCheckIdx = tryGetStepIndex('wiring_check');
-    expect(wiringCheckIdx).not.toBeNull();
+    const testSuiteIdx = tryGetStepIndex('test_suite');
+    expect(testSuiteIdx).not.toBeNull();
     for (let i = 0; i < VALIDATION_GROUP.members.length; i += 1) {
       const idx = tryGetStepIndex(VALIDATION_GROUP.members[i] as StepName);
-      expect(idx).toBe((wiringCheckIdx as number) + 1 + i);
+      expect(idx).toBe((testSuiteIdx as number) + 1 + i);
     }
 
     // Ordinary serial steps are completely unaffected.

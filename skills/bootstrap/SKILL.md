@@ -272,8 +272,8 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
-**`.memory/` is set up by the harness, not by this skill.** `bin/conduct` calls
-`conduct-ts memory setup <dir>` before any bootstrap sub-step runs. This creates a canonical
+**`.memory/` is set up by the harness, not by this skill.** `conduct-ts memory setup <dir>`
+runs before any bootstrap sub-step. This creates a canonical
 per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
 it (adr-2026-06-29-shared-memory-store-placement-and-durability). If `.memory/` already exists as a real directory (legacy), it is migrated via
 copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-memory-migration). **Do NOT create or mkdir `.memory/`
@@ -293,12 +293,12 @@ Add to `.gitignore` (idempotent — don't duplicate):
 
 ### 6. Generate or Update Agent Instructions
 
-- **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template` (includes HARNESS.md reference)
-- **Existing CLAUDE.md:** Verify it references `HARNESS.md`. If missing, append the reference block.
-  Never overwrite user content. Behavioral rules live in HARNESS.md, not in the project CLAUDE.md.
+- **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template` (includes repository-harness reference)
+- **Existing CLAUDE.md:** Verify it references the repository harness documentation. If missing, append the reference block.
+  Never overwrite user content. Behavioral rules live in the harness documentation, not in the project CLAUDE.md.
 - **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
   harness entry point while keeping the skills themselves user-scoped at `~/.codex/skills/`.
-- **Existing AGENTS.md:** Verify it references `HARNESS.md`; append the Codex harness reference
+- **Existing AGENTS.md:** Verify it references the repository harness documentation; append the Codex harness reference
   block if needed. Never overwrite user content.
 
 ### 7. Bootstrap Memory (Existing Projects Only)
@@ -399,7 +399,7 @@ seed commit captures a scaffold that actually boots.
 
 **Branch-policy note:** this seed commit on `main` is the one sanctioned
 direct-to-`main` commit — a brand-new repo has no branch to PR into. From here on,
-all harness work happens on feature branches/worktrees and merges via PR (HARNESS.md
+all harness work happens on feature branches/worktrees and merges via PR (the repository harness
 branch policy). The pre-PR lint hook (Step 3d-ii) and a remote are now both in place,
 so the very first feature can open a PR end-to-end.
 

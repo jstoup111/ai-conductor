@@ -348,6 +348,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
@@ -372,6 +376,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
@@ -717,6 +725,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
@@ -792,6 +804,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       // After this run, manual_test should pass on retry, and we should have

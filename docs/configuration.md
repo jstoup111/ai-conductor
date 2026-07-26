@@ -5,9 +5,11 @@ The harness reads two config files, merged in order (project overrides user):
 | File | Scope | Purpose |
 |------|-------|---------|
 | `~/.ai-conductor/config.yml` | User-level | Personal defaults, update channel, markdown viewer, mermaid renderer |
-| `.ai-conductor/config.yml` | Project-level | Per-project model/effort tuning, custom steps, plugin selection |
+| `.ai-conductor/config.yml` | Project-level | Aggregate tests, model/effort tuning, custom steps, plugin selection |
 
-Both files are optional. The conductor works with zero config.
+Both files are optional for commands that do not reach configuration-backed gates. Native
+automated delivery requires a project-level `test_suite` declaration before its pre-SHIP gate;
+that gate fails closed when the declaration is absent or invalid.
 
 ### Full reference
 
@@ -15,6 +17,16 @@ Both files are optional. The conductor works with zero config.
 # .ai-conductor/config.yml
 
 harness_version: ">=0.99.0"   # Minimum harness version this config requires
+
+# ── Native aggregate test-suite gate (project level) ─────────────────────────
+test_suite:
+  command: npm test             # One project-owned aggregate operation
+  working_directory: .          # Relative to the project root
+  timeout_seconds: 1800         # Positive finite seconds
+  inputs:                       # Optional extra test-relevant paths/globs
+    - test-support/**
+  environment:                  # Optional environment variable names
+    - CI
 
 # ── Global defaults ───────────────────────────────────────────────────────────
 defaults:
@@ -159,6 +171,19 @@ conductor:
   update_channel: tagged       # "tagged" | "main"
   auto_check: true             # Check for updates on startup
 ```
+
+### Aggregate test-suite gate
+
+The native `test_suite` BUILD gate requires one explicit project-owned aggregate command. The
+conductor runs it from `working_directory` under `timeout_seconds`; a missing, blank, malformed,
+unresolvable, timed-out, or non-zero operation fails closed and blocks SHIP.
+
+The schema intentionally describes one operation rather than a list of suites. Projects with
+separate unit, acceptance, integration, or system-test commands should compose them in a package
+script or wrapper and set `command` to that aggregate target. `inputs` adds project-specific
+test-relevant paths to freshness calculation, while `environment` names variables whose values
+affect results; values are hashed and are not written to evidence. Harness integrity remains an
+independent self-host check, not part of this project suite declaration.
 
 ### Provider-aware autonomous model policy (`conduct-ts` only)
 

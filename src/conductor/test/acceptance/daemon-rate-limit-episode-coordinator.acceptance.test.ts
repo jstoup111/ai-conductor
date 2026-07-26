@@ -165,6 +165,7 @@ describe('acceptance: the exact observed session-limit message routes to a coord
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
+    test_suite: 'done',
   } as ConductState;
 
   let dir: string;
