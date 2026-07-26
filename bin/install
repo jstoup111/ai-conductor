@@ -1133,17 +1133,17 @@ owned_harness_link() {
 }
 
 # Once the active Codex catalog is established in ~/.agents/skills, remove only
-# exact harness-owned links left at Codex's former discovery location.
+# exact harness-owned links left at Codex's former discovery location. A prior
+# complete harness catalog is ownership proof here too: a legacy installation
+# can legitimately point at an older checkout.
 reconcile_legacy_codex_links() {
   local legacy_dir="${HOME}/.codex/skills"
-  local skill target source current
+  local skill target
 
   for skill in "${SKILLS[@]}"; do
     target="${legacy_dir}/${skill}"
-    source="${HARNESS_DIR}/skills/${skill}"
     if [ -L "$target" ]; then
-      current=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [ "$current" = "$source" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
         rm -- "$target"
       else
         warn "Codex legacy skill: ${skill} — foreign symlink preserved"
@@ -1155,8 +1155,7 @@ reconcile_legacy_codex_links() {
 
   target="${legacy_dir}/HARNESS.md"
   if [ -L "$target" ]; then
-    current=$(readlink -f "$target" 2>/dev/null || echo "")
-    if [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+    if owned_harness_link "$target"; then
       rm -- "$target"
     else
       warn "Codex legacy harness instructions — foreign symlink preserved"
@@ -1442,8 +1441,7 @@ uninstall() {
   for skill in "${SKILLS[@]}"; do
     target="${legacy_dir}/${skill}"
     if [ -L "$target" ]; then
-      points_to=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [ "$points_to" = "${HARNESS_DIR}/skills/${skill}" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
         rm -- "$target"
         removed=$((removed + 1))
       else
@@ -1456,8 +1454,7 @@ uninstall() {
 
   harness_target="${legacy_dir}/HARNESS.md"
   if [ -L "$harness_target" ]; then
-    points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
-    if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+    if owned_harness_link "$harness_target"; then
       rm -- "$harness_target"
       removed=$((removed + 1))
     else

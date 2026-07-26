@@ -169,6 +169,20 @@ check 'updated catalog matches the complete current source catalog' \
 check 'update removes an obsolete current-scope skill owned by the prior harness checkout' \
   test ! -e "$UPDATE_HOME/.agents/skills/retired-workflow"
 
+# Legacy ownership uses the same complete-prior-harness proof as the active
+# catalog. An older, valid legacy catalog must converge, while the foreign
+# legacy fixtures below remain untouched.
+OLD_LEGACY_UPDATE_HOME="$TMP_ROOT/home-old-legacy-update"
+mkdir -p "$OLD_LEGACY_UPDATE_HOME/.codex/skills"
+ln -s "$OLD_CHECKOUT/skills/tdd" "$OLD_LEGACY_UPDATE_HOME/.codex/skills/tdd"
+ln -s "$OLD_CHECKOUT/HARNESS.md" "$OLD_LEGACY_UPDATE_HOME/.codex/skills/HARNESS.md"
+run_install "$OLD_LEGACY_UPDATE_HOME" --update --providers codex \
+  >"$TMP_ROOT/old-legacy-update.out" 2>&1
+check 'update converges a complete prior-harness legacy skill link' \
+  test ! -e "$OLD_LEGACY_UPDATE_HOME/.codex/skills/tdd"
+check 'update converges complete prior-harness legacy instructions' \
+  test ! -e "$OLD_LEGACY_UPDATE_HOME/.codex/skills/HARNESS.md"
+
 SAME_CHECKOUT_HOME="$TMP_ROOT/home-update-same-checkout"
 mkdir -p "$SAME_CHECKOUT_HOME/.agents/skills"
 ln -s "$CHECKOUT/HARNESS.md" "$SAME_CHECKOUT_HOME/.agents/skills/HARNESS.md"
@@ -394,6 +408,17 @@ check 'uninstall removes legacy harness-owned catalog entries' \
   test ! -e "$OWNED_LEGACY_HOME/.codex/skills/stories"
 check 'uninstall removes legacy harness-owned instructions' \
   test ! -e "$OWNED_LEGACY_HOME/.codex/skills/HARNESS.md"
+
+OLD_LEGACY_UNINSTALL_HOME="$TMP_ROOT/home-old-legacy-uninstall"
+mkdir -p "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills"
+ln -s "$OLD_CHECKOUT/skills/tdd" "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills/tdd"
+ln -s "$OLD_CHECKOUT/HARNESS.md" "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills/HARNESS.md"
+run_install "$OLD_LEGACY_UNINSTALL_HOME" --uninstall \
+  >"$TMP_ROOT/old-legacy-uninstall.out" 2>&1
+check 'uninstall removes a complete prior-harness legacy skill link' \
+  test ! -e "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills/tdd"
+check 'uninstall removes complete prior-harness legacy instructions' \
+  test ! -e "$OLD_LEGACY_UNINSTALL_HOME/.codex/skills/HARNESS.md"
 
 printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
