@@ -83,6 +83,13 @@ machinery exists.
 **Every change to this harness repo MUST be validated before committing.** This is not optional.
 Run the full validation suite and fix any failures before `git commit`.
 
+### Test Authoring Rules
+
+Every supported provider adding, changing, reviewing, or debugging tests in this repository MUST
+read and follow [`.agents/skills/write-tests/SKILL.md`](.agents/skills/write-tests/SKILL.md). This is
+repository-local test-design guidance; it complements the provider-neutral `tdd` skill, which
+controls implementation order.
+
 ### Validation Suite
 
 Run `test/test_harness_integrity.sh` — it checks all of the following:

@@ -22,7 +22,7 @@ async function manifest(root: string, exclude: readonly string[]): Promise<Entry
   return Promise.all(files.map(async file => {
     const path = relative(root, file);
     const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code === 'EISDIR') return readlink(file);
+      if (error.code === 'EISDIR' || error.code === 'ENOENT') return readlink(file);
       throw error;
     });
     return { path, digest: createHash('sha256').update(bytes).digest('hex') };
