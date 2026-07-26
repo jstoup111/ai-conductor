@@ -248,6 +248,40 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     });
   });
 
+  it('keeps interleaved terminal messages with their feature-owned loggers', async () => {
+    const lines: string[] = [];
+    let waiting = 0;
+    let releaseOutcomes!: () => void;
+    const outcomesReady = new Promise<void>((resolve) => {
+      releaseOutcomes = resolve;
+    });
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.readOutcome = async () => {
+      waiting += 1;
+      if (waiting === 2) releaseOutcomes();
+      await outcomesReady;
+      return { done: false, halted: true, reason: 'paused' };
+    };
+    featureDeps.beginFeatureRun = async (_worktree, item) => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: [],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+      log: (message: string) => lines.push(`[${item.slug}] ${message}`),
+    });
+
+    const run = makeRunFeature(featureDeps);
+    await Promise.all([run({ slug: 'feature-a' }), run({ slug: 'feature-b' })]);
+
+    expect(lines).toEqual([
+      '[feature-a] ✋ feature-a halted — worktree kept (paused)',
+      '[feature-b] ✋ feature-b halted — worktree kept (paused)',
+    ]);
+  });
+
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
