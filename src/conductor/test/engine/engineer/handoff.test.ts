@@ -30,6 +30,11 @@ import type { TargetRepo } from '../../../src/engine/engineer/target.js';
 
 /** Build a fake TargetRepo pointing at a temp dir. */
 function makeTarget(canonicalPath: string, name = 'my-project'): TargetRepo {
+  return { name, canonicalPath, remote: `https://github.com/acme/${name}.git` };
+}
+
+/** Build a local-only TargetRepo for the genuine no-remote paths. */
+function makeLocalTarget(canonicalPath: string, name: string): TargetRepo {
   return { name, canonicalPath };
 }
 
@@ -48,6 +53,12 @@ function makeFakeRunner(stdout: string): { runner: HandoffDeps['runner']; calls:
   };
   return { runner, calls };
 }
+
+/** Successful git runner for tests whose behavior begins after the required push. */
+const noOpGitRunner: NonNullable<HandoffDeps['gitRunner']> = async () => ({
+  stdout: '',
+  stderr: '',
+});
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +82,7 @@ describe('openSpecPr', () => {
 
     const result = await openSpecPr(target, 'spec/add-auth', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
 
@@ -92,11 +104,41 @@ describe('openSpecPr', () => {
 
     const result = await openSpecPr(target, 'spec/feat-x', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
 
     expect(result.kind).toBe('pr-opened');
     expect(calls[0].cwd).toBe(tempDir);
+  });
+
+  it('pushes the spec branch before creating its PR from the idea worktree', async () => {
+    const branch = 'spec/remote-idea';
+    const target = {
+      ...makeTarget(tempDir),
+      remote: 'https://github.com/acme/my-project.git',
+    };
+    const trace: Array<{ command: string; args: string[]; cwd: string }> = [];
+    const runner: HandoffDeps['runner'] = async (args, opts) => {
+      trace.push({ command: 'gh', args: [...args], cwd: opts?.cwd ?? '' });
+      return { stdout: 'https://github.com/acme/my-project/pull/42', stderr: '' };
+    };
+    const gitRunner: HandoffDeps['runner'] = async (args, opts) => {
+      trace.push({ command: 'git', args: [...args], cwd: opts?.cwd ?? '' });
+      return { stdout: '', stderr: '' };
+    };
+    const deps = {
+      runner,
+      gitRunner,
+      ledgerOpts: { engineerDir: tempDir },
+    } as HandoffDeps & { gitRunner: HandoffDeps['runner'] };
+
+    await openSpecPr(target, branch, deps);
+
+    expect(trace).toEqual([
+      { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
+      { command: 'gh', args: ['pr', 'create', '--head', branch, '--fill'], cwd: tempDir },
+    ]);
   });
 
   it('records the (project, feature) key in the authored ledger', async () => {
@@ -106,6 +148,7 @@ describe('openSpecPr', () => {
 
     const result = await openSpecPr(target, 'spec/cool-feature', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
 
@@ -122,8 +165,8 @@ describe('openSpecPr', () => {
     const target = makeTarget(tempDir, 'proj');
     const { runner } = makeFakeRunner(PR_URL);
 
-    const r1 = await openSpecPr(target, 'spec/thing', { runner, ledgerOpts: { engineerDir: tempDir } });
-    const r2 = await openSpecPr(target, 'spec/thing', { runner, ledgerOpts: { engineerDir: tempDir } });
+    const r1 = await openSpecPr(target, 'spec/thing', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } });
+    const r2 = await openSpecPr(target, 'spec/thing', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } });
 
     expect(r1.kind).toBe('pr-opened');
     expect(r2.kind).toBe('pr-opened');
@@ -139,7 +182,7 @@ describe('openSpecPr', () => {
     const target = makeTarget(tempDir, 'proj');
     const { runner, calls } = makeFakeRunner(PR_URL);
 
-    const result = await openSpecPr(target, 'spec/some-branch', { runner, ledgerOpts: { engineerDir: tempDir } });
+    const result = await openSpecPr(target, 'spec/some-branch', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } });
 
     expect(result.kind).toBe('pr-opened');
 
@@ -154,7 +197,7 @@ describe('openSpecPr', () => {
     const { runner } = makeFakeRunner('Something went wrong, no URL here.');
 
     await expect(
-      openSpecPr(target, 'spec/bad', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/bad', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow(/no PR URL/i);
   });
 
@@ -163,7 +206,7 @@ describe('openSpecPr', () => {
     const { runner } = makeFakeRunner('');
 
     await expect(
-      openSpecPr(target, 'spec/empty-out', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/empty-out', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow(/no PR URL/i);
   });
 });
@@ -205,8 +248,8 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
   }
 
   it('returns pr-skipped (non-fatal) when gh reports "no remote"', async () => {
-    const target = makeTarget(tempDir, 'no-remote-proj');
-    const { runner } = makeThrowingRunner(
+    const target = makeLocalTarget(tempDir, 'no-remote-proj');
+    const { runner, calls } = makeThrowingRunner(
       'git: error: No remote configured. Destination repository does not have any remotes.',
     );
 
@@ -219,11 +262,12 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     if (result.kind === 'pr-skipped') {
       expect(result.reason).toMatch(/no remote/i);
     }
+    expect(calls).toEqual([]);
   });
 
   it('returns pr-skipped (non-fatal) when gh reports "does not have any remotes"', async () => {
-    const target = makeTarget(tempDir, 'no-remote-proj2');
-    const { runner } = makeThrowingRunner(
+    const target = makeLocalTarget(tempDir, 'no-remote-proj2');
+    const { runner, calls } = makeThrowingRunner(
       "gh: Could not create pull request: 'origin' does not have any remotes",
     );
 
@@ -236,6 +280,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     if (result.kind === 'pr-skipped') {
       expect(result.reason).toMatch(/no remote/i);
     }
+    expect(calls).toEqual([]);
   });
 
   // Regression: gh's REAL message for a remote-less repo is "no git remotes found"
@@ -244,8 +289,8 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
   // returning pr-skipped — which made `conduct engineer handoff` skip BOTH the
   // authored-ledger record and the ensureRunning daemon nudge while still exiting 0.
   it('returns pr-skipped AND records the authored key when gh reports "no git remotes found"', async () => {
-    const target = makeTarget(tempDir, 'gh-no-remotes-proj');
-    const { runner } = makeThrowingRunner(
+    const target = makeLocalTarget(tempDir, 'gh-no-remotes-proj');
+    const { runner, calls } = makeThrowingRunner(
       'Command failed: gh pr create --head spec/feat --fill\nno git remotes found',
     );
 
@@ -256,8 +301,9 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
 
     expect(result.kind).toBe('pr-skipped');
     if (result.kind === 'pr-skipped') {
-      expect(result.reason).toMatch(/no git remotes? found/i);
+      expect(result.reason).toMatch(/no remote/i);
     }
+    expect(calls).toEqual([]);
 
     // The ledger MUST be recorded on this path — the prior bug skipped it.
     const keys = await readAuthoredKeys({ engineerDir: tempDir });
@@ -265,8 +311,8 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
   });
 
   it('records the authored key on pr-skipped (authoring happened; flywheel counts it)', async () => {
-    const target = makeTarget(tempDir, 'ledger-skip-proj');
-    const { runner } = makeThrowingRunner(
+    const target = makeLocalTarget(tempDir, 'ledger-skip-proj');
+    const { runner, calls } = makeThrowingRunner(
       'git: error: No remote configured.',
     );
 
@@ -277,6 +323,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
 
     // Non-fatal skip result
     expect(result.kind).toBe('pr-skipped');
+    expect(calls).toEqual([]);
 
     // Authored key is still recorded — the engineer planned this spec even though
     // no PR was opened. The flywheel trend (flywheel-trend.ts) intersects
@@ -287,7 +334,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
   });
 
   it('NEVER calls the runner with "merge" on the no-remote path', async () => {
-    const target = makeTarget(tempDir, 'proj-no-merge');
+    const target = makeLocalTarget(tempDir, 'proj-no-merge');
     const { runner, calls } = makeThrowingRunner(
       'git: error: No remote configured.',
     );
@@ -296,6 +343,8 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
       runner,
       ledgerOpts: { engineerDir: tempDir },
     });
+
+    expect(calls).toEqual([]);
 
     // Every invocation must not contain 'merge' — the no-remote path must not
     // attempt any merge as a fallback.
@@ -311,7 +360,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     const { runner } = makeThrowingRunner('error: Connection timed out after 30s');
 
     await expect(
-      openSpecPr(target, 'spec/other-err', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/other-err', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow('Connection timed out after 30s');
   });
 
@@ -326,7 +375,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     );
 
     await expect(
-      openSpecPr(target, 'spec/deleted-repo', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/deleted-repo', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow(/Repository not found/);
   });
 
@@ -341,7 +390,7 @@ describe('openSpecPr — no-remote fallback (task-25, FR-7 negative path)', () =
     );
 
     await expect(
-      openSpecPr(target, 'spec/auth-err', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/auth-err', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow(/Invalid username or password/);
   });
 });
@@ -431,6 +480,7 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
 
     const result = await openSpecPr(target, 'spec/t26-feat', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
 
@@ -454,7 +504,7 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
   // ── Path B: no-remote skip (pr-skipped) ───────────────────────────────────
 
   it('[path-B] no-remote skip — no merge call, no build call, runner called once then bailed', async () => {
-    const target = makeTarget(tempDir, 't26-noremote');
+    const target = makeLocalTarget(tempDir, 't26-noremote');
     // makeThrowingRunner is defined in the outer describe; re-implement locally
     // to keep this describe self-contained and explicit.
     const calls: RecordedCall[] = [];
@@ -470,18 +520,8 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
 
     expect(result.kind).toBe('pr-skipped');
 
-    // The runner was called at least once (falsifiability: proves recorder works).
-    expect(calls.length).toBeGreaterThan(0);
-
-    // Loop over ALL recorded calls — no merge attempt, no build attempt.
-    assertNoMergeNoBuild(calls);
-
-    // Confirm the single call was the pr-create attempt, not a merge fallback.
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args).toContain('pr');
-    expect(calls[0].args).toContain('create');
-    // No second call to attempt merge after the skip.
-    expect(calls).not.toHaveLength(2);
+    // A local-only target short-circuits before any external command.
+    expect(calls).toEqual([]);
   });
 
   // ── Path C: no-URL throw ───────────────────────────────────────────────────
@@ -491,7 +531,7 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
     const { runner, calls } = makeFakeRunner('gh: something happened, no URL here.');
 
     await expect(
-      openSpecPr(target, 'spec/t26-nourl', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/t26-nourl', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow(/no PR URL/i);
 
     // Even on the throw path, the recorder captured calls made before the throw.
@@ -515,7 +555,7 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
     };
 
     await expect(
-      openSpecPr(target, 'spec/t26-othererr', { runner, ledgerOpts: { engineerDir: tempDir } }),
+      openSpecPr(target, 'spec/t26-othererr', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
     ).rejects.toThrow('HTTP 503');
 
     // On rethrow, exactly one runner call was made (the create attempt that failed).
@@ -540,12 +580,14 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
         calls.push({ args: [...args], cwd: opts?.cwd ?? '' });
         return { stdout: '', stderr: '' };
       },
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     };
 
     const depsKeys = Object.keys(deps);
     // Only the two allowed keys may exist.
     expect(depsKeys).toContain('runner');
+    expect(depsKeys).toContain('gitRunner');
     expect(depsKeys).toContain('ledgerOpts');
     // No build/merge surface — these keys must be absent.
     expect(depsKeys).not.toContain('mergeRunner');
@@ -553,8 +595,8 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
     expect(depsKeys).not.toContain('pipelineRunner');
     expect(depsKeys).not.toContain('mergeHook');
     expect(depsKeys).not.toContain('buildHook');
-    // Total key count: runner + ledgerOpts = 2.
-    expect(depsKeys).toHaveLength(2);
+    // Total key count: runner + gitRunner + ledgerOpts = 3.
+    expect(depsKeys).toHaveLength(3);
   });
 
   // ── Falsifiability verification note ──────────────────────────────────────
