@@ -94,4 +94,19 @@ describe('provider-aware self-host homes', () => {
     expect((await (await import('node:fs/promises')).readdir(baseDir))).toEqual([]);
     await rm(root, { recursive: true, force: true });
   });
+
+  it('gives Codex a child-only .agents/skills view of worktree skills', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codex-skill-home-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'skills', 'HARNESS'), { recursive: true });
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
+    try {
+      expect(await realpath(join(home.homeDir, '.agents', 'skills'))).toBe(
+        await realpath(join(worktree, 'skills')),
+      );
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

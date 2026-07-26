@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
@@ -27,6 +27,7 @@ import { ProviderRuntimeSet, type ProviderRuntime } from '../../src/engine/provi
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { runTaskDone, runTaskStart } from '../../src/engine/task-cli.js';
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
+import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 type Candidate = {
   providerKey: string;
@@ -86,6 +87,21 @@ function executeWithSafety(input: Parameters<ExecuteWithCandidateSafety>[0]) {
 }
 
 describe('acceptance: Codex safety and self-host parity (#907)', () => {
+  it('self-host Codex discovers worktree skills without changing the ordinary live catalog', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'acceptance-907-skills-'));
+    const worktree = join(root, 'worktree');
+    const live = join(root, 'live', '.agents', 'skills');
+    await Promise.all([mkdir(join(worktree, 'skills', 'HARNESS'), { recursive: true }), mkdir(live, { recursive: true })]);
+    await writeFile(join(worktree, 'skills', 'HARNESS', 'SKILL.md'), 'WORKTREE');
+    await writeFile(join(live, 'HARNESS'), 'LIVE');
+    const before = await readFile(join(live, 'HARNESS'), 'utf8');
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
+    try {
+      expect(await realpath(join(home.homeDir, '.agents', 'skills'))).toBe(await realpath(join(worktree, 'skills')));
+      expect(await readFile(join(live, 'HARNESS'), 'utf8')).toBe(before);
+    } finally { await home.teardown(); await rm(root, { recursive: true, force: true }); }
+  });
+
   // Covers: FR-1, FR-3, FR-4
   it('keeps attribution task-local advisory telemetry and preserves an explicit valid trailer', () => {
     expect(PREPARE_COMMIT_MSG_HOOK).not.toContain('.pipeline/current-task');

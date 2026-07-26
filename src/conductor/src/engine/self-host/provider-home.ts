@@ -11,6 +11,7 @@ export type SelfHostProviderId = 'claude' | 'codex';
 
 export interface ProviderHomeFs {
   mkdtemp(prefix: string): Promise<string>;
+  mkdir(path: string): Promise<void>;
   symlink(target: string, path: string): Promise<void>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   pathExists(path: string): Promise<boolean>;
@@ -18,6 +19,7 @@ export interface ProviderHomeFs {
 
 export const realProviderHomeFs: ProviderHomeFs = {
   mkdtemp: (prefix) => fsp.mkdtemp(prefix),
+  mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
   rm: (path, opts) => fsp.rm(path, opts),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
@@ -137,6 +139,10 @@ export async function provisionProviderHome(
         );
       }
       await fs.symlink(target, join(homeDir, asset));
+    }
+    if (options.provider.id === 'codex') {
+      await fs.mkdir(join(homeDir, '.agents'));
+      await fs.symlink(join(options.worktreeRoot, 'skills'), join(homeDir, '.agents', 'skills'));
     }
 
     const auth = await options.provider.prepareSelfHostAuth?.(context);
