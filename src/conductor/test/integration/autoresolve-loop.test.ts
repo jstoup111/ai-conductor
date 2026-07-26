@@ -57,8 +57,11 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   });
 
   afterEach(async () => {
-    await rm(origin, { recursive: true, force: true });
-    await rm(dir, { recursive: true, force: true });
+    // Git may finish packing objects immediately after the final child process
+    // exits; retry recursive removal rather than letting that teardown race
+    // obscure an otherwise-passing integration assertion.
+    await rm(origin, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
 
   function fakeGhFor(labelCalls: string[][], commentBodies: string[]) {
