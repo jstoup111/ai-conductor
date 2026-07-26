@@ -410,6 +410,53 @@ describe('engine/finish-record-cli', () => {
       );
     });
 
+    it('strips sanctioned worktree branch prefixes for durable evidence evaluation', async () => {
+      const evaluateEvidence = vi.fn(async () => validEvidence);
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+      }));
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) {
+          return { stdout: 'refs/remotes/origin/feat\n' };
+        }
+        if (args[0] === 'merge-base') {
+          return { stdout: '' };
+        }
+        if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+          return { stdout: 'candidate\n' };
+        }
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+
+      for (const state of [
+        {
+          feature_desc: 'First-class Codex harness parity',
+          worktree_branch: 'spec/first-class-codex-harness-parity-904',
+        },
+        {
+          feature_desc: 'Codex harness parity follow-up',
+          worktree_branch: 'feature/first-class-codex-harness-parity-904',
+        },
+      ]) {
+        await writeFile(join(existingAbsDir, 'conduct-state.json'), JSON.stringify(state));
+        await dispatchFinishRecord(
+          {
+            kind: 'record',
+            choice: 'pr',
+            prUrl: 'https://github.com/org/repo/pull/1',
+            pipelineDir: existingAbsDir,
+          },
+          scratchParent,
+          { runGh, runGit, evaluateEvidence },
+        );
+      }
+
+      expect(evaluateEvidence.mock.calls.map(([input]) => input.slug)).toEqual([
+        'first-class-codex-harness-parity-904',
+        'first-class-codex-harness-parity-904',
+      ]);
+    });
+
     it('refuses when headPushedToUpstream returns false: exit !=0, zero writes', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const before = await snapshotDir(existingAbsDir);
@@ -654,7 +701,7 @@ describe('engine/finish-record-cli', () => {
         join(existingAbsDir, 'conduct-state.json'),
         JSON.stringify({
           feature_desc: 'Engineer handoff pushes spec branch before PR creation (#331)',
-          worktree_branch: 'feature/engineer-handoff-pushes-spec-branch-331',
+          worktree_branch: 'unknown/engineer-handoff-pushes-spec-branch-331',
         }),
       );
       let evaluateCalls = 0;

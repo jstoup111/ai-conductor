@@ -202,10 +202,10 @@ export async function dispatchFinishRecord(
       return 1;
     }
     const worktreeBranch = stateResult.value.worktree_branch;
-    const branchSlug = worktreeBranch?.match(/^spec\/(.+)$/)?.[1];
+    const branchSlug = worktreeBranch?.match(/^(?:spec|feature)\/(.+)$/)?.[1];
     if (worktreeBranch !== undefined && !branchSlug) {
       console.error(
-        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
+        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug> or feature/<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
