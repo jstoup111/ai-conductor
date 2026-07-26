@@ -4734,10 +4734,10 @@ export class Conductor {
             // only, never an unconditional HALT until the cap is exceeded.
             //
             // NOT daemon-gated (unlike build_review's otherwise-identical
-            // block): the wiring-reachability-gate acceptance spec
-            // (test/integration/wiring-gate-loop.acceptance.test.ts) drives a
-            // plain mode:'auto' non-daemon Conductor and asserts the kickback
-            // fires there too — wiring_check's evidence is deterministically
+            // block): the non-daemon execution-boundary case in
+            // test/wiring-gate-loop.test.ts drives a plain mode:'auto'
+            // Conductor and asserts the kickback fires there too —
+            // wiring_check's evidence is deterministically
             // computed (no LLM grader session to gate behind daemon
             // autonomy), so there's no reason to withhold the self-heal in
             // interactive/non-daemon runs the way build_review's judgement

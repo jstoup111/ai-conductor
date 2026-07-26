@@ -8,10 +8,12 @@
  *   - an unsatisfied wiring_check verdict blocks manual_test from being
  *     selected next (selector level);
  *   - a satisfied verdict unblocks manual_test (selector level);
+ *   - a real Conductor run dispatches build_review, wiring_check, test_suite,
+ *     then manual_test in that order (runtime registry/composition boundary);
  *   - a wiring gap kicks back to build WITHOUT ever writing .pipeline/HALT —
  *     kickback only, never an unconditional halt (conductor level, real
- *     Conductor run, daemon:true so the wiring_check kickback block engages,
- *     mirroring the existing build_review kickback path);
+ *     Conductor runs across distinct daemon and non-daemon execution
+ *     boundaries);
  *   - exceeding MAX_KICKBACKS_PER_GATE for wiring_check engages the SAME
  *     stall-escalation / HALT mechanism the other self-heal loops use
  *     (kickbackCounts cap in conductor.ts, MAX_KICKBACKS_PER_GATE = 2);
@@ -219,7 +221,11 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     return { stdout: '' };
   };
 
-  function makeConductor(runner: StepRunner): Conductor {
+  function makeConductor(
+    runner: StepRunner,
+    daemon = true,
+    onFullSuiteEnsure?: () => void,
+  ): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -229,65 +235,101 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       mode: 'auto',
       fromStep: 'build',
       maxRetries: 1,
-      daemon: true,
+      daemon,
       config: { build_review: { enabled: true } },
       git: fakeGit,
       fullSuiteVerifier: {
-        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        ensure: async () => {
+          onFullSuiteEnsure?.();
+          return { status: 'REUSED', evidence: {} as never };
+        },
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
       },
     });
   }
 
-  it('a wiring gap kicks back to build with NO .pipeline/HALT written', async () => {
-    // technical track: skips prd_audit (no PRD to audit) so this test
-    // isolates the wiring_check kickback behavior from unrelated SHIP-tail
-    // gates that would otherwise HALT for reasons that have nothing to do
-    // with wiring_check.
-    await writeState(statePath, { ...frontDone(), track: 'technical' });
-    let wiringRuns = 0;
-    const kicks: Array<{ from: string; to: string }> = [];
-    events.on('kickback', (e) => {
-      if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+  it('dispatches build_review, wiring_check, test_suite, then manual_test in a real Conductor run', async () => {
+    await writeState(statePath, {
+      ...frontDone(),
+      complexity_tier: 'M',
+      track: 'technical',
+      coherence_check: 'done',
     });
+    const ran: StepName[] = [];
     const runner: StepRunner = {
       run: async (step) => {
-        if (step === 'wiring_check') {
-          wiringRuns++;
-          // First attempt: write gap-carrying evidence (unresolved gap).
-          // Second+ attempt (after the build kickback): satisfy cleanly.
-          if (wiringRuns === 1) {
-            await writeFile(
-              join(dir, '.pipeline/wiring-evidence.json'),
-              JSON.stringify({
-                schema: 1,
-                base: 'base',
-                head: 'head',
-                layer2: { applicable: false },
-                waivers: [],
-                tasks: [
-                  {
-                    id: 't1',
-                    contract: 'src/x.ts#foo',
-                    gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
-                  },
-                ],
-              }),
-            );
-            return { success: true };
-          }
-          return satisfy('wiring_check');
-        }
+        ran.push(step);
         return satisfy(step);
       },
     };
 
-    await makeConductor(runner).run();
+    await makeConductor(runner, true, () => ran.push('test_suite')).run();
 
-    expect(wiringRuns).toBeGreaterThan(0);
-    expect(kicks).toContainEqual({ from: 'wiring_check', to: 'build' });
-    await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
+    const reviewIdx = ran.indexOf('build_review');
+    const wiringIdx = ran.indexOf('wiring_check');
+    const testSuiteIdx = ran.indexOf('test_suite');
+    const manualIdx = ran.indexOf('manual_test');
+    expect(reviewIdx).toBeGreaterThan(-1);
+    expect(wiringIdx).toBeGreaterThan(reviewIdx);
+    expect(testSuiteIdx).toBeGreaterThan(wiringIdx);
+    expect(manualIdx).toBeGreaterThan(testSuiteIdx);
   });
+
+  it.each([
+    { executionBoundary: 'daemon', daemon: true },
+    { executionBoundary: 'non-daemon', daemon: false },
+  ])(
+    '$executionBoundary execution boundary: objective wiring-gap evidence kicks back to build with NO .pipeline/HALT written',
+    async ({ daemon }) => {
+      // technical track: skips prd_audit (no PRD to audit) so this test
+      // isolates the wiring_check kickback behavior from unrelated SHIP-tail
+      // gates that would otherwise HALT for reasons that have nothing to do
+      // with wiring_check.
+      await writeState(statePath, { ...frontDone(), track: 'technical' });
+      let wiringRuns = 0;
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'wiring_check') {
+            wiringRuns++;
+            // First attempt: write gap-carrying evidence (unresolved gap).
+            // Second+ attempt (after the build kickback): satisfy cleanly.
+            if (wiringRuns === 1) {
+              await writeFile(
+                join(dir, '.pipeline/wiring-evidence.json'),
+                JSON.stringify({
+                  schema: 1,
+                  base: 'base',
+                  head: 'head',
+                  layer2: { applicable: false },
+                  waivers: [],
+                  tasks: [
+                    {
+                      id: 't1',
+                      contract: 'src/x.ts#foo',
+                      gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
+                    },
+                  ],
+                }),
+              );
+              return { success: true };
+            }
+            return satisfy('wiring_check');
+          }
+          return satisfy(step);
+        },
+      };
+
+      await makeConductor(runner, daemon).run();
+
+      expect(wiringRuns).toBeGreaterThan(0);
+      expect(kicks).toContainEqual({ from: 'wiring_check', to: 'build' });
+      await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
+    },
+  );
 
   it('exceeding MAX_KICKBACKS_PER_GATE for wiring_check engages the existing stall-escalation HALT', async () => {
     await writeState(statePath, { ...frontDone(), track: 'technical' });
