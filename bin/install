@@ -1090,12 +1090,40 @@ install() {
   local installed=0
   local updated=0
   local skills_dir client skill source target current harness_target
+  local prior_harness prior_root candidate candidate_name supported
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
     else
       skills_dir="$CODEX_SKILLS_DIR"
     fi
+
+    if [ "$client" = Codex ] && [ -L "${skills_dir}/HARNESS.md" ]; then
+      prior_harness=$(readlink -f "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+      prior_root="${prior_harness%/HARNESS.md}"
+      if [ "$prior_harness" = "${prior_root}/HARNESS.md" ] &&
+         [ -f "${prior_root}/HARNESS.md" ] && [ -f "${prior_root}/VERSION" ] &&
+         [ -d "${prior_root}/skills" ]; then
+        while IFS= read -r -d '' candidate; do
+          candidate_name="${candidate##*/}"
+          [ "$candidate_name" = "HARNESS.md" ] && continue
+          supported=false
+          for skill in "${SKILLS[@]}"; do
+            [ "$candidate_name" = "$skill" ] && supported=true && break
+          done
+          [ "$supported" = true ] && continue
+          current=$(readlink -- "$candidate" 2>/dev/null || echo "")
+          if [[ "$current" != /* ]]; then
+            current="${candidate%/*}/${current}"
+          fi
+          current=$(realpath -m -- "$current" 2>/dev/null || echo "")
+          if [ "$current" = "${prior_root}/skills/${candidate_name}" ]; then
+            rm -- "$candidate" || warn "Codex skill: ${candidate_name} — obsolete symlink removal failed"
+          fi
+        done < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -type l -print0)
+      fi
+    fi
+
     for skill in "${SKILLS[@]}"; do
       source="${HARNESS_DIR}/skills/${skill}"
       target="${skills_dir}/${skill}"

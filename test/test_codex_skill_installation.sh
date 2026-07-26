@@ -125,7 +125,11 @@ mkdir -p "$UPDATE_HOME/.agents/skills" "$UPDATE_HOME/.codex/skills" "$OLD_CHECKO
 cp -r "$CHECKOUT/skills" "$OLD_CHECKOUT/skills"
 cp "$CHECKOUT/HARNESS.md" "$CHECKOUT/VERSION" "$OLD_CHECKOUT/"
 printf '%s\n' 'old workflow revision' > "$OLD_CHECKOUT/skills/tdd/SKILL.md"
+mkdir -p "$OLD_CHECKOUT/skills/retired-workflow"
+printf '%s\n' 'retired workflow revision' > "$OLD_CHECKOUT/skills/retired-workflow/SKILL.md"
+ln -s "$OLD_CHECKOUT/HARNESS.md" "$UPDATE_HOME/.agents/skills/HARNESS.md"
 ln -s "$OLD_CHECKOUT/skills/tdd" "$UPDATE_HOME/.agents/skills/tdd"
+ln -s "$OLD_CHECKOUT/skills/retired-workflow" "$UPDATE_HOME/.agents/skills/retired-workflow"
 ln -s "$CHECKOUT/skills/tdd" "$UPDATE_HOME/.codex/skills/tdd"
 
 run_install "$UPDATE_HOME" --update --providers codex >"$TMP_ROOT/update-1.out" 2>&1
@@ -135,6 +139,18 @@ check 'update removes a recognized harness-owned legacy duplicate' \
   test ! -e "$UPDATE_HOME/.codex/skills/tdd"
 check 'updated catalog matches the complete current source catalog' \
   owned_catalog_is_current "$UPDATE_HOME"
+check 'update removes an obsolete current-scope skill owned by the prior harness checkout' \
+  test ! -e "$UPDATE_HOME/.agents/skills/retired-workflow"
+
+SAME_CHECKOUT_HOME="$TMP_ROOT/home-update-same-checkout"
+mkdir -p "$SAME_CHECKOUT_HOME/.agents/skills"
+ln -s "$CHECKOUT/HARNESS.md" "$SAME_CHECKOUT_HOME/.agents/skills/HARNESS.md"
+ln -s "$CHECKOUT/skills/retired-same-checkout-workflow" \
+  "$SAME_CHECKOUT_HOME/.agents/skills/retired-same-checkout-workflow"
+run_install "$SAME_CHECKOUT_HOME" --update --providers codex \
+  >"$TMP_ROOT/update-same-checkout.out" 2>&1
+check 'update removes an obsolete current-scope skill anchored to the same checkout' \
+  test ! -L "$SAME_CHECKOUT_HOME/.agents/skills/retired-same-checkout-workflow"
 
 FIRST_SNAPSHOT="$TMP_ROOT/update-first.snapshot"
 SECOND_SNAPSHOT="$TMP_ROOT/update-second.snapshot"
