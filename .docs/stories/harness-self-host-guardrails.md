@@ -2,6 +2,12 @@
 
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** self-host dispatch no longer relinks live global
+> skills. Both Claude and Codex resolve worktree-owned harness assets from minimal throwaway
+> provider homes containing only selected authentication and engine-owned controls. The
+> historical `SkillRelinkPreflight` criteria below are superseded for self-host runs;
+> non-self-host installation behavior is unchanged.
+
 **Track:** Technical (no PRD — acceptance criteria live here, tagged `TR-N`)
 **Design:** `.docs/specs/2026-06-30-harness-self-host-guardrails.md`
 **Architecture:** `.docs/architecture/2026-06-30-harness-self-host-guardrails.md`

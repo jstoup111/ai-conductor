@@ -1,5 +1,10 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** self-host sandbox settings are now generated minimally
+> for both Claude and Codex. Operator `settings.json` and personal hooks are neither copied
+> nor preserved in the sandbox; only engine-owned guards and worktree-owned harness assets
+> are installed. Historical operator-hook-preservation criteria below are superseded.
+
 # Stories: Main-Checkout Leak Triage, Auto-Heal, and Write-Fence (#380)
 
 Technical track — requirements derive from APPROVED ADR

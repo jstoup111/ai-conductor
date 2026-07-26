@@ -1,5 +1,9 @@
 # Components: Inline Build-Work Attribution Enforcement (#505)
 
+> **Historical architecture amended by #907 on 2026-07-26:** missing task telemetry no
+> longer blocks mutation. Protected-artifact/workspace boundaries and judgment gates own
+> safety and acceptance.
+
 **Last updated:** 2026-07-10
 **Scope:** The three new enforcement surfaces that make unattributed inline task work
 impossible to create silently during a daemon build — (A) a fail-closed branch in the

@@ -1,5 +1,10 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** `.pipeline/current-task` is retired as a required
+> workspace-global stamp. Dispatch ids and explicit valid commit trailers remain advisory
+> task-local telemetry, multiple rows may be `in_progress`, and judgment gates remain the
+> completion authority. Historical current-task criteria below are superseded.
+
 # Stories: Deterministic Build Evidence Attribution (#433)
 
 Track: technical (no PRD — criteria derive from issue #433 + APPROVED ADR

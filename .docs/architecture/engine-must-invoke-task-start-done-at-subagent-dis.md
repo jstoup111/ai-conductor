@@ -1,5 +1,9 @@
 # Component Diagram: Engine-Invoked Task Start/Done at Subagent Dispatch (#477)
 
+> **Historical architecture amended by #907 on 2026-07-26:** the workspace-global
+> current-task lifecycle shown below is retired as required machinery. Current architecture
+> uses concurrent task-local telemetry.
+
 **Last updated:** 2026-07-10
 **Scope:** Closes the last prompt-discipline link in the #433/#452 attribution chain. Today
 `skills/pipeline/SKILL.md` step 0 *instructs* the orchestrator agent to run `conduct-ts task

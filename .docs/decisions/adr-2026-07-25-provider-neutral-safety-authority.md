@@ -1,7 +1,7 @@
 # ADR: Engine-owned safety authority with provider-local early guards
 
 **Date:** 2026-07-25
-**Status:** APPROVED
+**Status:** Superseded by `adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation`
 **Feature:** Claude hook and self-host sandbox assumptions have no Codex parity (#907)
 **Deciders:** James Stoup (operator), architecture review for issue #907
 **Approval:** Approved by James Stoup on 2026-07-26.

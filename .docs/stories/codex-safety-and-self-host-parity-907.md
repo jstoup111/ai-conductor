@@ -6,142 +6,137 @@
 **Complexity:** Medium
 **Source:** `.docs/specs/2026-07-25-codex-safety-and-self-host-parity-907.md`
 
-These stories cover the cross-provider parity delta. They do not supersede the older
-Claude-specific task-stamping, documentation-guard, or self-host stories. Task identity
-means only the current task in progress; existing judgment gates remain responsible for
+These stories cover the cross-provider parity delta. They amend older task-stamping and
+Claude self-host stories where explicitly noted below. Task identity is concurrent,
+non-authoritative attribution telemetry; existing judgment gates remain responsible for
 completion and wiring decisions.
 
-## Story: Maintain one accurate current-task identity
+## Story: Carry accurate task-local attribution concurrently
 
 **Requirement:** FR-1
 
-As a daemon operator, I want every autonomous build task to expose one accurate current
-identity so that I can tell which task owns work regardless of the selected provider.
+As a daemon operator, I want every autonomous build task to carry its own known identity so
+that concurrent work remains attributable regardless of the selected provider.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
 - **HP-1:** Given an autonomous build with a known pending task and either Claude or Codex
-  selected, when that task begins mutation-bearing work, then exactly that task id is current
-  before its first project mutation.
-- **HP-2:** Given task-identity enforcement is active, when autonomous build tasks are ready
-  concurrently, then at most one mutation-bearing task is treated as current while read-only
-  judgment work cannot acquire a mutation identity.
+  selected, when that task is dispatched, then its exact plan-task id is validated and carried
+  in that dispatch's attribution context.
+- **HP-2:** Given independent mutation-bearing tasks are ready concurrently, when pipeline
+  overlap/dependency rules permit both, then both may be `in_progress` and neither task's
+  attribution clears, replaces, or serializes the other.
 
 #### Negative Paths
 
-- **NP-1 (covers HP-1):** Given the selected provider cannot establish the known task identity,
-  when the task attempts to begin work, then it is not treated as current and mutation-bearing
-  work does not proceed under a guessed identity.
-- **NP-2 (covers HP-2):** Given one mutation-bearing task is current, when another task attempts
-  to become current before the first releases ownership, then the overlap is rejected and neither
-  task is silently attributed to the other.
+- **NP-1 (covers HP-1):** Given a dispatch claims an empty, malformed, or unknown task id, when
+  scheduling validates it, then the identity is rejected rather than guessed or recorded.
+- **NP-2 (covers HP-2):** Given two tasks are active concurrently, when either task commits with
+  an explicit valid `Task:` trailer, then no workspace-global value overwrites that trailer with
+  the other task's id.
 
 ### Done When
 
-- [ ] A provider-parity test proves the same known task id becomes current before the first
-      mutation under Claude and Codex.
-- [ ] An overlap test proves a second mutation-bearing task cannot replace or share an active
-      current-task identity.
-- [ ] A read-only judgment dispatch proves it creates no mutation identity.
+- [ ] Provider-parity tests prove exact known ids are carried for Claude and Codex dispatches.
+- [ ] A concurrent overlap test proves both task rows remain active and attribution is independent.
+- [ ] A commit-hook test proves a valid explicit trailer is preserved under concurrent dispatch.
 
-## Story: Retire task identity on every terminal transition
+## Story: Retire only the matching task's active telemetry
 
 **Requirement:** FR-2
 
-As a daemon operator, I want an ended task to stop being current so that later work cannot
-inherit stale ownership.
+As a daemon operator, I want an ended task removed from the active set without disturbing
+concurrent tasks so that progress telemetry remains accurate.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- **HP-1:** Given a task is current, when it completes, fails, is cancelled, or is interrupted,
-  then that task id is no longer current before any later mutation-bearing work begins.
-- **HP-2:** Given one current task is replaced by another known task, when replacement occurs,
-  then the old identity is retired and only the replacement identity can become current.
+- **HP-1:** Given a task is active, when it completes, fails, is cancelled, or is interrupted,
+  then only that task id leaves the active telemetry set.
+- **HP-2:** Given another task remains active concurrently, when the first task ends or is replaced,
+  then the other task's row and attribution context remain unchanged.
 
 #### Negative Paths
 
-- **NP-1 (covers HP-1):** Given terminal cleanup cannot verify removal of the old identity, when
-  the run handles the terminal event, then the old identity authorizes no further mutation and
-  affected work stops with recovery guidance.
-- **NP-2 (covers HP-2):** Given the replacement id is missing, unknown, or cannot be established,
-  when replacement is attempted, then the old id is not retained as a fallback and the new task
-  does not begin mutation-bearing work.
+- **NP-1 (covers HP-1):** Given telemetry cleanup cannot record the ended state, when terminal
+  handling continues, then the failure is reported but does not become mutation or completion
+  authority.
+- **NP-2 (covers HP-2):** Given a replacement id is missing or unknown, when replacement is
+  attempted, then no other active task is cleared or relabeled as the replacement.
 
 ### Done When
 
 - [ ] Lifecycle tests cover completion, failure, cancellation, and interruption under both
-      providers and observe no current identity afterward.
-- [ ] A replacement test proves there is no interval in which the retired task authorizes the
-      replacement's mutations.
-- [ ] A cleanup-failure test proves forward progress stops instead of accepting stale ownership.
+      providers and observe only the matching row retired.
+- [ ] A replacement test preserves every unrelated concurrent active row.
+- [ ] A telemetry-write failure test proves no mutation or completion verdict depends on it.
 
-## Story: Reject mutation without current-task ownership
+## Story: Keep task attribution out of mutation authorization
 
 **Requirement:** FR-3
 
-As a harness operator, I want unstamped build mutations rejected so that autonomous work is
-never accepted without a current task owner.
+As a harness operator, I want mutation safety enforced by the applicable artifact and workspace
+boundaries so that missing task telemetry cannot serialize or wedge concurrent work.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- **HP-1:** Given a build is active and a valid known task is current, when that task performs an
-  otherwise permitted project mutation, then the mutation may proceed under that identity for
-  both Claude and Codex.
-- **HP-2:** Given a build is active with no current task, when a mutation is attempted through a
-  normal file tool, shell command, or another available local mutation surface, then the mutation
-  is rejected before it can be accepted as build output.
+- **HP-1:** Given a build mutation is allowed by the protected-artifact and workspace policies,
+  when task attribution is present, absent, or concurrent, then that telemetry does not change
+  the mutation decision.
+- **HP-2:** Given task telemetry is missing, when otherwise permitted implementation work mutates
+  the feature workspace, then work may proceed and the attribution gap is reported non-blockingly.
 
 #### Negative Paths
 
-- **NP-1 (covers HP-1):** Given the visible current-task value was changed without a valid task
-  transition, when a mutation is checked, then the visible value alone does not authorize it.
-- **NP-2 (covers HP-2):** Given an early lifecycle guard is disabled, skipped, or does not cover
-  the mutation surface, when unstamped mutation reaches dispatch validation, then the build does
-  not advance or accept that mutation and reports the missing identity protection.
+- **NP-1 (covers HP-1):** Given a supplied task id is stale, unknown, or mismatched, when an
+  otherwise forbidden protected-artifact or live-checkout mutation is attempted, then the id
+  neither authorizes the mutation nor changes the independent safety verdict.
+- **NP-2 (covers HP-2):** Given no task trailer is produced, when judgment gates assess wiring and
+  completeness, then they judge plan versus implementation directly rather than failing solely
+  because attribution telemetry is absent.
 
 ### Done When
 
-- [ ] Claude/Codex tests prove valid current ownership permits an otherwise allowed mutation.
-- [ ] File-tool, shell, and uncovered-surface tests prove unstamped durable changes cannot receive
-      a passing build outcome.
-- [ ] A disabled-guard test proves provider lifecycle coverage is not the sole acceptance signal.
+- [ ] Claude/Codex tests prove mutation decisions are identical with present, absent, and
+      concurrent task telemetry.
+- [ ] Protected-artifact and live-checkout tests remain fail-closed independently of task ids.
+- [ ] A completeness test proves missing task telemetry alone cannot fail or pass judgment.
 
-## Story: Refuse invalid task identities
+## Story: Validate supplied attribution without guessing or replacement
 
 **Requirement:** FR-4
 
-As a harness operator, I want malformed or outdated task identities to fail closed so that an
-identity can never authorize the wrong work.
+As a harness operator, I want supplied task identities validated as telemetry so that incorrect
+attribution is rejected without turning attribution into mutation authority.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- **HP-1:** Given a current identity exactly matches a known active plan task, when mutation
-  authorization is evaluated, then that identity is accepted for only that task.
-- **HP-2:** Given the same valid task is re-entered through an idempotent lifecycle event, when
-  identity is evaluated, then ownership remains accurate without creating a second owner.
+- **HP-1:** Given a dispatch id or explicit commit trailer exactly matches a seeded plan task,
+  when attribution is recorded, then the exact value is preserved for that task.
+- **HP-2:** Given the same valid task is reported more than once, when telemetry is updated, then
+  the update is idempotent and does not alter another active task.
 
 #### Negative Paths
 
-- **NP-1 (covers HP-1):** Given the identity is empty, unknown, stale, malformed, or names a
-  different task, when mutation is attempted, then authorization is rejected and the diagnostic
-  identifies the invalid identity state without guessing a replacement.
-- **NP-2 (covers HP-2):** Given a supposedly idempotent event conflicts with another current task
-  or a different task-status row, when it is evaluated, then it is treated as a mismatch and no
-  ownership state is overwritten.
+- **NP-1 (covers HP-1):** Given the supplied identity is empty, unknown, stale, malformed, or
+  mismatched, when telemetry is processed, then it is not recorded and the diagnostic identifies
+  the invalid value without guessing a replacement.
+- **NP-2 (covers HP-2):** Given an explicit valid commit trailer differs from another active task,
+  when the commit hook runs, then it validates and preserves the explicit value rather than
+  replacing it from workspace-global state.
 
 ### Done When
 
 - [ ] A table-driven provider-parity test covers empty, unknown, stale, malformed, and mismatched
-      identities with a rejected mutation verdict.
-- [ ] Idempotent same-task and conflicting-task tests prove only the same valid owner is preserved.
+      identities with rejected telemetry and no mutation-authority side effect.
+- [ ] Idempotent and concurrent-task tests prove valid task-local attribution is preserved.
 
 ## Story: Keep protected DECIDE artifacts frozen
 
@@ -254,9 +249,10 @@ run so that personal provider configuration cannot affect or be affected by the 
 
 #### Happy Path
 
-- **HP-1:** Given #905 selects a supported API-key or cached-login source, when a Codex self-host
-  run starts, then it can use that selected source without inheriting unrelated live preferences,
-  extensions, lifecycle customizations, histories, sessions, or mutable provider state.
+- **HP-1:** Given a supported authentication source is selected (#905 for Codex or the existing
+  Claude credential source), when a Claude or Codex self-host run starts, then it can use that
+  source without inheriting unrelated live preferences, extensions, lifecycle customizations,
+  histories, sessions, or mutable provider state.
 - **HP-2:** Given unrelated live provider configuration exists, when a self-host run completes,
   then that configuration remains byte-identical except for the explicitly selected auth source's
   provider-owned behavior.
@@ -270,13 +266,29 @@ run so that personal provider configuration cannot affect or be affected by the 
   unrelated live preference, extension, hook, plugin, history, or session, when the boundary is
   enforced, then that state is unavailable to the run and its live sentinel remains byte-identical;
   if either outcome cannot be verified, substantive work stops.
+- **NP-3 (covers HP-1):** Given Claude self-host preparation would copy operator `settings.json`,
+  preserve personal hooks, propagate general operator state, or relink live global skills, when
+  the isolated home is provisioned, then those legacy inheritance/global-mutation paths are not
+  invoked; required engine hooks and worktree skills come from the minimal isolated home.
+- **NP-4 (covers HP-1):** Given Codex cached login is selected, when its credential is handed into
+  the isolated home, then only the selected native credential artifact is copied opaquely with
+  restrictive permissions; it is never parsed, logged, hashed, symlinked to live state, or retained
+  after the run, and the live source remains byte-identical.
+- **NP-5 (covers HP-1):** Given #904 installed skills under the operator's
+  `$HOME/.agents/skills`, when Codex self-host starts, then it discovers the feature worktree's
+  catalog through a child-only discovery home and neither loads nor mutates the live catalog.
 
 ### Done When
 
-- [ ] API-key and cached-login tests prove only the #905-selected auth source is available to the
-      self-host run.
+- [ ] Claude and Codex auth tests prove only the selected source is available to the self-host run.
 - [ ] Sentinel preferences, extensions, lifecycle customizations, histories, and sessions remain
       unchanged and unavailable for inheritance.
+- [ ] Claude tests prove no operator-settings copy, personal-hook preservation, general state-file
+      propagation, or live global skill relink occurs.
+- [ ] Cached-login tests prove opaque selected-credential handoff, restrictive permissions,
+      unchanged source, confidentiality, and cleanup on every terminal path.
+- [ ] #904 integration coverage proves self-host `$skill` invocation resolves the worktree catalog
+      while ordinary Codex sessions retain the installed user-scoped catalog.
 - [ ] An unisolatable auth-source test proves no model work begins under broadened access.
 
 ## Story: Remove self-host isolation residue on every exit
@@ -482,48 +494,49 @@ credentials or personal provider configuration.
 - [ ] Raw provider-error tests prove secrets and sensitive config values are redacted before output.
 - [ ] Partial-provisioning/cleanup tests prove selected auth material never becomes a project artifact.
 
-## Story: Preserve existing Claude behavior
+## Story: Preserve Claude compatibility outside intentional self-host isolation
 
 **Requirement:** FR-15
 
-As a Claude user, I want Codex parity added without changing my established workflow so that the
-new provider option carries no Claude migration or safety regression.
+As a Claude user, I want provider parity without an authentication migration or safety regression,
+while self-host runs intentionally stop inheriting my unrelated live configuration.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- **HP-1:** Given an existing Claude-selected autonomous build, when it runs after #907, then its
-  current-task lifecycle, permitted mutations, protected-artifact behavior, self-host isolation,
-  recovery behavior, and operator-visible outcomes remain equivalent to the approved pre-#907
-  contracts.
+- **HP-1:** Given an existing Claude-selected autonomous build, when it runs after #907, then
+  concurrent task scheduling, task-local telemetry, protected-artifact behavior, authentication,
+  recovery behavior, and non-self-host outcomes remain compatible with the amended contracts.
 - **HP-2:** Given Codex is unavailable or not configured, when Claude is selected, then Claude work
   does not depend on Codex configuration, hooks, auth, state, or executable availability.
 
 #### Negative Paths
 
-- **NP-1 (covers HP-1):** Given the provider-neutral safety layer detects a real Claude protection
-  failure, when Claude work would otherwise continue, then it still fails closed with the existing
-  safety outcome rather than weakening policy for backward compatibility.
+- **NP-1 (covers HP-1):** Given a Claude self-host run has personal settings, hooks, extensions, or
+  global skill links in the live provider home, when the run starts, then those are neither
+  inherited nor modified; only selected auth, engine controls, and worktree harness assets enter
+  the throwaway home.
 - **NP-2 (covers HP-2):** Given Codex-specific isolated state is missing, malformed, or inaccessible,
   when a Claude-only workflow runs, then that unrelated Codex condition neither changes Claude
   behavior nor produces a Codex remediation message.
 
 ### Done When
 
-- [ ] Existing Claude task, mutation, documentation, self-host, recovery, and operator-output
-      regression suites remain green without changed expected behavior.
+- [ ] Existing Claude non-self-host, authentication, recovery, and provider-output suites remain
+      green; self-host expectations are updated only for strict isolation and concurrent telemetry.
 - [ ] Claude-only tests pass with Codex executable/config/auth/state absent.
-- [ ] A genuine Claude protection failure remains fail-closed and provider-correct.
+- [ ] Claude self-host tests prove minimal isolated configuration, unchanged live sentinels, and
+      no global relink on every terminal path.
 
 ## Traceability
 
 | Requirement | Story |
 |---|---|
-| FR-1 | Maintain one accurate current-task identity |
-| FR-2 | Retire task identity on every terminal transition |
-| FR-3 | Reject mutation without current-task ownership |
-| FR-4 | Refuse invalid task identities |
+| FR-1 | Carry accurate task-local attribution concurrently |
+| FR-2 | Retire only the matching task's active telemetry |
+| FR-3 | Keep task attribution out of mutation authorization |
+| FR-4 | Validate supplied attribution without guessing or replacement |
 | FR-5 | Keep protected DECIDE artifacts frozen |
 | FR-6 | Fail closed when a protected target is indeterminate |
 | FR-7 | Confine self-host writes to the feature workspace |
@@ -534,4 +547,4 @@ new provider option carries no Claude migration or safety regression.
 | FR-12 | Preserve protections across initial, retry, and resume paths |
 | FR-13 | Explain protection failures actionably |
 | FR-14 | Keep safety diagnostics confidential |
-| FR-15 | Preserve existing Claude behavior |
+| FR-15 | Preserve Claude compatibility outside intentional self-host isolation |

@@ -1,8 +1,8 @@
 # Sequence: Provider-Neutral Task and Mutation Safety (#907)
 
-**Last updated:** 2026-07-25
-**Scope:** Current-task identity and mutation authorization across Claude and Codex,
-including stale identity, failure cleanup, and the separate judgment-gate boundary.
+**Last updated:** 2026-07-26
+**Scope:** Concurrent task-local attribution across Claude and Codex, with mutation safety
+and judgment authority independent of task telemetry.
 
 ## Diagram
 
@@ -10,55 +10,54 @@ including stale identity, failure cleanup, and the separate judgment-gate bounda
 sequenceDiagram
     autonumber
     participant C as Conductor lifecycle
-    participant T as Task state authority
+    participant T as Concurrent task telemetry
     participant S as Required safety authority
     participant P as Selected provider
     participant W as Feature worktree
     participant J as Judgment gates
 
-    C->>T: start task «id»
-    T->>T: validate task and make «id» current
-    T-->>S: current identity «id»
-    C->>P: dispatch task «id»
+    par task «a»
+        C->>T: validate and activate task «a»
+        C->>P: dispatch task «a» with task-local id
+    and task «b»
+        C->>T: validate and activate task «b»
+        C->>P: dispatch task «b» with task-local id
+    end
     P->>S: request project mutation
-    S->>T: read current identity
-    alt identity is valid and matches task «id»
-        T-->>S: current «id»
-        S->>W: permit mutation
+    S->>S: evaluate artifact and workspace policy
+    alt target is permitted
+        S->>W: permit mutation independent of task telemetry
         W-->>P: mutation result
-    else identity is empty, stale, unknown, or mismatched
-        T-->>S: invalid identity
+    else protected artifact or live boundary denies target
         S-->>P: reject with actionable guidance
     end
-    P-->>C: task success, failure, or cancellation
-    C->>T: end task «id»
-    T->>T: clear identity only when «id» is current
+    P->>T: supply explicit Task trailer when committing
+    T->>T: validate and preserve supplied id, never globally replace
+    P-->>C: task «a» ends
+    C->>T: retire only task «a», task «b» remains active
     C->>J: evaluate architecture, wiring, and completeness
     J-->>C: verdict independent of task stamp
 ```
 
 ## Negative and Recovery Paths
 
-- A provider dispatch never makes an unknown or stale identity authoritative.
-- Completion, failure, cancellation, and task replacement all remove the ended task's
-  authority before later work proceeds.
-- Retry and resume re-enter through the same start and validation flow; they do not
-  inherit authority merely because an old identity remains on disk.
-- The judgment gates evaluate the resulting work independently. A valid task identity
-  is necessary for mutation safety but is not proof that the implementation is wired or
-  complete.
+- Unknown or stale supplied ids are rejected as telemetry rather than guessed.
+- Completion, failure, cancellation, and replacement retire only the matching active row.
+- Retry and resume re-enter task-local validation without a workspace-global stamp.
+- Missing task telemetry neither authorizes nor rejects mutation and never determines
+  wiring or completion.
 
 ## Legend
 
-- `«id»` is the active plan task identifier.
+- `«a»` and `«b»` are concurrent plan task identifiers.
 - The selected provider may be Claude or Codex; neither owns task-state authority.
-- `adr-2026-07-25-provider-neutral-safety-authority` places the task lease and
-  terminal mutation audit in the conductor safety boundary; provider lifecycle hooks
-  supply early events but do not own acceptance.
+- `adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation` keeps
+  attribution advisory while artifact/workspace policies own mutation safety.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Replace singular task lease with concurrent task-local telemetry | Conflict-check resolution for issue #907 |
 | 2026-07-25 | Resolve the task-safety authority seam | Architecture review for issue #907 |
 | 2026-07-25 | Initial sequence | DECIDE architecture for issue #907 |

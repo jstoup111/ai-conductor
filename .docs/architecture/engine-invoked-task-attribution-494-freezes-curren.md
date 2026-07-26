@@ -1,5 +1,9 @@
 # Component Diagram: Attribution Abstain-or-Loud Hardening (#519)
 
+> **Historical architecture amended by #907 on 2026-07-26:** overlap no longer clears
+> a required singular stamp. Current architecture preserves concurrent task-local
+> attribution and explicit valid trailers.
+
 **Last updated:** 2026-07-11
 **Scope:** Fixes the silent misattribution cascade in the #494 attribution machinery. In the
 #492 build, `.pipeline/current-task` froze at task 1's id and every later commit (tasks 2–16)

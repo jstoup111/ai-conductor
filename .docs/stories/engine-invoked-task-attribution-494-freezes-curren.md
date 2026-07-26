@@ -1,5 +1,11 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** healthy overlap no longer removes a singular stamp or
+> requires byte-identical overlap behavior. Concurrent tasks retain independent active-task
+> telemetry; explicit valid `Task:` trailers are preserved. Uncertainty may lose telemetry
+> but cannot authorize or reject mutation. Historical overlap/current-task criteria below are
+> superseded.
+
 # Stories: Attribution Abstain-or-Loud Hardening (#519)
 
 Technical track — acceptance criteria derive from

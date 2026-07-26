@@ -1,9 +1,9 @@
 # Components: Codex Safety and Self-Host Parity (#907)
 
-**Last updated:** 2026-07-25
+**Last updated:** 2026-07-26
 **Scope:** The current Claude-shaped safety surfaces, the provider-neutral engine seams
-that already own lifecycle and judgment, and the required ownership boundary for task
-identity, mutation protection, protected artifacts, and self-host isolation.
+that already own lifecycle and judgment, and the required ownership boundary for
+task-local telemetry, mutation protection, protected artifacts, and symmetric self-host isolation.
 
 ## Component Diagram
 
@@ -14,9 +14,9 @@ flowchart LR
     subgraph Engine["Conductor engine"]
         Conductor["Conductor lifecycle<br/>step, retry, resume, cleanup"]
         Routing["Provider execution routing<br/>Claude or Codex"]
-        TaskState["Task lifecycle state<br/>current identity and task rows"]
+        TaskState["Concurrent task telemetry<br/>validated ids and active task rows"]
         PhaseState["Phase protection state<br/>active phase and allowed artifacts"]
-        Safety["Conductor safety boundary<br/>task lease, artifact seal, terminal audits"]
+        Safety["Conductor safety boundary<br/>artifact seal, workspace boundary, terminal audits"]
         SelfHost["Self-host coordinator<br/>provider-aware isolation lifecycle"]
         Judgement["Judgment gates<br/>architecture, wiring, build completion"]
     end
@@ -26,6 +26,11 @@ flowchart LR
         ClaudeHooks["Claude lifecycle integrations<br/>current interception surface"]
         Codex["Codex provider"]
         CodexClient["Codex client<br/>native sandbox and lifecycle hooks"]
+    end
+
+    subgraph Isolated["Per-run minimal provider home"]
+        ClaudeHome["Throwaway CLAUDE_CONFIG_DIR<br/>selected auth, engine controls,<br/>worktree harness assets"]
+        CodexHome["Throwaway CODEX_HOME + discovery HOME<br/>opaque selected auth, engine controls,<br/>worktree .agents/skills view"]
     end
 
     subgraph Workspace["Feature worktree boundary"]
@@ -45,12 +50,14 @@ flowchart LR
     Conductor --> Routing
     Conductor --> TaskState
     Conductor --> PhaseState
-    TaskState --> Safety
+    TaskState -. "non-authoritative telemetry" .-> Safety
     PhaseState --> Safety
     Routing --> Claude
     Routing --> Codex
     Claude --> ClaudeHooks
     Codex --> CodexClient
+    ClaudeHome --> Claude
+    CodexHome --> Codex
     ClaudeHooks -. "provider-local early guard" .-> Safety
     CodexClient -. "provider-local early guard" .-> Safety
     Claude --> Safety
@@ -61,6 +68,8 @@ flowchart LR
     Conductor --> SelfHost
     Routing --> SelfHost
     SelfHost --> Auth
+    SelfHost --> ClaudeHome
+    SelfHost --> CodexHome
     SelfHost --> Work
     SelfHost -. "deny mutation" .-> Live
     SelfHost -. "exclude unrelated state" .-> ClaudeConfig
@@ -80,16 +89,17 @@ flowchart LR
 ## Boundary Notes
 
 - The conductor already owns step, retry, resume, phase, and cleanup lifecycles.
-- Current-task and phase state already exist as engine-visible worktree state, while
-  Claude lifecycle integrations currently perform key interception and stamping.
+- Task rows represent a concurrent active set. Task ids and commit trailers are telemetry;
+  no workspace-global current-task value authorizes mutation or completion.
 - The required safety authority owns outcomes, not provider API symmetry. Claude
   lifecycle integration may remain as a compatibility signal, but it is not the
   correctness boundary.
-- Judgment gates remain the authority for architecture, wiring, and build completeness;
-  current-task identity does not replace those judgments.
-- Self-host isolation preserves only the authentication source selected by issue #905.
-  The live checkout and unrelated provider configuration remain protected.
-- `adr-2026-07-25-provider-neutral-safety-authority` places policy and terminal
+- Judgment gates remain the authority for architecture, wiring, and build completeness.
+- Both provider homes preserve only selected authentication, engine-owned controls, and
+  worktree-owned harness assets. Personal settings/hooks and live global relink are excluded.
+- #904's ordinary Codex catalog remains under the operator's `$HOME/.agents/skills`; a
+  self-host child receives a separate discovery home linked only to feature-worktree skills.
+- `adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation` places policy and terminal
   acceptance in the conductor safety boundary. Provider hooks and sandboxes remain
   early/preventive integrations rather than the correctness authority.
 
@@ -106,5 +116,6 @@ flowchart LR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Replace singular task lease with concurrent telemetry; add minimal homes for both providers | Conflict-check resolution for issue #907 |
 | 2026-07-25 | Resolve the safety seam and record Codex native guards | Architecture review for issue #907 |
 | 2026-07-25 | Initial component boundary | DECIDE architecture for issue #907 |

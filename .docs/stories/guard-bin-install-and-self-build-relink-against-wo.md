@@ -5,6 +5,13 @@
 Track: technical — acceptance criteria derived from the technical intent + approved ADR
 `adr-2026-07-06-installed-root-resolution-for-global-writes`. Tier M.
 
+> **Amended 2026-07-26 by #907:** self-host runs do not invoke the live-global relink
+> preflight and do not copy/retarget operator `settings.json`. Required skills, hooks,
+> permissions, and workspace behavior are generated inside the selected provider's minimal
+> throwaway home from worktree/engine-owned inputs. Historical self-host relink and copied-
+> settings criteria below are superseded; the caller-independent `bin/install` worktree-root
+> guard and non-self-host installer behavior remain intact.
+
 ## Story: bin/install refuses to mutate operator globals from a worktree root
 
 **Requirement:** TR-1 (installer self-root guard — caller-independent backstop)
