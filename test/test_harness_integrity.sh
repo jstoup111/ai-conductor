@@ -826,6 +826,24 @@ else
   assert "test/test_provider_skill_contracts.sh exists" 1
 fi
 
+# ── 15. Root agent-instruction parity ───────────────────────────────────────
+# Claude and Codex must load the same repository contract. Keep the named
+# provider entry points as symlinks to one canonical source so additions cannot
+# silently drift between CLAUDE.md and AGENTS.md.
+echo ""
+echo -e "${BOLD}15. Root agent-instruction parity${NC}"
+
+agent_instructions="${HARNESS_DIR}/AGENT_INSTRUCTIONS.md"
+if [ -f "$agent_instructions" ] \
+  && [ -L "${HARNESS_DIR}/CLAUDE.md" ] \
+  && [ -L "${HARNESS_DIR}/AGENTS.md" ] \
+  && [ "$(readlink "${HARNESS_DIR}/CLAUDE.md")" = "AGENT_INSTRUCTIONS.md" ] \
+  && [ "$(readlink "${HARNESS_DIR}/AGENTS.md")" = "AGENT_INSTRUCTIONS.md" ]; then
+  assert "CLAUDE.md and AGENTS.md share canonical agent instructions" 0
+else
+  assert "CLAUDE.md and AGENTS.md share canonical agent instructions" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
