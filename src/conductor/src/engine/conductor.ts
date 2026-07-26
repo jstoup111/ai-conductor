@@ -1293,8 +1293,7 @@ export class Conductor {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
-    const actualProvider = failed?.actualProvider;
-    if (authentication?.provider === 'codex' && actualProvider) {
+    if (authentication?.provider === 'codex') {
       if (authentication.source === 'api-key') {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
@@ -1314,7 +1313,7 @@ export class Conductor {
       }
 
       const readiness = this.providerExecution?.runtimes.readinessFor(
-        actualProvider,
+        authentication.provider,
         authentication,
       );
       if (readiness) {

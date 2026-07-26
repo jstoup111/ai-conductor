@@ -128,6 +128,74 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(park).toEqual({ timedOut: false, haltReason: '' });
   });
 
+  it('fails closed on mismatched provider attribution without probing an alternative runtime', async () => {
+    const codexReadiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'unusable',
+    });
+    const alternativeReadiness = vi.fn().mockResolvedValue({
+      provider: 'claude', source: 'cached-login', state: 'ready',
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: codexReadiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'claude',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternativeReadiness },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async (delay: number) => {
+      clockOffset += delay;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'claude',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+
+      expect({
+        park,
+        codexReadinessCalls: codexReadiness.mock.calls.length,
+        alternativeReadinessCalls: alternativeReadiness.mock.calls.length,
+        sleepCalls: sleepFn.mock.calls.length,
+      }).toEqual({
+        park: {
+          timedOut: true,
+          haltReason:
+            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+            'Refresh the Codex login, then re-queue this feature.',
+        },
+        codexReadinessCalls: 7,
+        alternativeReadinessCalls: 0,
+        sleepCalls: 6,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('backs off cached-login readiness checks at exponentially increasing rungs', async () => {
     const readiness = vi
       .fn()
