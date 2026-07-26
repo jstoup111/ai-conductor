@@ -13,6 +13,12 @@ export type TaskAttributionValidation =
   | { taskId: string }
   | { diagnostic: { code: TaskAttributionDiagnosticCode; value: string } };
 
+/** Advisory task-local context for one concurrently active provider attempt. */
+export interface ActiveTaskTelemetry {
+  taskId: string;
+  context: Readonly<Record<string, unknown>>;
+}
+
 const TASK_ID = new RegExp(`^${TASK_ID_PATTERN}$`);
 
 function sanitizedTaskId(value: unknown): string {
@@ -34,4 +40,16 @@ export function validateTaskAttribution(input: TaskAttributionInput): TaskAttrib
     return { diagnostic: { code: 'mismatched', value } };
   }
   return { taskId: input.taskId };
+}
+
+/**
+ * Adds an active task without granting it any workspace-global authority.
+ * A repeat activation is deliberately a no-op so the original context stays
+ * associated with that task while sibling tasks remain independently active.
+ */
+export function activateTaskTelemetry(
+  activeTasks: readonly ActiveTaskTelemetry[],
+  task: ActiveTaskTelemetry,
+): ActiveTaskTelemetry[] {
+  return activeTasks.some(({ taskId }) => taskId === task.taskId) ? [...activeTasks] : [...activeTasks, task];
 }

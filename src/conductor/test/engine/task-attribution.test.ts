@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { activateTaskTelemetry } from '../../src/engine/task-attribution.js';
 
 describe('validateTaskAttribution', () => {
   it('preserves only exact task-local ids from the current seeded plan', async () => {
@@ -18,5 +19,22 @@ describe('validateTaskAttribution', () => {
     for (const testCase of cases) {
       expect(attribution.validateTaskAttribution(testCase), testCase.label).toEqual(testCase.result);
     }
+  });
+});
+
+describe('activateTaskTelemetry', () => {
+  it('keeps sibling task contexts and an existing task context across repeat activation', () => {
+    expect(
+      activateTaskTelemetry(
+        [
+          { taskId: '1', context: { provider: 'claude' } },
+          { taskId: '2', context: { provider: 'codex' } },
+        ],
+        { taskId: '1', context: { provider: 'replacement' } },
+      ),
+    ).toEqual([
+      { taskId: '1', context: { provider: 'claude' } },
+      { taskId: '2', context: { provider: 'codex' } },
+    ]);
   });
 });
