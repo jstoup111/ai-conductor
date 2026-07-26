@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
@@ -29,6 +29,16 @@ export interface CreateProtectedArtifactSealOptions {
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
 }
+
+export interface VerifyProtectedArtifactSealOptions {
+  projectRoot: string;
+  /** Required only while validating a first BUILD entry before it may persist a seal. */
+  baselineCommit?: string;
+}
+
+export type ProtectedArtifactSealVerdict =
+  | { ok: true; seal: ProtectedArtifactSeal }
+  | { ok: false; reason: string };
 
 export interface ActiveStepArtifactExceptionInput {
   phase: string;
@@ -116,6 +126,74 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
     })),
   );
   return { version: 1, baselineCommit: options.baselineCommit, protectedArtifacts };
+}
+
+async function workspaceProtectedPaths(projectRoot: string, directory: string): Promise<string[]> {
+  const root = join(projectRoot, directory);
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const paths = await Promise.all(entries.map(async (entry) => {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isDirectory()) return workspaceProtectedPaths(projectRoot, path);
+      if (entry.isFile()) return [path];
+      return [path];
+    }));
+    return paths.flat();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+async function inspectSeal(
+  projectRoot: string,
+  seal: ProtectedArtifactSeal,
+): Promise<ProtectedArtifactSealVerdict> {
+  const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
+  const actualPaths = (await Promise.all(
+    PROTECTED_ARTIFACT_DIRECTORIES.map((directory) => workspaceProtectedPaths(projectRoot, directory)),
+  )).flat().sort(comparePaths);
+
+  for (const path of actualPaths) {
+    if (!expected.has(path)) {
+      return { ok: false, reason: `Protected artifact added: ${path}` };
+    }
+    try {
+      const actual = fingerprint(await readFile(join(projectRoot, path), 'utf8'));
+      if (actual !== expected.get(path)) {
+        return { ok: false, reason: `Protected artifact changed: ${path}` };
+      }
+    } catch {
+      return { ok: false, reason: `Protected artifact changed: ${path}` };
+    }
+  }
+
+  for (const path of expected.keys()) {
+    if (!actualPaths.includes(path)) {
+      return { ok: false, reason: `Protected artifact deleted: ${path}` };
+    }
+  }
+  return { ok: true, seal };
+}
+
+/**
+ * Verifies the workspace against the original durable seal. When no durable
+ * seal exists, callers may supply the committed baseline to validate a first
+ * BUILD entry before they persist it; this function never writes or refreshes
+ * a seal itself.
+ */
+export async function verifyProtectedArtifactSeal(
+  options: VerifyProtectedArtifactSealOptions,
+): Promise<ProtectedArtifactSealVerdict> {
+  const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+  if (existing) return inspectSeal(options.projectRoot, existing);
+  if (!options.baselineCommit) {
+    return { ok: false, reason: 'Protected artifact seal is missing' };
+  }
+  return inspectSeal(
+    options.projectRoot,
+    await createSeal({ projectRoot: options.projectRoot, baselineCommit: options.baselineCommit }),
+  );
 }
 
 /**

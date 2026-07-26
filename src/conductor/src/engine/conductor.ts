@@ -74,6 +74,10 @@ import {
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
 import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
+import {
+  createProtectedArtifactSeal,
+  verifyProtectedArtifactSeal,
+} from './protected-artifact-seal.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -3506,8 +3510,32 @@ export class Conductor {
             step.name === 'build' && isEnforcementConfigured(this.config)
               ? await seedAndCheckAttributionMachinery(this.projectRoot, state.feature_desc ?? '')
               : null;
+          // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
+          // every attempt before writing phase markers or starting dispatch; a
+          // resume therefore cannot accept a dirty workspace as a new baseline.
+          let protectedArtifactIssue: string | null = null;
+          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
+            const currentCommit = await currentCommitSha(this.projectRoot);
+            const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
+            // Legacy/test-only non-git roots cannot establish an approved
+            // commit identity. They remain outside this committed-artifact
+            // boundary; real feature worktrees always supply one.
+            if (currentCommit) {
+              const sealVerdict = await verifyProtectedArtifactSeal({
+                projectRoot: this.projectRoot,
+                baselineCommit: baselineCommit ?? undefined,
+              });
+              if (!sealVerdict.ok) {
+                protectedArtifactIssue = sealVerdict.reason;
+              } else if (step.phase === 'BUILD' && baselineCommit) {
+                // Persist only after the workspace matches committed DECIDE
+                // content. createProtectedArtifactSeal is immutable once present.
+                await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+              }
+            }
+          }
           const markerActive =
-            !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
+            !machineryIssue && !protectedArtifactIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
@@ -3527,9 +3555,9 @@ export class Conductor {
           }
 
           let result: StepRunResult;
-          if (machineryIssue) {
+          if (machineryIssue || protectedArtifactIssue) {
             buildWatcher?.stop();
-            result = { success: false, output: machineryIssue };
+            result = { success: false, output: machineryIssue ?? protectedArtifactIssue! };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below — that flow only
             // fires in `mode === 'auto'` (daemon), but a broken attribution
@@ -3546,7 +3574,7 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(this.projectRoot, machineryIssue);
+              await writeHaltMarker(this.projectRoot, machineryIssue ?? protectedArtifactIssue!);
             }
           } else
           try {

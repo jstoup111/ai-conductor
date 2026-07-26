@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createProtectedArtifactSeal,
   isActiveStepArtifactException,
+  verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCallback);
@@ -94,6 +95,43 @@ describe('createProtectedArtifactSeal', () => {
     await expect(
       createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: await git(repo, ['rev-parse', 'HEAD']) }),
     ).resolves.toEqual(original);
+  });
+});
+
+describe('verifyProtectedArtifactSeal', () => {
+  it('rejects a changed protected artifact against the durable original seal', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'dirty replacement\n');
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/feature.md',
+    });
+  });
+
+  it.each([
+    ['deleted', async (repo: string) => rm(join(repo, '.docs/plans/feature.md')),
+      'Protected artifact deleted: .docs/plans/feature.md'],
+    ['recreated', async (repo: string) => {
+      await rm(join(repo, '.docs/plans/feature.md'));
+      await writeProjectFile(repo, '.docs/plans/feature.md', 'recreated plan\n');
+    }, 'Protected artifact changed: .docs/plans/feature.md'],
+    ['new', async (repo: string) => writeProjectFile(repo, '.docs/plans/new.md', 'new plan\n'),
+      'Protected artifact added: .docs/plans/new.md'],
+  ])('rejects a %s protected artifact without refreshing the seal', async (_kind, mutate, reason) => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+
+    await mutate(repo);
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
   });
 });
 
