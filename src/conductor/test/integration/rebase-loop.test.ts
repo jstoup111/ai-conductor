@@ -484,6 +484,9 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+    const haltedState = await readState(statePath);
+    expect(haltedState.ok && haltedState.value.pr_url).toBeUndefined();
+    await expect(access(join(dir, '.pipeline/finish-choice'))).rejects.toThrow();
     expect(await rebaseInProgress()).toBe(true);
   });
 
@@ -1073,13 +1076,20 @@ describe('integration/rebase-loop', () => {
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
+        const dispatches: string[] = [];
         const { invalidated } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await conductorWith({
+          run: async (step) => {
+            dispatches.push(step);
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        }).run();
 
         expect(completed).toBe(true);
         expect(counts.prd_audit).toBe(2);
@@ -1097,6 +1107,12 @@ describe('integration/rebase-loop', () => {
         expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
         expect(archInvalidated).toBeDefined();
         expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
+        expect(
+          Math.max(
+            dispatches.lastIndexOf('prd_audit'),
+            dispatches.lastIndexOf('architecture_review_as_built'),
+          ),
+        ).toBeLessThan(dispatches.indexOf('finish'));
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {

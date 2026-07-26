@@ -65,6 +65,8 @@ export const DAEMON_SESSION_PREFIX = 'cc-daemon-';
  * Exact-or-prefix (with trailing separator) check, so
  * `${tmpdir}-evil/x` does NOT falsely match `tmpdir`. */
 export function isTmpdirRooted(cwd: string): boolean {
+  if (cwd === '(unknown)') return false;
+
   const tmp = path.resolve(os.tmpdir());
   const resolved = path.resolve(cwd);
   return resolved === tmp || resolved.startsWith(tmp + path.sep);

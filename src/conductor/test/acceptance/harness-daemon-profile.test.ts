@@ -62,6 +62,7 @@ function preBuildDoneState(): ConductState {
     architecture_review: 'done',
     acceptance_specs: 'done',
     test_suite: 'done',
+    rebase: 'done',
     complexity_tier: 'M',
     track: 'technical',
     feature_desc: 'self-build-feat',
@@ -93,6 +94,9 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'finish') {
+          await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
         return { success: true };
       }),
     };
@@ -120,6 +124,10 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
+      fullSuiteVerifier: {
+        ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+        inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+      },
       config: {
         harness_self_host: {
           sandbox_build_env: true,
@@ -127,6 +135,10 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
           // credentials. Keep the self-host path active while making auth
           // readiness deterministic on developer machines and clean CI hosts.
           build_auth: { mode: 'api-key' },
+        },
+        steps: {
+          manual_test: { disable: true },
+          architecture_review_as_built: { disable: true },
         },
       },
     } as ConstructorParameters<typeof Conductor>[0]);
@@ -204,6 +216,9 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'finish') {
+          await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
         return { success: true };
       }),
     };
@@ -236,6 +251,10 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
           sandbox_build_env: true,
           build_auth: { mode: 'api-key' },
           version_approval_gate: false, // Gate is disabled
+        },
+        steps: {
+          manual_test: { disable: true },
+          architecture_review_as_built: { disable: true },
         },
       },
     } as ConstructorParameters<typeof Conductor>[0]);

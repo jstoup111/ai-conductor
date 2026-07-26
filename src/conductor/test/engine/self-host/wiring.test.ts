@@ -68,7 +68,14 @@ function preBuildDoneState(): ConductState {
     architecture_review: 'done',
     acceptance_specs: 'done',
     test_suite: 'done',
-    complexity_tier: 'M',
+    build_review: 'done',
+    wiring_check: 'done',
+    manual_test: 'done',
+    prd_audit: 'done',
+    architecture_review_as_built: 'done',
+    retro: 'done',
+    rebase: 'done',
+    complexity_tier: 'S',
     track: 'technical', // no PRD/prd_audit — keeps the SHIP tail minimal
     feature_desc: 'self-build-feat',
   } as ConductState;
@@ -181,6 +188,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     runner: StepRunner,
     opts: { selfHost?: boolean; daemon?: boolean; config?: Record<string, unknown> } = {},
   ): Conductor {
+    const configuredSteps = (opts.config?.steps ?? {}) as Record<string, unknown>;
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -193,7 +201,13 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: opts.config as never,
+      config: {
+        ...opts.config,
+        steps: {
+          manual_test: { disable: true },
+          ...configuredSteps,
+        },
+      } as never,
     });
   }
 

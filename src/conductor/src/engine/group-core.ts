@@ -315,6 +315,7 @@ export interface BranchStepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
   escalateForStep?(step: StepName, state: ConductState): boolean;
   beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
+  resetSession?(step?: StepName, providerKey?: string): Promise<void>;
 }
 
 /**
@@ -435,6 +436,10 @@ async function runGroupBranchInner(
   const mintSessionId = deps.mintSessionId ?? uuidv4;
   const memberStep = member.name as StepName;
   const providerSessions = deps.stepRunner.beginProviderBranch?.(memberStep);
+  // A provider branch is born as its own fresh, detached scope. Legacy
+  // scalar branches need the serial lifecycle reset instead; applying it to
+  // provider branches would mutate the shared serial-session authority.
+  if (!providerSessions) await deps.stepRunner.resetSession?.(memberStep);
   const escalate = deps.stepRunner.escalateForStep?.(memberStep, state) ?? true;
   let sessionId = providerSessions ? "" : mintSessionId();
 

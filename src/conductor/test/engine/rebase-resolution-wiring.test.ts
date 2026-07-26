@@ -51,6 +51,7 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
   }
+  (state as Record<string, unknown>).finish = 'done';
   await writeState(statePath, state);
 }
 

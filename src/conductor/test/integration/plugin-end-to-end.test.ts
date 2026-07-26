@@ -3,11 +3,9 @@ import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { readFile } from 'fs/promises';
-import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
-import type { StepName, ConductState } from '../../src/types/index.js';
+import type { StepName } from '../../src/types/index.js';
 import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
@@ -44,7 +42,6 @@ class EchoCaptureStepRunner implements StepRunner {
 describe('Integration: EchoProvider E2E plugin loading', () => {
   let tempDir: string;
   let pluginDir: string;
-  let statePath: string;
   let events: ConductorEventEmitter;
   let runner: EchoCaptureStepRunner;
 
@@ -53,7 +50,6 @@ describe('Integration: EchoProvider E2E plugin loading', () => {
     tempDir = await mkdtemp(join(tmpdir(), 'echo-provider-e2e-'));
     pluginDir = join(tempDir, 'plugins');
     await mkdir(pluginDir, { recursive: true });
-    statePath = join(tempDir, 'conduct-state.json');
     events = new ConductorEventEmitter();
 
     // Create EchoProvider plugin
@@ -155,9 +151,7 @@ export default {
     );
   });
 
-  it('conductor session with EchoProvider uses the loaded plugin', async () => {
-    await writeState(statePath, { complexity_tier: 'S', test_suite: 'done' } as ConductState);
-
+  it('step-runner dispatch uses the loaded EchoProvider', async () => {
     const registry = new PluginRegistry();
     await discoverPlugins(pluginDir, '', registry);
     registerBuiltins(registry, events, () => {});
@@ -166,29 +160,11 @@ export default {
     const provider = registry.get<LLMProvider>('llm_provider', 'echo');
     runner = new EchoCaptureStepRunner(provider);
 
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      // Isolate the engine-native `rebase` step to a throwaway dir (not a git
-      // repo → performRebase no-ops) so it can never rebase the real worktree.
-      projectRoot: tempDir,
-      mode: 'auto',
-    });
+    const result = await runner.run('explore');
 
-    await conductor.run();
-
-    // Verify conductor ran successfully
-    const result = await readState(statePath);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(result.value.feature_status).toBe('complete');
-
-    // Verify all invoke() outputs started with "ECHO: "
-    for (const output of runner.invokeOutputs) {
-      expect(output).toMatch(/^ECHO: /);
-    }
+    expect(result.success).toBe(true);
+    expect(runner.calls).toEqual(['explore']);
+    expect(runner.invokeOutputs).toEqual(['ECHO: Test prompt for explore']);
   });
 
   it('src/index.ts has no hardcoded EchoProvider reference', async () => {

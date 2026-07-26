@@ -57,6 +57,18 @@ const READY_STATE: ConductState = {
   test_suite: 'done',
 } as ConductState;
 
+const BUILD_ONLY_READY_STATE: ConductState = {
+  ...READY_STATE,
+  build_review: 'done',
+  wiring_check: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  retro: 'done',
+  rebase: 'done',
+  finish: 'done',
+} as ConductState;
+
 async function writeOperatorCreds(
   operatorDir: string,
   expiresAt: number,
@@ -120,7 +132,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = operatorDir;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeState(statePath, READY_STATE);
+    await writeState(statePath, BUILD_ONLY_READY_STATE);
   });
 
   afterEach(async () => {

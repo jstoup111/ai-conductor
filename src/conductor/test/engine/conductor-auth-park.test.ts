@@ -55,6 +55,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     } as never;
   }
 
+  function fullSuiteVerifierStub() {
+    return {
+      ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+      inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+    };
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'auth-park-unit-'));
     tokenDir = await mkdtemp(join(tmpdir(), 'auth-park-token-'));
@@ -113,6 +120,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn: vi.fn(async () => {}),
       config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
     });
 
     const park = await (conductor as any).parkOnAuthFailure({
@@ -798,6 +806,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn,
       config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
     });
 
     const park = await (conductor as any).parkOnAuthFailure({
@@ -950,9 +959,13 @@ describe('conductor auth-park: daemon-token mode', () => {
         },
       ]);
       const buildAttempts: number[] = [];
+      const tailSteps: string[] = [];
       const runner: StepRunner = {
         run: vi.fn(async (step, _state, options) => {
-          if (step !== 'build') return { success: true };
+          if (step !== 'build') {
+            tailSteps.push(step);
+            return { success: false, output: 'auth-park test tail barrier' };
+          }
           buildAttempts.push(options?.attempt ?? -1);
           if (buildAttempts.length === 1) {
             return {
@@ -976,16 +989,30 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn: vi.fn(async () => {}),
         config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
         providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
 
       expect(readiness).toHaveBeenCalledTimes(2);
       expect(buildAttempts).toEqual([1, 1]);
+      expect(tailSteps).not.toContain('finish');
+      expect(tailSteps.length).toBeGreaterThan(0);
     },
   );
 
   it('parks a selected-source Codex completion rejection without provider fallback', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build_review: 'done',
+      wiring_check: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState);
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'ready',
     });
@@ -1079,6 +1106,21 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(parked).toHaveLength(0);
   });
 
+  it('uses the injected full-suite verifier at the aggregate test boundary', async () => {
+    const fullSuiteVerifier = fullSuiteVerifierStub();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fullSuiteVerifier,
+    });
+
+    await (conductor as any).runTestSuiteStep();
+
+    expect(fullSuiteVerifier.ensure).toHaveBeenCalledTimes(1);
+  });
+
   it('serial Codex API-key rejection halts once without hot-resuming after an environment change', async () => {
     const readiness = vi.fn();
     const runtimes = new ProviderRuntimeSet([
@@ -1092,7 +1134,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     ]);
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         process.env.CODEX_API_KEY = 'replacement-must-not-hot-resume';
         return {
           success: false,
@@ -1103,6 +1145,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       }),
     };
     const halts: string[] = [];
+    const fullSuiteVerifier = fullSuiteVerifierStub();
     events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt') halts.push(event.reason);
     });
@@ -1117,6 +1160,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn: vi.fn(async () => {}),
       config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier,
     });
 
     await conductor.run();
@@ -1126,6 +1170,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(halts).toHaveLength(1);
     expect(halts[0]).toContain('restart the daemon');
     expect(halts[0]).not.toContain('replacement-must-not-hot-resume');
+    expect(fullSuiteVerifier.ensure).not.toHaveBeenCalled();
   });
 
   it('authFailure in daemon-token mode parks on the daemon token path (not operator credentials)', async () => {
@@ -1135,7 +1180,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
         if (buildAttempts === 1) {
           buildAttempt1Failed = true;
@@ -1192,6 +1237,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1211,7 +1257,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     let buildAttempts = 0;
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
         if (buildAttempts === 1) {
           return { success: false, authFailure: true } as AuthResult;
@@ -1264,6 +1310,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1283,7 +1330,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
         tokensSeenByBuild.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);
         if (buildAttempts === 1) {
@@ -1337,6 +1384,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1354,7 +1402,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   it('authFailure park: non-empty content check (mtime alone is insufficient)', async () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
       }),
     };
@@ -1404,6 +1452,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1419,7 +1468,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   it('authFailure park timeout: HALT names daemon token path and re-mint instructions (not operator path)', async () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
       }),
     };
@@ -1460,6 +1509,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       const haltPath = join(dir, '.pipeline/HALT');
@@ -1491,7 +1541,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   it('park timeout HALT: does not mention expiresAt or retries exhausted (daemon-token specific)', async () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
       }),
     };
@@ -1531,6 +1581,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       const haltPath = join(dir, '.pipeline/HALT');
@@ -1564,7 +1615,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     let buildAttempts = 0;
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
         if (buildAttempts === 1) {
           return { success: false, authFailure: true } as AuthResult;
@@ -1617,6 +1668,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1647,7 +1699,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     const runner: StepRunner = {
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
-        if (step !== 'build') return { success: true };
+        if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
         if (buildAttempts === 1) {
           buildAttempt1Failed = true;
@@ -1704,6 +1756,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();

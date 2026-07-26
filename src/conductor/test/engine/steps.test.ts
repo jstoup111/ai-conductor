@@ -234,7 +234,7 @@ describe('engine/steps', () => {
       expect(s.name).toBe('rebase');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('structural');
-      expect(s.prerequisites).toEqual(['manual_test']);
+      expect(s.prerequisites).toEqual(['retro']);
       expect(s.skippableForTiers).toEqual([]);
       expect(s.isCheckpoint).toBe(false);
       expect(s.loopGate).toBe(true);
@@ -478,8 +478,8 @@ describe('engine/steps', () => {
       }).toEqual({ testSuite: ['wiring_check'], manualTest: ['test_suite'] });
     });
 
-    it('rebase requires manual_test', () => {
-      expect(getPrerequisites('rebase')).toEqual(['manual_test']);
+    it('rebase requires the joined validation tail through retro', () => {
+      expect(getPrerequisites('rebase')).toEqual(['retro']);
     });
 
     it('finish requires rebase', () => {
