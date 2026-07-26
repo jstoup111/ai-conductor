@@ -28,6 +28,12 @@ self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#
 fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
 task ids and commit hooks.)
 
+**Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
+integration, and end-to-end tests run the real internal flow with faithful fakes at every
+third-party boundary. Only explicitly named, opt-in smoke tests may call real LLMs or other
+external services; the default test suite and CI exclude them. `HARNESS.md` defines the full
+test-isolation policy.
+
 ## Daemon Operations Safety (Operator / Claude)
 
 When operating a running daemon — parking, cleaning up, resuming, or "finishing"
