@@ -40,7 +40,8 @@ export function createFeatureDaemonLogger(
   baseLog: (message: string) => void,
 ): (message: string) => void {
   const featureTag = formatDaemonFeatureTag(featureSlug);
-  return (message) => baseLog(`${featureTag} ${message}`);
+  return (message) =>
+    baseLog(message.startsWith(`${featureTag} `) ? message : `${featureTag} ${message}`);
 }
 
 /** Absolute path to a repo's daemon activity log. */

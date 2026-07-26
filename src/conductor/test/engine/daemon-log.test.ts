@@ -252,6 +252,24 @@ describe('engine/daemon-log', () => {
       log('global scan complete');
       expect(lines).toEqual(['global scan complete']);
     });
+
+    it('does not duplicate its context while global and feature lines alternate', () => {
+      const lines: string[] = [];
+      const log = (line: string) => lines.push(line);
+      const featureLog = createFeatureDaemonLogger('feature-a', log);
+
+      log('global scan started');
+      featureLog('setup complete');
+      log('global scan complete');
+      featureLog('[feature-a] retrying build');
+
+      expect(lines).toEqual([
+        'global scan started',
+        '[feature-a] setup complete',
+        'global scan complete',
+        '[feature-a] retrying build',
+      ]);
+    });
   });
 
   describe('tailDaemonLog (negative paths)', () => {
