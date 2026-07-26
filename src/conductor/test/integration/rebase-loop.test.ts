@@ -82,6 +82,15 @@ const FRONT_DONE_M: ConductState = {
   acceptance_specs: 'skipped',
 };
 
+const validShipmentEvidence = async () => ({
+  kind: 'valid' as const,
+  slug: 'test-feature',
+  pr: 'https://github.com/org/repo/pull/1',
+  recordPath: '.docs/shipped/test-feature.md',
+  hash: 'verified',
+  commit: 'verified',
+});
+
 describe('integration/rebase-loop', () => {
   let dir: string;
   let statePath: string;
@@ -190,6 +199,7 @@ describe('integration/rebase-loop', () => {
       fromStep: 'build',
       maxRetries: 1,
       git: fakeGit,
+      shipmentEvidence: validShipmentEvidence,
     });
   }
 

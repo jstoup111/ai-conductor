@@ -156,6 +156,14 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
       sessionStartedAt: Date.now() - 60_000,
       daemon: true,
       isHeadPushed: async () => true,
+      shipmentEvidence: async (input) => ({
+        kind: 'valid',
+        slug: input.slug,
+        pr: input.implementationPr,
+        recordPath: `.docs/shipped/${input.slug}.md`,
+        hash: 'fixture-hash',
+        commit: input.candidateCommit,
+      }),
       // Not on `CompletionContext` yet (Task 3 / Task 8) — cast through `any`
       // so the test still compiles against today's narrower interface while
       // exercising the seam the implementation will add.

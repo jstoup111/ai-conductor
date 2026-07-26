@@ -238,6 +238,14 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       daemon,
       config: { build_review: { enabled: true } },
       git: fakeGit,
+      shipmentEvidence: async (input) => ({
+        kind: 'valid',
+        slug: input.slug,
+        pr: input.implementationPr,
+        recordPath: `.docs/shipped/${input.slug}.md`,
+        hash: 'fixture-hash',
+        commit: input.candidateCommit,
+      }),
       fullSuiteVerifier: {
         ensure: async () => {
           onFullSuiteEnsure?.();

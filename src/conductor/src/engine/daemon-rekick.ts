@@ -15,7 +15,7 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
-import { checkMergedPrGuard } from './merged-pr-guard.js';
+import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
@@ -334,20 +334,17 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shi
  * re-verifies against the new base instead of the stale one. One-shot: the
  * sentinel is consumed (deleted) whether or not the rebase conflicts.
  *
- * If `prUrl` is provided, checks if the recorded PR is merged (via `checkMergedPrGuard`)
- * BEFORE rebasing. On MERGED, returns `'already_shipped'` without rebasing — the
- * feature has already landed out-of-band.
+ * If `prUrl` is provided, validates the merged PR's durable record BEFORE
+ * rebasing. Only a valid record on merged history returns `'already_shipped'`.
  *
  *   'skipped'  — no sentinel; caller proceeds normally (no rebase forced).
  *   'rebased'  — rebase ran (noop/clean/changelog-resolved); caller resumes the
  *                gate loop. FR-5 kickbacks (build/manual_test) are written by
  *                `applyRebaseVerdicts` so the loop re-verifies changed code.
- *   'halted'   — the rebase re-conflicted on the new base; 9.0's HALT was
- *                written and the rebase left paused. Caller MUST re-park (skip
- *                `conductor.run()`); FR-9 bounds re-kick at this SHA.
- *   'already_shipped' — the recorded PR is merged out-of-band; no rebase ran, no
- *                       further steps dispatched. Caller writes synthetic ship
- *                       markers, marks processed, and returns (ADR-2026-07-09-mid-run-merged-pr-guard).
+ *   'halted'   — a rebase conflict or durable-evidence gap wrote HALT. Caller
+ *                preserves the worktree and skips `conductor.run()`.
+ *   'already_shipped' — merged history evidence is valid; no rebase ran and
+ *                       the caller routes through its normal completion boundary.
  *
  * Reuses the exact 9.0 rebase primitives (`performRebase`/`applyRebaseVerdicts`/
  * `emitRebaseEvent`/`writeHalt`) — it never reimplements the rebase logic.
@@ -386,6 +383,10 @@ export async function resumeRebaseFirst(opts: {
   runGh?: GhRunner;
   /** Optional: recorded PR URL for merged-PR guard. Absent → no guard. */
   prUrl?: string;
+  /** Feature identity required for strict durable-evidence verification. */
+  slug?: string;
+  /** Test seam; production uses the strict merged-history verifier. */
+  verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -394,19 +395,25 @@ export async function resumeRebaseFirst(opts: {
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
 
-  // ADR-2026-07-09-mid-run-merged-pr-guard: check if the recorded PR is merged
-  // BEFORE rebasing. If merged, return 'already_shipped' — the feature landed
-  // out-of-band and needs no further work.
-  if (opts.runGh && opts.prUrl) {
-    const guardVerdict = await checkMergedPrGuard(
-      opts.runGh,
-      opts.worktreePath,
-      opts.prUrl,
-      opts.log,
-    );
-    if (guardVerdict === 'merged') {
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: recorded PR already merged out-of-band`);
+  // Check and verify merged history BEFORE rebasing. Merge state alone is never
+  // completion evidence: every refusal and unavailable dependency parks the
+  // worktree without writing synthetic success markers.
+  if (opts.prUrl && !opts.slug) {
+    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete');
+    return 'halted';
+  }
+  if (opts.runGh && opts.prUrl && opts.slug) {
+    const verifiedMerge = await (opts.verifyMergedShipment
+      ? opts.verifyMergedShipment()
+      : verifyMergedPrShipment(opts.runGh, opts.worktreePath, opts.prUrl, opts.slug));
+    if (verifiedMerge.kind === 'verified') {
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: merged shipment evidence verified`);
       return 'already_shipped';
+    }
+    if (verifiedMerge.kind === 'halt') {
+      await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`);
+      return 'halted';
     }
   }
 

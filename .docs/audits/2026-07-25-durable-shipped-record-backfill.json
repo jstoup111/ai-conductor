@@ -1,0 +1,2957 @@
+{
+  "complete": true,
+  "startedAt": "2026-07-26T09:36:57.384Z",
+  "completedAt": "2026-07-26T09:40:17.764Z",
+  "rows": [
+    {
+      "sourcePath": ".docs/plans/2026-03-30-technical-assessment.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-03-30-technical-assessment.md",
+        "slug": "2026-03-30-technical-assessment"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-03-30-technical-assessment.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-12-phase-1-story-catalog.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-04-12-phase-1-story-catalog.md",
+        "slug": "2026-04-12-phase-1-story-catalog"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md",
+        "slug": "2026-04-12-phase-3-conductor-rewrite"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-04-12-phase-2-language-evaluation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-12-phase-4-skill-overrides.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-04-12-phase-4-skill-overrides.md",
+        "slug": "2026-04-12-phase-4-skill-overrides"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-18-runmode-interactive-flag.md",
+      "sourceKind": "plan",
+      "classification": "contradictory",
+      "plan": {
+        "path": ".docs/plans/2026-04-18-runmode-interactive-flag.md",
+        "slug": "2026-04-18-runmode-interactive-flag"
+      },
+      "reason": "extant evidence conflicts: shipped-record-pr-mismatch",
+      "implementationPr": {
+        "number": 56,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/56",
+        "mergedAt": "2026-04-19T16:17:25Z",
+        "headSha": "889b6925db01d804cd41267c3dc3fe283e8f873a"
+      },
+      "verdict": {
+        "kind": "refusal",
+        "code": "shipped-record-pr-mismatch",
+        "expected": "https://github.com/jstoup111/ai-conductor/pull/56",
+        "observed": "https://github.com/jstoup111/ai-conductor/pull/201"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-19-wave-b-conditional-parallel.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-04-19-wave-b-conditional-parallel.md",
+        "slug": "2026-04-19-wave-b-conditional-parallel"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-19-wave-b-plugin-loader.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-04-19-wave-b-plugin-loader.md",
+        "slug": "2026-04-19-wave-b-plugin-loader"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-19-wave-b-recorder-provider.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-04-19-wave-b-recorder-provider.md",
+        "slug": "2026-04-19-wave-b-recorder-provider"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-04-19-wave-b-ui-renderer.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-04-19-wave-b-ui-renderer.md",
+        "slug": "2026-04-19-wave-b-ui-renderer"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-05-01-wave-c-json-stdout-subscriber.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-05-01-wave-c-json-stdout-subscriber.md",
+        "slug": "2026-05-01-wave-c-json-stdout-subscriber"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-05-01-wave-c-telemetry-event-log.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-05-01-wave-c-telemetry-event-log.md",
+        "slug": "2026-05-01-wave-c-telemetry-event-log"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md",
+        "slug": "2026-06-25-phase-9.0-rebase-on-latest"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-25-phase-9.0-rebase-on-latest.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-25-phase-9.1-retro-signal-brain-memory.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.1-retro-signal-brain-memory.md",
+        "slug": "2026-06-25-phase-9.1-retro-signal-brain-memory"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+        "slug": "2026-06-25-phase-9.1-retro-signal-engineer-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-25-phase-9.1-retro-signal-engineer-memory.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md",
+        "slug": "2026-06-25-phase-9.2-registry-project-creation"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-25-phase-9.2-registry-project-creation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-25-phase-9.3-supervisor-engineer.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.3-supervisor-engineer.md",
+        "slug": "2026-06-25-phase-9.3-supervisor-engineer"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md",
+        "slug": "2026-06-26-phase-9.3-engineer-redesign"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-26-phase-9.3-engineer-redesign.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-27-phase-9.3-engineer-cleanup.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-27-phase-9.3-engineer-cleanup.md",
+        "slug": "2026-06-27-phase-9.3-engineer-cleanup"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 91,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/91",
+        "mergedAt": "2026-06-27T16:15:41Z",
+        "headSha": "5d918271dc18bf178a4f69d15ce1dc60267be63a"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-27-phase-9.3-engineer-cleanup",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/91",
+        "recordPath": ".docs/shipped/2026-06-27-phase-9.3-engineer-cleanup.md",
+        "hash": "21a8f7ddf7d3a8b80bb3f4bc69e4896897cc8ac0fc101c4b1407ae4fe700a629",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md",
+        "slug": "2026-06-27-phase-9.3b-github-intake-writeback"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-27-phase-9.3b-github-intake-writeback.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-28-daemon-halt-reconciliation.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-daemon-halt-reconciliation.md",
+        "slug": "2026-06-28-daemon-halt-reconciliation"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-28-daemon-halt-reconciliation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-28-otel-observability.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-otel-observability.md",
+        "slug": "2026-06-28-otel-observability"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-28-otel-observability.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-daemon-pr-labels.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-daemon-pr-labels.md",
+        "slug": "2026-06-29-daemon-pr-labels"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-29-daemon-pr-labels.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-daemon-tmux-supervisor.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-daemon-tmux-supervisor.md",
+        "slug": "2026-06-29-daemon-tmux-supervisor"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-mermaid-renderer.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-mermaid-renderer.md",
+        "slug": "2026-06-29-mermaid-renderer"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-29-mermaid-renderer.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md",
+        "slug": "2026-06-29-pluggable-memory-1a-durable-default-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-29-pluggable-memory-source.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-pluggable-memory-1b-provider-framework.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-pluggable-memory-1b-provider-framework.md",
+        "slug": "2026-06-29-pluggable-memory-1b-provider-framework"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-29-rebase-resolution-skill.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-rebase-resolution-skill.md",
+        "slug": "2026-06-29-rebase-resolution-skill"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-29-rebase-resolution-skill.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 153,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "mergedAt": "2026-06-29T21:29:29Z",
+        "headSha": "d54bfeea96792c4f66430c075cf683cc1bde48c8"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-29-rebase-resolution-skill",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "recordPath": ".docs/shipped/2026-06-29-rebase-resolution-skill.md",
+        "hash": "d55faaba10f2e608910b9c34f1875921e1ed29b0652781393aca0e2bdcceff23",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-30-background-intake-conduct-loop.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-background-intake-conduct-loop.md",
+        "slug": "2026-06-30-background-intake-conduct-loop"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-30-background-intake-conduct-loop.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 382,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "mergedAt": "2026-07-07T01:39:33Z",
+        "headSha": "84a2274b8ab28cfc7e7b2033354c4ca73017ecc0"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-30-background-intake-conduct-loop",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "recordPath": ".docs/shipped/2026-06-30-background-intake-conduct-loop.md",
+        "hash": "b1cbbbedc02b5e3fe796fc4e3668204d7016b26c4a9105e9f80968213bf2bd2d",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-30-daemon-owner-gate.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-daemon-owner-gate.md",
+        "slug": "2026-06-30-daemon-owner-gate"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-30-daemon-owner-gate.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-06-30-engineer-worktree-isolation.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-engineer-worktree-isolation.md",
+        "slug": "2026-06-30-engineer-worktree-isolation"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-30-engineer-worktree-isolation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-01-self-host-guardrails-phase6-wiring.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-01-self-host-guardrails-phase6-wiring.md",
+        "slug": "2026-07-01-self-host-guardrails-phase6-wiring"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-daemon-auto-restart-stale-engine.md",
+        "slug": "2026-07-03-daemon-auto-restart-stale-engine"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md",
+        "slug": "2026-07-03-daemon-issue-priority-scheduling"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-03-daemon-issue-priority-scheduling.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-03-intake-marker-plan-stem-keying.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-intake-marker-plan-stem-keying.md",
+        "slug": "2026-07-03-intake-marker-plan-stem-keying"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+        "slug": "2026-07-03-surface-owner-gated-specs-dashboard-status"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-03-surface-owner-gated-specs-dashboard-status.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-05-changelog-migration-block-enforcement.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-07-05-changelog-migration-block-enforcement.md",
+        "slug": "2026-07-05-changelog-migration-block-enforcement"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-05-rekick-gated-rebase-resolution.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-05-rekick-gated-rebase-resolution.md",
+        "slug": "2026-07-05-rekick-gated-rebase-resolution"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-07-evidence-gate-task-id-grammar.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-07-evidence-gate-task-id-grammar.md",
+        "slug": "2026-07-07-evidence-gate-task-id-grammar"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-08-gate-writeback-skip-notice-dedup.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-08-gate-writeback-skip-notice-dedup.md",
+        "slug": "2026-07-08-gate-writeback-skip-notice-dedup"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-09-daemon-merged-pr-guard-on-retry.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-09-daemon-merged-pr-guard-on-retry.md",
+        "slug": "2026-07-09-daemon-merged-pr-guard-on-retry"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-10-priority-banded-intake-claim.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-10-priority-banded-intake-claim.md",
+        "slug": "2026-07-10-priority-banded-intake-claim"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-10-stale-engine-residuals-369.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-10-stale-engine-residuals-369.md",
+        "slug": "2026-07-10-stale-engine-residuals-369"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-12-rtk-hook-preservation.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-07-12-rtk-hook-preservation.md",
+        "slug": "2026-07-12-rtk-hook-preservation"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 615,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/615",
+        "mergedAt": "2026-07-13T03:56:45Z",
+        "headSha": "6bbdf1b30c3b9fc95f5281dd40b95c252ea20d0c"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-07-12-rtk-hook-preservation",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/615",
+        "recordPath": ".docs/shipped/2026-07-12-rtk-hook-preservation.md",
+        "hash": "f316d00be4263b748b6f0f9bdd545185c6094b0535c342fdbd0f311b7535ee6d",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-12-wiring-reachability-gate.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-07-12-wiring-reachability-gate.md",
+        "slug": "2026-07-12-wiring-reachability-gate"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 650,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/650",
+        "mergedAt": "2026-07-13T22:30:22Z",
+        "headSha": "c596939397931dc90a5d6971b07718dbffa1e82c"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-07-12-wiring-reachability-gate",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/650",
+        "recordPath": ".docs/shipped/2026-07-12-wiring-reachability-gate.md",
+        "hash": "d98feb1fafc1b33fdcfc950d363e5d942ecd32cc77a25905f35fbb086d250bcf",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-20-engine-gc-self-eviction-guard.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-20-engine-gc-self-eviction-guard.md",
+        "slug": "2026-07-20-engine-gc-self-eviction-guard"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-20-intake-criteria-enforcement.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-07-20-intake-criteria-enforcement.md",
+        "slug": "2026-07-20-intake-criteria-enforcement"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-21-sidecar-stamp-reachability-guard.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-21-sidecar-stamp-reachability-guard.md",
+        "slug": "2026-07-21-sidecar-stamp-reachability-guard"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-22-daemon-suppress-other-owner-log-noise.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-22-daemon-suppress-other-owner-log-noise.md",
+        "slug": "2026-07-22-daemon-suppress-other-owner-log-noise"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-22-idea-scoped-land-artifact-resolution.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-22-idea-scoped-land-artifact-resolution.md",
+        "slug": "2026-07-22-idea-scoped-land-artifact-resolution"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-23-model-and-effort-resolution-provider-aware-902.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-23-model-and-effort-resolution-provider-aware-902.md",
+        "slug": "2026-07-23-model-and-effort-resolution-provider-aware-902"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-24-per-step-provider-routing-927.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-24-per-step-provider-routing-927.md",
+        "slug": "2026-07-24-per-step-provider-routing-927"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-24-per-step-provider-routing-927.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-builtin-provider-installation-readiness-901.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-builtin-provider-installation-readiness-901.md",
+        "slug": "2026-07-25-builtin-provider-installation-readiness-901"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-codex-auth-sandbox-permission-readiness-905.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-codex-auth-sandbox-permission-readiness-905.md",
+        "slug": "2026-07-25-codex-auth-sandbox-permission-readiness-905"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-durable-shipped-record-enforcement-and-backfill-916-936.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-durable-shipped-record-enforcement-and-backfill-916-936.md",
+        "slug": "2026-07-25-durable-shipped-record-enforcement-and-backfill-916-936"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-first-class-codex-harness-parity-904.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-first-class-codex-harness-parity-904.md",
+        "slug": "2026-07-25-first-class-codex-harness-parity-904"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-full-suite-verification-gate-940.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-full-suite-verification-gate-940.md",
+        "slug": "2026-07-25-full-suite-verification-gate-940"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-25-full-suite-verification-gate.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-maintain-documentation.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-maintain-documentation.md",
+        "slug": "2026-07-25-maintain-documentation"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/2026-07-25-tdd-is-too-literal-933.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-tdd-is-too-literal-933.md",
+        "slug": "2026-07-25-tdd-is-too-literal-933"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/acceptance-specs-halts-when-the-red-evidence-marke.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/acceptance-specs-halts-when-the-red-evidence-marke.md",
+        "slug": "acceptance-specs-halts-when-the-red-evidence-marke"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/add-a-judgement-gate-at-the-build-manual-test-seam.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/add-a-judgement-gate-at-the-build-manual-test-seam.md",
+        "slug": "add-a-judgement-gate-at-the-build-manual-test-seam"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/audit-trail-write-completeness-for-retro-under-fre.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/audit-trail-write-completeness-for-retro-under-fre.md",
+        "slug": "audit-trail-write-completeness-for-retro-under-fre"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/auto-park-decisions-must-be-contradiction-checked-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-park-decisions-must-be-contradiction-checked-.md",
+        "slug": "auto-park-decisions-must-be-contradiction-checked-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/auto-park-empty-missing-plan-check-false-positives.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-park-empty-missing-plan-check-false-positives.md",
+        "slug": "auto-park-empty-missing-plan-check-false-positives"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/auto-park-markers-written-to-the-worktree-s-daemon.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-park-markers-written-to-the-worktree-s-daemon.md",
+        "slug": "auto-park-markers-written-to-the-worktree-s-daemon"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/auto-resolve-open-pr-conflicts.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-resolve-open-pr-conflicts.md",
+        "slug": "auto-resolve-open-pr-conflicts"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-04-auto-resolve-open-pr-conflicts.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/autoheal-path-corroboration-rejects-valid-build-co.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/autoheal-path-corroboration-rejects-valid-build-co.md",
+        "slug": "autoheal-path-corroboration-rejects-valid-build-co"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/bin-conduct-unknown-subcommand-guard.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/bin-conduct-unknown-subcommand-guard.md",
+        "slug": "bin-conduct-unknown-subcommand-guard"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/block-edits-to-docs-spec-artifacts-during-build-an.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/block-edits-to-docs-spec-artifacts-during-build-an.md",
+        "slug": "block-edits-to-docs-spec-artifacts-during-build-an"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/build-auth-token-check-and-classify.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-auth-token-check-and-classify.md",
+        "slug": "build-auth-token-check-and-classify"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-22-build-auth-token-check-and-classify.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/build-dispatch-can-start-with-current-task-none-so.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-dispatch-can-start-with-current-task-none-so.md",
+        "slug": "build-dispatch-can-start-with-current-task-none-so"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/build-progress-1-based-display.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-progress-1-based-display.md",
+        "slug": "build-progress-1-based-display"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/build-progress-marker-stays-0-n-for-the-whole-buil.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/build-progress-marker-stays-0-n-for-the-whole-buil.md",
+        "slug": "build-progress-marker-stays-0-n-for-the-whole-buil"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/build-review-grades-plan-vs-diff-against-a-stale-o.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-review-grades-plan-vs-diff-against-a-stale-o.md",
+        "slug": "build-review-grades-plan-vs-diff-against-a-stale-o"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/build-stall-remediation-skips-no-task-progress.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-stall-remediation-skips-no-task-progress.md",
+        "slug": "build-stall-remediation-skips-no-task-progress"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/builds-stall-when-work-lands-without-task-trailer-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/builds-stall-when-work-lands-without-task-trailer-.md",
+        "slug": "builds-stall-when-work-lands-without-task-trailer-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/canonical-tracker-client-seam-with-per-backend-tra.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/canonical-tracker-client-seam-with-per-backend-tra.md",
+        "slug": "canonical-tracker-client-seam-with-per-backend-tra"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/ci-fix-resolver-autofix.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/ci-fix-resolver-autofix.md",
+        "slug": "ci-fix-resolver-autofix"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/ci-test-suite-workflow.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/ci-test-suite-workflow.md",
+        "slug": "ci-test-suite-workflow"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/commit-msg-hook-rejects-valid-task-ids-when-task-s.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/commit-msg-hook-rejects-valid-task-ids-when-task-s.md",
+        "slug": "commit-msg-hook-rejects-valid-task-ids-when-task-s"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/condense-readme-relocate-docs.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/condense-readme-relocate-docs.md",
+        "slug": "condense-readme-relocate-docs"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/conduct-loop-exits-silently-between-steps-no-termi.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/conduct-loop-exits-silently-between-steps-no-termi.md",
+        "slug": "conduct-loop-exits-silently-between-steps-no-termi"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/conductor-suite-fork-determinism.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/conductor-suite-fork-determinism.md",
+        "slug": "conductor-suite-fork-determinism"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/conductor-test-suite-leaks-a-real-pipeline-halt-in.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/conductor-test-suite-leaks-a-real-pipeline-halt-in.md",
+        "slug": "conductor-test-suite-leaks-a-real-pipeline-halt-in"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/content-aware-shipped-work-dedup-never-re-dispatch.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/content-aware-shipped-work-dedup-never-re-dispatch.md",
+        "slug": "content-aware-shipped-work-dedup-never-re-dispatch"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-api-rate-limit-episode-cascades-into-mass-h.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-api-rate-limit-episode-cascades-into-mass-h.md",
+        "slug": "daemon-api-rate-limit-episode-cascades-into-mass-h"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-auto-resolve-gitignored-rebase-conflicts.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/daemon-auto-resolve-gitignored-rebase-conflicts.md",
+        "slug": "daemon-auto-resolve-gitignored-rebase-conflicts"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-build-agents-leak-edits-into-the-main-check.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-build-agents-leak-edits-into-the-main-check.md",
+        "slug": "daemon-build-agents-leak-edits-into-the-main-check"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-build-start-base-refresh.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-build-start-base-refresh.md",
+        "slug": "daemon-build-start-base-refresh"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-event-driven-wake-for-parked-halted-feature.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-event-driven-wake-for-parked-halted-feature.md",
+        "slug": "daemon-event-driven-wake-for-parked-halted-feature"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-false-ship-guard.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-false-ship-guard.md",
+        "slug": "daemon-false-ship-guard"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-halts-a-build-that-is-making-forward-progre.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-halts-a-build-that-is-making-forward-progre.md",
+        "slug": "daemon-halts-a-build-that-is-making-forward-progre"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-lifecycle-controls.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-lifecycle-controls.md",
+        "slug": "daemon-lifecycle-controls"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-04-daemon-lifecycle-controls.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-lock-exclusivity-pidfile-boot-refusal-and-p.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-lock-exclusivity-pidfile-boot-refusal-and-p.md",
+        "slug": "daemon-lock-exclusivity-pidfile-boot-refusal-and-p"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-logs-surface-kickback-steps-visibly.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-logs-surface-kickback-steps-visibly.md",
+        "slug": "daemon-logs-surface-kickback-steps-visibly"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-mode-route-halt-user-input-required-through.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-mode-route-halt-user-input-required-through.md",
+        "slug": "daemon-mode-route-halt-user-input-required-through"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-releases-the-lock-only-after-draining-in-fl.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-releases-the-lock-only-after-draining-in-fl.md",
+        "slug": "daemon-releases-the-lock-only-after-draining-in-fl"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-restart-leaves-the-daemon-stopped-when-orig.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-restart-leaves-the-daemon-stopped-when-orig.md",
+        "slug": "daemon-restart-leaves-the-daemon-stopped-when-orig"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-self-host-guardrails.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-self-host-guardrails.md",
+        "slug": "daemon-self-host-guardrails"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/daemon-stale-engine-origin-advance.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-stale-engine-origin-advance.md",
+        "slug": "daemon-stale-engine-origin-advance"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/decide-artifact-coherence-check.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-artifact-coherence-check.md",
+        "slug": "decide-artifact-coherence-check"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-22-decide-artifact-coherence-check.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/decide-pipeline-restructure.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-pipeline-restructure.md",
+        "slug": "decide-pipeline-restructure"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-29-decide-pipeline-restructure.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/demote-task-stamping-to-telemetry.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/demote-task-stamping-to-telemetry.md",
+        "slug": "demote-task-stamping-to-telemetry"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/dependency-ordered-intake-and-dispatch.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/dependency-ordered-intake-and-dispatch.md",
+        "slug": "dependency-ordered-intake-and-dispatch"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-03-dependency-ordered-intake-and-dispatch.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/deterministic-evidence-attribution.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/deterministic-evidence-attribution.md",
+        "slug": "deterministic-evidence-attribution"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/drop-check-harness-config-consumer-claude-md-harne.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/drop-check-harness-config-consumer-claude-md-harne.md",
+        "slug": "drop-check-harness-config-consumer-claude-md-harne"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/emit-intra-step-build-progress-and-stall-as-events.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/emit-intra-step-build-progress-and-stall-as-events.md",
+        "slug": "emit-intra-step-build-progress-and-stall-as-events"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engine-invoked-task-attribution-494-freezes-curren.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engine-invoked-task-attribution-494-freezes-curren.md",
+        "slug": "engine-invoked-task-attribution-494-freezes-curren"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engine-must-invoke-task-start-done-at-subagent-dis.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engine-must-invoke-task-start-done-at-subagent-dis.md",
+        "slug": "engine-must-invoke-task-start-done-at-subagent-dis"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engine-rebuild-content-cache.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engine-rebuild-content-cache.md",
+        "slug": "engine-rebuild-content-cache"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engineer-claim-delivery-guard.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-claim-delivery-guard.md",
+        "slug": "engineer-claim-delivery-guard"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engineer-cli-subcommand-help-executes-the-command.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-cli-subcommand-help-executes-the-command.md",
+        "slug": "engineer-cli-subcommand-help-executes-the-command"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engineer-handoff-writeback-gh-enoent.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-handoff-writeback-gh-enoent.md",
+        "slug": "engineer-handoff-writeback-gh-enoent"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+        "slug": "engineer-unclaim-requeue-verb-stale-claimed-ledger"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-22-engineer-unclaim-requeue-verb-stale-claimed-ledger.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/escalation-ladder-docs-cumulative-bump.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/escalation-ladder-docs-cumulative-bump.md",
+        "slug": "escalation-ladder-docs-cumulative-bump"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/evidence-gate-validates-provenance-proxies-not-whe.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/evidence-gate-validates-provenance-proxies-not-whe.md",
+        "slug": "evidence-gate-validates-provenance-proxies-not-whe"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/evidence-range-anchor-rung-engages-producer-writes.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/evidence-range-anchor-rung-engages-producer-writes.md",
+        "slug": "evidence-range-anchor-rung-engages-producer-writes"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/evidence-stamps-sync-to-task-status-rows-so-progre.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/evidence-stamps-sync-to-task-status-rows-so-progre.md",
+        "slug": "evidence-stamps-sync-to-task-status-rows-so-progre"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/expose-daemon-pause-resume-verbs.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/expose-daemon-pause-resume-verbs.md",
+        "slug": "expose-daemon-pause-resume-verbs"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/fable-front-of-funnel-decide.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fable-front-of-funnel-decide.md",
+        "slug": "fable-front-of-funnel-decide"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/fable-recovery-steps.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fable-recovery-steps.md",
+        "slug": "fable-recovery-steps"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/finish-force-with-lease-after-sanctioned-rebase.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/finish-force-with-lease-after-sanctioned-rebase.md",
+        "slug": "finish-force-with-lease-after-sanctioned-rebase"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/finish-should-rewrite-stale-needs-remediation-titl.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/finish-should-rewrite-stale-needs-remediation-titl.md",
+        "slug": "finish-should-rewrite-stale-needs-remediation-titl"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/finish-staleness-grep-never-matches-rebase-finish.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/finish-staleness-grep-never-matches-rebase-finish.md",
+        "slug": "finish-staleness-grep-never-matches-rebase-finish"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 596,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/596",
+        "mergedAt": "2026-07-12T17:10:35Z",
+        "headSha": "469cd6f04b9e3e2756d27d90939603514eeb4a78"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "finish-staleness-grep-never-matches-rebase-finish",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/596",
+        "recordPath": ".docs/shipped/finish-staleness-grep-never-matches-rebase-finish.md",
+        "hash": "817b892f499f82c20ac6218e1555097172e555334a164e4327d9cb5482e86670",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/finish-step-completion-becomes-engine-machinery-re.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/finish-step-completion-becomes-engine-machinery-re.md",
+        "slug": "finish-step-completion-becomes-engine-machinery-re"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
+        "slug": "finish-step-fails-try-1-on-every-daemon-ship-skill"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 427,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/427",
+        "mergedAt": "2026-07-08T11:47:00Z",
+        "headSha": "325593fae9d5b91229fb1ac5318402baa053cbca"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "finish-step-fails-try-1-on-every-daemon-ship-skill",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/427",
+        "recordPath": ".docs/shipped/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
+        "hash": "35d584d266a696cd7cff74b2df1e110969727d33a9c762631fdcb848d1a7b638",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/fix-400-stale-engine-respawn-in-place-stacks-daemo.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fix-400-stale-engine-respawn-in-place-stacks-daemo.md",
+        "slug": "fix-400-stale-engine-respawn-in-place-stacks-daemo"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/fixture-portability-guard-exempts-git-init-bare.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fixture-portability-guard-exempts-git-init-bare.md",
+        "slug": "fixture-portability-guard-exempts-git-init-bare"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/flow-eval-harness.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/flow-eval-harness.md",
+        "slug": "flow-eval-harness"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/flow-examples.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/flow-examples.md",
+        "slug": "flow-examples"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/fresh-build-dispatch-halts-immediately-with-attrib.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fresh-build-dispatch-halts-immediately-with-attrib.md",
+        "slug": "fresh-build-dispatch-halts-immediately-with-attrib"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/fresh-session-per-step.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/fresh-session-per-step.md",
+        "slug": "fresh-session-per-step"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/gate-step-completion-validates-against-code-state-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/gate-step-completion-validates-against-code-state-.md",
+        "slug": "gate-step-completion-validates-against-code-state-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/generalize-source-ref-parsing-formatting-to-suppor.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/generalize-source-ref-parsing-formatting-to-suppor.md",
+        "slug": "generalize-source-ref-parsing-formatting-to-suppor"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/generated-model-table.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/generated-model-table.md",
+        "slug": "generated-model-table"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/global-dispatch-circuit-breaker-park-a-feature-aft.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/global-dispatch-circuit-breaker-park-a-feature-aft.md",
+        "slug": "global-dispatch-circuit-breaker-park-a-feature-aft"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/guard-bin-install-and-self-build-relink-against-wo.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/guard-bin-install-and-self-build-relink-against-wo.md",
+        "slug": "guard-bin-install-and-self-build-relink-against-wo"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/guard-engineer-signals-from-test-pollution.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/guard-engineer-signals-from-test-pollution.md",
+        "slug": "guard-engineer-signals-from-test-pollution"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/halt-monitor-filed-issues-never-auto-close-no-link.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/halt-monitor-filed-issues-never-auto-close-no-link.md",
+        "slug": "halt-monitor-filed-issues-never-auto-close-no-link"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/halt-pr-reconciliation-sweep-logs-on-delta-only-52.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/halt-pr-reconciliation-sweep-logs-on-delta-only-52.md",
+        "slug": "halt-pr-reconciliation-sweep-logs-on-delta-only-52"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/halt-prs-must-reliably-carry-needs-remediation-lab.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/halt-prs-must-reliably-carry-needs-remediation-lab.md",
+        "slug": "halt-prs-must-reliably-carry-needs-remediation-lab"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/handoff-push-spec-branch.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/handoff-push-spec-branch.md",
+        "slug": "handoff-push-spec-branch"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/harness-daemon-profile.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/harness-daemon-profile.md",
+        "slug": "harness-daemon-profile"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/inline-build-work-commits-unattributed-session-hoo.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/inline-build-work-commits-unattributed-session-hoo.md",
+        "slug": "inline-build-work-commits-unattributed-session-hoo"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/intake-claim-closed-issue-guard-and-brain-sweep.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-claim-closed-issue-guard-and-brain-sweep.md",
+        "slug": "intake-claim-closed-issue-guard-and-brain-sweep"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/intake-convention-issues-state-what-and-desired-ou.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-convention-issues-state-what-and-desired-ou.md",
+        "slug": "intake-convention-issues-state-what-and-desired-ou"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/intake-issue-pr-link-autoclose.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-issue-pr-link-autoclose.md",
+        "slug": "intake-issue-pr-link-autoclose"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/intake-issue-pr-link-autoclose.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/intake-issues-get-contradictory-duplicate-priority.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-issues-get-contradictory-duplicate-priority.md",
+        "slug": "intake-issues-get-contradictory-duplicate-priority"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/intake-only-enforcement.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-only-enforcement.md",
+        "slug": "intake-only-enforcement"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/isolate-daemon-build-auth-from-operator-oauth.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/isolate-daemon-build-auth-from-operator-oauth.md",
+        "slug": "isolate-daemon-build-auth-from-operator-oauth"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/issues-close-on-first-production-observation-of-th.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/issues-close-on-first-production-observation-of-th.md",
+        "slug": "issues-close-on-first-production-observation-of-th"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/judged-attribution-verdict-persistence.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/judged-attribution-verdict-persistence.md",
+        "slug": "judged-attribution-verdict-persistence"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/kickback-to-build-no-op-when-target-evidence-stamped.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/kickback-to-build-no-op-when-target-evidence-stamped.md",
+        "slug": "kickback-to-build-no-op-when-target-evidence-stamped"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/main-advance-re-kick-sweep-wipes-needs-human-decid.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/main-advance-re-kick-sweep-wipes-needs-human-decid.md",
+        "slug": "main-advance-re-kick-sweep-wipes-needs-human-decid"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/make-daemon-build-push-pr-timing-a-configurable-st.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/make-daemon-build-push-pr-timing-a-configurable-st.md",
+        "slug": "make-daemon-build-push-pr-timing-a-configurable-st"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/manual-test-auto-mode-marker-record.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/manual-test-auto-mode-marker-record.md",
+        "slug": "manual-test-auto-mode-marker-record"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/manual-test-fail-routing.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/manual-test-fail-routing.md",
+        "slug": "manual-test-fail-routing"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/mergeable-watch-registry-size-cap.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/mergeable-watch-registry-size-cap.md",
+        "slug": "mergeable-watch-registry-size-cap"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/mid-loop-pipeline-wipe-549.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/mid-loop-pipeline-wipe-549.md",
+        "slug": "mid-loop-pipeline-wipe-549"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 567,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/567",
+        "mergedAt": "2026-07-12T01:48:16Z",
+        "headSha": "131143f3182cf47687cf12fe36b5de348c7e31eb"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "mid-loop-pipeline-wipe-549",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/567",
+        "recordPath": ".docs/shipped/mid-loop-pipeline-wipe-549.md",
+        "hash": "7514040ebf4dd27e94f56e66dba3905648819d007789195a6e4fb3d36ea74f69",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/missing-session-hook-files-terminally-halt-a-build.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/missing-session-hook-files-terminally-halt-a-build.md",
+        "slug": "missing-session-hook-files-terminally-halt-a-build"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/model-availability-fallback-ladder.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/model-availability-fallback-ladder.md",
+        "slug": "model-availability-fallback-ladder"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/multi-operator-ownership-hardening.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/multi-operator-ownership-hardening.md",
+        "slug": "multi-operator-ownership-hardening"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/multi-operator-ownership-slice-b.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/multi-operator-ownership-slice-b.md",
+        "slug": "multi-operator-ownership-slice-b"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/no-diff-task-evidence-stamp.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/no-diff-task-evidence-stamp.md",
+        "slug": "no-diff-task-evidence-stamp"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/noevidenceattempts-persists-across-unpark-so-re-di.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/noevidenceattempts-persists-across-unpark-so-re-di.md",
+        "slug": "noevidenceattempts-persists-across-unpark-so-re-di"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md",
+        "slug": "operator-park-a-human-placed-halt-must-survive-the"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-04-operator-park.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/owner-stamped-at-authoring.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/owner-stamped-at-authoring.md",
+        "slug": "owner-stamped-at-authoring"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/parallel-validation-phase-fan-out-manual-test-prd-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/parallel-validation-phase-fan-out-manual-test-prd-.md",
+        "slug": "parallel-validation-phase-fan-out-manual-test-prd-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/park-all-dispatch-paths.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/park-all-dispatch-paths.md",
+        "slug": "park-all-dispatch-paths"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/park-and-unpark-resolve-the-repo-root-from-any-cwd.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/park-and-unpark-resolve-the-repo-root-from-any-cwd.md",
+        "slug": "park-and-unpark-resolve-the-repo-root-from-any-cwd"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/per-feature-token-accounting.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/per-feature-token-accounting.md",
+        "slug": "per-feature-token-accounting"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/per-task-work-happened-floor.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/per-task-work-happened-floor.md",
+        "slug": "per-task-work-happened-floor"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/pipeline-run-state-lives-inside-the-worktree-cwd-r.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/pipeline-run-state-lives-inside-the-worktree-cwd-r.md",
+        "slug": "pipeline-run-state-lives-inside-the-worktree-cwd-r"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/pipeline-scope-per-task-verify-to-affected-tests-f.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/pipeline-scope-per-task-verify-to-affected-tests-f.md",
+        "slug": "pipeline-scope-per-task-verify-to-affected-tests-f"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/port-self-update-flow.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/port-self-update-flow.md",
+        "slug": "port-self-update-flow"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/port-test-conduct-worktree-sh-coverage-to-the-ts-s.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/port-test-conduct-worktree-sh-coverage-to-the-ts-s.md",
+        "slug": "port-test-conduct-worktree-sh-coverage-to-the-ts-s"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/post-rebase-build-invalidation-dispatches-a-full-b.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/post-rebase-build-invalidation-dispatches-a-full-b.md",
+        "slug": "post-rebase-build-invalidation-dispatches-a-full-b"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/post-rebase-invalidation-re-runs-every-judged-gate.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/post-rebase-invalidation-re-runs-every-judged-gate.md",
+        "slug": "post-rebase-invalidation-re-runs-every-judged-gate"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/pr-labels-structured-gh-not-found-detection.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/pr-labels-structured-gh-not-found-detection.md",
+        "slug": "pr-labels-structured-gh-not-found-detection"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/prd-audit-kickback-preserves-task-status.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/prd-audit-kickback-preserves-task-status.md",
+        "slug": "prd-audit-kickback-preserves-task-status"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/prepare-commit-msg-reconciles-self-stamped-trailer.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/prepare-commit-msg-reconciles-self-stamped-trailer.md",
+        "slug": "prepare-commit-msg-reconciles-self-stamped-trailer"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/rate-limit-wait-signal.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/rate-limit-wait-signal.md",
+        "slug": "rate-limit-wait-signal"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md",
+        "slug": "rebase-orphans-every-sha-anchored-evidence-citatio"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/reduce-redundant-full-test-suite-runs-in-build-shi.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/reduce-redundant-full-test-suite-runs-in-build-shi.md",
+        "slug": "reduce-redundant-full-test-suite-runs-in-build-shi"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/reenable-bin-setup-worktree-smoke.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/reenable-bin-setup-worktree-smoke.md",
+        "slug": "reenable-bin-setup-worktree-smoke"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/reject-undefined-base-path-in-authored-keys-write-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/reject-undefined-base-path-in-authored-keys-write-.md",
+        "slug": "reject-undefined-base-path-in-authored-keys-write-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/rekick-resume-republish-stale-worktree-engine.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/rekick-resume-republish-stale-worktree-engine.md",
+        "slug": "rekick-resume-republish-stale-worktree-engine"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/rekick-resume-runs-finish-while-the-build-gate-ver.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/rekick-resume-runs-finish-while-the-build-gate-ver.md",
+        "slug": "rekick-resume-runs-finish-while-the-build-gate-ver"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/remediation-comment-upsert.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remediation-comment-upsert.md",
+        "slug": "remediation-comment-upsert"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-06-30-remediation-comment-upsert.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/remediation-fr6-fr10-fr11.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remediation-fr6-fr10-fr11.md",
+        "slug": "remediation-fr6-fr10-fr11"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/remediation-fr8-merged-pr-announcement.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remediation-fr8-merged-pr-announcement.md",
+        "slug": "remediation-fr8-merged-pr-announcement"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/remove-773-dead-evidence-gate-residue-filedirmatch.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remove-773-dead-evidence-gate-residue-filedirmatch.md",
+        "slug": "remove-773-dead-evidence-gate-residue-filedirmatch"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/remove-serena-harness-dependency.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remove-serena-harness-dependency.md",
+        "slug": "remove-serena-harness-dependency"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/resolve-436-rekick-pre-loop-rebase-satisfies-verdi.md",
+        "slug": "resolve-436-rekick-pre-loop-rebase-satisfies-verdi"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/retry-as-escalation.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/retry-as-escalation.md",
+        "slug": "retry-as-escalation"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 702,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/702",
+        "mergedAt": "2026-07-20T21:36:56Z",
+        "headSha": "105b4b30c16695b518e63cd251a24e48c37aceaa"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "retry-as-escalation",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/702",
+        "recordPath": ".docs/shipped/retry-as-escalation.md",
+        "hash": "9a4e6b6cb40623cfb6b2d13e44e71d0f71747c84e38b1396e9c06f7ece669c23",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/retry-classify-rerun-vs-route.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/retry-classify-rerun-vs-route.md",
+        "slug": "retry-classify-rerun-vs-route"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/retry-log-lines-carry-the-completion-check-reason-.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/retry-log-lines-carry-the-completion-check-reason-.md",
+        "slug": "retry-log-lines-carry-the-completion-check-reason-"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/reused-halt-pr-ships-with-halt-boilerplate-body-an.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/reused-halt-pr-ships-with-halt-boilerplate-body-an.md",
+        "slug": "reused-halt-pr-ships-with-halt-boilerplate-body-an"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/s-tier-pipeline-knobs.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/s-tier-pipeline-knobs.md",
+        "slug": "s-tier-pipeline-knobs"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/sandbox-auth-expiry-park.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/sandbox-auth-expiry-park.md",
+        "slug": "sandbox-auth-expiry-park"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/satisfied-by-forged-citation-validation.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/satisfied-by-forged-citation-validation.md",
+        "slug": "satisfied-by-forged-citation-validation"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/self-host-release-gate-bin-conduct-breaking-surfac.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/self-host-release-gate-bin-conduct-breaking-surfac.md",
+        "slug": "self-host-release-gate-bin-conduct-breaking-surfac"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/semantic-judge-lane-never-dispatches-on-resumed-st.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/semantic-judge-lane-never-dispatches-on-resumed-st.md",
+        "slug": "semantic-judge-lane-never-dispatches-on-resumed-st"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/session-fresh-verdict-artifacts.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/session-fresh-verdict-artifacts.md",
+        "slug": "session-fresh-verdict-artifacts"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/setup-before-dispatch-wedge-deterministic-setup-fa.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/setup-before-dispatch-wedge-deterministic-setup-fa.md",
+        "slug": "setup-before-dispatch-wedge-deterministic-setup-fa"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/setup-triage-must-not-report-setup-failed-park-whe.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/setup-triage-must-not-report-setup-failed-park-whe.md",
+        "slug": "setup-triage-must-not-report-setup-failed-park-whe"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/ship-ci-feedback-loop.md",
+      "sourceKind": "plan",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/ship-ci-feedback-loop.md",
+        "slug": "ship-ci-feedback-loop"
+      },
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 453,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/453",
+        "mergedAt": "2026-07-11T13:18:02Z",
+        "headSha": "d50b88e89bc86bcdd84512d467b9c03c665baeb6"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "ship-ci-feedback-loop",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/453",
+        "recordPath": ".docs/shipped/ship-ci-feedback-loop.md",
+        "hash": "e60db9988069d6f447c3b106e4313f4a0888254cd416c0e04c9e52b2f8a4dcca",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/plans/skip-full-ci-for-docs-only-changes.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/skip-full-ci-for-docs-only-changes.md",
+        "slug": "skip-full-ci-for-docs-only-changes"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/spec-authoring-is-blind-to-unmerged-dependent-work.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/spec-authoring-is-blind-to-unmerged-dependent-work.md",
+        "slug": "spec-authoring-is-blind-to-unmerged-dependent-work"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/status-hides-completed-features-by-default.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/status-hides-completed-features-by-default.md",
+        "slug": "status-hides-completed-features-by-default"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/test-spawned-daemons-leak-real-tmux-daemons-persis.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/test-spawned-daemons-leak-real-tmux-daemons-persis.md",
+        "slug": "test-spawned-daemons-leak-real-tmux-daemons-persis"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/tmux-leak-guard-fails-open-transient-snapshot-fail.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/tmux-leak-guard-fails-open-transient-snapshot-fail.md",
+        "slug": "tmux-leak-guard-fails-open-transient-snapshot-fail"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/trailer-scans-re-spawn-identical-git-subprocess-fa.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/trailer-scans-re-spawn-identical-git-subprocess-fa.md",
+        "slug": "trailer-scans-re-spawn-identical-git-subprocess-fa"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/trailer-union-build-completion.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/trailer-union-build-completion.md",
+        "slug": "trailer-union-build-completion"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/trim-skill-frontmatter-descriptions-and-de-accrete.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/trim-skill-frontmatter-descriptions-and-de-accrete.md",
+        "slug": "trim-skill-frontmatter-descriptions-and-de-accrete"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/unify-build-completion-evidence-derivation-fix-der.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/unify-build-completion-evidence-derivation-fix-der.md",
+        "slug": "unify-build-completion-evidence-derivation-fix-der"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/verify-only-prove-closed-task-evidence.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/verify-only-prove-closed-task-evidence.md",
+        "slug": "verify-only-prove-closed-task-evidence"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/wiring-check-retries-on-evidence-it-invalidated-it.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/wiring-check-retries-on-evidence-it-invalidated-it.md",
+        "slug": "wiring-check-retries-on-evidence-it-invalidated-it"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/wiring-gaps-surface-only-after-a-paid-build-review.md",
+      "sourceKind": "plan",
+      "classification": "unresolved",
+      "plan": {
+        "path": ".docs/plans/wiring-gaps-surface-only-after-a-paid-build-review.md",
+        "slug": "wiring-gaps-surface-only-after-a-paid-build-review"
+      },
+      "reason": "historical plan is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/plans/writing-system-tests-fr-coverage.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/writing-system-tests-fr-coverage.md",
+        "slug": "writing-system-tests-fr-coverage"
+      },
+      "relatedSourcePaths": [
+        ".docs/specs/2026-07-04-writing-system-tests-fr-coverage.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/plans/writing-system-tests-red-exit-gate.md",
+      "sourceKind": "plan",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/writing-system-tests-red-exit-gate.md",
+        "slug": "writing-system-tests-red-exit-gate"
+      },
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-03-30-technical-assessment.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-03-30-technical-assessment.md",
+        "slug": "2026-03-30-technical-assessment"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-03-30-technical-assessment.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-04-12-phase-2-language-evaluation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md",
+        "slug": "2026-04-12-phase-3-conductor-rewrite"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-04-12-pluggable-harness-architecture.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has ambiguous or unavailable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-04-19-wave-b-pluggable-harness.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-05-01-wave-c-second-visualizer-and-telemetry.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has ambiguous or unavailable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.0-rebase-on-latest.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md",
+        "slug": "2026-06-25-phase-9.0-rebase-on-latest"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.1-retro-signal-brain-memory.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+        "slug": "2026-06-25-phase-9.1-retro-signal-engineer-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.2-registry-project-creation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md",
+        "slug": "2026-06-25-phase-9.2-registry-project-creation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-26-phase-9.3-engineer-redesign.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md",
+        "slug": "2026-06-26-phase-9.3-engineer-redesign"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-27-phase-9.3b-github-intake-writeback.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md",
+        "slug": "2026-06-27-phase-9.3b-github-intake-writeback"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-28-daemon-halt-reconciliation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-daemon-halt-reconciliation.md",
+        "slug": "2026-06-28-daemon-halt-reconciliation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-28-daemon-halt-reconciliation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-28-otel-observability.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-otel-observability.md",
+        "slug": "2026-06-28-otel-observability"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-28-otel-observability.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-daemon-pr-labels.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-daemon-pr-labels.md",
+        "slug": "2026-06-29-daemon-pr-labels"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-daemon-pr-labels.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-daemon-supervised-hosting.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has no provable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-decide-pipeline-restructure.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-pipeline-restructure.md",
+        "slug": "decide-pipeline-restructure"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/decide-pipeline-restructure.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-mermaid-renderer.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-mermaid-renderer.md",
+        "slug": "2026-06-29-mermaid-renderer"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-mermaid-renderer.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-pluggable-memory-source.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md",
+        "slug": "2026-06-29-pluggable-memory-1a-durable-default-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-rebase-resolution-skill.md",
+      "sourceKind": "spec",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-rebase-resolution-skill.md",
+        "slug": "2026-06-29-rebase-resolution-skill"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-rebase-resolution-skill.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 153,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "mergedAt": "2026-06-29T21:29:29Z",
+        "headSha": "d54bfeea96792c4f66430c075cf683cc1bde48c8"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-29-rebase-resolution-skill",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "recordPath": ".docs/shipped/2026-06-29-rebase-resolution-skill.md",
+        "hash": "d55faaba10f2e608910b9c34f1875921e1ed29b0652781393aca0e2bdcceff23",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-background-intake-conduct-loop.md",
+      "sourceKind": "spec",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-background-intake-conduct-loop.md",
+        "slug": "2026-06-30-background-intake-conduct-loop"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-background-intake-conduct-loop.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 382,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "mergedAt": "2026-07-07T01:39:33Z",
+        "headSha": "84a2274b8ab28cfc7e7b2033354c4ca73017ecc0"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-30-background-intake-conduct-loop",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "recordPath": ".docs/shipped/2026-06-30-background-intake-conduct-loop.md",
+        "hash": "b1cbbbedc02b5e3fe796fc4e3668204d7016b26c4a9105e9f80968213bf2bd2d",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-daemon-owner-gate.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-daemon-owner-gate.md",
+        "slug": "2026-06-30-daemon-owner-gate"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-daemon-owner-gate.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-engineer-worktree-isolation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-engineer-worktree-isolation.md",
+        "slug": "2026-06-30-engineer-worktree-isolation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-engineer-worktree-isolation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-harness-self-host-guardrails.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has ambiguous or unavailable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-remediation-comment-upsert.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remediation-comment-upsert.md",
+        "slug": "remediation-comment-upsert"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/remediation-comment-upsert.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-daemon-issue-priority-scheduling.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md",
+        "slug": "2026-07-03-daemon-issue-priority-scheduling"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-dependency-ordered-intake-and-dispatch.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/dependency-ordered-intake-and-dispatch.md",
+        "slug": "dependency-ordered-intake-and-dispatch"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/dependency-ordered-intake-and-dispatch.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+        "slug": "2026-07-03-surface-owner-gated-specs-dashboard-status"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-auto-resolve-open-pr-conflicts.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-resolve-open-pr-conflicts.md",
+        "slug": "auto-resolve-open-pr-conflicts"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/auto-resolve-open-pr-conflicts.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-daemon-lifecycle-controls.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-lifecycle-controls.md",
+        "slug": "daemon-lifecycle-controls"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/daemon-lifecycle-controls.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-operator-park.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md",
+        "slug": "operator-park-a-human-placed-halt-must-survive-the"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-writing-system-tests-fr-coverage.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/writing-system-tests-fr-coverage.md",
+        "slug": "writing-system-tests-fr-coverage"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/writing-system-tests-fr-coverage.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-build-auth-token-check-and-classify.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-auth-token-check-and-classify.md",
+        "slug": "build-auth-token-check-and-classify"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/build-auth-token-check-and-classify.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-decide-artifact-coherence-check.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-artifact-coherence-check.md",
+        "slug": "decide-artifact-coherence-check"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/decide-artifact-coherence-check.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+        "slug": "engineer-unclaim-requeue-verb-stale-claimed-ledger"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-24-per-step-provider-routing-927.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-24-per-step-provider-routing-927.md",
+        "slug": "2026-07-24-per-step-provider-routing-927"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-24-per-step-provider-routing-927.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-25-builtin-provider-installation-readiness-901.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has no provable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-25-codex-auth-sandbox-permission-readiness-905.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-25-codex-safety-and-self-host-parity-907.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-25-first-class-codex-harness-parity-904.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-25-full-suite-verification-gate.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-full-suite-verification-gate-940.md",
+        "slug": "2026-07-25-full-suite-verification-gate-940"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-25-full-suite-verification-gate-940.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/SUPERSEDED-2026-06-25-phase-9.3-supervisor-engineer.md",
+      "sourceKind": "spec",
+      "classification": "unresolved",
+      "reason": "product spec has no provable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/intake-issue-pr-link-autoclose.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-issue-pr-link-autoclose.md",
+        "slug": "intake-issue-pr-link-autoclose"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/intake-issue-pr-link-autoclose.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    }
+  ],
+  "counts": {
+    "aligned": 12,
+    "backfilled": 0,
+    "unresolved": 33,
+    "absent": 216,
+    "ambiguous": 0,
+    "contradictory": 1
+  }
+}

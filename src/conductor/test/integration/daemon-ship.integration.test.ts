@@ -194,6 +194,14 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
       createWorktree: async () => ({ path: repo, branch: BRANCH }),
       runConductor: async () => {},
       readOutcome: async () => outcome,
+      shipmentEvidence: async (input) => ({
+        kind: 'valid',
+        slug: input.slug,
+        pr: input.implementationPr,
+        recordPath: `.docs/shipped/${input.slug}.md`,
+        hash: 'fixture-hash',
+        commit: input.candidateCommit,
+      }),
       teardownWorktree: async () => {},
       markProcessed: async (slug) => {
         processed.push(slug);

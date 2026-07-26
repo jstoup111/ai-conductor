@@ -980,27 +980,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // so the guard can check if the feature was merged out-of-band before rebasing.
       runGh: ownerGh,
       prUrl: baseState.pr_url,
+      slug: item.slug,
       log,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
     if (resume === 'already_shipped') {
-      // ADR-2026-07-09: the recorded PR is merged out-of-band. Write the synthetic
-      // verified-ship markers and return without invoking conductor.run().
-      const headSha = await (async () => {
-        try {
-          const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt.path });
-          return stdout.trim();
-        } catch {
-          return 'unknown';
-        }
-      })();
-      await mkdir(join(wt.path, '.pipeline'), { recursive: true });
-      const finishChoicePath = join(wt.path, '.pipeline', 'finish-choice');
-      const donePath = join(wt.path, '.pipeline', 'DONE');
-      await writeFile(finishChoicePath, 'pr', 'utf-8');
-      await writeFile(donePath, '', 'utf-8');
-      log(`already shipped out-of-band; local branch retained at ${headSha}`);
-      return;
+      // The merged record was verified on merged history. Do not manufacture
+      // local success markers; let the ordinary completion boundary converge.
+      log(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
     await conductor.run();

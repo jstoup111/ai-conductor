@@ -61,6 +61,15 @@ const FRONT_DONE: ConductState = {
   acceptance_specs: 'skipped',
 };
 
+const validShipmentEvidence = async () => ({
+  kind: 'valid' as const,
+  slug: 'test-feature',
+  pr: 'https://example.com/pr/1',
+  recordPath: '.docs/shipped/test-feature.md',
+  hash: 'verified',
+  commit: 'verified',
+});
+
 describe('integration/gate-loop', () => {
   let dir: string;
   let statePath: string;
@@ -902,6 +911,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         fromStep: 'build',
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
     }
 
@@ -1262,6 +1272,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config: reviewFailConfig(),
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
       await conductor.run();
       return { buildRuns, retryReasons, kicks, completed, ran };
@@ -1409,6 +1420,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config: reviewFailConfig(),
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
       await conductor.run();
 
@@ -1630,6 +1642,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config,
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
 
       await conductor.run();
@@ -1879,6 +1892,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config,
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
       await conductor.run();
 

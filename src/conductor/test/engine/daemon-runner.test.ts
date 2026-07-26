@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
@@ -12,6 +14,11 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -46,6 +53,14 @@ function deps(
       maybeThrow('runConductor');
     },
     readOutcome: async () => outcome,
+    shipmentEvidence: async (_input: ShipmentEvidenceInput) => ({
+      kind: 'valid',
+      slug: outcome.finishChoice === 'pr' ? ITEM.slug : 'not-a-ship',
+      pr: outcome.prUrl ?? '',
+      recordPath: `.docs/shipped/${ITEM.slug}.md`,
+      hash: 'verified',
+      commit: 'verified',
+    }),
     teardownWorktree: async (_wt, keep) => {
       rec.teardownKeep = keep;
     },
@@ -275,6 +290,128 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
     expect(rec.teardownKeep).toBe(false); // removed on success
+  });
+
+  it.each([
+    {
+      label: 'a refused record',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipped-record-missing' as const,
+        expected: '.docs/shipped/feat-x.md',
+        observed: null,
+      },
+    },
+    {
+      label: 'an unavailable verifier',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipment-evidence-git-unavailable' as const,
+        expected: 'candidate-tree/head reachability',
+        observed: 'git unavailable',
+      },
+    },
+  ])('PR-shaped done outcome with $label halts before daemon ship side effects', async ({ verdict }) => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-evidence-'));
+    try {
+      await mkdir(join(wt, '.pipeline'), { recursive: true });
+      await writeFile(join(wt, '.pipeline', 'DONE'), 'done\n', 'utf-8');
+      const rec: TestRecorder = {};
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl: 'https://github.com/owner/repo/pull/916',
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: async () => verdict,
+      });
+
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('halted');
+      expect(out.reason).toContain(verdict.code);
+      expect(rec.processedCalls).toHaveLength(0);
+      expect(rec.enrollCalls).toHaveLength(0);
+      expect(rec.teardownKeep).toBe(true);
+      await expect(readFile(join(wt, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(wt, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(verdict.code);
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an unpushed candidate using the explicit implementation PR head before daemon ship side effects', async () => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-pr-binding-'));
+    const prUrl = 'https://github.com/owner/repo/pull/916';
+    try {
+      await initTestRepo(wt);
+      await mkdir(join(wt, '.docs/plans'), { recursive: true });
+      await mkdir(join(wt, '.docs/shipped'), { recursive: true });
+      const plan = '# Durable daemon evidence\n';
+      await writeFile(join(wt, `.docs/plans/${ITEM.slug}.md`), plan, 'utf-8');
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add durable daemon plan'], { cwd: wt });
+      const { stdout: remoteHeadStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      const remoteHead = remoteHeadStdout.trim();
+
+      await writeFile(
+        join(wt, `.docs/shipped/${ITEM.slug}.md`),
+        renderShippedRecord({
+          slug: ITEM.slug,
+          specHash: specHash(Buffer.from(plan), null).digest,
+          pr: prUrl,
+          shipped: '2026-07-25',
+        }),
+        'utf-8',
+      );
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add local durable shipment record'], { cwd: wt });
+
+      const rec: TestRecorder = {};
+      const ghCalls: string[][] = [];
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl,
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: undefined,
+        runGh: async (args) => {
+          ghCalls.push(args);
+          return { stdout: JSON.stringify({ url: prUrl, headRefOid: remoteHead }) };
+        },
+      });
+
+      const out = await run(ITEM);
+
+      expect({
+        status: out.status,
+        reason: out.reason,
+        ghCalls,
+        processedCalls: rec.processedCalls,
+        enrollCalls: rec.enrollCalls,
+        teardownKeep: rec.teardownKeep,
+      }).toEqual({
+        status: 'halted',
+        reason: 'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head',
+        ghCalls: [['pr', 'view', prUrl, '--json', 'url,headRefOid']],
+        processedCalls: [],
+        enrollCalls: [],
+        teardownKeep: true,
+      });
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
   });
 
   it('halted → keeps the worktree, does not mark processed', async () => {
@@ -1411,18 +1548,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
   });
 
-  // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING
-  // verified-ship path (readOutcome → isVerifiedShip → markProcessed). No
-  // production change is expected here (plan Task 10 step 3) — the guard's
-  // markers (`finish-choice` == 'pr', `DONE`, `pr_url` present) produce
-  // EXACTLY the WorktreeOutcome shape `writeSyntheticShipMarkers` (Task 2)
-  // will write, fed through the same `deps()`/`makeRunFeature` fixture the
-  // rest of this file already uses. These tests are expected to PASS today —
-  // they pin the integration contract the not-yet-written guard depends on.
-  describe('merged-PR guard synthetic ship (#358, TS-3)', () => {
+  // A normal verified PR outcome reaches the daemon-owned ship side effects
+  // only after the shared evidence verifier has returned valid.
+  describe('verified PR ship outcome', () => {
     const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
-    it('a guard-shaped outcome (finish-choice=pr, DONE, pr_url present) rides isVerifiedShip → markProcessed called with slug + prUrl', async () => {
+    it('a valid PR outcome marks the feature processed with its PR URL', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1441,14 +1572,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processed).toBe(true);
       expect(rec.processedCalls).toHaveLength(1);
       expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
-      // Removed on success, same as any other verified ship — the guard's
-      // synthetic stop introduces no second ship pathway (ADR: "No second
-      // ship pathway is introduced; side-effects stay owned by the
-      // daemon-runner").
+      // Side effects remain owned by the daemon runner's single verified path.
       expect(rec.teardownKeep).toBe(false);
     });
 
-    it('a halted (non-guard) outcome — isVerifiedShip false, no processed marker written', async () => {
+    it('a halted outcome writes no processed marker', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1467,7 +1595,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processedCalls).toHaveLength(0);
     });
 
-    it('idempotency: the guard-shaped outcome fed through run() twice — single ledger entry each time, stable content, no throw', async () => {
+    it('two valid outcomes create one stable ledger entry each without throwing', async () => {
       const rec: TestRecorder = {};
       const outcome: WorktreeOutcome = {
         done: true,

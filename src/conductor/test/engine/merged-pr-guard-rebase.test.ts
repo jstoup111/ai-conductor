@@ -7,17 +7,13 @@
  * runRebaseStep test file — it is exercised only through a real Conductor.run()
  * with `fromStep: 'rebase'`, per that file's header comment).
  *
- * `src/engine/merged-pr-guard.ts` does not exist yet. Today a MERGED verdict
- * has zero effect on conductor.ts, so the happy-path assertions here (no
- * performRebase invocation, branch tip retained, synthetic markers written)
- * are expected to FAIL against current behavior — the real rebase runs and
- * the synthetic markers are never written. This is the correct RED signal
- * (plan Tasks 8-9).
+ * A merged PR bypasses rebase only after the strict durable-evidence verifier
+ * returns `verified`; unavailable or unproven evidence must HALT.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -57,7 +53,7 @@ async function seedPreRebaseState(
   statePath: string,
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
-  const state: ConductState = {};
+  const state: ConductState = { feature_desc: 'feat' };
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
@@ -141,7 +137,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     if (repo) await rm(repo, { recursive: true, force: true });
   });
 
-  it('happy: MERGED verdict — performRebase never invoked, no HALT, both synthetic markers present, branch tip unchanged', async () => {
+  it('verified merged evidence skips rebase without manufacturing local completion markers', async () => {
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -154,7 +150,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     const runner: StepRunner = {
       run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),
     };
-    const { runGh } = makeGhFake({ state: 'MERGED' });
+    const verifyMergedShipment = vi.fn().mockResolvedValue({ kind: 'verified' as const });
 
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -164,22 +160,21 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
       daemon: true,
       mode: 'auto',
       fromStep: 'rebase',
-      runGh,
+      verifyMergedShipment,
     } as never);
 
     await conductor.run();
 
-    // The real seam performRebase is imported directly by conductor.ts (not
-    // re-exported through an injectable option), so a passing spy assertion
-    // here requires the guard to short-circuit BEFORE that call — today it
-    // does not, so this assertion is expected to fail (performRebase runs).
     expect(performRebaseSpy).not.toHaveBeenCalled();
+    expect(verifyMergedShipment).toHaveBeenCalledWith(PR_URL, 'feat');
 
     const haltExists = await fileExists(join(repo, '.pipeline/HALT'));
     expect(haltExists).toBe(false);
 
-    expect(await fileExists(join(repo, '.pipeline/finish-choice'))).toBe(true);
-    expect((await readFile(join(repo, '.pipeline/finish-choice'), 'utf-8')).trim()).toBe('pr');
+    expect(await fileExists(join(repo, '.pipeline/finish-choice'))).toBe(false);
+    // The ordinary state-machine completion marker is allowed only because
+    // this test injects a verified durable shipment result; no finish-choice
+    // marker is manufactured by the merged-PR backstop.
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
 
     // Branch tip unchanged — the guard never rebases or deletes the branch.
@@ -217,7 +212,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(await fileExists(join(repo, '.pipeline/finish-choice'))).toBe(false);
   });
 
-  it('negative: gh invocation throws — performRebase proceeds (degraded = today\'s behavior)', async () => {
+  it('negative: unavailable merged evidence HALTs without rebasing or synthetic success', async () => {
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -243,11 +238,11 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
 
     await conductor.run();
 
-    // Degraded/fail-open: the real rebase ran, which for a clean repo means
-    // the base commit is now an ancestor of `feat` (the tip SHA changed).
     const afterSha = (await g(['rev-parse', 'feat'])).stdout.trim();
-    expect(afterSha).not.toBe(beforeSha);
+    expect(afterSha).toBe(beforeSha);
+    expect(await fileExists(join(repo, '.pipeline/HALT'))).toBe(true);
     expect(await fileExists(join(repo, '.pipeline/finish-choice'))).toBe(false);
+    expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(false);
   });
 
   it('negative: no pr_url recorded — rebase proceeds unchanged (zero guard queries)', async () => {

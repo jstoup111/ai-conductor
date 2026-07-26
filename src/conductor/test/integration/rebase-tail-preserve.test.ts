@@ -120,6 +120,14 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
       fromStep: 'build',
       maxRetries: 1,
       git: fakeGit,
+      shipmentEvidence: async (input) => ({
+        kind: 'valid',
+        slug: input.slug,
+        pr: input.implementationPr,
+        recordPath: `.docs/shipped/${input.slug}.md`,
+        hash: 'fixture-hash',
+        commit: input.candidateCommit,
+      }),
       fullSuiteVerifier: {
         ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
         inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),

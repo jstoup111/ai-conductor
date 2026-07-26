@@ -60,12 +60,14 @@ Waiting for status to be reported"
 - **Then** it treats `skipped` (and `success`) as passing and **succeeds** (exit 0), so a
   ruleset that requires `ci-gate` resolves green and the PR is mergeable.
 
-### Scenario 2c: `ci-gate` is the designated required check, not the heavy jobs
+### Scenario 2c: `ci-gate` is the designated heavy-suite check, not the heavy jobs
 
 - **Given** the operator marks a required status check for `main`,
 - **When** they follow the documented guidance,
-- **Then** the required check named is **`ci-gate`** (always-present), never an
-  individually-skippable heavy job — so requiring it never wedges a docs-only PR.
+- **Then** the required aggregate for this heavy-suite workflow is **`ci-gate`**
+  (always-present), never an individually-skippable heavy job — so requiring it never wedges a
+  docs-only PR. Separate always-reporting policy checks, including shipped-record evidence, may also
+  be required without changing `ci-gate`'s role.
 
 ---
 

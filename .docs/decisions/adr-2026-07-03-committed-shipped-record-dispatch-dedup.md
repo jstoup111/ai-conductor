@@ -1,8 +1,9 @@
 ---
-status: APPROVED
+status: SUPERSEDED
 date: 2026-07-03
 approved: 2026-07-03
 supersedes: none
+superseded_by: adr-2026-07-25-fail-closed-durable-shipment-evidence
 amends: adr-013-daemon-main-advance-rekick
 deciders: James Stoup
 issues: "#204, #205"
@@ -11,7 +12,9 @@ issues: "#204, #205"
 # ADR: Committed Shipped Record as Dispatch-Dedup Authority
 
 ## Status
-APPROVED (2026-07-03, operator-confirmed in engineer session).
+SUPERSEDED by `adr-2026-07-25-fail-closed-durable-shipment-evidence` (2026-07-25). The newer ADR
+replaces the cache-degradation clause with fail-closed completion and carries forward the stable
+record-on-branch, hash/stem dedup, cache-repair, discovery, and rekick decisions.
 
 ## Context
 The daemon's only defense against re-building a shipped spec is the **local**

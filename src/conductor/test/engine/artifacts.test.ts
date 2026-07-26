@@ -20,9 +20,25 @@ const readStaleHaltTitleSpy = vi.fn(async () => null);
 // (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
 // null (fail-open); tests override via mockImplementation to call the real logic.
 const readStaleHaltBannerSpy = vi.fn(async () => null);
+const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
+  slug: string;
+  implementationPr: string;
+  candidateCommit: string;
+}) => ({
+  kind: 'valid' as const,
+  slug: input.slug,
+  pr: input.implementationPr,
+  recordPath: `.docs/shipped/${input.slug}.md`,
+  hash: 'test-hash',
+  commit: input.candidateCommit,
+}));
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
   readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
   readStaleHaltBanner: (...args: unknown[]) => readStaleHaltBannerSpy(...args),
+}));
+vi.mock('../../src/engine/shipment-evidence.js', () => ({
+  evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
+    evaluateShipmentEvidenceSpy(...args),
 }));
 
 import {
@@ -507,6 +523,28 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: finish predicate', () => {
+    it('rejects a fresh PR marker when strict shipment evidence refuses it', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        featureDesc: 'add-foo',
+        getHeadSha: async () => 'candidate-sha',
+        shipmentEvidence: async () => ({
+          kind: 'refusal',
+          code: 'shipped-record-missing',
+          expected: '.docs/shipped/add-foo.md',
+          observed: null,
+        }),
+      });
+
+      expect(result.done).toBe(false);
+    });
+
     it('passes when finish-choice="pr" AND state.pr_url is set', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(
@@ -517,8 +555,8 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
-    it('passes when finish-choice marker holds a recognized non-PR outcome', async () => {
-      for (const choice of ['merge-local', 'keep', 'discard']) {
+    it('passes when finish-choice marker holds a recognized non-shipping outcome', async () => {
+      for (const choice of ['keep', 'discard']) {
         const subDir = join(dir, choice);
         await mkdir(join(subDir, '.pipeline'), { recursive: true });
         await writeFile(join(subDir, FINISH_CHOICE_MARKER), choice);
@@ -626,6 +664,10 @@ describe('engine/artifacts', () => {
 
     it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         daemon: false,

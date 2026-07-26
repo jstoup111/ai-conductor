@@ -140,6 +140,27 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
     expect(repaired).toContain('billing-export');
   });
 
+  it('a committed record remains skipped on later scans when cache repair fails', async () => {
+    await commitSpec('cache-write-fails');
+    await commitShippedRecord('cache-write-fails', shippedRecordBody({
+      slug: 'cache-write-fails',
+      specHash: 'irrelevant-for-stem-match',
+    }));
+
+    const repairFailure = async () => {
+      throw new Error('processed cache is read-only');
+    };
+    const options = {
+      baseBranch,
+      repairProcessed: repairFailure,
+    } as Parameters<typeof discoverBacklog>[3];
+
+    const first = await discoverBacklog(dir, emptyLedger, undefined, options);
+    const second = await discoverBacklog(dir, emptyLedger, undefined, options);
+
+    expect([first.items, second.items]).toEqual([[], []]);
+  });
+
   it('a shipped record that exists only in the WORKING TREE (uncommitted) is ignored — dispatch proceeds', async () => {
     // Mirrors the FR-24 rule already enforced for plans/stories: only the
     // base-branch tree is authoritative. An uncommitted shipped record must not

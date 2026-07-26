@@ -7,6 +7,13 @@ import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
+import {
+  evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
+  type ShipmentEvidenceDependencies,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -70,6 +77,10 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 export interface FinishRecordRunners {
   runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
   runGit: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string }>;
+  evaluateEvidence?: (
+    input: ShipmentEvidenceInput,
+    dependencies: ShipmentEvidenceDependencies,
+  ) => Promise<ShipmentEvidenceResult>;
 }
 
 const noopRunners: FinishRecordRunners = {
@@ -139,22 +150,28 @@ export async function dispatchFinishRecord(
   // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
   // — never falls back to writing the keep/finish-choice marker anyway.
   if (cmd.choice === 'pr') {
-    let stdout: string | undefined;
+    const repoDir = dirname(cmd.pipelineDir);
+    let implementationBinding;
     try {
-      const result = await deps.runGh(['pr', 'view', '--json', 'url', '-q', '.url'], {
-        cwd: dirname(cmd.pipelineDir),
-      });
-      stdout = (result as { stdout?: string } | undefined)?.stdout;
+      implementationBinding = await resolveImplementationPrBinding(
+        async (args, opts) => {
+          const result = await deps.runGh(args, opts);
+          const stdout = (result as { stdout?: string } | undefined)?.stdout;
+          return { stdout: stdout ?? '' };
+        },
+        repoDir,
+        cmd.prUrl!,
+      );
     } catch (err) {
       console.error(
-        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} identity and head; refusing to record`,
       );
       return 1;
     }
 
-    if (!stdout || !stdout.trim()) {
+    if (implementationBinding.url !== cmd.prUrl || !implementationBinding.headRefOid) {
       console.error(
-        `finish-record: gh pr view returned no URL — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view did not return the requested PR URL and head — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
@@ -169,6 +186,78 @@ export async function dispatchFinishRecord(
     if (pushed !== true) {
       console.error(
         `finish-record: HEAD has not been verified as pushed to its upstream branch (push-evidence check returned ${String(pushed)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    // A PR URL and pushed HEAD only establish that a PR exists. The durable
+    // shipment contract additionally requires the record committed on that
+    // PR head to pass the shared strict evaluator before any terminal write.
+    const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+    const stateResult = await readState(statePath);
+    if (!stateResult.ok) {
+      console.error(
+        `finish-record: cannot read feature state from "${statePath}" (${stateResult.error.message}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (!stateResult.value.feature_desc) {
+      console.error(
+        `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    let candidateCommit: string;
+    try {
+      candidateCommit = (await deps.runGit(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim();
+    } catch (err) {
+      console.error(
+        `finish-record: cannot resolve the PR head for durable evidence (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    let evidence: ShipmentEvidenceResult;
+    try {
+      evidence = await (deps.evaluateEvidence ?? evaluateShipmentEvidence)(
+        {
+          repoDir,
+          slug: stateResult.value.feature_desc,
+          implementationPr: cmd.prUrl!,
+          candidateCommit,
+        },
+        {
+          gitRunner: async (args) => {
+            try {
+              const result = await deps.runGit(args, { cwd: repoDir });
+              return isMergeBaseAncestor(args) ? 'true' : result.stdout;
+            } catch (error) {
+              if (isMergeBaseAncestor(args) && exitCode(error) === 1) return 'false';
+              throw error;
+            }
+          },
+          githubRunner: async (implementationPr) => {
+            if (implementationPr !== cmd.prUrl) {
+              throw new Error(`unexpected implementation PR binding request: ${implementationPr}`);
+            }
+            return implementationBinding;
+          },
+        },
+      );
+    } catch (err) {
+      console.error(
+        `finish-record: durable shipment evidence is unavailable (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (evidence.kind !== 'valid') {
+      const detail =
+        evidence.kind === 'refusal'
+          ? `${evidence.code}: expected ${evidence.expected}, observed ${evidence.observed ?? 'none'}`
+          : evidence.reason;
+      console.error(
+        `finish-record: durable shipment evidence refused (${detail}) — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
@@ -216,4 +305,15 @@ export async function dispatchFinishRecord(
   }
 
   return 0;
+}
+
+function isMergeBaseAncestor(args: string[]): boolean {
+  return args[0] === 'merge-base' && args[1] === '--is-ancestor';
+}
+
+function exitCode(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    typeof (error as { code?: unknown }).code === 'number'
+    ? (error as { code: number }).code
+    : undefined;
 }
