@@ -120,7 +120,15 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: { harness_self_host: { sandbox_build_env: true } },
+      config: {
+        harness_self_host: {
+          sandbox_build_env: true,
+          // This fixture owns version-gate composition, not ambient daemon
+          // credentials. Keep the self-host path active while making auth
+          // readiness deterministic on developer machines and clean CI hosts.
+          build_auth: { mode: 'api-key' },
+        },
+      },
     } as ConstructorParameters<typeof Conductor>[0]);
     return { conductor, seen };
   }
@@ -226,6 +234,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       config: {
         harness_self_host: {
           sandbox_build_env: true,
+          build_auth: { mode: 'api-key' },
           version_approval_gate: false, // Gate is disabled
         },
       },
