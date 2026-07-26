@@ -748,11 +748,13 @@ describe('DefaultStepRunner', () => {
     expect({
       capturedCalls: capturedInteractive.mock.calls,
       codexCalls: unavailableCodex.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
         interactive: options.interactive,
       })),
       claudeCalls: claudeFallback.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
         sessionId: options.sessionId,
         resume: options.resume,
         interactive: options.interactive,
@@ -761,10 +763,20 @@ describe('DefaultStepRunner', () => {
     }).toEqual({
       capturedCalls: [],
       codexCalls: [
-        { sessionId: 'recovery-1', resume: false, interactive: true },
+        {
+          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          sessionId: 'recovery-1',
+          resume: false,
+          interactive: true,
+        },
       ],
       claudeCalls: [
-        { sessionId: 'recovery-2', resume: false, interactive: true },
+        {
+          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          sessionId: 'recovery-2',
+          resume: false,
+          interactive: true,
+        },
       ],
       attempts: [
         expect.objectContaining({

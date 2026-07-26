@@ -627,6 +627,7 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     streaming: boolean,
     interactive = false,
+    invocationKind: 'skill' | 'free-form' = 'skill',
   ): Promise<StepRunResult> {
     const sessions = opts?.providerSessions ?? this.sessionStore;
     if (!this.providerRuntimes || !sessions) {
@@ -663,13 +664,17 @@ export class DefaultStepRunner implements StepRunner {
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,
-        optionsForCandidate: (candidateKey) => ({
-          ...invocationOptions,
-          prompt: renderSkillInvocation(
-            STEP_SKILL_INVOCATIONS[step],
-            candidateKey,
-          ),
-        }),
+        ...(invocationKind === 'skill'
+          ? {
+              optionsForCandidate: (candidateKey: string) => ({
+                ...invocationOptions,
+                prompt: renderSkillInvocation(
+                  STEP_SKILL_INVOCATIONS[step],
+                  candidateKey,
+                ),
+              }),
+            }
+          : {}),
       });
       this.callCount++;
       if (!opts?.providerSessions) {
@@ -1032,6 +1037,7 @@ export class DefaultStepRunner implements StepRunner {
         '',
         true,
         true,
+        'free-form',
       );
       return;
     }
