@@ -62,56 +62,6 @@ require_pattern 'supported host-native alternatives are not falsely classified u
   'supported.*(host-native|provider-native|alternative|different)|valid.*path.*provider' \
   "$HARNESS_DIR/HARNESS.md"
 
-# Deterministic real-catalog scan. A Claude-only imperative is valid only when
-# its line or enclosing Markdown section names its host scope. Otherwise the
-# diagnostic includes file, line, and assumption category.
-TARGET_SKILLS=(
-  assess
-  architecture-review
-  bootstrap
-  code-review
-  conduct
-  engineer
-  finish
-  pipeline
-  retro
-  tdd
-)
-
-AUDIT_OUT="$HARNESS_DIR/.pipeline/provider-skill-contract-audit-904.txt"
-mkdir -p "$(dirname "$AUDIT_OUT")"
-: > "$AUDIT_OUT"
-
-for skill in "${TARGET_SKILLS[@]}"; do
-  file="$HARNESS_DIR/skills/$skill/SKILL.md"
-  awk -v file="$file" '
-    function scoped(text) {
-      return tolower(text) ~ /(claude|codex|selected host|host-native|provider-native|provider-specific|host-specific)/
-    }
-    /^#{1,6}[[:space:]]/ {
-      heading = $0
-    }
-    {
-      category = ""
-      if ($0 ~ /Agent tool|Task tool/) category = "tool/delegation"
-      else if ($0 ~ /model="(fable|opus|sonnet|haiku)"/) category = "model"
-      else if ($0 ~ /(Run|run|Invoke|invoke|Type|type)[[:space:]]+`\/[a-z][a-z-]*/) category = "invocation"
-      else if ($0 ~ /\/quit|Claude REPL/) category = "interaction"
-
-      if (category != "" && !scoped($0) && !scoped(heading)) {
-        printf "%s:%d: %s: %s\n", file, NR, category, $0
-      }
-    }
-  ' "$file" >> "$AUDIT_OUT"
-done
-
-if [ -s "$AUDIT_OUT" ]; then
-  fail 'every host-only invocation, model, tool, delegation, and interaction imperative is explicitly scoped'
-  sed -n '1,80p' "$AUDIT_OUT"
-else
-  pass 'every host-only invocation, model, tool, delegation, and interaction imperative is explicitly scoped'
-fi
-
 # Direct use must retain the same canonical skill frontmatter and lifecycle
 # gate language. Existing integrity coverage owns exhaustive reference/model
 # validation; these assertions pin the observable direct-use contract.

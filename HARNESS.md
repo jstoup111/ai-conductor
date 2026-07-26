@@ -76,7 +76,25 @@ Checkpoints are skipped in auto mode.
 ## Skill Invocation
 
 Skills are in `skills/`. Each has a `SKILL.md` with YAML frontmatter declaring enforcement level,
-SDLC phase, and dependencies. Invoke via `/skill-name` or by referencing the skill file.
+SDLC phase, and dependencies. A **semantic skill reference** is the provider-neutral name
+`skill-name`: it identifies the required workflow without assuming an invocation syntax. Use the
+selected host's native invocation only to activate that reference:
+
+- **Claude:** invoke `skill-name` as `/skill-name`.
+- **Codex:** invoke `skill-name` as `$skill-name`.
+
+Native wording may differ, but it cannot weaken, bypass, or replace the required shared outcome,
+artifact, or lifecycle gate. Do not weaken or bypass the shared artifact or gate. The shared
+required outcome, artifact, and lifecycle gate remain the same for direct invocation and
+daemon-managed workflows; missing artifact or gate evidence leaves the workflow incomplete.
+
+If a required capability is unavailable for the selected provider, stop before incompatible work
+begins. Report an unsupported-capability diagnostic that names the selected provider, the missing
+capability, and the concrete recovery action required to continue. Leave the lifecycle gate
+incomplete and emit no success artifact; never silently substitute another provider's syntax,
+tool, delegation, credentials, or success result. A supported provider-native alternative is a
+valid path even when it differs from the other host's mechanism, and must proceed without a false
+unsupported-capability rejection.
 
 **Start here:** Two ways to run the flow:
 - **Interactive:** Run `/conduct` inside Claude Code to be guided step-by-step
