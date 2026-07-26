@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "vitest run --reporter=dot --silent --slowTestThreshold=1800000",
+    "test": "vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
