@@ -55,7 +55,7 @@ attribution_audit_sample_pct: 10
 # park fires on the very trailer-corroboration wedges #773 removes, halting otherwise-
 # healthy builds. enabled:false stops the park (attempt/wall-clock retry bounds still apply).
 build_progress_halt:
-  enabled: false
+  enabled: true
 
 # Wiring-reachability gate Layer 2 (TS import-graph reachability, Task 22).
 # entry_points are the roots the import graph is walked from to check that
