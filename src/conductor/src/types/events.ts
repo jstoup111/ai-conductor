@@ -253,6 +253,14 @@ export type ConductorEvent =
       checkedAt?: number;
     }
   | {
+      /** Freshness telemetry for the full test-suite verification evidence. */
+      type: 'test_suite_verification';
+      freshness: {
+        status: 'CURRENT' | 'STALE';
+        reason?: string;
+      };
+    }
+  | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
       type: 'kickback';
       from: StepName;

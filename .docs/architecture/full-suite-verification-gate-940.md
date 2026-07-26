@@ -30,7 +30,7 @@ graph TD
 
     subgraph DIRECT["Direct-Claude flow"]
         SKILL["NEW: /test-suite skill<br/>after BUILD, before /manual-test"]
-        CLI["NEW: conduct-ts test-suite<br/>thin entrypoint to shared verifier"]
+        HOST["Host verification interface<br/>configured verifier + shared proof"]
     end
 
     subgraph EARLY["Earlier broad fallback"]
@@ -54,9 +54,9 @@ graph TD
     ENGINE -- "current PASS" --> SHIP["SHIP validation group"]
     FINISH --> SERVICE
 
-    SKILL --> CLI
-    CLI --> SERVICE
-    FALLBACK --> CLI
+    SKILL --> HOST
+    HOST --> SERVICE
+    FALLBACK --> HOST
 
     SHIP --> FINISH
     FINISH --> PR
@@ -69,9 +69,10 @@ graph TD
   after `wiring_check` and before `manual_test`, so a failure can use the
   existing gate loop to reopen `build` before any SHIP validator runs.
 - The verification core, not an LLM step, owns command execution and proof
-  creation. `conduct-ts test-suite` is a thin adapter for direct Claude and
-  any earlier full-suite fallback; all callers therefore make the same
-  run-versus-reuse decision.
+  creation. Direct Claude and any earlier full-suite fallback use the host's
+  repository-configured verifier interface; all callers therefore make the
+  same run-versus-reuse decision. The interface is not a repository-specific
+  command and may use an internal adapter.
 - A project declares one authoritative aggregate operation in
   `.ai-conductor/config.yml` under `test_suite.command`. The project—not the
   conductor—owns how that command composes unit, acceptance, and any other test
@@ -139,8 +140,8 @@ The sidecar is versioned and records at least:
 ## Legend
 
 - **NEW / MODIFIED** marks components changed by issue #940.
-- The direct-Claude path is not a Bash fallback: `/test-suite` invokes the same
-  TypeScript verifier directly.
+- The direct-Claude path is not a raw-command fallback: `/test-suite` uses the
+  same configured verifier and proof contract through the host interface.
 - The test runner's own internal caches are opaque. Reuse here means reusing a
   conductor proof for an identical verification fingerprint, not claiming how
   the underlying framework executed its tests.
@@ -151,3 +152,4 @@ The sidecar is versioned and records at least:
 |------|--------|--------|
 | 2026-07-25 | Initial generation | DECIDE phase for issue #940 |
 | 2026-07-25 | Added completed-state resume verification and bound the diagram to plan Tasks 10–20 | Plan-update architecture pass |
+| 2026-07-25 | Replaced direct-command wording with the portable host verifier interface | ADR amendment for issue #940 |

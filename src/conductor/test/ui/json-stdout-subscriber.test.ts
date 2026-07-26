@@ -117,4 +117,22 @@ describe('JsonStdoutSubscriber', () => {
       expect(parsed.error).toBe('render crashed');
     });
   });
+
+  it('renders stale test-suite verification details without declared environment values', () => {
+    subscriber.start();
+
+    const declaredEnvironment = 'API_TOKEN=never-expose-this-value';
+    subscriber.handle({
+      type: 'test_suite_verification',
+      freshness: { status: 'STALE', reason: 'environment_changed' },
+      declaredEnvironment,
+    } as unknown as ConductorEvent);
+
+    const written = stdoutWriteSpy.mock.calls[0][0] as string;
+    expect(
+      written.includes('STALE') &&
+      written.includes('environment_changed') &&
+      !written.includes(declaredEnvironment),
+    ).toBe(true);
+  });
 });

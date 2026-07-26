@@ -1,7 +1,7 @@
 # ADR: Content-addressed full-suite proof at the BUILD-to-SHIP boundary
 
 **Date:** 2026-07-25
-**Status:** APPROVED (operator-aligned 2026-07-25)
+**Status:** SUPERSEDED in part by `adr-2026-07-25-direct-claude-configured-verifier-interface` (direct-Claude invocation details only)
 **Deciders:** James Stoup (operator), Codex architecture review for issue #940
 **Relates to:** `adr-2026-07-12-wiring-check-gate.md`,
 `adr-2026-07-20-post-rebase-delta-aware-invalidation.md`, and

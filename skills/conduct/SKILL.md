@@ -51,13 +51,14 @@ Step 10: /plan                  → DECIDE (technical implementation plan, groun
 Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
 Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+Step 13: /test-suite            → BUILD (repository-configured aggregate verification gate)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
-Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
+Step 14: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
-Step 14: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
-Step 15: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
-Step 16: /retro                 → SHIP
-Step 17: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
+Step 15: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
+Step 16: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
+Step 17: /retro                 → SHIP
+Step 18: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
@@ -87,11 +88,12 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
 | 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` and the affected-test result set. Pipeline evaluator satisfies code-review gate. |
-| 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
-| 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
-| 14. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
-| 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 16. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
+| 12. test-suite | Current PASS evidence exists from the repository-configured aggregate verifier | Check `.pipeline/test-suite-evidence.json`; missing, stale, or failing evidence means this BUILD gate is pending. |
+| 13. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
+| 14. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
+| 15. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
+| 16. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
+| 17. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
 `"complete"` in `conduct-state.json`. Do not mark a PR or merge-local outcome complete until
@@ -234,7 +236,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "DRAFT ADRs remain unapproved — [list files]. All ADRs must be APPROVED before BUILD."
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
-**After build (before suggesting manual-test):**
+**After build (before suggesting /test-suite):**
 - Run the union of affected tests for the BUILD diff and verify it passes
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
@@ -244,6 +246,10 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
+
+**After /test-suite (before suggesting /manual-test):**
+- Require current PASS evidence from the repository-configured aggregate verifier.
+- If the verifier fails, BLOCK progression to SHIP and return to `/tdd` or `/pipeline` for remediation.
 
 **After prd-audit (before suggesting architecture-review --as-built):**
 - Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table
