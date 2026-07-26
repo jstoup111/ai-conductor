@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "startedAt": "2026-07-26T09:04:38.879Z",
-  "completedAt": "2026-07-26T09:07:44.575Z",
+  "startedAt": "2026-07-26T09:36:57.384Z",
+  "completedAt": "2026-07-26T09:40:17.764Z",
   "rows": [
     {
       "sourcePath": ".docs/plans/2026-03-30-technical-assessment.md",
@@ -224,7 +224,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/91",
         "recordPath": ".docs/shipped/2026-06-27-phase-9.3-engineer-cleanup.md",
         "hash": "21a8f7ddf7d3a8b80bb3f4bc69e4896897cc8ac0fc101c4b1407ae4fe700a629",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -349,7 +349,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/153",
         "recordPath": ".docs/shipped/2026-06-29-rebase-resolution-skill.md",
         "hash": "d55faaba10f2e608910b9c34f1875921e1ed29b0652781393aca0e2bdcceff23",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -376,7 +376,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/382",
         "recordPath": ".docs/shipped/2026-06-30-background-intake-conduct-loop.md",
         "hash": "b1cbbbedc02b5e3fe796fc4e3668204d7016b26c4a9105e9f80968213bf2bd2d",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -552,7 +552,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/615",
         "recordPath": ".docs/shipped/2026-07-12-rtk-hook-preservation.md",
         "hash": "f316d00be4263b748b6f0f9bdd545185c6094b0535c342fdbd0f311b7535ee6d",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -576,7 +576,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/650",
         "recordPath": ".docs/shipped/2026-07-12-wiring-reachability-gate.md",
         "hash": "d98feb1fafc1b33fdcfc950d363e5d942ecd32cc77a25905f35fbb086d250bcf",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -708,12 +708,12 @@
     {
       "sourcePath": ".docs/plans/2026-07-25-maintain-documentation.md",
       "sourceKind": "plan",
-      "classification": "unresolved",
+      "classification": "absent",
       "plan": {
         "path": ".docs/plans/2026-07-25-maintain-documentation.md",
         "slug": "2026-07-25-maintain-documentation"
       },
-      "reason": "historical plan is not present at the audit head"
+      "reason": "no exact associated merged implementation PR"
     },
     {
       "sourcePath": ".docs/plans/2026-07-25-tdd-is-too-literal-933.md",
@@ -1407,7 +1407,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/596",
         "recordPath": ".docs/shipped/finish-staleness-grep-never-matches-rebase-finish.md",
         "hash": "817b892f499f82c20ac6218e1555097172e555334a164e4327d9cb5482e86670",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -1441,7 +1441,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/427",
         "recordPath": ".docs/shipped/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
         "hash": "35d584d266a696cd7cff74b2df1e110969727d33a9c762631fdcb848d1a7b638",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -1788,7 +1788,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/567",
         "recordPath": ".docs/shipped/mid-loop-pipeline-wipe-549.md",
         "hash": "7514040ebf4dd27e94f56e66dba3905648819d007789195a6e4fb3d36ea74f69",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -2168,7 +2168,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/702",
         "recordPath": ".docs/shipped/retry-as-escalation.md",
         "hash": "9a4e6b6cb40623cfb6b2d13e44e71d0f71747c84e38b1396e9c06f7ece669c23",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -2302,7 +2302,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/453",
         "recordPath": ".docs/shipped/ship-ci-feedback-loop.md",
         "hash": "e60db9988069d6f447c3b106e4313f4a0888254cd416c0e04c9e52b2f8a4dcca",
-        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
       }
     },
     {
@@ -2449,6 +2449,32 @@
       "reason": "no exact associated merged implementation PR"
     },
     {
+      "sourcePath": ".docs/specs/2026-03-30-technical-assessment.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-03-30-technical-assessment.md",
+        "slug": "2026-03-30-technical-assessment"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-03-30-technical-assessment.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-04-12-phase-2-language-evaluation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md",
+        "slug": "2026-04-12-phase-3-conductor-rewrite"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-04-12-phase-3-conductor-rewrite.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
       "sourcePath": ".docs/specs/2026-04-12-pluggable-harness-architecture.md",
       "sourceKind": "spec",
       "classification": "unresolved",
@@ -2467,10 +2493,114 @@
       "reason": "product spec has ambiguous or unavailable canonical plan"
     },
     {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.0-rebase-on-latest.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md",
+        "slug": "2026-06-25-phase-9.0-rebase-on-latest"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.0-rebase-on-latest.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
       "sourcePath": ".docs/specs/2026-06-25-phase-9.1-retro-signal-brain-memory.md",
       "sourceKind": "spec",
       "classification": "unresolved",
       "reason": "historical product spec is not present at the audit head"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md",
+        "slug": "2026-06-25-phase-9.1-retro-signal-engineer-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.1-retro-signal-engineer-memory.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-25-phase-9.2-registry-project-creation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md",
+        "slug": "2026-06-25-phase-9.2-registry-project-creation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-25-phase-9.2-registry-project-creation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-26-phase-9.3-engineer-redesign.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md",
+        "slug": "2026-06-26-phase-9.3-engineer-redesign"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-26-phase-9.3-engineer-redesign.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-27-phase-9.3b-github-intake-writeback.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md",
+        "slug": "2026-06-27-phase-9.3b-github-intake-writeback"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-27-phase-9.3b-github-intake-writeback.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-28-daemon-halt-reconciliation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-daemon-halt-reconciliation.md",
+        "slug": "2026-06-28-daemon-halt-reconciliation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-28-daemon-halt-reconciliation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-28-otel-observability.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-28-otel-observability.md",
+        "slug": "2026-06-28-otel-observability"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-28-otel-observability.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-daemon-pr-labels.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-daemon-pr-labels.md",
+        "slug": "2026-06-29-daemon-pr-labels"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-daemon-pr-labels.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
     },
     {
       "sourcePath": ".docs/specs/2026-06-29-daemon-supervised-hosting.md",
@@ -2479,10 +2609,285 @@
       "reason": "product spec has no provable canonical plan"
     },
     {
+      "sourcePath": ".docs/specs/2026-06-29-decide-pipeline-restructure.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-pipeline-restructure.md",
+        "slug": "decide-pipeline-restructure"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/decide-pipeline-restructure.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-mermaid-renderer.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-mermaid-renderer.md",
+        "slug": "2026-06-29-mermaid-renderer"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-mermaid-renderer.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-pluggable-memory-source.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md",
+        "slug": "2026-06-29-pluggable-memory-1a-durable-default-memory"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-pluggable-memory-1a-durable-default-memory.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-29-rebase-resolution-skill.md",
+      "sourceKind": "spec",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-29-rebase-resolution-skill.md",
+        "slug": "2026-06-29-rebase-resolution-skill"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-29-rebase-resolution-skill.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 153,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "mergedAt": "2026-06-29T21:29:29Z",
+        "headSha": "d54bfeea96792c4f66430c075cf683cc1bde48c8"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-29-rebase-resolution-skill",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/153",
+        "recordPath": ".docs/shipped/2026-06-29-rebase-resolution-skill.md",
+        "hash": "d55faaba10f2e608910b9c34f1875921e1ed29b0652781393aca0e2bdcceff23",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-background-intake-conduct-loop.md",
+      "sourceKind": "spec",
+      "classification": "aligned",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-background-intake-conduct-loop.md",
+        "slug": "2026-06-30-background-intake-conduct-loop"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-background-intake-conduct-loop.md"
+      ],
+      "reason": "valid durable record is committed after implementation merge",
+      "implementationPr": {
+        "number": 382,
+        "url": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "mergedAt": "2026-07-07T01:39:33Z",
+        "headSha": "84a2274b8ab28cfc7e7b2033354c4ca73017ecc0"
+      },
+      "verdict": {
+        "kind": "valid",
+        "slug": "2026-06-30-background-intake-conduct-loop",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/382",
+        "recordPath": ".docs/shipped/2026-06-30-background-intake-conduct-loop.md",
+        "hash": "b1cbbbedc02b5e3fe796fc4e3668204d7016b26c4a9105e9f80968213bf2bd2d",
+        "commit": "b4876169e34977258f53086b2de46870fd5f4411"
+      }
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-daemon-owner-gate.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-daemon-owner-gate.md",
+        "slug": "2026-06-30-daemon-owner-gate"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-daemon-owner-gate.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-engineer-worktree-isolation.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-06-30-engineer-worktree-isolation.md",
+        "slug": "2026-06-30-engineer-worktree-isolation"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-06-30-engineer-worktree-isolation.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
       "sourcePath": ".docs/specs/2026-06-30-harness-self-host-guardrails.md",
       "sourceKind": "spec",
       "classification": "unresolved",
       "reason": "product spec has ambiguous or unavailable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-06-30-remediation-comment-upsert.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/remediation-comment-upsert.md",
+        "slug": "remediation-comment-upsert"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/remediation-comment-upsert.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-daemon-issue-priority-scheduling.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md",
+        "slug": "2026-07-03-daemon-issue-priority-scheduling"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-03-daemon-issue-priority-scheduling.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-dependency-ordered-intake-and-dispatch.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/dependency-ordered-intake-and-dispatch.md",
+        "slug": "dependency-ordered-intake-and-dispatch"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/dependency-ordered-intake-and-dispatch.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md",
+        "slug": "2026-07-03-surface-owner-gated-specs-dashboard-status"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-03-surface-owner-gated-specs-dashboard-status.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-auto-resolve-open-pr-conflicts.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/auto-resolve-open-pr-conflicts.md",
+        "slug": "auto-resolve-open-pr-conflicts"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/auto-resolve-open-pr-conflicts.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-daemon-lifecycle-controls.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/daemon-lifecycle-controls.md",
+        "slug": "daemon-lifecycle-controls"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/daemon-lifecycle-controls.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-operator-park.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md",
+        "slug": "operator-park-a-human-placed-halt-must-survive-the"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/operator-park-a-human-placed-halt-must-survive-the.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-04-writing-system-tests-fr-coverage.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/writing-system-tests-fr-coverage.md",
+        "slug": "writing-system-tests-fr-coverage"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/writing-system-tests-fr-coverage.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-build-auth-token-check-and-classify.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/build-auth-token-check-and-classify.md",
+        "slug": "build-auth-token-check-and-classify"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/build-auth-token-check-and-classify.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-decide-artifact-coherence-check.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/decide-artifact-coherence-check.md",
+        "slug": "decide-artifact-coherence-check"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/decide-artifact-coherence-check.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-22-engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md",
+        "slug": "engineer-unclaim-requeue-verb-stale-claimed-ledger"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
+      "sourcePath": ".docs/specs/2026-07-24-per-step-provider-routing-927.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-24-per-step-provider-routing-927.md",
+        "slug": "2026-07-24-per-step-provider-routing-927"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-24-per-step-provider-routing-927.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
     },
     {
       "sourcePath": ".docs/specs/2026-07-25-builtin-provider-installation-readiness-901.md",
@@ -2509,17 +2914,43 @@
       "reason": "historical product spec is not present at the audit head"
     },
     {
+      "sourcePath": ".docs/specs/2026-07-25-full-suite-verification-gate.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/2026-07-25-full-suite-verification-gate-940.md",
+        "slug": "2026-07-25-full-suite-verification-gate-940"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/2026-07-25-full-suite-verification-gate-940.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
+    },
+    {
       "sourcePath": ".docs/specs/SUPERSEDED-2026-06-25-phase-9.3-supervisor-engineer.md",
       "sourceKind": "spec",
       "classification": "unresolved",
       "reason": "product spec has no provable canonical plan"
+    },
+    {
+      "sourcePath": ".docs/specs/intake-issue-pr-link-autoclose.md",
+      "sourceKind": "spec",
+      "classification": "absent",
+      "plan": {
+        "path": ".docs/plans/intake-issue-pr-link-autoclose.md",
+        "slug": "intake-issue-pr-link-autoclose"
+      },
+      "relatedSourcePaths": [
+        ".docs/plans/intake-issue-pr-link-autoclose.md"
+      ],
+      "reason": "no exact associated merged implementation PR"
     }
   ],
   "counts": {
-    "aligned": 10,
+    "aligned": 12,
     "backfilled": 0,
-    "unresolved": 34,
-    "absent": 186,
+    "unresolved": 33,
+    "absent": 216,
     "ambiguous": 0,
     "contradictory": 1
   }

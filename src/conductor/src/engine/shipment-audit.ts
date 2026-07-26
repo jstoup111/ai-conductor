@@ -178,7 +178,14 @@ async function enumerateCommittedSources(options: ShipmentAuditOptions): Promise
       });
       continue;
     }
-    sourcesByPlanPath.get(referencedPlans[0])?.relatedSourcePaths?.push(path);
+    const canonicalPlan = plans.get(referencedPlans[0])!;
+    sourcesByPlanPath.get(canonicalPlan.path)?.relatedSourcePaths?.push(path);
+    sources.push({
+      path,
+      kind: 'spec',
+      plan: canonicalPlan,
+      relatedSourcePaths: [canonicalPlan.path],
+    });
   }
   return sources;
 }
