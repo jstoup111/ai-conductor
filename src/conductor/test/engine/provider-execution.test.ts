@@ -123,10 +123,10 @@ describe('executeProviderCandidates', () => {
     ]);
   });
 
-  it('rejects invalid task attribution before either provider is invoked', async () => {
+  it('discards malformed task attribution without blocking provider invocation', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
-      output: 'Codex must not be invoked.',
+      output: 'Codex completed independently of telemetry.',
       exitCode: 0,
     }));
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
@@ -151,14 +151,53 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'Build it.', cwd: '/workspace/feature' },
     });
 
-    expect({ result, calls: [codexInvoke.mock.calls, claudeInvoke.mock.calls] }).toEqual({
-      result: expect.objectContaining({
-        success: false,
-        output: 'Task attribution rejected: malformed.',
-        attempts: [],
-      }),
-      calls: [[], []],
+    expect(result).toMatchObject({
+      success: true,
+      actualProvider: 'codex',
+      attempts: [{ provider: 'codex', taskAttributionDiagnostic: 'malformed' }],
     });
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: 'absent', taskAttribution: undefined },
+    { label: 'stale', taskAttribution: { taskId: '2', seededTaskIds: ['1'], knownTaskIds: ['1', '2'] } },
+    { label: 'mismatched', taskAttribution: { taskId: '2', seededTaskIds: ['1', '2'], expectedTaskId: '1' } },
+  ])('keeps $label attribution advisory when a provider must fall back', async ({ taskAttribution }) => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex unavailable.',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Claude completed the independently adjudicated work.',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+        runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('provider-session')),
+      taskAttribution,
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(result.attempts).toHaveLength(2);
+    expect(result.attempts.every(({ taskId }) => taskId === undefined)).toBe(true);
+    if (taskAttribution) {
+      expect(result.attempts.every(({ taskAttributionDiagnostic }) => taskAttributionDiagnostic)).toBe(true);
+    }
+    expect(codexInvoke).toHaveBeenCalledOnce();
+    expect(claudeInvoke).toHaveBeenCalledOnce();
   });
 
   it('returns a permission denial from the selected provider without falling back', async () => {

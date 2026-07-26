@@ -26,6 +26,7 @@ import {
 } from './resolved-config.js';
 import {
   validateTaskAttribution,
+  type TaskAttributionDiagnosticCode,
   type TaskAttributionInput,
 } from './task-attribution.js';
 
@@ -43,6 +44,8 @@ export interface ProviderAttemptMetadata {
   provider: string;
   /** Validated task-local telemetry; never an authorization input. */
   taskId?: string;
+  /** Sanitized invalid-attribution classification; diagnostics only. */
+  taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   /** Sanitized source selected by the Codex provider, when it reported one. */
   authenticationSource?: 'api-key' | 'cached-login';
   model?: string;
@@ -301,6 +304,7 @@ export async function invokeProviderCandidate({
 export interface BuildProviderAttemptMetadataInput {
   providerKey: string;
   taskId?: string;
+  taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   result: InvokeResult;
   resolvedModel: string;
   invokedModel?: string;
@@ -312,6 +316,7 @@ export interface BuildProviderAttemptMetadataInput {
 export function buildProviderAttemptMetadata({
   providerKey,
   taskId,
+  taskAttributionDiagnostic,
   result,
   resolvedModel,
   invokedModel,
@@ -322,6 +327,7 @@ export function buildProviderAttemptMetadata({
   return {
     provider: providerKey,
     ...(taskId ? { taskId } : {}),
+    ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
@@ -372,16 +378,10 @@ export async function executeProviderCandidates({
   const attribution = attributionInput
     ? validateTaskAttribution(attributionInput)
     : undefined;
-  if (attribution && 'diagnostic' in attribution) {
-    return {
-      success: false,
-      output: `Task attribution rejected: ${attribution.diagnostic.code}.`,
-      exitCode: 1,
-      preferredProvider,
-      attempts,
-    };
-  }
-  const taskId = attribution?.taskId;
+  // Invalid attribution is diagnostic telemetry, never an execution veto.
+  const taskId = attribution && 'taskId' in attribution ? attribution.taskId : undefined;
+  const taskAttributionDiagnostic =
+    attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -412,6 +412,7 @@ export async function executeProviderCandidates({
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
       taskId,
+      taskAttributionDiagnostic,
       result,
       resolvedModel: resolved.model,
       invokedModel,

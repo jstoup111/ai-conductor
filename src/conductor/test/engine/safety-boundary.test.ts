@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateSafetyBoundary } from '../../src/engine/safety-boundary.js';
+import { evaluateSafetyBoundary, type SafetyAttributionTelemetry } from '../../src/engine/safety-boundary.js';
 
 describe('evaluateSafetyBoundary', () => {
   it('fails when an applicable required protection is missing', () => {
@@ -77,4 +77,27 @@ describe('evaluateSafetyBoundary', () => {
       diagnosticGaps: [{ name: 'native-observability' }],
     });
   });
+
+  it.each([
+    { label: 'present', attribution: { status: 'valid', taskId: '8' } },
+    { label: 'absent', attribution: { status: 'absent' } },
+    { label: 'concurrent', attribution: { status: 'valid', taskId: '8', concurrentTaskIds: ['7', '9'] } },
+    { label: 'stale', attribution: { status: 'stale', taskId: '8' } },
+    { label: 'mismatched', attribution: { status: 'mismatched', taskId: '8' } },
+  ] satisfies Array<{ label: string; attribution: SafetyAttributionTelemetry }>)(
+    'keeps $label attribution advisory for both allowed and forbidden mutations',
+    ({ attribution }) => {
+      const allowed = evaluateSafetyBoundary({
+        attribution,
+        protections: [{ name: 'workspace-mutation', criticality: 'required', applicability: 'applicable', state: 'passing' }],
+      });
+      const forbidden = evaluateSafetyBoundary({
+        attribution,
+        protections: [{ name: 'workspace-mutation', criticality: 'required', applicability: 'applicable', state: 'missing' }],
+      });
+
+      expect(allowed).toMatchObject({ passed: true, attribution });
+      expect(forbidden).toMatchObject({ passed: false, attribution });
+    },
+  );
 });

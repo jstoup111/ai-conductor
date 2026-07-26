@@ -51,6 +51,19 @@ describe('engine/artifacts — build_review predicate (completeness-driven, fail
     expect(r.done).toBe(true);
     expect(r.routeClass).toBeUndefined();
   });
+
+  it('uses the reviewer completeness verdict, not task-attribution telemetry, as completion authority', async () => {
+    await verdict({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+    });
+
+    const r = await checkGateCompletion(dir, 'build_review', {
+      taskAttribution: { status: 'stale', taskId: '8' },
+    });
+
+    expect(r.done).toBe(true);
+  });
 });
 
 // Task 8 (#773): fail-closed on LLM/grader unavailability. build_review's

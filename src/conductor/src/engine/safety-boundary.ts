@@ -17,7 +17,14 @@ export interface SafetyProtection {
 
 export interface SafetyBoundaryInput {
   protections: readonly SafetyProtection[];
+  /** Diagnostic task-local context; deliberately excluded from safety authority. */
+  attribution?: SafetyAttributionTelemetry;
 }
+
+/** Sanitized task telemetry; it never grants or denies a safety verdict. */
+export type SafetyAttributionTelemetry =
+  | { status: 'absent' }
+  | { status: 'valid' | 'stale' | 'mismatched'; taskId: string; concurrentTaskIds?: readonly string[] };
 
 /** An observed capability gap which does not itself authorize work. */
 export interface SafetyDiagnosticGap {
@@ -31,6 +38,8 @@ export interface SafetyVerdict {
   passed: boolean;
   requiredFailures: readonly SafetyProtection[];
   diagnosticGaps: readonly SafetyDiagnosticGap[];
+  /** Copied observability context, never an authorization signal. */
+  attribution?: SafetyAttributionTelemetry;
 }
 
 /**
@@ -57,5 +66,6 @@ export function evaluateSafetyBoundary(input: SafetyBoundaryInput): SafetyVerdic
     passed: requiredFailures.length === 0,
     requiredFailures,
     diagnosticGaps,
+    ...(input.attribution ? { attribution: input.attribution } : {}),
   };
 }
