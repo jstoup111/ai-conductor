@@ -122,6 +122,13 @@ export async function evaluateShipmentEvidence(
     try {
       planPaths = await listPlanPathsAtCommit(gitRunner, candidateCommit);
     } catch (error) {
+      // The ordinary record is already absent. The dated fallback is an
+      // optional identity extension, never a reason to obscure that
+      // established missing-record failure surface when the candidate tree
+      // cannot be enumerated (as in the daemon's synthetic false-ship test).
+      if (exactRecordContent === null) {
+        return refusal('shipped-record-missing', exactRecordPath, null);
+      }
       return unavailable('shipment-evidence-git-unavailable', 'committed plan identity', error);
     }
     const resolution = resolveShipmentIdentity(slug, planPaths);
