@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
@@ -25,5 +25,16 @@ describe('live self-host boundary', () => {
     await writeFile(join(live, 'sentinel'), 'after');
     try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
     finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('fingerprints a broken live-checkout symlink by its target without throwing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-broken-link-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await symlink('missing-worktree', join(live, 'stale-worktree'));
+    try {
+      expect((await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider })).surfaces[0].manifest)
+        .toEqual([{ path: 'stale-worktree', digest: '3a290960b8a3c3913dfd9c042d391b18e7afa36617c19b37f134e3ea2883573b' }]);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
