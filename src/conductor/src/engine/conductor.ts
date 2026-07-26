@@ -159,6 +159,7 @@ import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-aut
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
+import { fingerprintLiveBoundary, verifyLiveBoundary, type LiveBoundarySnapshot } from './self-host/live-boundary.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
@@ -927,6 +928,7 @@ export class Conductor {
    * the first `build` dispatch and torn down (idempotently) in `run()`'s finally.
    */
   private activeSandbox: SandboxBuildEnv | null = null;
+  private liveBoundarySnapshot: LiveBoundarySnapshot | null = null;
   /** Reusable safety verdicts are valid only within one exact attempt identity. */
   private readonly safetyAttemptCache = new SafetyAttemptCache();
   /** Guards the one-time skill relink so it runs before the first build only. */
@@ -1775,6 +1777,19 @@ export class Conductor {
     const buildSelection =
       this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
     const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
+    if (!this.liveBoundarySnapshot) {
+      const installed = await this.guardrails.resolveInstalledHarnessRoot();
+      const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
+      const codex = preferredBuildProvider === 'codex';
+      const providerHome = codex
+        ? process.env.CODEX_HOME ?? join(homedir(), '.codex')
+        : process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+      this.liveBoundarySnapshot = await fingerprintLiveBoundary({
+        liveCheckout,
+        unrelatedProviderState: providerHome,
+        selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
+      });
+    }
     const safetyIdentity = {
       taskId: state.feature_desc ?? this.featureDesc ?? 'unknown-task',
       provider: preferredBuildProvider ?? 'unknown-provider',
@@ -5735,6 +5750,11 @@ export class Conductor {
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
       this.safetyAttemptCache.clear();
+      if (this.liveBoundarySnapshot) {
+        const boundary = await verifyLiveBoundary(this.liveBoundarySnapshot).catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
+        this.liveBoundarySnapshot = null;
+        if (!boundary.ok) await writeHaltMarker(this.projectRoot, `${boundary.reason}\n`, 'mechanical').catch(() => {});
+      }
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
       process.off('SIGHUP', sighupHandler);
