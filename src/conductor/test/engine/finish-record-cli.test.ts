@@ -617,6 +617,73 @@ describe('engine/finish-record-cli', () => {
       await expect(readFile(join(existingAbsDir, 'DONE'), 'utf-8')).resolves.toBeDefined();
     });
 
+    it('choice=pr passes the stable feature slug to durable evidence evaluation', async () => {
+      const statePath = join(existingAbsDir, 'conduct-state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          feature_desc: 'Engineer handoff pushes spec branch before PR creation (#331)',
+          worktree_branch: 'spec/engineer-handoff-pushes-spec-branch-331',
+        }),
+      );
+      let observedSlug = '';
+      const runners: FinishRecordRunners = {
+        ...passingRunners,
+        evaluateEvidence: async (input) => {
+          observedSlug = input.slug;
+          return validEvidence;
+        },
+      };
+
+      await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        runners,
+      );
+
+      expect(observedSlug).toBe('engineer-handoff-pushes-spec-branch-331');
+    });
+
+    it('choice=pr rejects a malformed worktree branch before evidence or terminal writes', async () => {
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({
+          feature_desc: 'Engineer handoff pushes spec branch before PR creation (#331)',
+          worktree_branch: 'feature/engineer-handoff-pushes-spec-branch-331',
+        }),
+      );
+      let evaluateCalls = 0;
+      const runners: FinishRecordRunners = {
+        ...passingRunners,
+        evaluateEvidence: async () => {
+          evaluateCalls += 1;
+          return validEvidence;
+        },
+      };
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        runners,
+      );
+
+      expect({ code, evaluateCalls, entries: await readdir(existingAbsDir) }).toEqual({
+        code: 1,
+        evaluateCalls: 0,
+        entries: ['conduct-state.json'],
+      });
+    });
+
     it('choice=pr with no pre-existing state file creates one containing pr_url', async () => {
       const code = await dispatchFinishRecord(
         {
