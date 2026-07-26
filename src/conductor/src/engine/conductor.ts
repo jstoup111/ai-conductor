@@ -3643,7 +3643,7 @@ export class Conductor {
               step.name !== 'worktree' &&
               step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
-              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && phaseForStep(step.name) === 'SHIP')))
+              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))))
             ) {
               // Task 2, session-fresh-verdict-artifacts: stamp immediately
               // before the generic dispatch call so completionCtx can
@@ -3659,7 +3659,7 @@ export class Conductor {
                     ? await this.runRebaseStep(state)
                     : step.name === 'test_suite'
                       ? await this.runTestSuiteStep()
-                      : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && phaseForStep(step.name) === 'SHIP'))
+                      : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
                         ? await this.runSelfBuildDispatch(step.name, state, retryHint)
                         : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
@@ -3879,7 +3879,7 @@ export class Conductor {
             // preflight credentials check, exit immediately without retrying. This
             // preserves the credentials-specific HALT reason instead of allowing the
             // retry loop to overwrite it with the generic "retries exhausted" message.
-            if (this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && phaseForStep(step.name) === 'SHIP'))) {
+            if (this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))) {
               const haltPath = join(this.projectRoot, HALT_MARKER);
               const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
               if (haltExists) {

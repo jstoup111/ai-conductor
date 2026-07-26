@@ -90,6 +90,54 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('reads self-host candidate hooks from the live context after construction', async () => {
+    const executor = vi.fn(async (input: any) => {
+      const candidate = { step: 'build', providerKey: 'codex', model: 'gpt', effort: 'medium' };
+      await input.prepareCandidateSelfHost(candidate, {});
+      await input.withCandidateSafety(candidate, async () => ({ success: true, output: 'done', exitCode: 0 }));
+      return { success: true, output: 'done', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+    });
+    const context: any = {
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async () => undefined))]),
+      sessions: new ProviderSessionStore(), executor,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+    const prepared = vi.fn(async () => undefined);
+    const safety = vi.fn(async (_candidate, invoke) => invoke());
+    context.prepareCandidateSelfHost = prepared;
+    context.withCandidateSafety = safety;
+
+    await runner.run('build', emptyState);
+
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(safety).toHaveBeenCalledOnce();
+  });
+
+  it('forwards the live self-host preparation hook through build_review one-shot dispatch', async () => {
+    const executor = vi.fn(async (input: any) => {
+      const candidate = { step: 'build_review', providerKey: 'claude', model: 'sonnet', effort: 'medium' };
+      const selfHost = await input.prepareCandidateSelfHost(candidate, {});
+      await selfHost.teardown();
+      return { success: true, output: 'reviewed', exitCode: 0, preferredProvider: 'claude', actualProvider: 'claude', attempts: [] };
+    });
+    const teardown = vi.fn(async () => {});
+    const prepared = vi.fn(async () => ({ executable: 'claude', env: {}, args: [], teardown }));
+    const context: any = {
+      configuredProviders: ['claude'],
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+      sessions: new ProviderSessionStore(), executor, prepareCandidateSelfHost: prepared,
+      withCandidateSafety: async (_candidate: unknown, invoke: () => Promise<InvokeResult>) => invoke(),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+    const execute = (runner as any).executeProviderAwareOneShot.bind(runner);
+
+    await execute('build_review', { prompt: 'review', cwd: '/tmp/project', dangerouslySkipPermissions: true });
+
+    expect(prepared).toHaveBeenCalledOnce();
+    expect(teardown).toHaveBeenCalledOnce();
+  });
+
   it('routes complexity and recovery dispatches through provider-native fresh one-shot scopes', async () => {
     const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,

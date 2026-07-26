@@ -30,7 +30,7 @@ describe('candidate safety production wiring', () => {
 
   it('routes self-host BUILD and SHIP phases through the candidate-local dispatch', async () => {
     const source = await readFile(join(ROOT, 'src', 'engine', 'conductor.ts'), 'utf8');
-    expect(source).toContain("this.providerExecution && phaseForStep(step.name) === 'SHIP'");
+    expect(source).toContain("this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))");
     expect(source).toContain("phase: phaseForStep(candidate.step)");
   });
 });

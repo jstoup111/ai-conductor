@@ -350,6 +350,8 @@ export class DefaultStepRunner implements StepRunner {
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   private taskAttribution?: ExecuteProviderCandidatesInput['taskAttribution'];
+  /** Shared context remains live because Conductor installs self-host hooks at dispatch time. */
+  private providerExecutionContext?: ProviderExecutionContext;
   private withCandidateSafety?: WithCandidateSafety;
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
@@ -396,6 +398,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerAttempt =
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
+    this.providerExecutionContext = options?.providerExecution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
     this.prepareCandidateSelfHost = options?.providerExecution?.prepareCandidateSelfHost;
     this.providerWarn =
@@ -679,7 +682,8 @@ export class DefaultStepRunner implements StepRunner {
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         taskAttribution: this.taskAttribution,
         withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
-        prepareCandidateSelfHost: this.prepareCandidateSelfHost,
+        prepareCandidateSelfHost:
+          this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,
@@ -760,6 +764,8 @@ export class DefaultStepRunner implements StepRunner {
       effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
       taskAttribution: this.taskAttribution,
       withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+      prepareCandidateSelfHost:
+        this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
       options: request.options,
@@ -787,14 +793,15 @@ export class DefaultStepRunner implements StepRunner {
     wrapper: WithCandidateSafety;
     verify: (result: ProviderExecutionResult) => ProviderExecutionResult;
   } | undefined {
-    if (!this.withCandidateSafety || !['BUILD', 'SHIP'].includes(phaseForStep(step))) {
+    const boundary = this.providerExecutionContext?.withCandidateSafety ?? this.withCandidateSafety;
+    if (!boundary || !['BUILD', 'SHIP'].includes(phaseForStep(step))) {
       return undefined;
     }
     let entered = false;
     return {
       wrapper: async (candidate, invoke) => {
         entered = true;
-        return this.withCandidateSafety!(candidate, invoke);
+        return boundary(candidate, invoke);
       },
       verify: (result) => {
         if (entered || !result.success) return result;
