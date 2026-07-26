@@ -187,7 +187,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       events.on('kickback', (event: { from: StepName; to: StepName }) => kickbacks.push(event));
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'finish',
+        fromStep: 'finish', verifyArtifacts: true,
       });
 
       await conductor.run();
