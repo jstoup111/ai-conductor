@@ -484,6 +484,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     };
     const launchCalls: string[] = [];
     const fakeLaunch = (p: string) => { launchCalls.push(p); };
+    const fakeGit = async () => ({ stdout: '' });
 
     const handoffOut: string[] = [];
     const code = await dispatchEngineer(
@@ -492,6 +493,7 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
         registryPath,
         engineerDir,
         gh: fakeGh,
+        git: fakeGit,
         ensureRunningLaunch: fakeLaunch,
         print: (s) => handoffOut.push(s),
       },
@@ -564,14 +566,19 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
     const err: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'handoff', project: 'target-repo', branch, worktree },
-      { registryPath, engineerDir, gh: noUrlGh, print: (s) => out.push(s), printErr: (s) => err.push(s) },
+      {
+        registryPath,
+        engineerDir,
+        gh: noUrlGh,
+        git: async () => ({ stdout: '' }),
+        print: (s) => out.push(s),
+        printErr: (s) => err.push(s),
+      },
     );
-    expect(code).toBe(0); // non-fatal: work preserved on the branch
-    const result = JSON.parse(out.join(''));
-    expect(result.kind).toBe('local-commit');
+    expect(code).toBe(1);
+    expect(out).toHaveLength(0);
     // Keep-on-failure: the worktree survives and its path is reported.
     expect(await pathExists(worktree)).toBe(true);
-    expect(result.worktreePath).toBe(worktree);
     expect(err.join('')).toMatch(/worktree kept for inspection/i);
   });
 
