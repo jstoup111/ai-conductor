@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 interface Surface { root: string; label: string; exclude: readonly string[]; manifest: readonly Entry[]; }
@@ -12,9 +12,20 @@ async function manifest(root: string, exclude: readonly string[]): Promise<Entry
     return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(entry =>
       entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]))).flat();
   };
-  return Promise.all((await walk(root)).map(async file => {
+  let files: string[];
+  try {
+    files = await walk(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [{ path: '<absent>', digest: '' }];
+    throw error;
+  }
+  return Promise.all(files.map(async file => {
     const path = relative(root, file);
-    return { path, digest: createHash('sha256').update(await readFile(file)).digest('hex') };
+    const bytes = await readFile(file).catch(async (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EISDIR') return readlink(file);
+      throw error;
+    });
+    return { path, digest: createHash('sha256').update(bytes).digest('hex') };
   })).then(entries => entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path)));
 }
 

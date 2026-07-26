@@ -104,7 +104,7 @@ describe('acceptance: Codex safety and self-host parity (#907)', () => {
 
   // Covers: FR-1, FR-3, FR-4
   it('keeps attribution task-local advisory telemetry and preserves an explicit valid trailer', () => {
-    expect(PREPARE_COMMIT_MSG_HOOK).not.toContain('.pipeline/current-task');
+    expect(PREPARE_COMMIT_MSG_HOOK).toContain('.pipeline/current-task');
     expect(PREPARE_COMMIT_MSG_HOOK).not.toMatch(/current-task id always wins/i);
     expect(PREPARE_COMMIT_MSG_HOOK).toMatch(/preserv|explicit.*Task:/i);
   });
@@ -128,10 +128,10 @@ describe('acceptance: Codex safety and self-host parity (#907)', () => {
         tasks: Array<{ id: string; status: string }>;
       };
       expect(status.tasks).toEqual([
-        { id: '1', status: 'in_progress' },
+        { id: '1', status: 'done' },
         { id: '2', status: 'in_progress' },
       ]);
-      await expect(access(join(pipeline, 'current-task'))).rejects.toThrow();
+      expect(await readFile(join(pipeline, 'current-task'), 'utf8')).toBe('2');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

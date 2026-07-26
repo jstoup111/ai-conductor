@@ -176,6 +176,20 @@ export async function runTaskDone(projectRoot: string, id: string): Promise<numb
   const pipelineDir = join(projectRoot, '.pipeline');
   const stampPath = join(pipelineDir, 'current-task');
 
+  const statusPath = join(pipelineDir, 'task-status.json');
+  try {
+    const status = JSON.parse(await readFile(statusPath, 'utf-8')) as { tasks?: Array<Record<string, unknown>> };
+    const task = status.tasks?.find((entry) => entry.id === id);
+    if (!task) return 1;
+    task.status = 'done';
+    const temporary = join(pipelineDir, `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
+    await writeFile(temporary, JSON.stringify(status, null, 2));
+    await rename(temporary, statusPath);
+  } catch (error) {
+    console.error(`[task-cli] failed to retire task ${id}: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
   // Try to read the current stamp
   let stampContent: string;
   try {
@@ -185,13 +199,10 @@ export async function runTaskDone(projectRoot: string, id: string): Promise<numb
     return 0;
   }
 
-  // Validate stamp matches the requested id
+  // A workspace stamp is advisory telemetry only. A sibling's active stamp
+  // must not prevent this task from retiring; preserve it intact.
   if (stampContent !== id) {
-    console.error(
-      `[task-cli] task id mismatch: requested "${id}" but stamp contains "${stampContent}"\n` +
-        `[task-cli] stamp will not be removed until task ${stampContent} is marked done`,
-    );
-    return 1;
+    return 0;
   }
 
   // Remove the stamp file
