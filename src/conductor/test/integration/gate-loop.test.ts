@@ -373,7 +373,11 @@ describe('integration/gate-loop', () => {
       delete initialState.finish;
       await writeState(scenarioStatePath, {
         ...(initialState as unknown as ConductState),
-        complexity_tier: 'M',
+        // This scenario exercises only the custom marker's attempt freshness
+        // at the finish boundary. On the S/technical policy, every #922
+        // validation member is a valid skip, so it cannot mask that marker
+        // with unrelated validation evidence requirements.
+        complexity_tier: 'S',
         track: 'technical',
       });
       if (evidence === 'stale') {
@@ -847,19 +851,48 @@ describe('integration/gate-loop', () => {
     // All front-half steps done; tail steps pending so they run. Start at build.
     const state: Record<string, string> = {};
     for (const s of ALL_STEPS) state[s.name] = 'done';
-    for (const name of ['build', 'manual_test', 'retro', 'finish']) delete state[name];
+    for (const name of [
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]) delete state[name];
     await writeState(statePath, {
       ...(state as unknown as ConductState),
-      // M tier: S-tier now skips manual_test too (D5), which would collapse
-      // the tail to just build/finish and defeat this test's purpose of
-      // proving every tail step gets a fresh session. M tier keeps
-      // build, manual_test, retro, and finish all running.
+      // Keep the product validation group applicable: its three current
+      // artifacts are written by the runner below before the publication tail.
       complexity_tier: 'M',
+      track: 'product',
     });
 
-    const resetSession = vi.fn(async () => {});
+    const validators: StepName[] = [
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ];
+    const resetValidators: StepName[] = [];
+    let releaseValidatorResets!: () => void;
+    const validatorResetGate = new Promise<void>((resolve) => {
+      releaseValidatorResets = resolve;
+    });
+    const resetSession = vi.fn(async (step?: StepName) => {
+      if (step === undefined || !validators.includes(step)) return;
+      resetValidators.push(step);
+      if (resetValidators.length === validators.length) releaseValidatorResets();
+      // A serial group would deadlock on its first reset here. Releasing only
+      // after all members entered proves the fan-out retains its parallel
+      // session boundaries before any member dispatches.
+      await validatorResetGate;
+    });
+    const ran: StepName[] = [];
     const runner: StepRunner & { resetSession: typeof resetSession } = {
-      run: async () => ({ success: true }),
+      run: async (step) => {
+        if (validators.includes(step)) expect(resetValidators).toHaveLength(validators.length);
+        ran.push(step);
+        return satisfy(step);
+      },
       resetSession,
     };
     const conductor = new Conductor({
@@ -869,12 +902,28 @@ describe('integration/gate-loop', () => {
       projectRoot: dir,
       mode: 'auto',
       fromStep: 'build',
+      config: { validation_concurrency: 3 },
     });
     await conductor.run();
 
-    // build, manual_test, retro, finish all ran (M tier, nothing skipped in
-    // the tail) → one reset each.
-    expect(resetSession).toHaveBeenCalledTimes(4);
+    // build, the three-member product validation group, retro, and finish
+    // each receive one fresh session.
+    expect(ran).toEqual([
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]);
+    expect(resetSession.mock.calls.map(([step]) => step)).toEqual([
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]);
   });
 
   describe('manual-test FAIL routing end-to-end with a real repo (#367)', () => {
