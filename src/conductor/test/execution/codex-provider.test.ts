@@ -134,6 +134,31 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('captures every substantive Codex stream before returning sanitized one-shot and automatic-streaming output', async () => {
+    const key = 'sk-905-contained-output-key';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+    mockExeca
+      .mockResolvedValueOnce({ stdout: jsonlMessage(`One-shot leaked ${key.slice(0, 8)}.`), exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: `Automatic stream leaked ${key.slice(-8)}.`, exitCode: 0 } as any);
+
+    try {
+      const oneShot = await apiKeyProvider.invoke(baseOptions);
+      const automatic = await apiKeyProvider.invokeInteractive({ ...baseOptions, interactive: false });
+
+      expect(mockExeca.mock.calls.map(([, , options]) => ({ stdout: options.stdout, stderr: options.stderr }))).toEqual([
+        { stdout: 'pipe', stderr: 'pipe' },
+        { stdout: 'pipe', stderr: 'pipe' },
+      ]);
+      expect(`${oneShot.output}\n${automatic.output}`).not.toContain(key.slice(0, 8));
+      expect(`${oneShot.output}\n${automatic.output}`).not.toContain(key.slice(-8));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
   it('keeps a >128 KiB prompt out of argv', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
     const prompt = 'x'.repeat(200_000);
@@ -143,6 +168,49 @@ describe('CodexProvider', () => {
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(options.input).toContain(prompt);
     for (const arg of args) expect(arg.length).toBeLessThan(1024);
+  });
+
+  it('fails closed with a Codex permission diagnostic when automatic review reports a structured denial or review timeout', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ type: 'error', code: 'approval_denied' }), stderr: '', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review timed out awaiting approval.', exitCode: 1, timedOut: true } as any);
+
+    const oneShot = await provider.invoke(baseOptions);
+    const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+
+    for (const result of [oneShot, automaticStream]) {
+      expect(result).toMatchObject({
+        success: false,
+        permissionDenied: true,
+        authFailure: undefined,
+        rateLimited: undefined,
+        modelUnavailable: undefined,
+        sessionExpired: undefined,
+      });
+      expect(result.output).toMatch(/Codex.*automatic permission.*(unavailable|denied).*retry/i);
+    }
+    expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"']),
+        expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"', 'resume', 'thread-123']),
+      ]),
+    );
+  });
+
+  it('does not misclassify generic empty or process-timeout failures as Codex permission decisions', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true } as any);
+
+    const emptyFailure = await provider.invoke(baseOptions);
+    const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+
+    expect(emptyFailure).toMatchObject({ success: false, output: '', permissionDenied: undefined });
+    expect(timeoutFailure).toMatchObject({
+      success: false,
+      output: 'child process timed out',
+      permissionDenied: undefined,
+    });
   });
 
   it.each([
@@ -756,8 +824,8 @@ describe('CodexProvider', () => {
     expect(args).not.toContain('--json');
     expect(options).toMatchObject({
       stdin: 'pipe',
-      stdout: ['pipe', 'inherit'],
-      stderr: ['pipe', 'inherit'],
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
   });
 
@@ -897,8 +965,8 @@ describe('CodexProvider', () => {
           waitSeconds:
             'waitSeconds' in expected ? expected.waitSeconds : undefined,
         },
-        stdout: ['pipe', 'inherit'],
-        stderr: ['pipe', 'inherit'],
+        stdout: 'pipe',
+        stderr: 'pipe',
       })),
     );
   });

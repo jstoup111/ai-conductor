@@ -63,6 +63,12 @@ export interface InvokeResult {
    */
   authFailure?: boolean;
   /**
+   * Set when Codex's automatic permission review was denied or could not
+   * complete. This is distinct from authentication, rate, model, and session
+   * recovery signals so unattended work fails closed with an operator action.
+   */
+  permissionDenied?: boolean;
+  /**
    * Explicitly identifies deterministic provider-wide unavailability.
    * Consumers must also require providerUnavailableScope === 'run'; output
    * text alone never authorizes provider fallback or run-wide caching.
