@@ -190,6 +190,7 @@ it('composes one ordered provider context across the interactive run after regis
       onAttempt:
         "(step, attempt) =>\n      events.emit({ type: 'provider_attempt', step, ...attempt })",
       warn: '(_message, transition) => events.emit(transition)',
+      withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
     compatibilityRuntime:
       'providerExecution.runtimes.get(providerExecution.configuredProviders[0])'.replace(
