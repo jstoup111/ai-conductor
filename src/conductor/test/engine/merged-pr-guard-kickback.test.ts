@@ -400,6 +400,12 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
+      // This route isolates a PRD-audit failure. The as-built member is
+      // legitimately skipped because its upstream DECIDE review was skipped;
+      // otherwise #922's parallel validation group would also dispatch it,
+      // and its intentionally absent report would obscure the PRD route.
+      state.architecture_review = 'skipped';
+      state.architecture_review_as_built = 'skipped';
       state.pr_url = PR_URL;
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -833,6 +839,11 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         (rebaseState as Record<string, unknown>)[s.name] =
           s.name === 'retro' ? 'skipped' : 'done';
       }
+      // Phase 2 measures only the rebase-entry guard. Give the following
+      // finish fence its established valid skips so it cannot start unrelated
+      // validation work after the second guard query.
+      rebaseState.complexity_tier = 'S';
+      rebaseState.track = 'technical';
       rebaseState.pr_url = PR_URL;
       await writeState(statePath, rebaseState as unknown as ConductState);
 
