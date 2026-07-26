@@ -81,3 +81,19 @@ production finish validation fence.
 **Verify:**
 
 `npx vitest run test/engine/conductor-token-injection.test.ts test/engine/self-host/wiring.test.ts test/acceptance/daemon-rate-limit-episode-coordinator.acceptance.test.ts test/acceptance/sandbox-auth-expiry-park.acceptance.test.ts`
+
+### Task rem-test-rebase-translation-tail-01: Terminate finish-time rebase fixtures after rebase
+
+**Files likely touched:**
+
+- `src/conductor/test/engine/rebase-translate-acceptance.test.ts`
+
+**Dependencies:** `rem-test-post-build-tail-fixtures-01`
+
+Keep the real `runRebaseStep` dispatch under test, but seed the downstream finish state as
+resolved. The fixture asserts rebase translation artifacts, not subsequent SHIP validators;
+do not change production rebase or finish-fence logic.
+
+**Verify:**
+
+`npx vitest run test/engine/rebase-translate-acceptance.test.ts`
