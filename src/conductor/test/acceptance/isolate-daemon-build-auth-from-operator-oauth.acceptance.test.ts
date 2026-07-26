@@ -364,7 +364,10 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       expect(tokensSeenByRunner[0]).toBe('tok-v1');
       // The retried attempt sees the freshly-minted token, not the stale one.
       expect(tokensSeenByRunner[2]).toBe(await readFile(tokenPath, 'utf-8'));
-      expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1); // reused, not re-provisioned
+      // #907 isolates the sandbox at the resolved provider-candidate boundary.
+      // Each of the three dispatch attempts therefore receives a fresh sandbox
+      // rather than reusing mutable provider state across retries.
+      expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(3);
     } finally {
       nowSpy.mockRestore();
     }
