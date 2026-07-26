@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -126,6 +126,82 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     expect(readiness).toHaveBeenCalledTimes(2);
     expect(park).toEqual({ timedOut: false, haltReason: '' });
+  });
+
+  it('resumes only the auth-failed grouped member after its scheduled Codex readiness recheck', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done',
+      build_review: 'done',
+      wiring_check: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+    });
+    const alternateReadiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }, {
+      key: 'claude',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternateReadiness },
+      policy: CLAUDE_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+          return { success: true };
+        }
+        if (step === 'prd_audit' && calls.filter((call) => call === step).length === 1) {
+          return {
+            success: false,
+            authFailure: true,
+            actualProvider: 'codex',
+            authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+          };
+        }
+        if (step === 'prd_audit') {
+          await writeFile(join(dir, '.pipeline/prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n');
+        }
+        if (step === 'architecture_review_as_built') {
+          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# As-Built Architecture Review\n\nVerdict: APPROVED\n');
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+    });
+
+    await conductor.run();
+
+    expect({ calls, readinessCalls: readiness.mock.calls.length, alternateReadinessCalls: alternateReadiness.mock.calls.length }).toEqual({
+      calls: ['manual_test', 'prd_audit', 'architecture_review_as_built', 'prd_audit'],
+      readinessCalls: 1,
+      alternateReadinessCalls: 0,
+    });
   });
 
   it('fails closed on mismatched provider attribution without probing an alternative runtime', async () => {
