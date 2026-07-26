@@ -15,4 +15,15 @@ describe('live self-host boundary', () => {
     try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
     finally { await rm(root, { recursive: true, force: true }); }
   });
+
+  it('rejects terminal success when either live surface drifts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-drift-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(live, 'sentinel'), 'before'); await writeFile(join(provider, 'preferences'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'sentinel'), 'after');
+    try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
 });
