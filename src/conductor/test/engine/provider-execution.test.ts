@@ -77,6 +77,44 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('returns a permission denial from the selected provider without falling back', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex permission review denied the required action.',
+      exitCode: 1,
+      permissionDenied: true,
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run',
+      exitCode: 0,
+    }));
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions,
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect({ result, claudeCalls: claudeInvoke.mock.calls }).toEqual({
+      result: expect.objectContaining({
+        success: false,
+        permissionDenied: true,
+        actualProvider: 'codex',
+      }),
+      claudeCalls: [],
+    });
+  });
+
   it('emits only the selected Codex authentication source for successful and failed attempts', async () => {
     const captured: unknown[] = [];
     const invoke = vi.fn()

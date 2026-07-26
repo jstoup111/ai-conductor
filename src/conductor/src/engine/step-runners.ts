@@ -786,6 +786,7 @@ export class DefaultStepRunner implements StepRunner {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
       ...(result.authFailure ? { authFailure: true } : {}),
+      ...(result.permissionDenied ? { permissionDenied: true } : {}),
       ...(result.rateLimited
         ? {
             rateLimited: true,
@@ -864,6 +865,14 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+      };
+    }
+
+    if (result.permissionDenied) {
+      return {
+        success: false,
+        output: result.output,
+        permissionDenied: true,
       };
     }
 
@@ -1501,6 +1510,9 @@ export class DefaultStepRunner implements StepRunner {
 
     if (result.authFailure) {
       return finalize({ success: false, output: result.output, authFailure: true });
+    }
+    if (result.permissionDenied) {
+      return finalize({ success: false, output: result.output, permissionDenied: true });
     }
     if (result.rateLimited) {
       return finalize({

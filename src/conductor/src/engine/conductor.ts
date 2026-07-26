@@ -347,6 +347,8 @@ export interface StepRunResult {
    * The conductor halts and reports the auth failure.
    */
   authFailure?: boolean;
+  /** A provider's automatic permission review denied the requested action. */
+  permissionDenied?: boolean;
   /** Provider-owned, sanitized authentication readiness for this dispatch. */
   authentication?: AuthenticationReadiness;
   /**
@@ -3719,6 +3721,29 @@ export class Conductor {
             // retry without decrementing attempt (budget intact).
             attempt--;
             continue;
+          }
+
+          // Permission review denial is terminal for this run. Retrying or
+          // escalating providers/models cannot approve an action that Codex
+          // already denied under the bounded policy.
+          if (result.permissionDenied) {
+            const provider = result.actualProvider ?? 'selected provider';
+            const detail = result.output?.trim();
+            const haltReason =
+              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action.\n` +
+              'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
+              (detail ? `\nProvider detail: ${detail}` : '');
+            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+            await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
+              .catch(() => {
+                /* best-effort marker */
+              });
+            await writeState(this.stateFilePath, state);
+            const prUrl = await this.surfaceRemediationPr(haltReason);
+            await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           if (!result.success) {

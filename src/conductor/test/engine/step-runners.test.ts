@@ -1581,6 +1581,23 @@ TIER: M`,
         state: 'missing',
       });
     });
+
+    it('preserves a provider permission denial for conductor-owned terminal handling', async () => {
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: false,
+        output: 'Codex permission review denied the required action.',
+        exitCode: 1,
+        permissionDenied: true,
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      const result = await runner.run('worktree', emptyState);
+
+      expect(result).toMatchObject({ success: false, permissionDenied: true });
+    });
   });
 
   describe('rate-limit detection', () => {

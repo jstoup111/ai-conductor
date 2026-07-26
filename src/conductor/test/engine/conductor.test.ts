@@ -9113,6 +9113,35 @@ describe('engine/conductor', () => {
       expect(attempt).toBeGreaterThanOrEqual(2);
     });
 
+    it('halts a Codex permission denial without consuming a retry', async () => {
+      const runner: StepRunner = {
+        run: vi.fn(async () => ({
+          success: false,
+          output: 'permission review denied workspace escape',
+          permissionDenied: true,
+          actualProvider: 'codex',
+        })),
+      };
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({ calls: runner.run.mock.calls.length, haltReasons }).toEqual({
+        calls: 1,
+        haltReasons: [expect.stringContaining('Codex permission review denied')],
+      });
+    });
+
     it('re-enters park on subsequent authFailure without budget burn', async () => {
       const { waitForCredentialsChange } = await import(
         '../../src/engine/self-host/operator-credentials.js'
