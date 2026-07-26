@@ -23,9 +23,9 @@ current step only; it is reset at the next step boundary.
 
 - **Design phase** (bootstrap → plan): Each step reads the approved artifact
   produced by its predecessor.
-- **Build phase** (pipeline): The conductor drives the task loop. Claude orchestrates each task
-  by dispatching subagents. Subagent context is isolated and discarded — only a ~2-3 line summary
-  returns to the orchestrator per task. No context compaction needed.
+- **Build phase** (pipeline): The conductor drives the task loop. The selected host agent orchestrates
+  each task by dispatching subagents. Subagent context is isolated and discarded —
+  only a ~2-3 line summary returns to the orchestrator per task. No context compaction needed.
 - **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
 
 Retries within the same step resume that step's session so partial work and

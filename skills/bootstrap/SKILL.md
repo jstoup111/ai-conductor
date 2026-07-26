@@ -310,6 +310,10 @@ both point to the same shared workflow and lifecycle gates in `HARNESS.md`. If e
 contradicts that contract, report the host and the conflicting instruction before completing
 initialization.
 
+For Codex, `~/.agents/skills/` is the active current catalog; treat the former
+`~/.codex/skills/` location as legacy migration material only. Never describe it as the active
+discovery location or ask an operator to recreate it.
+
 ### 7. Bootstrap Memory (Existing Projects Only)
 
 Seed `.memory/` from existing code. Use detection from Steps 4 and 4c — don't re-scan.

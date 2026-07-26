@@ -118,5 +118,32 @@ require_pattern 'code review retains fresh-context evaluator review' \
 require_pattern 'code review retains blocking verdict gate' \
   'BLOCK verdict prevents merge' "$HARNESS_DIR/skills/code-review/SKILL.md"
 
+# These lifecycle skills share outcomes and gates across supported hosts. Only
+# installation, invocation, and interactive-session mechanics may differ.
+require_pattern 'bootstrap identifies the current Codex skill location' \
+  '~/.agents/skills.*(active|current)' \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md"
+require_pattern 'bootstrap identifies the legacy Codex skill location' \
+  '~/.codex/skills.*legacy|legacy.*~/.codex/skills' \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md"
+require_pattern 'conduct describes build orchestration as provider-neutral' \
+  'host agent orchestrates|selected provider orchestrates|provider-neutral.*orchestrat' \
+  "$HARNESS_DIR/skills/conduct/SKILL.md"
+require_pattern 'engineer makes the host-agent session model provider-neutral' \
+  'live supported host-agent session|supported host-agent session|host-agent session' \
+  "$HARNESS_DIR/skills/engineer/SKILL.md"
+require_pattern 'engineer scopes Claude launcher claims to Claude-only behavior' \
+  'Claude-only.*(launcher|session)|(launcher|session).*Claude-only' \
+  "$HARNESS_DIR/skills/engineer/SKILL.md"
+require_pattern 'engineer defers native persistent-session launching to issue 759' \
+  '(#759|issue 759).*(defer|deferred)|(defer|deferred).*#759' \
+  "$HARNESS_DIR/skills/engineer/SKILL.md"
+require_pattern 'engineer scopes /quit to Claude Code sessions' \
+  'Claude Code.*`/quit`|`/quit`.*Claude Code' \
+  "$HARNESS_DIR/skills/engineer/SKILL.md"
+require_pattern 'engineer gives non-Claude hosts a normal session-end path' \
+  'other supported host.*(end|close).*session|end.*session.*other supported host' \
+  "$HARNESS_DIR/skills/engineer/SKILL.md"
+
 printf '\nProvider skill contract acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
